@@ -7,6 +7,7 @@
 //! the marks cost one pass over the particles a frame, a compaction a second
 //! and nothing while the water is gone.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 use std::sync::LazyLock;
 
@@ -183,7 +184,7 @@ impl WetMap {
             bytes,
         )
         .map_err(|error| error.to_string())?;
-        let map = device.try_create_buffer_shared(bytes)?;
+        let map = device.try_create_buffer(bytes, BufferUse::Upload)?;
         map.zero_fill();
         self.map = Some(map);
         Ok(())

@@ -1,5 +1,6 @@
 //! Numerical GPU proofs for `node.analytic_echo_instances`.
 
+use manifold_gpu::BufferUse;
 use super::{AnalyticEchoInstances, ECHO_CAPACITY, EchoUniforms as Uniforms};
 use manifold_node_engine::mesh::InstanceTransform;
 use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
@@ -59,13 +60,14 @@ fn dispatch(src: &[InstanceTransform], uniforms: Uniforms) -> Vec<InstanceTransf
     let pipeline =
         device.create_compute_pipeline(&wgsl, ENTRY, "structured-modifier-analytic-echo");
     let input = device
-        .create_buffer_shared(src.len() as u64 * std::mem::size_of::<InstanceTransform>() as u64);
+        .create_buffer(src.len() as u64 * std::mem::size_of::<InstanceTransform>() as u64, BufferUse::Upload);
     unsafe {
         input.write(0, bytemuck::cast_slice(src));
     }
     let output_count = src.len() * ECHO_CAPACITY as usize;
-    let output = device.create_buffer_shared(
+    let output = device.create_buffer(
         output_count as u64 * std::mem::size_of::<InstanceTransform>() as u64,
+        BufferUse::Upload,
     );
     let mut encoder = device.create_encoder("structured-modifier-analytic-echo");
     encoder.dispatch_compute(

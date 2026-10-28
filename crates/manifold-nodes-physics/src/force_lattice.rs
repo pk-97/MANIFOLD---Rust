@@ -3,6 +3,7 @@
 //! binds and the trilinear WGSL include. The CPU lattice is
 //! `manifold_physics::force_lattice::ForceLattice`.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
@@ -274,9 +275,11 @@ impl LatticeBuffers {
         {
             let capacity = Capacity::reserve(needed);
             let create = |what: &str, size: u64| {
-                gpu.device.try_create_buffer_shared(size).map_err(|error| {
-                    format!("Force lattice: the {what} need {size} bytes: {error}")
-                })
+                gpu.device
+                    .try_create_buffer(size, BufferUse::Upload)
+                    .map_err(|error| {
+                        format!("Force lattice: the {what} need {size} bytes: {error}")
+                    })
             };
             let forces_buffer = create("forces", capacity.forces as u64 * bytes)?;
             let impulses_buffer = create("impulses", capacity.impulse_bytes())?;

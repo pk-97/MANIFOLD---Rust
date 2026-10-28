@@ -7,6 +7,7 @@
 //! `Array<MeshVertex>` output. It publishes the shape's live extent, so a
 //! tetrahedron draws its 12 vertices, not the 108-vertex capacity.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
@@ -117,7 +118,7 @@ impl Primitive for PlatonicMesh {
         };
         let live_triangles = self
             .live_triangles
-            .get_or_insert_with(|| gpu.device.create_buffer(16))
+            .get_or_insert_with(|| gpu.device.create_buffer(16, BufferUse::Gpu))
             .clone();
         let source = platonic_mesh_upload_bytes(shape);
         gpu.native_enc.dispatch_compute(
@@ -184,8 +185,9 @@ mod gpu_tests {
             "node.platonic_solid_mesh.gpu-proof",
         );
         for shape in 0..5u32 {
-            let out = device.create_buffer_shared(
+            let out = device.create_buffer(
                 (PLATONIC_MESH_CAPACITY * std::mem::size_of::<MeshVertex>()) as u64,
+                BufferUse::Upload,
             );
             let uniforms = UploadUniforms {
                 count: platonic_mesh_upload_count(shape),

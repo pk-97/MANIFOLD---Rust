@@ -16,6 +16,8 @@
 #[cfg(feature = "gpu-proofs")]
 use manifold_core::BlendMode;
 use manifold_core::effect_graph_def::EffectGraphDef;
+#[cfg(feature = "gpu-proofs")]
+use manifold_gpu::BufferUse;
 
 #[cfg(feature = "gpu-proofs")]
 use manifold_compositor::compositor::{CompositeLayerDescriptor, Compositor, CompositorFrame};
@@ -401,7 +403,7 @@ fn region_luma_pixels(
     texture: &manifold_gpu::GpuTexture,
 ) -> Vec<f32> {
     let bytes_per_row = W * 8;
-    let buf = device.create_buffer_shared(u64::from(H * bytes_per_row));
+    let buf = device.create_buffer(u64::from(H * bytes_per_row), BufferUse::Upload);
     let mut rb = device.create_encoder("layer-skin-readback");
     rb.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     rb.commit_and_wait_completed();
@@ -629,7 +631,8 @@ fn skin_tracks_source_content_and_missing_id_falls_back() {
         std::fs::create_dir_all(dir).expect("create demo dir");
         let dump_png = |texture: &manifold_gpu::GpuTexture, path: std::path::PathBuf| {
             let bytes_per_row = texture.width * 8;
-            let buf = device.create_buffer_shared(u64::from(texture.height * bytes_per_row));
+            let buf =
+                device.create_buffer(u64::from(texture.height * bytes_per_row), BufferUse::Upload);
             let mut rb = device.create_encoder("layer-skin-demo-readback");
             rb.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);
             rb.commit_and_wait_completed();

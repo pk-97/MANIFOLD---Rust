@@ -455,9 +455,10 @@ mod gpu_tests {
         while !words.len().is_multiple_of(4) {
             words.push(0);
         }
-        let output = h
-            .device
-            .create_buffer_shared((b.len() * size_of::<InstanceTransform>()) as u64);
+        let output = h.device.create_buffer(
+            (b.len() * size_of::<InstanceTransform>()) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         let pipeline =
             h.device
                 .create_compute_pipeline(&generated.wgsl, ENTRY, "particle-blend-fused");

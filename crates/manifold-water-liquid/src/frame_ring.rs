@@ -4,6 +4,7 @@
 //! the display blends between them one tick behind. A restart or a regrown
 //! ring collapses A onto the new frame.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
 use crate::clock::display_blend;
@@ -62,7 +63,7 @@ impl FrameRing {
             )
             .map_err(|error| error.to_string())?;
             self.slots = (0..RING)
-                .map(|_| device.try_create_buffer_shared(bytes))
+                .map(|_| device.try_create_buffer(bytes, BufferUse::Upload))
                 .collect::<Result<_, _>>()?;
             self.counts = [0; RING];
             self.epoch = None;

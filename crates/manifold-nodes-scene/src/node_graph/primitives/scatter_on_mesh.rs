@@ -23,6 +23,7 @@
 //! shader is a `wang_hash` chain seeded from `(instance index, seed)`, no
 //! true randomness anywhere.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuBinding;
 use std::borrow::Cow;
 
@@ -233,7 +234,7 @@ impl Primitive for ScatterOnMesh {
         let needs_alloc = self.cumulative.is_none() || self.cached_triangle_count != triangle_count;
         if needs_alloc {
             let bytes = u64::from(triangle_count.max(1)) * 4;
-            self.cumulative = Some(gpu.device.create_buffer(bytes));
+            self.cumulative = Some(gpu.device.create_buffer(bytes, BufferUse::Gpu));
             self.cached_triangle_count = triangle_count;
         }
         let cumulative = self.cumulative.as_ref().expect("cumulative just allocated");
@@ -402,14 +403,16 @@ mod gpu_tests {
         let vertex_count = vertices.len() as u32;
         let triangle_count = vertex_count / 3;
 
-        let vbuf = device.create_buffer_shared(std::mem::size_of_val(vertices) as u64);
+        let vbuf = device.create_buffer(std::mem::size_of_val(vertices) as u64, BufferUse::Upload);
         unsafe {
             vbuf.write(0, bytemuck::cast_slice(vertices));
         }
-        let ibuf = device.create_buffer_shared(
+        let ibuf = device.create_buffer(
             capacity as u64 * std::mem::size_of::<InstanceTransform>() as u64,
+            BufferUse::Upload,
         );
-        let cumulative = device.create_buffer_shared(u64::from(triangle_count.max(1)) * 4);
+        let cumulative =
+            device.create_buffer(u64::from(triangle_count.max(1)) * 4, BufferUse::Upload);
 
         let uniforms = ScatterOnMeshUniforms {
             count,

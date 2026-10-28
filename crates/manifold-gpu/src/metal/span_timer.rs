@@ -151,6 +151,7 @@ impl GpuSpanTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BufferUse;
     use crate::{GpuBinding, GpuDevice};
 
     /// A span reports its longest buffer, never the sum: a layer whose frame
@@ -172,7 +173,7 @@ mod tests {
             "cs_main",
             "span timer proof",
         );
-        let buffer = device.create_buffer_shared(4);
+        let buffer = device.create_buffer(4, BufferUse::Upload);
         let dispatch = |encoder: &mut GpuEncoder, loops: u32| {
             let work = loops.to_ne_bytes();
             encoder.dispatch_compute(

@@ -7,6 +7,7 @@ use super::super::{FIELD_TILES_WGSL, model_matrix};
 use super::*;
 use crate::testkit::field_tiles::FieldTable;
 use half::f16;
+use manifold_gpu::BufferUse;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
 
 const N: usize = RIPPLE_TEXELS as usize;
@@ -20,7 +21,7 @@ pub(super) fn read_f32(buffer: &GpuBuffer, count: usize) -> Vec<f32> {
 
 /// Mip 0 of `texture` read back as (sx, sz) per texel, row-major.
 fn read_slopes(device: &GpuDevice, texture: &GpuTexture) -> Vec<[f32; 2]> {
-    let out = device.create_buffer_shared((N * N * 4) as u64);
+    let out = device.create_buffer((N * N * 4) as u64, BufferUse::Upload);
     let mut enc = device.create_encoder("ripple slopes readback");
     enc.copy_texture_to_buffer(texture, &out, N as u32, N as u32, N as u32 * 4);
     enc.commit_and_wait_completed();
@@ -45,7 +46,7 @@ fn slopes_of_a_sine_are_its_derivative() {
             amplitude * (k * x).sin()
         })
         .collect();
-    let buffer = device.create_buffer_shared((N * N * 4) as u64);
+    let buffer = device.create_buffer((N * N * 4) as u64, BufferUse::Upload);
     unsafe {
         buffer.write(0, bytemuck::cast_slice(&heights));
     }
@@ -104,7 +105,7 @@ pub(super) fn lattices(device: &GpuDevice, flow: [f32; 3]) -> Lattices {
     let table = table();
     let velocity = table.pool([0.0; 3], |_| flow);
     Lattices {
-        levelset: device.create_buffer_shared(16),
+        levelset: device.create_buffer(16, BufferUse::Upload),
         velocity: shared_buffer(device, &velocity),
         tiles: shared_buffer(device, &table.words),
         extent: shared_buffer(device, &table.extent()),
@@ -225,7 +226,7 @@ pub(super) fn probe_normals(
     let camera = [0.0f32, 3.0, 0.0, 1.0];
     let outs: Vec<GpuBuffer> = times
         .iter()
-        .map(|_| device.create_buffer_shared((PROBES * 16) as u64))
+        .map(|_| device.create_buffer((PROBES * 16) as u64, BufferUse::Upload))
         .collect();
     let mut enc = device.create_encoder("ripple probe");
     for (&time, out) in times.iter().zip(&outs) {

@@ -7,6 +7,7 @@
 //! the red occluder plane hung above it (slot 1).
 
 use half::f16;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuTexture, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
@@ -67,7 +68,7 @@ fn render(selected: &[u32]) -> (Vec<u8>, Option<Vec<u8>>) {
 
 fn read_mask(device: &manifold_gpu::GpuDevice, mask: &GpuTexture) -> Vec<u8> {
     assert_eq!(mask.format, GpuTextureFormat::R8Unorm);
-    let buf = device.create_buffer_shared(u64::from(mask.width * mask.height));
+    let buf = device.create_buffer(u64::from(mask.width * mask.height), BufferUse::Upload);
     let mut enc = device.create_encoder("selection-mask-readback");
     enc.copy_texture_to_buffer(mask, &buf, mask.width, mask.height, mask.width);
     enc.commit_and_wait_completed();

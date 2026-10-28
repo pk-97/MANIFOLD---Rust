@@ -9,6 +9,7 @@
 //! nest kernel, the frame as the one outer copy), so a moving group never
 //! lays out or uploads its copies again.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_core::copies_body::{COPY_LAYOUT_LABELS, SIZE_SPACING_DEFAULT, SIZE_SPACING_RANGE};
@@ -196,7 +197,7 @@ impl Primitive for GenerateInstanceTransforms {
             (&mut self.group_buffer, COPY_BYTES),
         ] {
             if buffer.as_ref().is_none_or(|held| held.size != size) {
-                match gpu.device.try_create_buffer(size) {
+                match gpu.device.try_create_buffer(size, BufferUse::Gpu) {
                     Ok(created) => *buffer = Some(created),
                     Err(error) => {
                         ctx.error(format!("Arrange Copies: {error}"));

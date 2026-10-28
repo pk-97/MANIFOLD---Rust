@@ -5,6 +5,7 @@
 //! `REBUILD_SUBSTEPS` substeps; one workgroup per block accumulates into a
 //! workgroup tile and flushes into the pooled accumulator.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
@@ -238,7 +239,7 @@ impl Primitive for MatterToGrid {
         let order_bytes = point_slots.max(1) * 4;
         if self.order.as_ref().is_none_or(|o| o.size < order_bytes) {
             self.order = None;
-            match gpu.device.try_create_buffer_shared(order_bytes) {
+            match gpu.device.try_create_buffer(order_bytes, BufferUse::Upload) {
                 Ok(order) => self.order = Some(order),
                 Err(error) => {
                     ctx.error(format!(

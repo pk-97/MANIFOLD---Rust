@@ -1,6 +1,7 @@
 use super::*;
 use bytemuck::Zeroable;
 use half::f16;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{
     GpuCompareFunction, GpuDepthStencilDesc, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
@@ -16,7 +17,7 @@ fn readback_rgba16f(
 ) -> Vec<[f32; 4]> {
     let bytes_per_row = w * 8;
     let total = u64::from(h * bytes_per_row);
-    let readback = device.create_buffer_shared(total);
+    let readback = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("shaft-march-readback");
     enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
     enc.commit_and_wait_completed();
@@ -44,7 +45,7 @@ fn readback_depth32f(
 ) -> Vec<f32> {
     let bytes_per_row = w * 4;
     let total = u64::from(h * bytes_per_row);
-    let readback = device.create_buffer_shared(total);
+    let readback = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("appearance-depth-readback");
     enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
     enc.commit_and_wait_completed();
@@ -477,7 +478,7 @@ fn shaft_march_matches_cpu_reference() {
         mk_vertex(ext, ext),
         mk_vertex(-ext, ext),
     ];
-    let vbuf = device.create_buffer_shared(std::mem::size_of_val(&quad_verts) as u64);
+    let vbuf = device.create_buffer(std::mem::size_of_val(&quad_verts) as u64, BufferUse::Upload);
     unsafe {
         vbuf.write(0, bytemuck::cast_slice(&quad_verts));
     }
@@ -485,7 +486,10 @@ fn shaft_march_matches_cpu_reference() {
         pos_scale: [0.0, 0.0, 0.0, 1.0],
         rot_pad: [0.0, 0.0, 0.0, 0.0],
     };
-    let ibuf = device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+    let ibuf = device.create_buffer(
+        std::mem::size_of::<InstanceTransform>() as u64,
+        BufferUse::Upload,
+    );
     unsafe {
         ibuf.write(0, bytemuck::bytes_of(&identity_inst));
     }
@@ -735,7 +739,7 @@ fn appearance_weights_discard_zero_triangle_in_shadow_depth() {
         test_mesh_vertex([1.0, -1.0, 0.5]),
         test_mesh_vertex([1.0, 1.0, 0.5]),
     ];
-    let vbuf = device.create_buffer_shared(std::mem::size_of_val(&vertices) as u64);
+    let vbuf = device.create_buffer(std::mem::size_of_val(&vertices) as u64, BufferUse::Upload);
     unsafe {
         vbuf.write(0, bytemuck::cast_slice(&vertices));
     }
@@ -743,14 +747,20 @@ fn appearance_weights_discard_zero_triangle_in_shadow_depth() {
         pos_scale: [0.0, 0.0, 0.0, 1.0],
         rot_pad: [0.0, 0.0, 0.0, 0.0],
     };
-    let ibuf = device.create_buffer_shared(std::mem::size_of_val(&instance) as u64);
+    let ibuf = device.create_buffer(std::mem::size_of_val(&instance) as u64, BufferUse::Upload);
     unsafe {
         ibuf.write(0, bytemuck::bytes_of(&instance));
     }
     let all_visible = [1.0f32; 6];
     let left_hidden = [0.0f32, 0.0, 0.0, 1.0, 1.0, 1.0];
-    let all_visible_buf = device.create_buffer_shared(std::mem::size_of_val(&all_visible) as u64);
-    let left_hidden_buf = device.create_buffer_shared(std::mem::size_of_val(&left_hidden) as u64);
+    let all_visible_buf = device.create_buffer(
+        std::mem::size_of_val(&all_visible) as u64,
+        BufferUse::Upload,
+    );
+    let left_hidden_buf = device.create_buffer(
+        std::mem::size_of_val(&left_hidden) as u64,
+        BufferUse::Upload,
+    );
     unsafe {
         all_visible_buf.write(0, bytemuck::cast_slice(&all_visible));
         left_hidden_buf.write(0, bytemuck::cast_slice(&left_hidden));
@@ -877,13 +887,18 @@ fn shadow_alpha_mask_preserves_uv_selection_transform_factor_and_mirror() {
             vertices.push(v);
         }
     }
-    let vbuf =
-        device.create_buffer_shared((vertices.len() * std::mem::size_of::<MeshVertex>()) as u64);
+    let vbuf = device.create_buffer(
+        (vertices.len() * std::mem::size_of::<MeshVertex>()) as u64,
+        BufferUse::Upload,
+    );
     let vertex_count = vertices.len() as u32;
     unsafe {
         vbuf.write(0, bytemuck::cast_slice(&vertices));
     }
-    let ibuf = device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+    let ibuf = device.create_buffer(
+        std::mem::size_of::<InstanceTransform>() as u64,
+        BufferUse::Upload,
+    );
     let map = upload_rgba16f(
         &device,
         2,
@@ -1047,7 +1062,8 @@ fn render_scene_vertex_color_interpolation_and_albedo_product() {
             color: [0.0, 0.0, 1.0, 1.0],
         },
     ];
-    let vertex_buffer = device.create_buffer_shared(std::mem::size_of_val(&vertices) as u64);
+    let vertex_buffer =
+        device.create_buffer(std::mem::size_of_val(&vertices) as u64, BufferUse::Upload);
     unsafe {
         vertex_buffer.write(0, bytemuck::cast_slice(&vertices));
     }
@@ -1055,12 +1071,14 @@ fn render_scene_vertex_color_interpolation_and_albedo_product() {
         pos_scale: [0.0, 0.0, 0.0, 1.0],
         rot_pad: [0.0; 4],
     };
-    let instance_buffer =
-        device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+    let instance_buffer = device.create_buffer(
+        std::mem::size_of::<InstanceTransform>() as u64,
+        BufferUse::Upload,
+    );
     unsafe {
         instance_buffer.write(0, bytemuck::bytes_of(&instance));
     }
-    let weights_buffer = device.create_buffer_shared(4);
+    let weights_buffer = device.create_buffer(4, BufferUse::Upload);
     unsafe {
         weights_buffer.write(0, bytemuck::bytes_of(&1.0f32));
     }
@@ -1264,7 +1282,10 @@ fn extension_map_sampling_metadata_matches_production_helper() {
         pos_scale: [0.0, 0.0, 0.0, 1.0],
         rot_pad: [0.0, 0.0, 0.0, 0.0],
     };
-    let instances = device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+    let instances = device.create_buffer(
+        std::mem::size_of::<InstanceTransform>() as u64,
+        BufferUse::Upload,
+    );
     unsafe {
         instances.write(0, bytemuck::bytes_of(&instance));
     }
@@ -1276,7 +1297,8 @@ fn extension_map_sampling_metadata_matches_production_helper() {
         test_mesh_vertex([1.0, 1.0, 0.0]),
         test_mesh_vertex([-1.0, 1.0, 0.0]),
     ];
-    let vertex_buffer = device.create_buffer_shared(std::mem::size_of_val(&vertices) as u64);
+    let vertex_buffer =
+        device.create_buffer(std::mem::size_of_val(&vertices) as u64, BufferUse::Upload);
     unsafe {
         vertex_buffer.write(0, bytemuck::cast_slice(&vertices));
     }
@@ -1656,7 +1678,7 @@ fn sample_grazing_row(
     sampler: &manifold_gpu::GpuSampler,
 ) -> Vec<[f32; 4]> {
     let pipeline = device.create_compute_pipeline(ANISO_TEST_WGSL, "cs_main", "aniso-test-sample");
-    let out_buf = device.create_buffer_shared(u64::from(ANISO_TEST_ROW_LEN) * 16);
+    let out_buf = device.create_buffer(u64::from(ANISO_TEST_ROW_LEN) * 16, BufferUse::Upload);
     let bindings = [
         GpuBinding::Texture {
             binding: 0,
@@ -1901,7 +1923,7 @@ fn ray_resolution_or_canvas_change_fires_rt_realloc_reset() {
     // keep the render-pass clear fallback usable for the reset sentinel.
     let hold = s.rt_sv_hold_history[0].as_ref().expect("R16 hold history");
     let bytes_per_row = 257 * 2;
-    let readback = device.create_buffer_shared(u64::from(257 * bytes_per_row));
+    let readback = device.create_buffer(u64::from(257 * bytes_per_row), BufferUse::Upload);
     let mut enc = device.create_encoder("rt-r16-history-clear-read");
     enc.clear_texture(hold, 0.25, 0.0, 0.0, 0.0);
     enc.copy_texture_to_buffer(hold, &readback, 257, 257, bytes_per_row);
@@ -2109,11 +2131,18 @@ fn rt_post_scratch_shared_backing_matches_dedicated_across_queued_frames() {
     let dedicated_b = rgba16f_target(&device, W, H, "rt-post-scratch-dedicated-b");
     let dedicated_pre_irr = rgba16f_target(&device, W, H, "rt-post-scratch-dedicated-pre-irr");
     let dedicated_pre_n = rgba16f_target(&device, W, H, "rt-post-scratch-dedicated-pre-n");
-    let params_buffer = device.create_buffer_shared(std::mem::size_of::<AtrousPostParams>() as u64);
-    let atrous_params_buffer =
-        device.create_buffer_shared(std::mem::size_of::<AtrousParams>() as u64);
-    let gi_materials = device
-        .create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>() as u64);
+    let params_buffer = device.create_buffer(
+        std::mem::size_of::<AtrousPostParams>() as u64,
+        BufferUse::Upload,
+    );
+    let atrous_params_buffer = device.create_buffer(
+        std::mem::size_of::<AtrousParams>() as u64,
+        BufferUse::Upload,
+    );
+    let gi_materials = device.create_buffer(
+        std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>() as u64,
+        BufferUse::Upload,
+    );
     gi_materials.zero_fill();
     let sv_scratch: [manifold_gpu::GpuTexture; 2] =
         std::array::from_fn(|_| rgba16f_layers(&device, W, H, "rt-post-scratch-visibility"));
@@ -2158,15 +2187,15 @@ fn rt_post_scratch_shared_backing_matches_dedicated_across_queued_frames() {
     let bytes_per_row = W * 8;
     let readback_size = u64::from(bytes_per_row * H);
     let shared_readbacks: Vec<_> = (0..POST_FRAME_COUNT)
-        .map(|_| device.create_buffer_shared(readback_size))
+        .map(|_| device.create_buffer(readback_size, BufferUse::Upload))
         .collect();
     let dedicated_readbacks: Vec<_> = (0..POST_FRAME_COUNT)
-        .map(|_| device.create_buffer_shared(readback_size))
+        .map(|_| device.create_buffer(readback_size, BufferUse::Upload))
         .collect();
-    let shared_raw_readback = device.create_buffer_shared(readback_size);
-    let dedicated_raw_readback = device.create_buffer_shared(readback_size);
-    let shared_guide_readback = device.create_buffer_shared(readback_size);
-    let dedicated_guide_readback = device.create_buffer_shared(readback_size);
+    let shared_raw_readback = device.create_buffer(readback_size, BufferUse::Upload);
+    let dedicated_raw_readback = device.create_buffer(readback_size, BufferUse::Upload);
+    let shared_guide_readback = device.create_buffer(readback_size, BufferUse::Upload);
+    let dedicated_guide_readback = device.create_buffer(readback_size, BufferUse::Upload);
 
     let mut encoder = device.create_encoder("rt-post-scratch-parity");
     for (frame, source) in sources.iter().enumerate() {
@@ -2544,12 +2573,16 @@ fn rt_firefly_scratch_shared_backing_matches_dedicated_across_queued_frames() {
     let shared_reflection_tail = rgba16f_target(&device, W, H, "rt-firefly-shared-reflection-tail");
     let dedicated_reflection_tail =
         rgba16f_target(&device, W, H, "rt-firefly-dedicated-reflection-tail");
-    let gi_materials = device
-        .create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>() as u64);
+    let gi_materials = device.create_buffer(
+        std::mem::size_of::<manifold_gpu::raytrace::GiMaterial>() as u64,
+        BufferUse::Upload,
+    );
     gi_materials.zero_fill();
-    let atrous_params_buffer =
-        device.create_buffer_shared(std::mem::size_of::<AtrousParams>() as u64);
-    let firefly_params_buffer = device.create_buffer_shared(16);
+    let atrous_params_buffer = device.create_buffer(
+        std::mem::size_of::<AtrousParams>() as u64,
+        BufferUse::Upload,
+    );
+    let firefly_params_buffer = device.create_buffer(16, BufferUse::Upload);
     let tracer = GpuShadowRayTracer::new(&device);
     let params = AtrousParams::new([W, H], 2, true, 0);
     let firefly_params = manifold_gpu::raytrace::FireflyClampParams::new([W, H], 8.0, 4.0);
@@ -2587,26 +2620,26 @@ fn rt_firefly_scratch_shared_backing_matches_dedicated_across_queued_frames() {
 
     let readback_size = u64::from(W * H * 8);
     let preclamp_shared: Vec<_> = (0..FRAME_COUNT)
-        .map(|_| device.create_buffer_shared(readback_size))
+        .map(|_| device.create_buffer(readback_size, BufferUse::Upload))
         .collect();
     let preclamp_dedicated: Vec<_> = (0..FRAME_COUNT)
-        .map(|_| device.create_buffer_shared(readback_size))
+        .map(|_| device.create_buffer(readback_size, BufferUse::Upload))
         .collect();
     let output_shared: Vec<_> = (0..FRAME_COUNT)
-        .map(|_| device.create_buffer_shared(readback_size))
+        .map(|_| device.create_buffer(readback_size, BufferUse::Upload))
         .collect();
     let output_dedicated: Vec<_> = (0..FRAME_COUNT)
-        .map(|_| device.create_buffer_shared(readback_size))
+        .map(|_| device.create_buffer(readback_size, BufferUse::Upload))
         .collect();
     let reflection_shared: Vec<_> = (0..FRAME_COUNT)
-        .map(|_| device.create_buffer_shared(readback_size))
+        .map(|_| device.create_buffer(readback_size, BufferUse::Upload))
         .collect();
     let reflection_dedicated: Vec<_> = (0..FRAME_COUNT)
-        .map(|_| device.create_buffer_shared(readback_size))
+        .map(|_| device.create_buffer(readback_size, BufferUse::Upload))
         .collect();
-    let raw_readback = device.create_buffer_shared(readback_size);
+    let raw_readback = device.create_buffer(readback_size, BufferUse::Upload);
     let history_readbacks: [manifold_gpu::GpuBuffer; 2] =
-        std::array::from_fn(|_| device.create_buffer_shared(readback_size));
+        std::array::from_fn(|_| device.create_buffer(readback_size, BufferUse::Upload));
     let sv_layers: [manifold_gpu::GpuTexture; 2] =
         std::array::from_fn(|_| rgba16f_layers(&device, W, H, "rt-firefly-visibility"));
     let mut encoder = device.create_encoder("rt-firefly-scratch-parity");

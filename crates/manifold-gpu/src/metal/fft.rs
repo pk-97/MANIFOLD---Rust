@@ -344,10 +344,11 @@ unsafe fn tensor_data_for_buffer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BufferUse;
     use crate::metal::GpuDevice;
 
     fn upload(device: &GpuDevice, values: &[f32]) -> GpuBuffer {
-        let buf = device.create_buffer_shared((values.len() * 4) as u64);
+        let buf = device.create_buffer((values.len() * 4) as u64, BufferUse::Upload);
         let ptr = buf.mapped_ptr().expect("shared buffer has mapped_ptr");
         // SAFETY: shared buffer sized for `values`; no GPU work in flight.
         unsafe {
@@ -375,7 +376,7 @@ mod tests {
             .collect();
         let in_buf = upload(&device, &samples);
         let fft = GpuFft::new_r2c(device.raw_device(), n);
-        let out_buf = device.create_buffer_shared(fft.output_len_bytes());
+        let out_buf = device.create_buffer(fft.output_len_bytes(), BufferUse::Upload);
         let mut enc = device.create_encoder("gpu-fft-test");
         fft.encode(&mut enc, &in_buf, &out_buf);
         enc.commit_and_wait_completed();
@@ -415,7 +416,7 @@ mod tests {
             .collect();
         let outputs: Vec<GpuBuffer> = inputs
             .iter()
-            .map(|_| device.create_buffer_shared(fft.output_len_bytes()))
+            .map(|_| device.create_buffer(fft.output_len_bytes(), BufferUse::Upload))
             .collect();
         let target = |m: usize| (m + 1) % outputs.len();
         let order: Vec<usize> = (0..inputs.len()).chain((0..inputs.len()).rev()).collect();
@@ -434,7 +435,7 @@ mod tests {
         };
         for (m, input) in inputs.iter().enumerate() {
             let fresh = GpuFft::new_r2c(device.raw_device(), n);
-            let out = device.create_buffer_shared(fft.output_len_bytes());
+            let out = device.create_buffer(fft.output_len_bytes(), BufferUse::Upload);
             let mut enc = device.create_encoder("gpu-fft-fresh");
             fresh.encode(&mut enc, input, &out);
             enc.commit_and_wait_completed();
@@ -473,8 +474,8 @@ mod tests {
         assert_eq!(inverse.input_len_bytes(), forward.output_len_bytes());
 
         let in_buf = upload(&device, &values);
-        let spectrum = device.create_buffer_shared(forward.output_len_bytes());
-        let back = device.create_buffer_shared(inverse.output_len_bytes());
+        let spectrum = device.create_buffer(forward.output_len_bytes(), BufferUse::Upload);
+        let back = device.create_buffer(inverse.output_len_bytes(), BufferUse::Upload);
         let mut enc = device.create_encoder("gpu-fft-nd-test");
         forward.encode(&mut enc, &in_buf, &spectrum);
         inverse.encode(&mut enc, &spectrum, &back);
@@ -539,8 +540,8 @@ mod tests {
         assert_eq!(inverse.input_len_bytes(), forward.output_len_bytes());
         assert_eq!(inverse.output_len_bytes(), (total * 4) as u64);
         let input = upload(device, values);
-        let spectrum = device.create_buffer_shared(forward.output_len_bytes());
-        let back = device.create_buffer_shared(inverse.output_len_bytes());
+        let spectrum = device.create_buffer(forward.output_len_bytes(), BufferUse::Upload);
+        let back = device.create_buffer(inverse.output_len_bytes(), BufferUse::Upload);
         assert!(
             input.size >= forward.input_len_bytes() && spectrum.size >= forward.output_len_bytes()
         );

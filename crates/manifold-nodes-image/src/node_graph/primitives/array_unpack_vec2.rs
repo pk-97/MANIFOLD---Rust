@@ -173,9 +173,12 @@ mod gpu_tests {
         ];
         let n = input.len() as u32;
 
-        let in_buf = device.create_buffer_shared(std::mem::size_of_val(input.as_slice()) as u64);
-        let x_buf = device.create_buffer_shared((input.len() * 4) as u64);
-        let y_buf = device.create_buffer_shared((input.len() * 4) as u64);
+        let in_buf = device.create_buffer(
+            std::mem::size_of_val(input.as_slice()) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
+        let x_buf = device.create_buffer((input.len() * 4) as u64, manifold_gpu::BufferUse::Upload);
+        let y_buf = device.create_buffer((input.len() * 4) as u64, manifold_gpu::BufferUse::Upload);
         unsafe {
             in_buf.write(0, bytemuck::cast_slice(&input));
         }

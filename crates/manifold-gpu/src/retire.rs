@@ -258,6 +258,7 @@ impl Drop for RetireQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BufferUse;
     use crate::GpuDevice;
     use crate::GpuTexture;
 
@@ -386,7 +387,7 @@ mod tests {
         device.set_retirement(mark.clone());
 
         // Allocated AFTER set_retirement — carries the mark by itself.
-        let buf = device.create_buffer(4096);
+        let buf = device.create_buffer(4096, BufferUse::Gpu);
         drop(buf);
         queue.drain();
         assert_eq!(

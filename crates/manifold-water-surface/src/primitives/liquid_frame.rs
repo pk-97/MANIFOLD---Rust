@@ -6,6 +6,7 @@
 //! from the codegen mandate as cross-frame state (ADDING_PRIMITIVES.md
 //! exclusion 2): it owns the publication history.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuBuffer;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
@@ -113,7 +114,7 @@ impl LiquidFrame {
                 None => {
                     let size = sizes[i].max(4);
                     if self.placeholders[i].as_ref().is_none_or(|b| b.size != size) {
-                        let buffer = device.create_buffer_shared(size);
+                        let buffer = device.create_buffer(size, BufferUse::Upload);
                         buffer.zero_fill();
                         self.placeholders[i] = Some(buffer);
                     }

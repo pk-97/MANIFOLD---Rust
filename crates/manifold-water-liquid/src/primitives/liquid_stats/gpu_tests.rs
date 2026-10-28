@@ -2,12 +2,13 @@
 //! `n` never reach the words, whatever they hold.
 
 use super::*;
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuDevice;
 
 const SENTINEL: u32 = 0xdead_beef;
 
 fn shared(device: &GpuDevice, words: &[u32]) -> GpuBuffer {
-    let buffer = device.create_buffer_shared((words.len() * 4) as u64);
+    let buffer = device.create_buffer((words.len() * 4) as u64, BufferUse::Upload);
     // SAFETY: a shared buffer of exactly these words; no GPU work in flight.
     unsafe { buffer.write(0, bytemuck::cast_slice(words)) };
     buffer
@@ -74,8 +75,8 @@ fn reduce(device: &GpuDevice, particles: &[u32], n: u32) -> Vec<u32> {
     let particles = shared(device, particles);
     let identity = shared(device, &[0, 0, 0, 0, n.div_ceil(256).max(1), 1, 1, n]);
     let stats = shared(device, &[SENTINEL; LIQUID_STATS_WORDS as usize]);
-    let partials = device.create_buffer(partial_bytes(slots));
-    let args = device.create_buffer(ARGS_BYTES);
+    let partials = device.create_buffer(partial_bytes(slots), BufferUse::Gpu);
+    let args = device.create_buffer(ARGS_BYTES, BufferUse::Gpu);
     let mut enc = device.create_encoder("liquid stats proof");
     pipelines.encode(
         &mut enc,

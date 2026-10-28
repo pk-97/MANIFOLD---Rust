@@ -5,6 +5,7 @@
 //! re-introduces edge cropping fails loudly here instead of mangling
 //! direct-drive content on the rig. `manifold-led` itself stays untouched.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{
     GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -62,7 +63,7 @@ fn edge_extend_half_widths_is_identity_mapping() {
     enc.commit_and_wait_completed();
 
     let bytes_per_row = STRIPS * 4;
-    let buf = device.create_buffer_shared(u64::from(LEDS * bytes_per_row));
+    let buf = device.create_buffer(u64::from(LEDS * bytes_per_row), BufferUse::Upload);
     let mut read_enc = device.create_encoder("edge-identity-readback");
     read_enc.copy_texture_to_buffer(blit.output_texture(), &buf, STRIPS, LEDS, bytes_per_row);
     read_enc.commit_and_wait_completed();

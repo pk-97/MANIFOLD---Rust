@@ -184,11 +184,11 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "cut-remap-test",
         );
-        let source_buf = device.create_buffer_shared(std::mem::size_of_val(source).max(1) as u64);
-        let map_buf = device.create_buffer_shared(std::mem::size_of_val(maps).max(1) as u64);
+        let source_buf = device.create_buffer(std::mem::size_of_val(source).max(1) as u64, manifold_gpu::BufferUse::Upload);
+        let map_buf = device.create_buffer(std::mem::size_of_val(maps).max(1) as u64, manifold_gpu::BufferUse::Upload);
         let output_buf = device
-            .create_buffer_shared((maps.len() * std::mem::size_of::<MeshVertex>()).max(1) as u64);
-        let counts_buf = device.create_buffer_shared(4);
+            .create_buffer((maps.len() * std::mem::size_of::<MeshVertex>()).max(1) as u64, manifold_gpu::BufferUse::Upload);
+        let counts_buf = device.create_buffer(4, manifold_gpu::BufferUse::Upload);
         unsafe {
             source_buf.write(0, bytemuck::cast_slice(source));
             map_buf.write(0, bytemuck::cast_slice(maps));
@@ -248,9 +248,9 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "cut-weight-remap-test",
         );
-        let source_buf = device.create_buffer_shared((source.len() * 4).max(1) as u64);
-        let map_buf = device.create_buffer_shared((maps.len() * 16).max(1) as u64);
-        let output_buf = device.create_buffer_shared((maps.len() * 4).max(1) as u64);
+        let source_buf = device.create_buffer((source.len() * 4).max(1) as u64, manifold_gpu::BufferUse::Upload);
+        let map_buf = device.create_buffer((maps.len() * 16).max(1) as u64, manifold_gpu::BufferUse::Upload);
+        let output_buf = device.create_buffer((maps.len() * 4).max(1) as u64, manifold_gpu::BufferUse::Upload);
         unsafe {
             source_buf.write(0, bytemuck::cast_slice(source));
             map_buf.write(0, bytemuck::cast_slice(maps));
@@ -548,11 +548,11 @@ mod gpu_tests {
             "fused-cut-remap-test",
         );
         let source_buf =
-            device.create_buffer_shared((source.len() * std::mem::size_of::<MeshVertex>()) as u64);
-        let map_buf = device.create_buffer_shared((maps.len() * 16) as u64);
-        let weights_buf = device.create_buffer_shared((weights.len() * 4) as u64);
+            device.create_buffer((source.len() * std::mem::size_of::<MeshVertex>()) as u64, manifold_gpu::BufferUse::Upload);
+        let map_buf = device.create_buffer((maps.len() * 16) as u64, manifold_gpu::BufferUse::Upload);
+        let weights_buf = device.create_buffer((weights.len() * 4) as u64, manifold_gpu::BufferUse::Upload);
         let output_buf =
-            device.create_buffer_shared((maps.len() * std::mem::size_of::<MeshVertex>()) as u64);
+            device.create_buffer((maps.len() * std::mem::size_of::<MeshVertex>()) as u64, manifold_gpu::BufferUse::Upload);
         unsafe {
             source_buf.write(0, bytemuck::cast_slice(&source));
             map_buf.write(0, bytemuck::cast_slice(&maps));
@@ -689,9 +689,9 @@ mod gpu_tests {
             1,
             manifold_gpu::GpuTextureFormat::Rgba8Unorm,
         );
-        let source = device.create_buffer_shared(std::mem::size_of::<MeshVertex>() as u64 * 3);
-        let maps = device.create_buffer_shared(16 * 2);
-        let output = device.create_buffer_shared(std::mem::size_of::<MeshVertex>() as u64 * 2);
+        let source = device.create_buffer(std::mem::size_of::<MeshVertex>() as u64 * 3, manifold_gpu::BufferUse::Upload);
+        let maps = device.create_buffer(16 * 2, manifold_gpu::BufferUse::Upload);
+        let output = device.create_buffer(std::mem::size_of::<MeshVertex>() as u64 * 2, manifold_gpu::BufferUse::Upload);
         let source_slot = backend.pre_bind_array(ResourceId(0), source);
         let map_slot = backend.pre_bind_array(ResourceId(1), maps);
         let output_slot = backend.pre_bind_array(ResourceId(2), output);

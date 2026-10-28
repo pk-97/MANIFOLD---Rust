@@ -1033,7 +1033,7 @@ mod gpu_tests {
             mk_vertex([-1.0, 0.5, 4.0]),
             mk_vertex([0.0, 0.0, 0.0]),
         ];
-        let buffer = device.create_buffer_shared(std::mem::size_of_val(expected.as_slice()) as u64);
+        let buffer = device.create_buffer(std::mem::size_of_val(expected.as_slice()) as u64, manifold_gpu::BufferUse::Upload);
         unsafe {
             buffer.write(0, bytemuck::cast_slice(&expected));
         }
@@ -1075,7 +1075,7 @@ mod gpu_tests {
         for publish in [true, false] {
             let mut g = Graph::new();
             let live = publish.then(|| manifold_node_engine::scene::live_extent::LiveExtent {
-                counts: device.create_buffer_shared(16),
+                counts: device.create_buffer(16, manifold_gpu::BufferUse::Upload),
                 offset: 8,
                 per_item: 3,
                 bound: 6,
@@ -1108,7 +1108,7 @@ mod gpu_tests {
                 MetalBackend::new(device.arc(), 16, 16, GpuTextureFormat::Rgba16Float);
             backend.pre_bind_array(
                 r_mesh_out,
-                device.create_buffer_shared(9 * std::mem::size_of::<MeshVertex>() as u64),
+                device.create_buffer(9 * std::mem::size_of::<MeshVertex>() as u64, manifold_gpu::BufferUse::Upload),
             );
             let mut exec = Executor::new(Box::new(backend));
             exec.execute_frame(&mut g, &plan, frame_time());

@@ -6,6 +6,7 @@
 //! flight; a warm ring records and allocates nothing; and the CPU probe
 //! reports the cost of a replayed stretch against direct encoding.
 
+use crate::BufferUse;
 use objc2_metal::MTLSharedEvent;
 
 use super::*;
@@ -90,7 +91,7 @@ struct Rig {
 impl Rig {
     fn new(device: &GpuDevice, replay: bool) -> Self {
         let buffers = std::array::from_fn(|b| {
-            let buffer = device.create_buffer_shared((N * 4) as u64);
+            let buffer = device.create_buffer((N * 4) as u64, BufferUse::Upload);
             write_u32s(
                 &buffer,
                 &(0..N as u32)
@@ -109,7 +110,7 @@ impl Rig {
             label: "replay-proof texture",
             mip_levels: 1,
         });
-        let args = device.create_buffer_shared(12);
+        let args = device.create_buffer(12, BufferUse::Upload);
         write_u32s(&args, &GROUPS);
         Self {
             buffers,
@@ -506,7 +507,7 @@ fn replay_copy_matches_blit() {
     }
     let run = |replay: bool| {
         let buffers: [GpuBuffer; 2] = std::array::from_fn(|b| {
-            let buffer = device.create_buffer_shared(WORDS * 4);
+            let buffer = device.create_buffer(WORDS * 4, BufferUse::Upload);
             write_u32s(
                 &buffer,
                 &(0..WORDS as u32)
@@ -681,9 +682,12 @@ struct GatedRig {
 impl GatedRig {
     fn new(device: &GpuDevice, replay: bool, segments: usize) -> Self {
         let rig = Rig::new(device, replay);
-        let flags = device.create_buffer_shared((segments * 4) as u64);
-        let args = device.create_buffer_shared((segments * 12) as u64);
-        let ranges = device.create_buffer_shared(segments as u64 * crate::GATED_RANGE_BYTES);
+        let flags = device.create_buffer((segments * 4) as u64, BufferUse::Upload);
+        let args = device.create_buffer((segments * 12) as u64, BufferUse::Upload);
+        let ranges = device.create_buffer(
+            segments as u64 * crate::GATED_RANGE_BYTES,
+            BufferUse::Upload,
+        );
         Self {
             rig,
             gate: device.create_compute_pipeline(GATE_WGSL, "main", "replay-proof gate"),

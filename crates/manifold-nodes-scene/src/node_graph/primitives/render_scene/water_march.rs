@@ -7,6 +7,7 @@
 //! is its extent. Before a field's march, one workgroup per pool slot flags
 //! what each held tile holds, so the marches step over the tiles with nothing
 //! for them as they step over unheld ones.
+use manifold_gpu::BufferUse;
 use std::sync::LazyLock;
 
 use manifold_gpu::*;
@@ -238,8 +239,10 @@ impl WaterMarch {
             ));
         }
         if self.hits.is_none() || self.hits_size != (width, height) {
-            self.hits =
-                Some(device.create_buffer(u64::from(width) * u64::from(height) * FIELD_HIT_BYTES));
+            self.hits = Some(device.create_buffer(
+                u64::from(width) * u64::from(height) * FIELD_HIT_BYTES,
+                BufferUse::Gpu,
+            ));
             self.hits_size = (width, height);
         }
         enc.clear_buffer(self.hits.as_ref().expect("ensured"));
@@ -288,11 +291,12 @@ impl WaterMarch {
         let slot = field.slot as usize;
         let flag_bytes = u64::from(field.pool_tiles) * 4;
         if self.tile_flags.len() <= slot {
-            self.tile_flags
-                .resize_with(slot + 1, || device.create_buffer(flag_bytes));
+            self.tile_flags.resize_with(slot + 1, || {
+                device.create_buffer(flag_bytes, BufferUse::Gpu)
+            });
         }
         if self.tile_flags[slot].size < flag_bytes {
-            self.tile_flags[slot] = device.create_buffer(flag_bytes);
+            self.tile_flags[slot] = device.create_buffer(flag_bytes, BufferUse::Gpu);
         }
         let tile_flags = &self.tile_flags[slot];
         let mut flag_uniforms = uniforms;
@@ -435,10 +439,10 @@ impl WaterMarch {
             ));
         }
         if self.mist.is_none() || self.mist_size != (view.width, view.height) {
-            self.mist =
-                Some(device.create_buffer(
-                    u64::from(view.width) * u64::from(view.height) * MIST_PIXEL_BYTES,
-                ));
+            self.mist = Some(device.create_buffer(
+                u64::from(view.width) * u64::from(view.height) * MIST_PIXEL_BYTES,
+                BufferUse::Gpu,
+            ));
             self.mist_size = (view.width, view.height);
             self.mist_cleared = false;
         }

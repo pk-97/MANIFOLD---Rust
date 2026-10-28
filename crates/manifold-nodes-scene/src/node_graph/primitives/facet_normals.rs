@@ -198,11 +198,17 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "facet-normals-test",
         );
-        let sbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+        let sbuf = device.create_buffer(
+            std::mem::size_of_val(src) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             sbuf.write(0, bytemuck::cast_slice(src));
         }
-        let dbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+        let dbuf = device.create_buffer(
+            std::mem::size_of_val(src) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
 
         // One thread per VERTEX (dispatch_count = vertex count).
         let dispatch_count = src.len() as u32;

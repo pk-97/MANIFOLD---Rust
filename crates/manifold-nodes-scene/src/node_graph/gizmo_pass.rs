@@ -10,6 +10,7 @@
 //! (Ghost).
 
 use manifold_foundation::scene_surface::GizmoDrawMode;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{
     DrawCount, GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice,
     GpuEncoder, GpuLoadAction, GpuRenderPipeline, GpuTexture, GpuTextureDesc, GpuTextureDimension,
@@ -97,7 +98,7 @@ impl GizmoPass {
         if self.buffers.len() < RING || self.buffers[0].size < needed {
             let size = needed.max(4096).next_power_of_two();
             self.buffers = (0..RING)
-                .map(|_| device.create_buffer_shared(size))
+                .map(|_| device.create_buffer(size, BufferUse::Upload))
                 .collect();
         }
         self.next = (self.next + 1) % RING;

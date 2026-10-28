@@ -5,6 +5,7 @@
 //! own buffer, zeroed, with a live extent of zero. A wired selector copies the
 //! chosen live items into `out` on the GPU, zero past them.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 
@@ -189,7 +190,7 @@ fn output_resource(
 
 fn shared<T: bytemuck::Pod>(device: &manifold_gpu::GpuDevice, items: &[T], fill: u8) -> GpuBuffer {
     let bytes: &[u8] = bytemuck::cast_slice(items);
-    let buffer = device.create_buffer_shared(bytes.len().max(4) as u64);
+    let buffer = device.create_buffer(bytes.len().max(4) as u64, BufferUse::Upload);
     // SAFETY: fresh shared buffer; no GPU work has seen it.
     unsafe {
         buffer.write(0, &vec![fill; buffer.size as usize]);

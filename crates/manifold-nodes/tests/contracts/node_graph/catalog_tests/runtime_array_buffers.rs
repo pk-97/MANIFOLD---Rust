@@ -1,4 +1,5 @@
 //! Array-buffer allocation, aliasing, and live resize regressions.
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
 use manifold_node_engine::exec::execution_plan::ResourceId;
@@ -142,7 +143,7 @@ fn cymatics_survives_live_resize() {
             enc.commit_and_wait_completed();
         }
         let bytes_per_row = w * 8;
-        let buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
+        let buf = device.create_buffer(u64::from(h * bytes_per_row), BufferUse::Upload);
         let mut rb = device.create_encoder("cymatics-resize-readback");
         rb.copy_texture_to_buffer(&target.texture, &buf, w, h, bytes_per_row);
         rb.commit_and_wait_completed();

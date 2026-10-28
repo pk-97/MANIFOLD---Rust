@@ -21,6 +21,7 @@
 //! evidence (including the D3 instance fold, exercised because the hit
 //! row is a wired SLOT row).
 
+use manifold_gpu::BufferUse;
 use std::ffi::c_void;
 use std::slice;
 
@@ -176,7 +177,7 @@ fn dead_slot(pos: [f32; 3]) -> InstanceTransform {
 
 fn write_shared_buffer<T: Copy>(device: &GpuDevice, data: &[T]) -> GpuBuffer {
     let bytes = std::mem::size_of_val(data) as u64;
-    let buf = device.create_buffer_shared(bytes.max(16));
+    let buf = device.create_buffer(bytes.max(16), BufferUse::Upload);
     let ptr = buf
         .mapped_ptr()
         .expect("shared buffer must expose a mapped pointer");
@@ -312,8 +313,9 @@ fn run_probes_with_inners(
         &objects,
     );
     let normal_sources = normal_sources_slot.expect("ensure_normal_sources must allocate");
-    let gi_materials_buffer = device.create_buffer_shared(
+    let gi_materials_buffer = device.create_buffer(
         ((objects.len() * (1 + slots.len())).max(1) * std::mem::size_of::<GiMaterial>()) as u64,
+        BufferUse::Upload,
     );
 
     // Depth fixture: 8 texels, one column per probe. The kernel derives
@@ -469,7 +471,7 @@ fn run_probes_with_inners(
     );
     encoder.commit_and_wait_completed();
 
-    let readback = device.create_buffer_shared(W as u64 * 4 * 4);
+    let readback = device.create_buffer(W as u64 * 4 * 4, BufferUse::Upload);
     let mut enc2 = device.create_encoder("rt-instancing-readback");
     enc2.copy_texture_to_buffer(&out_n, &readback, W, 1, W * 4 * 4);
     enc2.commit_and_wait_completed();

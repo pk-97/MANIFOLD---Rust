@@ -1,10 +1,11 @@
 //! Bounded native Metal pixel proofs for the shipped spectrogram shader.
 use super::*;
 use crate::spectrum_worker::spectrogram_tests::column_message;
+use manifold_gpu::BufferUse;
 
 fn read_pixels(device: &GpuDevice, renderer: &SpectrumGpuRenderer) -> Vec<u8> {
     let bytes = renderer.width() as u64 * renderer.height() as u64 * 4;
-    let readback = device.create_buffer_shared(bytes);
+    let readback = device.create_buffer(bytes, BufferUse::Upload);
     let mut encoder = device.create_encoder("spectrogram proof readback");
     encoder.copy_texture_to_buffer(
         renderer.target.gpu_texture(),

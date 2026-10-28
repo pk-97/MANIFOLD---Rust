@@ -42,6 +42,7 @@
 //! `(0,0,0)` (env-band path, no ray cast, exact — no perturbation math to
 //! introduce noise).
 
+use manifold_gpu::BufferUse;
 use std::ffi::c_void;
 use std::slice;
 
@@ -69,7 +70,7 @@ struct PackedVertexNUV {
 
 fn write_shared_buffer<T: Copy>(device: &GpuDevice, data: &[T]) -> manifold_gpu::GpuBuffer {
     let bytes = std::mem::size_of_val(data) as u64;
-    let buf = device.create_buffer_shared(bytes.max(16));
+    let buf = device.create_buffer(bytes.max(16), BufferUse::Upload);
     let ptr = buf
         .mapped_ptr()
         .expect("shared buffer must expose a mapped pointer");
@@ -610,7 +611,7 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
     );
     encoder.commit_and_wait_completed();
 
-    let readback_buf = device.create_buffer_shared(2 * 4 * 4);
+    let readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Upload);
     let mut enc2 = device.create_encoder("rt-r3-readback");
     enc2.copy_texture_to_buffer(&out_refl, &readback_buf, 2, 1, 2 * 4 * 4);
     enc2.commit_and_wait_completed();

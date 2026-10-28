@@ -4,6 +4,7 @@
 //! normal-source/material texture tables. Split out of `raytrace.rs`
 //! (BUG-xmsx driver split); see that file for the module map.
 
+use crate::BufferUse;
 use crate::raytrace_types::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -902,7 +903,7 @@ unsafe impl Send for ProbeBlas {}
 unsafe impl Sync for ProbeBlas {}
 
 pub(crate) fn tlas_probe_structure(device: &GpuDevice) -> ProbeBlas {
-    let verts = device.create_buffer(3 * 12);
+    let verts = device.create_buffer(3 * 12, BufferUse::Gpu);
     let obj = RtObjectGeometry {
         instance_inner: RtObjectGeometry::NO_INNER,
         vertex_buffer: &verts,
@@ -1124,18 +1125,18 @@ pub(crate) fn prepare_accel(
             structure,
             descriptor: b.descriptor.clone(),
             tri: b.tri.clone(),
-            build_scratch: device.try_create_buffer(b.build_scratch).map_err(|_| {
-                RtAccelError::Allocation {
+            build_scratch: device
+                .try_create_buffer(b.build_scratch, BufferUse::Gpu)
+                .map_err(|_| RtAccelError::Allocation {
                     bytes: b.build_scratch,
                     resource: "BLAS build scratch",
-                }
-            })?,
-            refit_scratch: device.try_create_buffer(b.refit_scratch).map_err(|_| {
-                RtAccelError::Allocation {
+                })?,
+            refit_scratch: device
+                .try_create_buffer(b.refit_scratch, BufferUse::Gpu)
+                .map_err(|_| RtAccelError::Allocation {
                     bytes: b.refit_scratch,
                     resource: "BLAS refit scratch",
-                }
-            })?,
+                })?,
             built: false,
         });
     }
@@ -1147,13 +1148,13 @@ pub(crate) fn prepare_accel(
         })?;
     device.record_accel_allocation();
     let tlas_build_scratch = device
-        .try_create_buffer(plan.tlas_build_scratch)
+        .try_create_buffer(plan.tlas_build_scratch, BufferUse::Gpu)
         .map_err(|_| RtAccelError::Allocation {
             bytes: plan.tlas_build_scratch,
             resource: "TLAS build scratch",
         })?;
     let tlas_refit_scratch = device
-        .try_create_buffer(plan.tlas_refit_scratch)
+        .try_create_buffer(plan.tlas_refit_scratch, BufferUse::Gpu)
         .map_err(|_| RtAccelError::Allocation {
             bytes: plan.tlas_refit_scratch,
             resource: "TLAS refit scratch",
@@ -1165,6 +1166,7 @@ pub(crate) fn prepare_accel(
                 .try_create_buffer(
                     u64::from(plan.total_slots)
                         * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
+                    BufferUse::Gpu,
                 )
                 .map_err(|_| RtAccelError::Allocation {
                     bytes: u64::from(plan.total_slots)
@@ -1172,9 +1174,10 @@ pub(crate) fn prepare_accel(
                     resource: "instance descriptor buffer",
                 })?,
             device
-                .try_create_buffer_shared(
+                .try_create_buffer(
                     u64::from(plan.total_slots)
                         * std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>() as u64,
+                    BufferUse::Upload,
                 )
                 .map_err(|_| RtAccelError::Allocation {
                     bytes: u64::from(plan.total_slots)
@@ -1193,6 +1196,7 @@ pub(crate) fn prepare_accel(
             device
                 .try_create_buffer(
                     (plan.topology.len() * std::mem::size_of::<RtInstanceBuildObj>()) as u64,
+                    BufferUse::Gpu,
                 )
                 .map_err(|_| RtAccelError::Allocation {
                     bytes: (plan.topology.len() * std::mem::size_of::<RtInstanceBuildObj>()) as u64,
@@ -1203,12 +1207,14 @@ pub(crate) fn prepare_accel(
         None
     };
     let instance_obj_params_scratch = match instance_obj_params.as_ref() {
-        Some(params) => Some(device.try_create_buffer_shared(params.size).map_err(|_| {
-            RtAccelError::Allocation {
-                bytes: params.size,
-                resource: "instance build params scratch",
-            }
-        })?),
+        Some(params) => Some(
+            device
+                .try_create_buffer(params.size, BufferUse::Upload)
+                .map_err(|_| RtAccelError::Allocation {
+                    bytes: params.size,
+                    resource: "instance build params scratch",
+                })?,
+        ),
         None => None,
     };
 
@@ -1281,13 +1287,13 @@ fn build_instance_buffer_from_plan(
     let stride = std::mem::size_of::<MTLAccelerationStructureInstanceDescriptor>();
     let size = (stride * plan.topology.len().max(1)) as u64;
     let destination = device
-        .try_create_buffer(size)
+        .try_create_buffer(size, BufferUse::Gpu)
         .map_err(|_| RtAccelError::Allocation {
             bytes: size,
             resource: "instance descriptor buffer",
         })?;
     let scratch = device
-        .try_create_buffer_shared(size)
+        .try_create_buffer(size, BufferUse::Upload)
         .map_err(|_| RtAccelError::Allocation {
             bytes: size,
             resource: "instance descriptor scratch",
@@ -1778,9 +1784,10 @@ pub fn ensure_normal_sources<'a>(
     // D11: canonical rows [0, N) + slot rows [N, N+Σ) in one buffer.
     let needed = normal_source_row_count(objects);
     if slot.is_none() || *capacity < needed {
-        *slot = Some(
-            device.create_buffer_shared((needed * std::mem::size_of::<RtNormalSource>()) as u64),
-        );
+        *slot = Some(device.create_buffer(
+            (needed * std::mem::size_of::<RtNormalSource>()) as u64,
+            BufferUse::Upload,
+        ));
         *capacity = needed;
     }
     let buf = slot.as_ref().expect("just ensured above");
@@ -2001,7 +2008,7 @@ pub fn ensure_normal_sources_snapshot<'a>(
         Some(buffer) => buffer.mapped_ptr().is_some(),
     };
     if needs_private_destination || *destination_capacity < needed {
-        *destination = Some(device.create_buffer(bytes));
+        *destination = Some(device.create_buffer(bytes, BufferUse::Gpu));
         *destination_capacity = needed;
     }
     let source = scratch.as_ref().expect("normal-source scratch was ensured");

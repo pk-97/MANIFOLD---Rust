@@ -7,6 +7,7 @@
 
 use super::tracer::GpuShadowRayTracer;
 use super::{GiMaterial, RtAccel, RtAccelError, RtObjectGeometry, effective_instance_slots};
+use crate::BufferUse;
 use crate::metal::encoder::GpuEncoder;
 use crate::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
@@ -114,9 +115,9 @@ impl EmissiveLightTable {
 
 fn prepare_buffer(device: &GpuDevice, bytes: u64, shared: bool) -> Result<GpuBuffer, RtAccelError> {
     let result = if shared {
-        device.try_create_buffer_shared(bytes)
+        device.try_create_buffer(bytes, BufferUse::Upload)
     } else {
-        device.try_create_buffer(bytes)
+        device.try_create_buffer(bytes, BufferUse::Gpu)
     };
     result.map_err(|_| RtAccelError::Allocation {
         bytes,

@@ -2,6 +2,7 @@
 //! seam: walls and bodies as one signed distance per node of the display's
 //! world tiles.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer};
@@ -168,7 +169,7 @@ impl Primitive for LiquidSolidDistance {
                 bytes,
             )
             .map_err(|error| error.to_string())
-            .and_then(|()| device.try_create_buffer_shared(bytes));
+            .and_then(|()| device.try_create_buffer(bytes, BufferUse::Upload));
             match created {
                 Ok(buffer) => {
                     buffer.zero_fill();
@@ -187,7 +188,7 @@ impl Primitive for LiquidSolidDistance {
             let plan = ctx
                 .gpu_encoder()
                 .device
-                .try_create_buffer_shared(CLOCK_PLAN_BYTES);
+                .try_create_buffer(CLOCK_PLAN_BYTES, BufferUse::Upload);
             match plan {
                 Ok(plan) => {
                     plan.zero_fill();

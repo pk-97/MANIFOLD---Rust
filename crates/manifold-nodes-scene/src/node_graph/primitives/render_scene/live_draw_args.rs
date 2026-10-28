@@ -6,6 +6,7 @@
 //! A camera pass reads a second block per culled draw: the live block with
 //! only the copies that can reach the view counted (`cull_instances.wgsl`).
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use manifold_node_engine::scene::live_extent::LiveExtent;
@@ -127,7 +128,7 @@ impl LiveDrawArgs {
             .as_ref()
             .is_none_or(|buffer| buffer.size < bytes)
         {
-            self.buffer = Some(device.create_buffer_shared(bytes));
+            self.buffer = Some(device.create_buffer(bytes, BufferUse::Upload));
         }
         self.buffer.clone().expect("arguments buffer allocated")
     }
@@ -338,7 +339,7 @@ mod tests {
         let device = manifold_gpu::testkit::test_device();
         let mut writer = LiveDrawArgs::default();
         for (triangles, expected) in [(4u32, 12u32), (7, 18)] {
-            let counts = device.create_buffer_shared(8);
+            let counts = device.create_buffer(8, BufferUse::Upload);
             // SAFETY: fresh shared buffer, no GPU work in flight.
             unsafe { counts.write(0, bytemuck::cast_slice(&[0u32, triangles])) };
             let args = writer.prepare(&device, 2);
@@ -383,7 +384,7 @@ mod tests {
             (far, 300_000, 299_999),
         ];
         for (instances, count, expected) in cases {
-            let buffer = device.create_buffer_shared((instances.len() * 32) as u64);
+            let buffer = device.create_buffer((instances.len() * 32) as u64, BufferUse::Upload);
             // SAFETY: fresh shared buffer, no GPU work in flight.
             unsafe { buffer.write(0, bytemuck::cast_slice(&instances)) };
             let args = writer.prepare(&device, 2);
@@ -460,10 +461,10 @@ mod tests {
         };
         let clip = camera_clip();
         for with_prev in [false, true] {
-            let source = device.create_buffer_shared(5 * 32);
-            let out = device.create_buffer_shared(5 * 32);
-            let prev_source = device.create_buffer_shared(5 * 32);
-            let out_prev = device.create_buffer_shared(5 * 32);
+            let source = device.create_buffer(5 * 32, BufferUse::Upload);
+            let out = device.create_buffer(5 * 32, BufferUse::Upload);
+            let prev_source = device.create_buffer(5 * 32, BufferUse::Upload);
+            let out_prev = device.create_buffer(5 * 32, BufferUse::Upload);
             // SAFETY: fresh shared buffers, no GPU work in flight.
             unsafe {
                 source.write(0, bytemuck::cast_slice(&instances));

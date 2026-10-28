@@ -19,6 +19,7 @@
 //! `node.gltf_animation_source`'s import wiring uses) — `gltf_import.rs`
 //! only wires this primitive when `GltfMaterialInfo::skin` resolved.
 
+use manifold_gpu::BufferUse;
 use manifold_node_engine::scene::mesh_selection::MeshSelection;
 use manifold_node_engine::scene::mesh_source::MeshSource;
 use std::borrow::Cow;
@@ -312,7 +313,7 @@ impl Primitive for GltfSkinnedMeshSource {
             let device = ctx.gpu_encoder().device;
             let vert_bytes = &self.cached_verts[..n];
             let vert_len = (n * std::mem::size_of::<MeshVertex>()) as u64;
-            let sv = device.create_buffer_shared(vert_len.max(1));
+            let sv = device.create_buffer(vert_len.max(1), BufferUse::Upload);
             unsafe {
                 sv.write(0, bytemuck::cast_slice(vert_bytes));
             }
@@ -324,7 +325,7 @@ impl Primitive for GltfSkinnedMeshSource {
                 .map(|j| Vec4Vertex { position: *j })
                 .collect();
             let joints_len = (n * std::mem::size_of::<Vec4Vertex>()) as u64;
-            let sj = device.create_buffer_shared(joints_len.max(1));
+            let sj = device.create_buffer(joints_len.max(1), BufferUse::Upload);
             unsafe {
                 sj.write(0, bytemuck::cast_slice(&joints_vec4));
             }
@@ -335,7 +336,7 @@ impl Primitive for GltfSkinnedMeshSource {
                 .map(|w| Vec4Vertex { position: *w })
                 .collect();
             let weights_len = (n * std::mem::size_of::<Vec4Vertex>()) as u64;
-            let sw = device.create_buffer_shared(weights_len.max(1));
+            let sw = device.create_buffer(weights_len.max(1), BufferUse::Upload);
             unsafe {
                 sw.write(0, bytemuck::cast_slice(&weights_vec4));
             }
@@ -679,12 +680,18 @@ mod gpu_tests {
             64,
             manifold_gpu::GpuTextureFormat::Rgba8Unorm,
         );
-        let verts_buf = device
-            .create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64);
-        let joints_buf = device
-            .create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<Vec4Vertex>() as u64);
-        let weights_buf = device
-            .create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<Vec4Vertex>() as u64);
+        let verts_buf = device.create_buffer(
+            (CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64,
+            BufferUse::Upload,
+        );
+        let joints_buf = device.create_buffer(
+            (CAPACITY as u64) * std::mem::size_of::<Vec4Vertex>() as u64,
+            BufferUse::Upload,
+        );
+        let weights_buf = device.create_buffer(
+            (CAPACITY as u64) * std::mem::size_of::<Vec4Vertex>() as u64,
+            BufferUse::Upload,
+        );
         let verts_slot = backend.pre_bind_array(ResourceId(0), verts_buf);
         let joints_slot = backend.pre_bind_array(ResourceId(1), joints_buf);
         let weights_slot = backend.pre_bind_array(ResourceId(2), weights_buf);

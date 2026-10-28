@@ -122,7 +122,9 @@ impl ReadbackRequest {
         let buffer_size = (bytes_per_row * height) as u64;
 
         if self.buffer_capacity < buffer_size {
-            let shared_buf = gpu.device.create_buffer_shared(buffer_size);
+            let shared_buf = gpu
+                .device
+                .create_buffer(buffer_size, manifold_gpu::BufferUse::Upload);
             let mapped_ptr = shared_buf
                 .mapped_ptr()
                 .expect("shared buffer must have mapped pointer")

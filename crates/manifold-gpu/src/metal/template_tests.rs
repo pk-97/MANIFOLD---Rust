@@ -6,6 +6,7 @@
 //! a refused prepare encodes nothing and leaves every slot as it was; a slot
 //! a command buffer still runs is never rewritten.
 
+use crate::BufferUse;
 use objc2_metal::MTLSharedEvent;
 
 use super::*;
@@ -186,7 +187,7 @@ struct Run {
 impl Run {
     fn new(device: &GpuDevice) -> Self {
         let buffers = std::array::from_fn(|b| {
-            let buffer = device.create_buffer_shared((N * 4) as u64);
+            let buffer = device.create_buffer((N * 4) as u64, BufferUse::Upload);
             write(
                 &buffer,
                 &(0..N as u32)
@@ -197,9 +198,12 @@ impl Run {
         });
         Self {
             buffers,
-            state: device.create_buffer_shared(8),
-            args: device.create_buffer_shared(24),
-            ranges: device.create_buffer_shared(u64::from(ENTRIES) * crate::GATED_RANGE_BYTES),
+            state: device.create_buffer(8, BufferUse::Upload),
+            args: device.create_buffer(24, BufferUse::Upload),
+            ranges: device.create_buffer(
+                u64::from(ENTRIES) * crate::GATED_RANGE_BYTES,
+                BufferUse::Upload,
+            ),
             store: GpuTemplateStore::new(device),
         }
     }
@@ -925,7 +929,7 @@ fn template_slots_in_flight_are_never_rewritten() {
         .iter()
         .map(|_| {
             (0..4)
-                .map(|_| device.create_buffer_shared((N * 4) as u64))
+                .map(|_| device.create_buffer((N * 4) as u64, BufferUse::Upload))
                 .collect()
         })
         .collect();
@@ -1235,9 +1239,9 @@ fn template_profiled_past_the_sampler_matches_the_reference() {
         ..Spec::default()
     };
     let mut big = Run::new(&device);
-    big.ranges = device.create_buffer_shared(128 * crate::GATED_RANGE_BYTES);
+    big.ranges = device.create_buffer(128 * crate::GATED_RANGE_BYTES, BufferUse::Upload);
     let mut reference = Run::new(&device);
-    reference.ranges = device.create_buffer_shared(128 * crate::GATED_RANGE_BYTES);
+    reference.ranges = device.create_buffer(128 * crate::GATED_RANGE_BYTES, BufferUse::Upload);
     reference_frame(&device, &k, &reference, 0, spec);
     let mut enc = device.create_encoder("template-proof exhausted");
     let sampler = device

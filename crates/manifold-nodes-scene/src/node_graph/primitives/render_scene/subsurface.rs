@@ -1,5 +1,6 @@
 //! Optional geometry-based subsurface pass; .
 use super::*;
+use manifold_gpu::BufferUse;
 use manifold_gpu::raytrace::{SubsurfaceMaterial, SubsurfaceParams};
 use manifold_node_engine::scene::material::SubsurfaceMode;
 
@@ -163,7 +164,7 @@ impl SubsurfacePass {
             [None, None]
         };
         let materials = if grow {
-            Some(device.try_create_buffer(table_bytes)?)
+            Some(device.try_create_buffer(table_bytes, BufferUse::Gpu)?)
         } else {
             None
         };

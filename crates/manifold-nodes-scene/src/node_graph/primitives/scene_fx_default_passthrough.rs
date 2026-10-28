@@ -59,7 +59,10 @@ mod gpu_tests {
     }
 
     fn make_filler_weights(device: &manifold_gpu::GpuDevice, src: &[MeshVertex]) -> GpuBuffer {
-        device.create_buffer_shared(std::mem::size_of_val(src) as u64)
+        device.create_buffer(
+            std::mem::size_of_val(src) as u64,
+            manifold_gpu::BufferUse::Upload,
+        )
     }
 
     fn make_dummy_field(device: &manifold_gpu::GpuDevice) -> GpuTexture {
@@ -93,11 +96,17 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "scene-fx-passthrough",
         );
-        let sbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+        let sbuf = device.create_buffer(
+            std::mem::size_of_val(src) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             sbuf.write(0, bytemuck::cast_slice(src));
         }
-        let dbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+        let dbuf = device.create_buffer(
+            std::mem::size_of_val(src) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
 
         let uniform_bytes = bytemuck::cast_slice(uniforms);
         let mut bindings = vec![
@@ -150,7 +159,10 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let src = make_vertices();
         let filler = make_filler_weights(&device, &src);
-        let filler_mesh = device.create_buffer_shared(std::mem::size_of_val(src.as_slice()) as u64);
+        let filler_mesh = device.create_buffer(
+            std::mem::size_of_val(src.as_slice()) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         let dummy_field = make_dummy_field(&device);
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
         let count = src.len() as u32;
@@ -224,7 +236,10 @@ mod gpu_tests {
         {
             let wgsl = standalone_for_spec::<MorphMesh>().expect("morph_mesh codegen");
             let uniforms = &[u(0.0), 0u32, 0u32, count];
-            let sbuf = device.create_buffer_shared(std::mem::size_of_val(src.as_slice()) as u64);
+            let sbuf = device.create_buffer(
+                std::mem::size_of_val(src.as_slice()) as u64,
+                manifold_gpu::BufferUse::Upload,
+            );
             unsafe {
                 sbuf.write(0, bytemuck::cast_slice(&src));
             }

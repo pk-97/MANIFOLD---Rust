@@ -4,6 +4,7 @@
 //! atlas are rebuilt into fresh buffers, so a buffer the GPU may still read is
 //! never written; body and region rows are written in encoder order each frame.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use crate::bodies::{BodySupports, LiquidBodies, LiquidBody, LiquidShape};
@@ -124,7 +125,7 @@ impl LiquidBodyBuffers {
             let fresh = |bytes: &[u8], least: usize| {
                 let buffer = gpu
                     .device
-                    .create_buffer_shared(bytes.len().max(least) as u64);
+                    .create_buffer(bytes.len().max(least) as u64, BufferUse::Upload);
                 // SAFETY: new shared buffer, not yet visible to the GPU.
                 unsafe { buffer.write(0, bytes) };
                 buffer
@@ -140,14 +141,17 @@ impl LiquidBodyBuffers {
             };
             let keep = |old: Option<GpuBuffer>, needs: bool, bytes: usize| match old {
                 Some(buffer) if !needs => buffer,
-                _ => gpu.device.create_buffer_shared(bytes.max(row) as u64),
+                _ => gpu
+                    .device
+                    .create_buffer(bytes.max(row) as u64, BufferUse::Upload),
             };
             self.stored = Some(Stored {
                 bodies: keep(old_bodies, needs_bodies, row_bytes),
                 contacts: match old_contacts {
                     Some(buffer) if !needs_contacts => buffer,
-                    _ => gpu.device.create_buffer_shared(
+                    _ => gpu.device.create_buffer(
                         contact_bytes.max(std::mem::size_of::<BodySupports>()) as u64,
+                        BufferUse::Upload,
                     ),
                 },
                 regions: keep(old_regions, needs_regions, region_bytes),
@@ -158,8 +162,10 @@ impl LiquidBodyBuffers {
                 atlas: fresh(bytemuck::cast_slice(bodies.atlas()), 4),
                 clock_obstacles: gpu
                     .device
-                    .create_buffer_shared(obstacle_bytes.max(96) as u64),
-                clock_sources: gpu.device.create_buffer_shared(source_bytes.max(96) as u64),
+                    .create_buffer(obstacle_bytes.max(96) as u64, BufferUse::Upload),
+                clock_sources: gpu
+                    .device
+                    .create_buffer(source_bytes.max(96) as u64, BufferUse::Upload),
                 version,
             });
         }

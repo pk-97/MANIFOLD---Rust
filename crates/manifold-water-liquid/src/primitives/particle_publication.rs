@@ -17,6 +17,7 @@
 use super::liquid_stats::with_stats_layout;
 use super::particle_identity::{COUNT_OFFSET, IDENTITY_BYTES};
 use super::prefix_scan::{PrefixScan, ScanLabels, storage_words};
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 const SHADER: &str = include_str!("shaders/particle_publication.wgsl");
@@ -113,10 +114,10 @@ impl ParticlePublication {
                 )
                 .map_err(|error| error.to_string())?;
                 let pairs = [
-                    device.try_create_buffer_shared(pair_bytes(slots))?,
-                    device.try_create_buffer_shared(pair_bytes(slots))?,
+                    device.try_create_buffer(pair_bytes(slots), BufferUse::Upload)?,
+                    device.try_create_buffer(pair_bytes(slots), BufferUse::Upload)?,
                 ];
-                let live = device.try_create_buffer_shared(LIVE_BYTES)?;
+                let live = device.try_create_buffer(LIVE_BYTES, BufferUse::Upload)?;
                 self.pairs = Some(pairs);
                 self.live = Some(live);
             }

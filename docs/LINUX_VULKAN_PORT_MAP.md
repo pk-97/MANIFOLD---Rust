@@ -59,7 +59,7 @@ Every row below exists on Metal and is missing on Vulkan. Phases are the design 
 | Group | Items (call sites) | Phase |
 |---|---|---|
 | Device | `new`, `new_queued` (73), `device_name` (65), `create_encoder` (879), `async_queue`, `prepare_utility_pipelines` | P1 |
-| Buffers | `create_buffer` (57), `create_buffer_shared` (752), `try_create_buffer` (32), `try_create_buffer_shared` (36), becoming `create_buffer(size, use)` (section 11). `GpuBuffer`: `mapped_ptr` (409), `write`, `zero_fill` (66), `identity_key` (92), `ptr_eq` | P1 (D14) |
+| Buffers | `create_buffer(size, use)` and `try_create_buffer` with `BufferUse::{Gpu, Upload, Readback}`; every former shared buffer is `Upload` until classified (section 11). `GpuBuffer`: `mapped_ptr` (409), `write`, `zero_fill` (66), `identity_key` (92), `ptr_eq` | P1 (D14) |
 | Textures | `create_texture` (269), `try_create_texture` (9), `mip_level_view`, `layer_view`, `mip_level_count`, `is_shader_readable`. `GpuTexture` also carries `depth` (the stub lacks it) | P1 |
 | Texture uploads | `device.upload_texture` and `enc.upload_texture` (127 together); both forms stay | P1 (D22) |
 | MSAA and memoryless textures | `create_texture_msaa` (4), `create_texture_msaa_memoryless` (18) | P2 |
@@ -198,7 +198,7 @@ The overnight run does steps 2 to 8 with buffer use after step 5, then P1, GPU t
 8. **Linux compile.** Done 28 Oct: `manifold-gpu/build.rs` picks Vulkan on every target but macOS, and `cargo check --workspace --all-targets` passes in the VM. Text-field copy and paste moved to arboard on the way.
 
 **Attended, before P1 needs them**
-- **Buffer use** (section 11), one subsystem at a time with that subsystem's proofs, then one full proof run. Before step 9.
+- **Buffer use** (section 11): the API landed 29 Oct with every former shared buffer as `Upload`; classification goes one subsystem at a time with that subsystem's proofs, then one full proof run.
 - **GPU timing** consolidation, with its own spec and a profiler session before and after. Before P2.
 
 **P1, one batch each, in this order**
@@ -249,7 +249,7 @@ Every API the Vulkan backend copies gets built twice and tested twice. So shrink
 
 | Today | After | Checked by | When |
 |---|---|---|---|
-| `create_buffer`, `create_buffer_shared`, `try_create_buffer`, `try_create_buffer_shared` (581 production calls). Shared memory is the default for GPU-only scratch, CPU-filled inputs and readbacks alike. It costs nothing on Apple's unified memory; on the 5080 it decides whether a shader reads VRAM or crosses PCIe | One `create_buffer(size, use)` plus `try_`, where use is `Gpu`, `Upload` or `Readback` (D14). Classified by evidence: a buffer whose mapping the CPU reads is `Readback`, one it only writes is `Upload` (write-only API), one it never maps is `Gpu`. On Metal, `Gpu` becomes Private. The callers that skip their write silently when `mapped_ptr()` is `None` (`detect_regions.rs:637`, `nested_cubes_geometry.rs:197`, `liquid_state.rs:341-357`, `track_regions.rs:539`, `mesh_cut_map.rs:228`) become hard errors first, so a wrong `Gpu` fails loudly instead of freezing geometry | Each subsystem's proofs, then one full proof run | Attended, before P1 step 9. The biggest NVIDIA speed item in the port |
+| `create_buffer(size, BufferUse)` with every former shared buffer as `Upload`: GPU-only scratch, CPU-filled inputs and readbacks alike. It costs nothing on Apple's unified memory; on the 5080 it decides whether a shader reads VRAM or crosses PCIe | Each buffer classified (D14) by evidence: a buffer whose mapping the CPU reads is `Readback`, one it only writes is `Upload` (write-only API), one it never maps is `Gpu`. On Metal, `Gpu` becomes Private. The callers that skip their write silently when `mapped_ptr()` is `None` (`detect_regions.rs:637`, `nested_cubes_geometry.rs:197`, `liquid_state.rs:341-357`, `track_regions.rs:539`, `mesh_cut_map.rs:228`) become hard errors first, so a wrong `Gpu` fails loudly instead of freezing geometry | Each subsystem's proofs, then one full proof run | One subsystem per batch. The biggest NVIDIA speed item in the port |
 | About 20 draw forms (`draw_instanced_depth*` alone has 8) | One draw call taking a descriptor: pass, viewport, depth, instance batch, topology | Same | Overnight |
 | 7 commit forms | `commit`, `commit_and_continue`, `commit_wait_and_continue` (coupled liquids wait mid-graph, `substep_region.rs:223`), and `commit_and_wait` returning a Result | Compiler | Overnight |
 | 5 ways to read GPU time: `tap_gpu_time`, `add_gpu_time_handler`, `commit_and_wait_completed_timed`, `commit_and_wait_profiled`, `GpuSpanTimer` (plus `raytrace/trace_timing.rs`) | One per-submit GPU time stream that the profiler, the span timer and the perf tools all read, plus the per-dispatch profiler. It redesigns the profiler, which proves every speed claim, so it gets its own spec | A profiler session before and after | Attended, before P2 |

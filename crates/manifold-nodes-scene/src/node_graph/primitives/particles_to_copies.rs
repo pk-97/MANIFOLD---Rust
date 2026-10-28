@@ -127,7 +127,7 @@ mod gpu_tests {
     }
 
     fn shared<T: bytemuck::Pod>(device: &GpuDevice, data: &[T]) -> GpuBuffer {
-        let buffer = device.create_buffer_shared(std::mem::size_of_val(data).max(16) as u64);
+        let buffer = device.create_buffer(std::mem::size_of_val(data).max(16) as u64, manifold_gpu::BufferUse::Upload);
         // SAFETY: shared storage, no GPU work in flight.
         unsafe { buffer.write(0, bytemuck::cast_slice(data)) };
         buffer
@@ -142,7 +142,7 @@ mod gpu_tests {
     fn standalone(device: &GpuDevice, src: &[FluidParticle], live_count: f32) -> Vec<InstanceTransform> {
         let pipeline = device.create_compute_pipeline(&standalone_for_spec::<ParticlesToCopies>().unwrap(), ENTRY, "particles-to-copies");
         let input = shared(device, src);
-        let out = device.create_buffer_shared((src.len() * std::mem::size_of::<InstanceTransform>()) as u64);
+        let out = device.create_buffer((src.len() * std::mem::size_of::<InstanceTransform>()) as u64, manifold_gpu::BufferUse::Upload);
         let uniforms = Uniforms { live_count, dispatch_count: src.len() as u32, _pad0: 0, _pad1: 0 };
         let mut enc = device.create_encoder("particles-to-copies");
         enc.dispatch_compute(
@@ -238,7 +238,7 @@ mod gpu_tests {
         let copies = standalone(&device, &src, live_count);
         let copies_buf = shared(&device, &copies);
         let weights_buf = shared(&device, &weights);
-        let unfused_out = device.create_buffer_shared(std::mem::size_of_val(copies.as_slice()) as u64);
+        let unfused_out = device.create_buffer(std::mem::size_of_val(copies.as_slice()) as u64, manifold_gpu::BufferUse::Upload);
         let displace = device.create_compute_pipeline(&standalone_for_spec::<DisplaceCopies>().unwrap(), ENTRY, "displace");
         let du = super::super::displace_copies::Uniforms {
             amount,
@@ -282,7 +282,7 @@ mod gpu_tests {
             words.push(0);
         }
         let particles_buf = shared(&device, &src);
-        let fused_out = device.create_buffer_shared(std::mem::size_of_val(copies.as_slice()) as u64);
+        let fused_out = device.create_buffer(std::mem::size_of_val(copies.as_slice()) as u64, manifold_gpu::BufferUse::Upload);
         let pipeline = device.create_compute_pipeline(&fused.wgsl, ENTRY, "particles-copies-fused");
         let mut enc = device.create_encoder("fused");
         enc.dispatch_compute(

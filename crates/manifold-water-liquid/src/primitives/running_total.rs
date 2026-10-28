@@ -5,6 +5,7 @@
 //! runs from `in` straight into `out`, no copy either side. Its
 //! `extent` keeps last frame's total on the GPU (GPU_FLUID_SURFACE_DESIGN.md P6b).
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
@@ -129,14 +130,16 @@ impl Primitive for RunningTotal {
                 ));
             }
             if self.total_cell.is_none() {
-                self.total_cell = Some(gpu.device.create_buffer_shared(4));
+                self.total_cell = Some(gpu.device.create_buffer(4, BufferUse::Upload));
             }
             if self.last_total.is_none() {
-                let last = gpu.device.create_buffer_shared(4);
+                let last = gpu.device.create_buffer(4, BufferUse::Upload);
                 last.zero_fill();
                 self.last_total = Some(last);
-                self.extent_scratch =
-                    Some(gpu.device.create_buffer_shared(u64::from(EXTENT_WORDS) * 4));
+                self.extent_scratch = Some(
+                    gpu.device
+                        .create_buffer(u64::from(EXTENT_WORDS) * 4, BufferUse::Upload),
+                );
             }
         }
         let (Some(input), Some(out)) = (ctx.inputs.array("in"), ctx.outputs.array("out")) else {

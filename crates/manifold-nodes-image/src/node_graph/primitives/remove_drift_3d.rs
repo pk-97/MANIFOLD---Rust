@@ -16,6 +16,7 @@
 //! sums over live particles → single-workgroup reduce to the mean →
 //! elementwise subtract. Fixed tree + fixed stride = bit-deterministic.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
@@ -156,7 +157,10 @@ impl Primitive for RemoveDrift3D {
             ));
         }
         if self.partials.is_none() {
-            self.partials = Some(gpu.device.create_buffer(u64::from(NUM_PARTIALS) * 16));
+            self.partials = Some(
+                gpu.device
+                    .create_buffer(u64::from(NUM_PARTIALS) * 16, BufferUse::Gpu),
+            );
         }
 
         let partial_pipeline = self.pipeline.as_ref().expect("just inserted");
@@ -255,10 +259,11 @@ mod gpu_tests {
         let finalize = device.create_compute_pipeline(SRC, "finalize_main", "rd-finalize");
         let apply = device.create_compute_pipeline(SRC, "apply_main", "rd-apply");
 
-        let in_buf = device.create_buffer_shared(std::mem::size_of_val(forces) as u64);
-        let p_buf = device.create_buffer_shared(std::mem::size_of_val(particles) as u64);
-        let partials = device.create_buffer_shared(u64::from(NUM_PARTIALS) * 16);
-        let out_buf = device.create_buffer_shared(std::mem::size_of_val(forces) as u64);
+        let in_buf = device.create_buffer(std::mem::size_of_val(forces) as u64, BufferUse::Upload);
+        let p_buf =
+            device.create_buffer(std::mem::size_of_val(particles) as u64, BufferUse::Upload);
+        let partials = device.create_buffer(u64::from(NUM_PARTIALS) * 16, BufferUse::Upload);
+        let out_buf = device.create_buffer(std::mem::size_of_val(forces) as u64, BufferUse::Upload);
         unsafe {
             in_buf.write(0, bytemuck::cast_slice(forces));
             p_buf.write(0, bytemuck::cast_slice(particles));

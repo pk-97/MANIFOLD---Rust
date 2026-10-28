@@ -60,7 +60,8 @@ mod gpu_tests {
     const SENTINEL: u32 = 0xdead_beef;
 
     fn shared(device: &GpuDevice, words: &[u32]) -> GpuBuffer {
-        let buffer = device.create_buffer_shared((words.len() * 4) as u64);
+        let buffer =
+            device.create_buffer((words.len() * 4) as u64, manifold_gpu::BufferUse::Upload);
         // SAFETY: a shared buffer of exactly these words; no GPU work in flight.
         unsafe { buffer.write(0, bytemuck::cast_slice(words)) };
         buffer

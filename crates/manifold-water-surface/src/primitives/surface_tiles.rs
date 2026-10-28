@@ -10,6 +10,7 @@
 //! interior holds the tiles it fills, so `node.interior_fill` has tiles to
 //! draw it on.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 use std::sync::LazyLock;
 
@@ -180,7 +181,7 @@ fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
 }
 
 fn shared(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
-    let buffer = device.try_create_buffer_shared(bytes.max(16))?;
+    let buffer = device.try_create_buffer(bytes.max(16), BufferUse::Upload)?;
     buffer.zero_fill();
     Ok(buffer)
 }

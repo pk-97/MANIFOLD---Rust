@@ -4,6 +4,7 @@
 //! fade, cross-section pi r^2 and extinction efficiency 2;
 //! the kernel-smoothed sum over droplets is the coefficient at the node.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
@@ -83,7 +84,7 @@ fn ensure_buffer(
     if slot.as_ref().is_none_or(|buffer| buffer.size != bytes) {
         *slot = Some(
             device
-                .try_create_buffer_shared(bytes)
+                .try_create_buffer(bytes, BufferUse::Upload)
                 .map_err(|error| error.to_string())?,
         );
     }

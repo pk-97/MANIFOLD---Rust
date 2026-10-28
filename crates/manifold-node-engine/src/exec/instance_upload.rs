@@ -187,10 +187,14 @@ mod gpu_tests {
     #[test]
     fn version_skip_and_destination_change() {
         let device = manifold_gpu::testkit::test_device();
-        let first =
-            device.create_buffer_shared(8 * std::mem::size_of::<InstanceTransform>() as u64);
-        let second =
-            device.create_buffer_shared(8 * std::mem::size_of::<InstanceTransform>() as u64);
+        let first = device.create_buffer(
+            8 * std::mem::size_of::<InstanceTransform>() as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
+        let second = device.create_buffer(
+            8 * std::mem::size_of::<InstanceTransform>() as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         let source: Vec<_> = (0..3).map(instance).collect();
         let mut upload = InstanceSnapshotUpload::default();
         assert_eq!(
@@ -211,7 +215,10 @@ mod gpu_tests {
     #[test]
     fn shrink_and_empty_clear_stale_tail() {
         let device = manifold_gpu::testkit::test_device();
-        let dst = device.create_buffer_shared(12 * std::mem::size_of::<InstanceTransform>() as u64);
+        let dst = device.create_buffer(
+            12 * std::mem::size_of::<InstanceTransform>() as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         let source: Vec<_> = (0..9).map(instance).collect();
         let short: Vec<_> = (0..3).map(|index| instance(index + 20)).collect();
         let mut upload = InstanceSnapshotUpload::default();
@@ -240,7 +247,10 @@ mod gpu_tests {
     #[test]
     fn overflow_rejects_before_touching_destination() {
         let device = manifold_gpu::testkit::test_device();
-        let dst = device.create_buffer_shared(3 * std::mem::size_of::<InstanceTransform>() as u64);
+        let dst = device.create_buffer(
+            3 * std::mem::size_of::<InstanceTransform>() as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             std::ptr::write_bytes(
                 dst.mapped_ptr().expect("shared destination buffer"),
@@ -266,10 +276,14 @@ mod gpu_tests {
     #[test]
     fn sequential_queued_snapshots_keep_inline_data() {
         let device = manifold_gpu::testkit::test_device();
-        let first =
-            device.create_buffer_shared(3 * std::mem::size_of::<InstanceTransform>() as u64);
-        let second =
-            device.create_buffer_shared(3 * std::mem::size_of::<InstanceTransform>() as u64);
+        let first = device.create_buffer(
+            3 * std::mem::size_of::<InstanceTransform>() as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
+        let second = device.create_buffer(
+            3 * std::mem::size_of::<InstanceTransform>() as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         let first_source: Vec<_> = (0..3).map(instance).collect();
         let second_source: Vec<_> = (100..103).map(instance).collect();
         let mut first_upload = InstanceSnapshotUpload::default();

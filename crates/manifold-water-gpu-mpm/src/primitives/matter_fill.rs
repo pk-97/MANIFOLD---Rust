@@ -1,6 +1,7 @@
 //! `node.matter_fill` — seed a matter domain's points: a pool of the lowest authored cells plus one
 //! box, in cell order. Mesh fills join in P3b.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer};
@@ -269,7 +270,7 @@ impl Primitive for MatterFill {
                 grown,
             )
             .map_err(|error| error.to_string())
-            .and_then(|()| device.try_create_buffer_shared(grown));
+            .and_then(|()| device.try_create_buffer(grown, BufferUse::Upload));
             match created {
                 Ok(buffer) => {
                     self.buffer = Some(buffer);

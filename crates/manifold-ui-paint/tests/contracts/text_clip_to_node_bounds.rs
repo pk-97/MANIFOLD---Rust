@@ -11,6 +11,7 @@
 
 #![cfg(target_os = "macos")]
 
+use manifold_gpu::BufferUse;
 use std::ffi::c_void;
 use std::slice;
 
@@ -277,7 +278,7 @@ fn flush_fit_label_keeps_edge_glyphs() {
 fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
     let bytes_per_row = W * 4;
     let total = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer_shared(total);
+    let buf = device.create_buffer(total, BufferUse::Upload);
 
     let mut enc = device.create_encoder("text-clip-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);

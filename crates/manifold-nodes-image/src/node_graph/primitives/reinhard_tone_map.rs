@@ -229,7 +229,10 @@ mod gpu_tests {
             .texture_2d(tm_output_slot)
             .expect("tone map output should be retained on backend");
         let bytes_per_row = w * 8;
-        let buf = device.create_buffer_shared(u64::from(h * bytes_per_row));
+        let buf = device.create_buffer(
+            u64::from(h * bytes_per_row),
+            manifold_gpu::BufferUse::Upload,
+        );
         let mut rb_enc = device.create_encoder("reinhard-readback");
         rb_enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
         rb_enc.commit_and_wait_completed();

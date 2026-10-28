@@ -169,7 +169,7 @@ pub mod gpu {
 
     pub fn shared<T: bytemuck::Pod>(device: &GpuDevice, data: &[T]) -> GpuBuffer {
         let bytes = bytemuck::cast_slice(data);
-        let buffer = device.create_buffer_shared(bytes.len().max(16) as u64);
+        let buffer = device.create_buffer(bytes.len().max(16) as u64, manifold_gpu::BufferUse::Upload);
         buffer.zero_fill();
         // SAFETY: fresh shared storage, sized for the source; not submitted yet.
         unsafe { buffer.write(0, bytes) };
@@ -320,7 +320,7 @@ pub mod gpu {
             .unwrap()
             .iter()
             .map(|src| {
-                let dst = device.create_buffer_shared(src.size);
+                let dst = device.create_buffer(src.size, manifold_gpu::BufferUse::Upload);
                 enc.copy_buffer_to_buffer(src, &dst, src.size);
                 dst
             })
@@ -430,7 +430,7 @@ pub mod gpu {
         enc: &mut manifold_gpu::GpuEncoder,
         src: &GpuBuffer,
     ) -> GpuBuffer {
-        let dst = device.create_buffer_shared(src.size);
+        let dst = device.create_buffer(src.size, manifold_gpu::BufferUse::Upload);
         enc.copy_buffer_to_buffer(src, &dst, src.size);
         dst
     }

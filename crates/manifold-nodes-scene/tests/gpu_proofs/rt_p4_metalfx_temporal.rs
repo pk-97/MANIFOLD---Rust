@@ -17,6 +17,7 @@
 //!      first time. Proves no ghost of scene A survives the reset.
 
 use half::f16;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};
 use manifold_node_engine::exec::effect_node::FrameTime;
 use manifold_node_engine::exec::temporal_reset::TemporalResetDetector;
@@ -107,7 +108,9 @@ fn readback_rgba_f32(texture: &GpuTexture, w: u32, h: u32) -> Vec<f32> {
     let h_harness = shared();
     let bytes_per_row = w * 8; // Rgba16Float = 8 bytes/px
     let total_bytes = u64::from(h * bytes_per_row);
-    let buf = h_harness.device.create_buffer_shared(total_bytes);
+    let buf = h_harness
+        .device
+        .create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = h_harness.device.create_encoder("p4-temporal-readback");
     enc.copy_texture_to_buffer(texture, &buf, w, h, bytes_per_row);
     enc.commit_and_wait_completed();

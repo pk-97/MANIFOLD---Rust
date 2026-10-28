@@ -5,6 +5,7 @@
 //! build on the same bytes, and the wired-instance section proves that a
 //! transform-only update refits the TLAS without touching the BLAS.
 
+use manifold_gpu::BufferUse;
 use std::slice;
 
 use manifold_gpu::raytrace::{
@@ -70,7 +71,7 @@ fn degenerate_triangle() -> [PackedVertex; 3] {
 }
 
 fn write_vertices(device: &GpuDevice, verts: &[PackedVertex; 3]) -> GpuBuffer {
-    let buffer = device.create_buffer_shared(std::mem::size_of_val(verts) as u64);
+    let buffer = device.create_buffer(std::mem::size_of_val(verts) as u64, BufferUse::Upload);
     let ptr = buffer
         .mapped_ptr()
         .expect("fixture vertex buffer must be mapped");
@@ -180,7 +181,7 @@ fn fresh_build_hit(
     let tracer = GpuShadowRayTracer::new(device);
     let vertices = write_vertices(device, vertices_data);
     let instances = instance_x.map(|x| {
-        let buffer = device.create_buffer_shared(32);
+        let buffer = device.create_buffer(32, BufferUse::Upload);
         write_instance(&buffer, x);
         buffer
     });
@@ -353,7 +354,7 @@ fn rt_dynamic_selective_refit_matches_fresh_build_and_instances() {
     );
 
     let instance_vertices = write_vertices(device, &triangle_at(0.0));
-    let instances = device.create_buffer_shared(32);
+    let instances = device.create_buffer(32, BufferUse::Upload);
     write_instance(&instances, 2.0);
     let instance_objects = [object(&instance_vertices, Some(&instances))];
     let plan = tracer

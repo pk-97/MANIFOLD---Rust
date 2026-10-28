@@ -12,6 +12,7 @@
 //! accumulate with atomics, resolve), so it is a barriered reduction, not a
 //! fusable per-element atom (docs/ADDING_PRIMITIVES.md exclusion 1).
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
@@ -134,7 +135,10 @@ impl Primitive for SmoothNormals {
         let gpu = ctx.gpu_encoder();
         let state = &mut self.state;
         if state.slots < slots || state.table.is_none() {
-            state.table = Some(gpu.device.create_buffer(u64::from(slots) * SLOT_BYTES));
+            state.table = Some(
+                gpu.device
+                    .create_buffer(u64::from(slots) * SLOT_BYTES, BufferUse::Gpu),
+            );
             state.slots = slots;
         }
         let table = state
@@ -289,12 +293,12 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let count = src.len() as u32;
         let slots = (count * 2).max(64).next_power_of_two();
-        let input = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+        let input = device.create_buffer(std::mem::size_of_val(src) as u64, BufferUse::Upload);
         unsafe {
             input.write(0, bytemuck::cast_slice(src));
         }
-        let table = device.create_buffer(u64::from(slots) * SLOT_BYTES);
-        let output = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+        let table = device.create_buffer(u64::from(slots) * SLOT_BYTES, BufferUse::Gpu);
+        let output = device.create_buffer(std::mem::size_of_val(src) as u64, BufferUse::Upload);
         let uniforms = SmoothUniforms {
             count,
             slots,

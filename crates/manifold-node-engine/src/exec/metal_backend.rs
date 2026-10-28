@@ -1343,7 +1343,7 @@ mod array_buffer_tests {
         let (device, mut b) = make_backend();
         let layout = particle_layout();
         let capacity = 1024u32;
-        let buffer = device.create_buffer(u64::from(layout.item_size) * u64::from(capacity));
+        let buffer = device.create_buffer(u64::from(layout.item_size) * u64::from(capacity), manifold_gpu::BufferUse::Gpu);
         let buf_size = buffer.size;
 
         let slot = b.pre_bind_array(ResourceId(0), buffer);
@@ -1362,7 +1362,7 @@ mod array_buffer_tests {
         // back the pinned slot — not allocate a fresh one.
         let (device, mut b) = make_backend();
         let layout = particle_layout();
-        let buffer = device.create_buffer(u64::from(layout.item_size) * 256);
+        let buffer = device.create_buffer(u64::from(layout.item_size) * 256, manifold_gpu::BufferUse::Gpu);
 
         let pinned = b.pre_bind_array(ResourceId(0), buffer);
         // Array slots ignore dims (pool_key normalizes them); pass
@@ -1381,7 +1381,7 @@ mod array_buffer_tests {
         // unpin it.
         let (device, mut b) = make_backend();
         let layout = particle_layout();
-        let buffer = device.create_buffer(u64::from(layout.item_size) * 64);
+        let buffer = device.create_buffer(u64::from(layout.item_size) * 64, manifold_gpu::BufferUse::Gpu);
 
         let slot = b.pre_bind_array(ResourceId(0), buffer);
         b.release(ResourceId(0), PortType::Array(layout), None, (16, 16));
@@ -1506,7 +1506,7 @@ mod array_buffer_tests {
     fn drop_all_resources_clears_array_buffers() {
         let (device, mut b) = make_backend();
         let layout = particle_layout();
-        let buffer = device.create_buffer(u64::from(layout.item_size) * 32);
+        let buffer = device.create_buffer(u64::from(layout.item_size) * 32, manifold_gpu::BufferUse::Gpu);
         let slot = b.pre_bind_array(ResourceId(0), buffer);
         assert!(b.array_buffer(slot).is_some());
 
@@ -1670,7 +1670,7 @@ mod alias_tests {
     #[test]
     fn alias_array_makes_dst_read_src_buffer_and_extent() {
         let (device, mut b) = make_backend();
-        let buffer = |n: u64| device.create_buffer_shared(n);
+        let buffer = |n: u64| device.create_buffer(n, manifold_gpu::BufferUse::Upload);
         let src = b.pre_bind_array(ResourceId(0), buffer(64));
         let dst = b.pre_bind_array(ResourceId(1), buffer(128));
         let next = b.pre_bind_array(ResourceId(2), buffer(128));

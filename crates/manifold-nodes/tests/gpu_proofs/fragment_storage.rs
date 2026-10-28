@@ -7,6 +7,7 @@
 //! read per-pixel from the fragment shader. Byte-level value assert via f16
 //! readback.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuTextureFormat};
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
@@ -81,7 +82,7 @@ fn fragment_reads_storage_buffer_via_bytes_binding() {
     enc.commit_and_wait_completed();
 
     let bytes_per_row = w * 8;
-    let buf = device.create_buffer_shared(u64::from(hgt * bytes_per_row));
+    let buf = device.create_buffer(u64::from(hgt * bytes_per_row), BufferUse::Upload);
     let mut rb = device.create_encoder("fsp-readback");
     rb.copy_texture_to_buffer(&target.texture, &buf, w, hgt, bytes_per_row);
     rb.commit_and_wait_completed();

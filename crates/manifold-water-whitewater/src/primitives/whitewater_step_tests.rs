@@ -268,7 +268,9 @@ mod gpu {
         let h = 0.1;
         let shape = step_shape(&table, h, 256);
         let shared = |bytes: &[u8]| {
-            let b = harness.device.create_buffer_shared(bytes.len() as u64);
+            let b = harness
+                .device
+                .create_buffer(bytes.len() as u64, manifold_gpu::BufferUse::Upload);
             // SAFETY: fresh shared storage, not submitted yet.
             unsafe { b.write(0, bytes) };
             b

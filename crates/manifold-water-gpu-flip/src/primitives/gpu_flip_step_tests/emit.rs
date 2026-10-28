@@ -1,6 +1,7 @@
 //! Fill, inflow and outflow proofs.
 
 use super::*;
+use manifold_gpu::BufferUse;
 
 pub(super) fn cpu_fill_hash(x: u32) -> u32 {
     let s = x.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
@@ -447,7 +448,7 @@ pub(super) fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
 
 /// Shared words on the device, for the birth reservation's inputs.
 fn device_words(device: &GpuDevice, words: &[u32]) -> GpuBuffer {
-    let buffer = device.create_buffer_shared((words.len() * 4) as u64);
+    let buffer = device.create_buffer((words.len() * 4) as u64, BufferUse::Upload);
     // SAFETY: a shared buffer of exactly these words; no GPU work in flight.
     unsafe { buffer.write(0, bytemuck::cast_slice(words)) };
     buffer

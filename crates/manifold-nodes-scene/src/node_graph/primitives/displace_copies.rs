@@ -175,13 +175,13 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "wave-pilot-displace",
         );
-        let input = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
-        let weight_buf = device.create_buffer_shared(std::mem::size_of_val(weights) as u64);
+        let input = device.create_buffer(std::mem::size_of_val(src) as u64, manifold_gpu::BufferUse::Upload);
+        let weight_buf = device.create_buffer(std::mem::size_of_val(weights) as u64, manifold_gpu::BufferUse::Upload);
         unsafe {
             input.write(0, bytemuck::cast_slice(src));
             weight_buf.write(0, bytemuck::cast_slice(weights));
         }
-        let output = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+        let output = device.create_buffer(std::mem::size_of_val(src) as u64, manifold_gpu::BufferUse::Upload);
         let uniforms = Uniforms {
             amount,
             direction_x: direction[0],

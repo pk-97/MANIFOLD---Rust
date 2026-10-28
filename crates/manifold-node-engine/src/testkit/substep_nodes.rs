@@ -4,6 +4,7 @@
 //! sink that makes the region live. Compiled for unit tests and the
 //! `gpu-proofs` feature only.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use crate::exec::effect_node::{
@@ -317,7 +318,7 @@ impl EffectNode for TickPublisher {
             .is_none_or(|copy| copy.size != source.size)
         {
             self.copies = std::array::from_fn(|_| {
-                let copy = gpu.device.create_buffer_shared(source.size);
+                let copy = gpu.device.create_buffer(source.size, BufferUse::Upload);
                 copy.zero_fill();
                 Some(copy)
             });

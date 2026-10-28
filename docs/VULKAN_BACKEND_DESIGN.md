@@ -1,6 +1,6 @@
 # Vulkan Backend — Design (Linux first)
 
-**Status:** design approved, not built. The `vulkan/` module is a stub and `manifold-gpu` does not compile with `--features vulkan` (`shadow_caster.rs:87` calls `create_buffer_shared`, which the stub lacks).
+**Status:** being built. P1's compute, copies and submission run on KosmicKrisp; render passes, the surface and the rest follow the port map's run order (`LINUX_VULKAN_PORT_MAP.md`).
 **Order:** Linux first, Windows later. The Linux machine (RTX 5080, Ryzen 9 9950X3D) is on order; until it arrives everything is built and tested on the Mac through a Vulkan driver that runs on Metal, and real NVIDIA performance comes last.
 **Who reads this:** the lead, who writes worker specs from it. This file holds the rules and decisions. The inventory (what breaks, file by file) and the work order live in `LINUX_VULKAN_PORT_MAP.md`; re-check it at the start of every phase, the Metal side keeps moving.
 

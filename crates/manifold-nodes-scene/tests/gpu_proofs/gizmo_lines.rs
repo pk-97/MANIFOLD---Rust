@@ -12,6 +12,7 @@
 
 use half::f16;
 use manifold_foundation::scene_surface::GizmoDrawMode;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -95,7 +96,7 @@ fn render(scene: &str, gizmo_depth: bool) -> Frame {
 
 fn read(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
     let bytes_per_row = texture.width * 8;
-    let buf = device.create_buffer_shared(u64::from(texture.height * bytes_per_row));
+    let buf = device.create_buffer(u64::from(texture.height * bytes_per_row), BufferUse::Upload);
     let mut enc = device.create_encoder("gizmo-proof-readback");
     enc.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);
     enc.commit_and_wait_completed();

@@ -52,6 +52,7 @@
 //! `set_dump_all`) then reads back `depth`'s specific texture by port name.
 
 use half::f16;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuTexture, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::persistence::PrimitiveRegistry;
@@ -220,7 +221,7 @@ fn readback_r32float(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) -> 
     const BYTES_PER_PIXEL: u32 = 4;
     let bytes_per_row = texture.width * BYTES_PER_PIXEL;
     let total_bytes = u64::from(texture.height * bytes_per_row);
-    let buf = device.create_buffer_shared(total_bytes);
+    let buf = device.create_buffer(total_bytes, BufferUse::Upload);
 
     let mut enc = device.create_encoder("gbuffer-depth-readback");
     enc.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);

@@ -2,6 +2,7 @@
 //! The shared-memory buffer is CPU-readable without mapping — after the GPU
 //! command buffer completes, bytes are available directly via the mapped pointer.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBuffer, GpuDevice, GpuTexture};
 
 /// A pending or completed GPU readback of an Rgba8Unorm texture.
@@ -60,7 +61,7 @@ impl ReadbackRequest {
             .as_ref()
             .is_none_or(|b| b.size() < buffer_size);
         if needs_new {
-            self.staging_buffer = Some(device.create_buffer_shared(buffer_size));
+            self.staging_buffer = Some(device.create_buffer(buffer_size, BufferUse::Upload));
         }
 
         let staging = self.staging_buffer.as_ref().unwrap();

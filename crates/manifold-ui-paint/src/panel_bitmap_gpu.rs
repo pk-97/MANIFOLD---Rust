@@ -4,6 +4,7 @@
 //! a positioned quad via `draw_indexed`. The timeline grid is not here: it is
 //! GPU lines (`timeline_grid_draw`).
 
+use manifold_gpu::BufferUse;
 use std::sync::Arc;
 
 use manifold_gpu::{
@@ -193,7 +194,7 @@ impl PanelBitmapGpu {
 
         // Pre-allocated index buffer for one quad
         let index_data: [u32; 6] = [0, 1, 2, 0, 2, 3];
-        let index_buf = device.create_buffer_shared(24); // 6 × 4 bytes
+        let index_buf = device.create_buffer(24, BufferUse::Upload); // 6 × 4 bytes
         unsafe {
             std::ptr::copy_nonoverlapping(
                 index_data.as_ptr(),
@@ -204,7 +205,7 @@ impl PanelBitmapGpu {
 
         // Pre-allocate ring-buffered vertex buffers for layer quads.
         let vbuf_size = (MAX_LAYER_QUADS * 4 * std::mem::size_of::<BitmapVertex>()) as u64;
-        let vbuf_ring = std::array::from_fn(|_| device.create_buffer_shared(vbuf_size));
+        let vbuf_ring = std::array::from_fn(|_| device.create_buffer(vbuf_size, BufferUse::Upload));
 
         Self {
             textures: Vec::new(),

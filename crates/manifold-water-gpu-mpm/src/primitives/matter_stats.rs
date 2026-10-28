@@ -7,6 +7,7 @@
 //! wrapper returns early per thread, which would make its barriers
 //! non-uniform.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
@@ -206,7 +207,7 @@ impl Primitive for MatterStats {
             .as_ref()
             .is_none_or(|b| b.size < partial_bytes)
         {
-            self.partials = Some(gpu.device.create_buffer(partial_bytes));
+            self.partials = Some(gpu.device.create_buffer(partial_bytes, BufferUse::Gpu));
         }
         let partials = self.partials.as_ref().expect("partials prepared");
         let params = StatsParams {

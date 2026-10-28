@@ -10,6 +10,7 @@
 //! `cached_verts` only until it is uploaded to staging; the GPU copy into the
 //! pre-bound output buffer runs when content or destination storage changes.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 use std::sync::mpsc;
 use std::sync::{Arc, OnceLock};
@@ -894,7 +895,7 @@ impl Primitive for GltfMeshSource {
             let bytes = &self.cached_verts[..n];
             let len_bytes = (n * std::mem::size_of::<MeshVertex>()) as u64;
             let device = ctx.gpu_encoder().device;
-            let staging = device.create_buffer_shared(len_bytes.max(1));
+            let staging = device.create_buffer(len_bytes.max(1), BufferUse::Upload);
             let staging_identity = staging.identity_key();
             unsafe {
                 staging.write(0, bytemuck::cast_slice(bytes));
@@ -926,7 +927,7 @@ impl Primitive for GltfMeshSource {
                 }
                 if !self.cached_indices.is_empty() {
                     let idx_len_bytes = (self.cached_indices.len() * 4) as u64;
-                    let idx_staging = device.create_buffer_shared(idx_len_bytes.max(4));
+                    let idx_staging = device.create_buffer(idx_len_bytes.max(4), BufferUse::Upload);
                     unsafe {
                         idx_staging.write(0, bytemuck::cast_slice(&self.cached_indices));
                     }
@@ -1774,8 +1775,10 @@ mod gpu_tests {
             manifold_gpu::GpuTextureFormat::Rgba8Unorm,
         );
         let r_out = ResourceId(0);
-        let buf = device
-            .create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64);
+        let buf = device.create_buffer(
+            (CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64,
+            BufferUse::Upload,
+        );
         let slot = backend.pre_bind_array(r_out, buf);
         (backend, r_out, slot)
     }
@@ -1839,8 +1842,10 @@ mod gpu_tests {
 
         // A replacement destination still receives the retained staging copy
         // after the CPU vertex backing has been released.
-        let replacement = device
-            .create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64);
+        let replacement = device.create_buffer(
+            (CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64,
+            BufferUse::Upload,
+        );
         let replacement_slot = backend.pre_bind_array(r_out, replacement);
         let replacement_scratch: Vec<(&'static str, Slot)> = vec![("vertices", replacement_slot)];
         let replacement_unchanged = run_once(

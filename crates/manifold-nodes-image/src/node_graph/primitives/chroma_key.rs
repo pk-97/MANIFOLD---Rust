@@ -269,7 +269,7 @@ mod gpu_tests {
             .expect("chroma_key output should be retained on backend");
         let bytes_per_row = w * 8;
         let total_bytes = u64::from(h * bytes_per_row);
-        let buf = device.create_buffer_shared(total_bytes);
+        let buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Upload);
         let mut rb_enc = device.create_encoder("chroma-key-readback");
         rb_enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
         rb_enc.commit_and_wait_completed();

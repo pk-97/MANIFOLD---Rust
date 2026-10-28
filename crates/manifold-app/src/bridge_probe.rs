@@ -25,6 +25,7 @@
 //!
 //! Run: `cargo run --features perf-soak --bin manifold -- bridge-probe [--policy legacy|fenced] [--frames N]`
 
+use manifold_gpu::BufferUse;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -151,15 +152,16 @@ pub fn run(args: &[String]) -> ! {
             .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
         );
         let tex = bridge.texture(0);
-        let params_buf = writer_dev.create_buffer_shared(24);
+        let params_buf = writer_dev.create_buffer(24, BufferUse::Upload);
         let colour = frame_colour(7);
         let params = [colour[0], colour[1], colour[2], colour[3], 0.0, 1.0];
         unsafe {
             let ptr = params_buf.mapped_ptr().expect("mapped");
             std::ptr::copy_nonoverlapping(params.as_ptr() as *const u8, ptr, 24);
         }
-        let sink = writer_dev.create_buffer_shared(4096);
-        let buf = writer_dev.create_buffer_shared(u64::from(BYTES_PER_ROW) * u64::from(H));
+        let sink = writer_dev.create_buffer(4096, BufferUse::Upload);
+        let buf =
+            writer_dev.create_buffer(u64::from(BYTES_PER_ROW) * u64::from(H), BufferUse::Upload);
         let t0 = std::time::Instant::now();
         {
             let mut enc = writer_dev.create_encoder("selftest");
@@ -225,7 +227,7 @@ pub fn run(args: &[String]) -> ! {
         let writer_dev = writer_dev.clone();
         std::thread::spawn(move || {
             let t0 = std::time::Instant::now();
-            let sink_buf = writer_dev.create_buffer_shared(4096);
+            let sink_buf = writer_dev.create_buffer(4096, BufferUse::Upload);
             for i in 1..=frames {
                 manifold_gpu::autorelease_scope(|| {
                     let slot = ((i - 1) % SURFACE_COUNT as u64) as usize;
@@ -273,7 +275,7 @@ pub fn run(args: &[String]) -> ! {
                         // reused — a shared params buffer raced late passes
                         // of the PREVIOUS frame (measured: slot surfaces
                         // holding two frames' colours from that alone).
-                        let params_buf = writer_dev.create_buffer_shared(24);
+                        let params_buf = writer_dev.create_buffer(24, BufferUse::Upload);
                         let params = [
                             colour[0],
                             colour[1],
@@ -338,7 +340,7 @@ pub fn run(args: &[String]) -> ! {
             // own completion handlers — the reader paces itself to GPU
             // retirement instead of flooding allocations behind the writer's
             // command-buffer stream (first probe version starved: 2 reads).
-            let sink_buf = reader_dev.create_buffer_shared(4096);
+            let sink_buf = reader_dev.create_buffer(4096, BufferUse::Upload);
             let offscreens = Arc::new(
                 (0..3)
                     .map(|_| {
@@ -358,7 +360,10 @@ pub fn run(args: &[String]) -> ! {
             let read_bufs = Arc::new(
                 (0..3)
                     .map(|_| {
-                        reader_dev.create_buffer_shared(u64::from(BYTES_PER_ROW) * u64::from(H))
+                        reader_dev.create_buffer(
+                            u64::from(BYTES_PER_ROW) * u64::from(H),
+                            BufferUse::Upload,
+                        )
                     })
                     .collect::<Vec<manifold_gpu::GpuBuffer>>(),
             );

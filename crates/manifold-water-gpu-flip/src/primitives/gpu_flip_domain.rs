@@ -20,6 +20,7 @@
 //! and the pool from its wires, so Cell Size applies on change. Exempt from the
 //! codegen mandate as a CPU bridge (ADDING_PRIMITIVES.md exclusion 3).
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -899,7 +900,7 @@ impl Primitive for GpuFlipDomain {
             // moves when roles come and go.
             let reaction = self.reaction.get_or_insert_with(|| {
                 let bytes = MAX_LIQUID_BODIES * REACTION_FLOATS * 4;
-                let buffer = gpu.device.create_buffer_shared(bytes as u64);
+                let buffer = gpu.device.create_buffer(bytes as u64, BufferUse::Upload);
                 // SAFETY: new shared buffer, not yet visible to the GPU.
                 unsafe { buffer.write(0, &vec![0u8; bytes]) };
                 buffer

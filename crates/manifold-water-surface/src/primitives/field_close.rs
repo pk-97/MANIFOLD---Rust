@@ -6,6 +6,7 @@
 //! from it into the output. The node owns both and makes them on its first
 //! run, so while a switch leaves it out it holds no memory.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
@@ -74,7 +75,7 @@ fn ensure(buffer: &mut Option<GpuBuffer>, device: &GpuDevice, bytes: u64) -> Res
         bytes,
     )
     .map_err(|error| error.to_string())?;
-    *buffer = Some(device.try_create_buffer(bytes)?);
+    *buffer = Some(device.try_create_buffer(bytes, BufferUse::Gpu)?);
     Ok(())
 }
 

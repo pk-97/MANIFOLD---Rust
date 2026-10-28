@@ -8,6 +8,7 @@
 //! (`caustic_light` in `scene_shading.wgsl`). Runs only with a sun whose
 //! shadow map is drawn this frame and a meshed water that lets light through;
 //! otherwise it holds no targets and reads off.
+use manifold_gpu::BufferUse;
 use std::sync::LazyLock;
 
 use manifold_gpu::*;
@@ -120,7 +121,7 @@ impl Caustics {
     ) -> Result<(), String> {
         self.ran = false;
         self.off.get_or_insert_with(|| {
-            let off = device.create_buffer_shared(FIT_BYTES);
+            let off = device.create_buffer(FIT_BYTES, BufferUse::Upload);
             off.zero_fill();
             off
         });
@@ -150,7 +151,8 @@ impl Caustics {
                     usage: GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::SHADER_READ,
                     label: "node.render_scene caustic surface",
                 })?,
-                sums: device.try_create_buffer(3 * 4 * u64::from(side) * u64::from(side))?,
+                sums: device
+                    .try_create_buffer(3 * 4 * u64::from(side) * u64::from(side), BufferUse::Gpu)?,
                 map: device.try_create_texture(&GpuTextureDesc {
                     width: side,
                     height: side,
@@ -161,7 +163,7 @@ impl Caustics {
                     usage: GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ,
                     label: "node.render_scene caustic map",
                 })?,
-                fit: device.try_create_buffer(FIT_BYTES)?,
+                fit: device.try_create_buffer(FIT_BYTES, BufferUse::Gpu)?,
             });
         }
         let targets = self.targets.as_ref().expect("ensured");

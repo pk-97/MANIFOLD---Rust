@@ -23,6 +23,7 @@ use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::params::ParamManifest;
 use manifold_core::{Beats, Seconds};
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -625,7 +626,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
     };
 
     let groups = (M as u32).div_ceil(256);
-    let buffer = device.create_buffer(buf_bytes);
+    let buffer = device.create_buffer(buf_bytes, BufferUse::Gpu);
     let step_pipe = device.create_compute_pipeline(&make_kernel(1), "cs_main", "syn-buf-step");
 
     for n in 1..=6u32 {
@@ -789,7 +790,7 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
     let read_frame = |target: &RenderTarget, w: u32, h: u32| -> (f64, Vec<u8>) {
         let bytes_per_row = w * 8;
         let total_bytes = u64::from(h * bytes_per_row);
-        let buf = device.create_buffer_shared(total_bytes);
+        let buf = device.create_buffer(total_bytes, BufferUse::Upload);
         let mut enc = device.create_encoder("scene-readback");
         enc.copy_texture_to_buffer(&target.texture, &buf, w, h, bytes_per_row);
         enc.commit_and_wait_completed();

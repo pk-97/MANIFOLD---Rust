@@ -299,6 +299,23 @@ pub struct GpuVertexLayout {
     pub attributes: Vec<GpuVertexAttribute>,
 }
 
+// ─── Buffers ─────────────────────────────────────────────────────────
+
+/// What the CPU does with a buffer, which decides where it lives. On unified
+/// memory only `Gpu` differs (private storage); on a discrete GPU each use
+/// gets its own memory type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BufferUse {
+    /// Only the GPU reads and writes it. Never mapped; on a discrete GPU it
+    /// sits in VRAM.
+    Gpu,
+    /// The CPU writes it, the GPU reads it. Mapped for writing: CPU reads
+    /// from this memory are very slow on a discrete GPU.
+    Upload,
+    /// The GPU writes it, the CPU reads it back. Mapped and CPU-cached.
+    Readback,
+}
+
 // ─── Render pipelines ────────────────────────────────────────────────
 
 /// Everything a render pipeline is built from. Start from

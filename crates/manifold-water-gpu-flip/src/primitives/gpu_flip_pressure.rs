@@ -30,6 +30,7 @@
 //! level's rows and slots, and the pressure is prolonged back up. The
 //! coarsest level is never a gradient level.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{
     GATED_RANGE_BYTES, GatedRecorder, GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice,
     GpuEncoder, GpuTemplateStore, TemplateRanges,
@@ -455,7 +456,7 @@ impl Buffers {
     fn new(device: &GpuDevice, pool_tiles: u32) -> Result<Self, String> {
         let pools = level_pools(pool_tiles);
         let zeroed = |bytes: u64| {
-            let buffer = device.create_buffer_shared(bytes);
+            let buffer = device.create_buffer(bytes, BufferUse::Upload);
             buffer.zero_fill();
             buffer
         };
@@ -466,38 +467,39 @@ impl Buffers {
             let cells = pool_len(pair[1]);
             coarse.push(Level {
                 tiles,
-                parents: device.create_buffer(u64::from(pair[0]) * 4),
+                parents: device.create_buffer(u64::from(pair[0]) * 4, BufferUse::Gpu),
                 cell_size: 0.0,
                 water: zeroed(cells * 4),
                 touched: zeroed(cells * 4),
                 faces: zeroed(cells * FACE_BYTES),
-                rows: device.create_buffer(cells * ROW_BYTES),
-                rhs: device.create_buffer(cells * 4),
-                e: device.create_buffer(cells * 4),
+                rows: device.create_buffer(cells * ROW_BYTES, BufferUse::Gpu),
+                rhs: device.create_buffer(cells * 4, BufferUse::Gpu),
+                e: device.create_buffer(cells * 4, BufferUse::Gpu),
             });
         }
         let bases = slot_bases(&pools);
         let slots = u64::from(*bases.last().expect("the total"));
-        let vector = || device.create_buffer(pool_len(pool_tiles) * 4);
+        let vector = || device.create_buffer(pool_len(pool_tiles) * 4, BufferUse::Gpu);
         Ok(Self {
             pool_tiles,
             coarse,
-            rows: device.create_buffer(pool_len(pool_tiles) * ROW_BYTES),
+            rows: device.create_buffer(pool_len(pool_tiles) * ROW_BYTES, BufferUse::Gpu),
             r: vector(),
             z: vector(),
             p: vector(),
             scratch: vector(),
             body: vector(),
-            partials: device.create_buffer(u64::from(partial_count(pool_tiles)) * 4),
-            scalars: device.create_buffer(u64::from(2 * MAX_ITERATIONS) * 4),
-            progress: device.create_buffer(PROGRESS_BYTES),
-            flags: device.create_buffer(slots * 4),
-            lists: device.create_buffer(slots * 4),
+            partials: device
+                .create_buffer(u64::from(partial_count(pool_tiles)) * 4, BufferUse::Gpu),
+            scalars: device.create_buffer(u64::from(2 * MAX_ITERATIONS) * 4, BufferUse::Gpu),
+            progress: device.create_buffer(PROGRESS_BYTES, BufferUse::Gpu),
+            flags: device.create_buffer(slots * 4, BufferUse::Gpu),
+            lists: device.create_buffer(slots * 4, BufferUse::Gpu),
             bases,
             armed: armed(device, &pools),
             groups: armed_groups(&pools),
-            gate: device.create_buffer(gate_bytes(pools.len())),
-            ranges: device.create_buffer(RANGES_BYTES),
+            gate: device.create_buffer(gate_bytes(pools.len()), BufferUse::Gpu),
+            ranges: device.create_buffer(RANGES_BYTES, BufferUse::Gpu),
         })
     }
 }
@@ -626,7 +628,7 @@ fn armed_groups(pools: &[u32]) -> Vec<[u32; 3]> {
 /// triples with the live slot counts.
 fn armed(device: &GpuDevice, pools: &[u32]) -> GpuBuffer {
     let words: Vec<u32> = armed_groups(pools).into_iter().flatten().collect();
-    let buffer = device.create_buffer_shared(words.len() as u64 * 4);
+    let buffer = device.create_buffer(words.len() as u64 * 4, BufferUse::Upload);
     // SAFETY: the buffer is shared, exactly `words` long, and no GPU work has
     // been encoded against it yet.
     unsafe { buffer.write(0, bytemuck::cast_slice(&words)) };
@@ -802,7 +804,7 @@ impl PressureSolver {
                 self.templates = Some(GpuTemplateStore::new(device));
             }
             if self.plan.is_none() {
-                let plan = device.create_buffer_shared(48);
+                let plan = device.create_buffer(48, BufferUse::Upload);
                 plan.zero_fill();
                 self.plan = Some(plan);
             }

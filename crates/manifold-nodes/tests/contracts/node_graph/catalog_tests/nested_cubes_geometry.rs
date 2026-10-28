@@ -81,7 +81,10 @@ mod gpu_tests {
         // Mirror of JsonGraphGenerator::pre_allocate_array_buffers but
         // local to this test (the generator path runs that walk
         // automatically; the bare Graph + Executor path here doesn't).
-        let row_buf = device.create_buffer_shared((5 * std::mem::size_of::<f32>()) as u64);
+        let row_buf = device.create_buffer(
+            (5 * std::mem::size_of::<f32>()) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         backend.pre_bind_array(r_row, row_buf);
 
         let mut native_enc = device.create_encoder("nested-cubes-geometry-test");
@@ -98,7 +101,7 @@ mod gpu_tests {
             .expect("output texture retained");
         let bytes_per_row = w * 8;
         let total_bytes = u64::from(h * bytes_per_row);
-        let readback_buf = device.create_buffer_shared(total_bytes);
+        let readback_buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Upload);
         let mut readback_enc = device.create_encoder("nested-cubes-geometry-readback");
         readback_enc.copy_texture_to_buffer(out_tex, &readback_buf, w, h, bytes_per_row);
         readback_enc.commit_and_wait_completed();

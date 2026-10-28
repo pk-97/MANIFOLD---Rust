@@ -43,6 +43,7 @@
 //! anyway). Verification could be tightened later by pinning the bridge's
 //! CN against its bridgeID.
 
+use manifold_gpu::BufferUse;
 use std::io::{Read, Write};
 use std::net::{TcpStream, UdpSocket};
 use std::path::PathBuf;
@@ -579,7 +580,7 @@ fn try_stream(
     let h = state.slicer.height();
     let bytes_per_row = w * 4;
     let total_bytes = (bytes_per_row * h) as u64;
-    let readback: GpuBuffer = state.device.create_buffer_shared(total_bytes);
+    let readback: GpuBuffer = state.device.create_buffer(total_bytes, BufferUse::Upload);
 
     let interval = Duration::from_millis(40);
     let mut next = Instant::now() + interval;

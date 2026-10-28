@@ -31,6 +31,7 @@
 //! The reaction holds 8 floats per body (linear then angular impulse, N·s and
 //! N·m·s about the posed centre of mass), added up over a tick's steps.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use super::gpu_flip_pressure::Sink;
@@ -201,7 +202,7 @@ impl BodyPasses {
                 self.pipelines = Some(Self::pipelines(device));
             }
             if self.clock_plan.is_none() {
-                let plan = device.create_buffer_shared(48);
+                let plan = device.create_buffer(48, BufferUse::Upload);
                 plan.zero_fill();
                 self.clock_plan = Some(plan);
             }
@@ -230,11 +231,11 @@ impl BodyPasses {
             assert!(self.pipelines.is_some(), "body pipelines built by prepare_pipelines at install");
             let need = partial_bytes(pool_tiles, count);
             if self.partials.as_ref().is_none_or(|p| p.size < need) {
-                self.partials = Some(device.try_create_buffer(need)?);
+                self.partials = Some(device.try_create_buffer(need, BufferUse::Gpu)?);
             }
             if self.sums.is_none() {
                 // Shared so the value proofs can read the last impulse's sums.
-                self.sums = Some(device.try_create_buffer_shared(SUM_BYTES)?);
+                self.sums = Some(device.try_create_buffer(SUM_BYTES, BufferUse::Upload)?);
             }
             Ok(())
         }

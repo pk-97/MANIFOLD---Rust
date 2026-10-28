@@ -31,6 +31,7 @@
 //! frame's published particles, through the same `matter::look` code the gate
 //! tests use, into `look_metrics.csv` and `look_summary.txt`.
 
+use manifold_gpu::BufferUse;
 use manifold_nodes as _;
 use std::error::Error;
 use std::fs::{self, File};
@@ -760,7 +761,7 @@ fn read_back<T: bytemuck::Pod>(
     let record = std::mem::size_of::<T>() as u64;
     let count = count.min(buffer.size() / record);
     let bytes = (count * record).max(record);
-    let staging = device.create_buffer_shared(bytes);
+    let staging = device.create_buffer(bytes, BufferUse::Upload);
     let mut encoder = device.create_encoder("fluid-capture-readback");
     encoder.copy_buffer_to_buffer(buffer, &staging, bytes.min(buffer.size()));
     encoder.commit_and_wait_completed();

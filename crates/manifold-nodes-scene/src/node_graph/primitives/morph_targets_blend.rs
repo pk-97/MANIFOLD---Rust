@@ -258,24 +258,35 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "morph-targets-blend-test",
         );
-        let in_buf = device.create_buffer_shared(std::mem::size_of_val(verts) as u64);
+        let in_buf = device.create_buffer(
+            std::mem::size_of_val(verts) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             in_buf.write(0, bytemuck::cast_slice(verts));
         }
-        let deltas_buf = device.create_buffer_shared((std::mem::size_of_val(deltas) as u64).max(1));
+        let deltas_buf = device.create_buffer(
+            (std::mem::size_of_val(deltas) as u64).max(1),
+            manifold_gpu::BufferUse::Upload,
+        );
         if !deltas.is_empty() {
             unsafe {
                 deltas_buf.write(0, bytemuck::cast_slice(deltas));
             }
         }
-        let weights_buf =
-            device.create_buffer_shared((std::mem::size_of_val(weights) as u64).max(1));
+        let weights_buf = device.create_buffer(
+            (std::mem::size_of_val(weights) as u64).max(1),
+            manifold_gpu::BufferUse::Upload,
+        );
         if !weights.is_empty() {
             unsafe {
                 weights_buf.write(0, bytemuck::cast_slice(weights));
             }
         }
-        let out_buf = device.create_buffer_shared(std::mem::size_of_val(verts) as u64);
+        let out_buf = device.create_buffer(
+            std::mem::size_of_val(verts) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
 
         let uniforms = MorphTargetsBlendUniforms {
             target_count,

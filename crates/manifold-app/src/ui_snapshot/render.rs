@@ -24,6 +24,7 @@
 //! content-thread atlas, and `panel_bitmap_gpu`/`clip_content_gpu`/`vqt` are
 //! `None` (no such renderers exist headless). See `docs/HEADLESS_UI_HARNESS.md`.
 
+use manifold_gpu::BufferUse;
 use std::ffi::c_void;
 use std::path::Path;
 use std::slice;
@@ -999,7 +1000,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 pub(super) fn readback(device: &GpuDevice, texture: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
     let bytes_per_row = w * UI_FORMAT.bytes_per_pixel();
     let total = u64::from(h * bytes_per_row);
-    let buf = device.create_buffer_shared(total);
+    let buf = device.create_buffer(total, BufferUse::Upload);
 
     let mut enc = device.create_encoder("ui-snap-readback");
     enc.copy_texture_to_buffer(texture, &buf, w, h, bytes_per_row);

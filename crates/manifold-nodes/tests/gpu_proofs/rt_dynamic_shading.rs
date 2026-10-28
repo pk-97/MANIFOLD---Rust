@@ -7,6 +7,7 @@
 //! now — the CPU params fields are deleted; nothing CPU-side can go stale.
 //! The P4b half is `rt_dynamic_coverage_and_attributes` below.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::raytrace::{
     EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial,
     MAX_RT_EMISSIVE_TRIANGLES, GpuShadowRayTracer, RtAccel, RtGeometryChange, RtObjectGeometry,
@@ -58,7 +59,7 @@ fn triangle_at(cx: f32, leg: f32) -> [PackedVertex; 3] {
 
 fn write_shared<T: Copy>(device: &GpuDevice, data: &[T]) -> GpuBuffer {
     let bytes = std::mem::size_of_val(data) as u64;
-    let buf = device.create_buffer_shared(bytes.max(16));
+    let buf = device.create_buffer(bytes.max(16), BufferUse::Upload);
     let ptr = buf.mapped_ptr().expect("fixture buffer must be CPU-mapped");
     unsafe {
         std::ptr::copy_nonoverlapping(data.as_ptr().cast::<u8>(), ptr, bytes as usize);
@@ -205,7 +206,7 @@ fn rt_dynamic_emissive_queued_frames_keep_metadata_snapshots() {
             )
             .unwrap();
         assert_eq!(update.emissive_refreshes, 1);
-        let result = device.create_buffer_shared(std::mem::size_of::<EmissiveTableStats>() as u64);
+        let result = device.create_buffer(std::mem::size_of::<EmissiveTableStats>() as u64, BufferUse::Upload);
         encoder.copy_buffer_to_buffer(
             &accel.emissive_table.as_ref().unwrap().stats,
             &result,
@@ -1550,8 +1551,8 @@ fn rt_dynamic_coverage_and_attributes() {
         enc.commit_and_wait_completed();
 
         let row_bytes = width as usize * 4 * 4;
-        let irr_buf = device.create_buffer_shared(row_bytes as u64);
-        let refl_buf = device.create_buffer_shared(row_bytes as u64);
+        let irr_buf = device.create_buffer(row_bytes as u64, BufferUse::Upload);
+        let refl_buf = device.create_buffer(row_bytes as u64, BufferUse::Upload);
         let mut enc2 = device.create_encoder("rt-p4b-readback");
         enc2.copy_texture_to_buffer(&out_irr, &irr_buf, width, 1, row_bytes as u32);
         enc2.copy_texture_to_buffer(&out_refl, &refl_buf, width, 1, row_bytes as u32);

@@ -322,7 +322,7 @@ impl GpuDenoiser for MetalFxDenoisedScaler {
 mod tests {
     use super::*;
     use crate::metal::GpuDevice;
-    use crate::{GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};
+    use crate::{BufferUse, GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};
 
     /// Upload f32 data into a texture, encoding into the target format.
     /// For f32-native formats bytes go straight through; for half-float
@@ -425,7 +425,7 @@ mod tests {
         let bpp = tex.format.bytes_per_pixel();
         let row_bytes = bpp * tex.width;
         let total = (row_bytes * tex.height) as u64;
-        let readback = device.create_buffer_shared(total);
+        let readback = device.create_buffer(total, BufferUse::Upload);
         let mut enc = device.create_encoder("readback");
         enc.copy_texture_to_buffer(tex, &readback, tex.width, tex.height, row_bytes);
         enc.commit_and_wait_completed();

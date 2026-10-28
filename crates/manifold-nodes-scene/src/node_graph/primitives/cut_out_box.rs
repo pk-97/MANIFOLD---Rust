@@ -178,7 +178,7 @@ mod gpu_tests {
     }
 
     fn upload(device: &manifold_gpu::GpuDevice, bytes: &[u8]) -> manifold_gpu::GpuBuffer {
-        let b = device.create_buffer_shared(bytes.len() as u64);
+        let b = device.create_buffer(bytes.len() as u64, manifold_gpu::BufferUse::Upload);
         unsafe { b.write(0, bytes) };
         b
     }
@@ -201,7 +201,10 @@ mod gpu_tests {
             ..cut()
         };
         let mesh = upload(&device, bytemuck::cast_slice(&vertices));
-        let out = device.create_buffer_shared(std::mem::size_of_val(vertices.as_slice()) as u64);
+        let out = device.create_buffer(
+            std::mem::size_of_val(vertices.as_slice()) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         let mut enc = device.create_encoder("cut-out-box-test");
         enc.dispatch_compute(
             &pipeline,
@@ -392,7 +395,7 @@ mod gpu_tests {
         let n = vertices.len();
         let bytes = std::mem::size_of_val(vertices.as_slice()) as u64;
         let groups = [(n as u32).div_ceil(256), 1, 1];
-        let fused_out = device.create_buffer_shared(bytes);
+        let fused_out = device.create_buffer(bytes, manifold_gpu::BufferUse::Upload);
         let fused_pipeline = device.create_compute_pipeline(&wgsl, ENTRY, "ocean-fused-test");
         // Unfused: the two standalone kernels, one after the other.
         let displace_wgsl =
@@ -403,8 +406,8 @@ mod gpu_tests {
         let displace_pipeline =
             device.create_compute_pipeline(&displace_wgsl, ENTRY, "ocean-unfused-displace");
         let cut_pipeline = device.create_compute_pipeline(&cut_wgsl, ENTRY, "ocean-unfused-cut");
-        let mid = device.create_buffer_shared(bytes);
-        let unfused_out = device.create_buffer_shared(bytes);
+        let mid = device.create_buffer(bytes, manifold_gpu::BufferUse::Upload);
+        let unfused_out = device.create_buffer(bytes, manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder("ocean-fused-test");
         enc.dispatch_compute(
             &fused_pipeline,

@@ -354,14 +354,14 @@ pub fn dispatch_pass(
     let pipeline = device.create_compute_pipeline(&step_source(), entry, "node.gpu_flip_step");
     let mut bindings = vec![uniform(params)];
     bindings.extend(buffers.iter().map(|&(binding, b)| buffer(binding, b)));
-    let clock_plan = device.create_buffer_shared(48);
+    let clock_plan = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
     clock_plan.zero_fill();
     if !buffers.iter().any(|&(binding, _)| binding == 46) {
         bindings.push(buffer(46, &clock_plan));
     }
     // The slots in use are the threads asked for, as a pass that dispatches
     // from the step's record would find them.
-    let record = device.create_buffer_shared(16);
+    let record = device.create_buffer(16, manifold_gpu::BufferUse::Upload);
     let slots = u32::try_from(threads).expect("thread count fits a word");
     // SAFETY: a shared buffer of four words; no GPU work has touched it yet.
     unsafe { record.write(0, bytemuck::cast_slice(&[groups(threads)[0], 1, 1, slots])) };

@@ -330,11 +330,11 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "push-normals-test",
         );
-        let sbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+        let sbuf = device.create_buffer(std::mem::size_of_val(src) as u64, manifold_gpu::BufferUse::Upload);
         unsafe {
             sbuf.write(0, bytemuck::cast_slice(src));
         }
-        let dbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+        let dbuf = device.create_buffer(std::mem::size_of_val(src) as u64, manifold_gpu::BufferUse::Upload);
 
         // Physical weights buffer is always `src.len()` elements so the
         // coincident pre-read `buf_weights[idx]` is in-bounds for every thread;
@@ -343,7 +343,7 @@ mod gpu_tests {
             Some(w) => {
                 let mut padded = vec![0.0f32; src.len()];
                 padded[..w.len().min(src.len())].copy_from_slice(&w[..w.len().min(src.len())]);
-                let b = device.create_buffer_shared((padded.len() * 4).max(4) as u64);
+                let b = device.create_buffer((padded.len() * 4).max(4) as u64, manifold_gpu::BufferUse::Upload);
                 unsafe {
                     b.write(0, bytemuck::cast_slice(&padded));
                 }
@@ -351,7 +351,7 @@ mod gpu_tests {
             }
             // Unwired: bind `src` as the harmless filler (run()'s pattern), len 0.
             None => (
-                device.create_buffer_shared(std::mem::size_of_val(src) as u64),
+                device.create_buffer(std::mem::size_of_val(src) as u64, manifold_gpu::BufferUse::Upload),
                 0,
             ),
         };

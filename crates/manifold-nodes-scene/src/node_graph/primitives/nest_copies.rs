@@ -9,6 +9,7 @@
 //! it never shrinks mid-show or reallocates per frame, and `count` says how
 //! many copies to draw.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
@@ -147,7 +148,10 @@ impl Primitive for NestCopies {
                 })
             };
             if let Some(copies) = grown(self.storage_copies, wanted, fits) {
-                self.storage = Some(gpu.device.create_buffer_shared(copies * COPY_BYTES));
+                self.storage = Some(
+                    gpu.device
+                        .create_buffer(copies * COPY_BYTES, BufferUse::Upload),
+                );
                 self.storage_copies = copies;
             } else {
                 if self.refused != wanted {

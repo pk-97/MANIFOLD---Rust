@@ -198,12 +198,17 @@ mod gpu_tests {
             "subdivide-mesh-test",
         );
         let out_count = (src.len() as u32 / 3 * 3) << (2 * level);
-        let sbuf = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+        let sbuf = device.create_buffer(
+            std::mem::size_of_val(src) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             sbuf.write(0, bytemuck::cast_slice(src));
         }
-        let dbuf = device
-            .create_buffer_shared(u64::from(out_count) * std::mem::size_of::<MeshVertex>() as u64);
+        let dbuf = device.create_buffer(
+            u64::from(out_count) * std::mem::size_of::<MeshVertex>() as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         let uniforms = SubdivideUniforms {
             level: level as i32,
             in_len: src.len() as u32,

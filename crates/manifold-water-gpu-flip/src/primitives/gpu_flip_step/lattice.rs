@@ -2,6 +2,7 @@
 
 use super::super::gpu_flip_pressure::level_pools;
 use super::*;
+use manifold_gpu::BufferUse;
 use manifold_water_liquid::tile_storage::pool_len;
 
 /// Bytes of a pooled cell field in a pool of `pool_tiles` tiles.
@@ -101,7 +102,7 @@ pub(super) fn allocate(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, Stri
         bytes,
     )
     .map_err(|error| error.to_string())
-    .and_then(|()| device.try_create_buffer(bytes))
+    .and_then(|()| device.try_create_buffer(bytes, BufferUse::Gpu))
 }
 
 /// A buffer that carries state from step to step: shared, so it starts at
@@ -112,7 +113,7 @@ pub(super) fn allocate_zeroed(device: &GpuDevice, bytes: u64) -> Result<GpuBuffe
         bytes,
     )
     .map_err(|error| error.to_string())
-    .and_then(|()| device.try_create_buffer_shared(bytes))?;
+    .and_then(|()| device.try_create_buffer(bytes, BufferUse::Upload))?;
     buffer.zero_fill();
     Ok(buffer)
 }

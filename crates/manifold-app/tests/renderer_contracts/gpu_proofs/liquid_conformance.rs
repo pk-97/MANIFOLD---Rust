@@ -6,6 +6,7 @@
 //! the row's totals and state readouts. Every run renders offline unless it
 //! says live, and waits for the GPU after each frame.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::sync::Arc;
@@ -650,7 +651,7 @@ impl LiquidRun {
             .find(|dump| dump.type_id == type_id && dump.port == port)
             .unwrap_or_else(|| panic!("no {type_id}.{port} in the dump"));
         let bytes = dump.buffer.size();
-        let staging = self.device.create_buffer_shared(bytes);
+        let staging = self.device.create_buffer(bytes, BufferUse::Upload);
         let mut encoder = self.device.create_encoder("liquid-conformance-readback");
         encoder.copy_buffer_to_buffer(dump.buffer, &staging, bytes);
         encoder.commit_and_wait_completed();

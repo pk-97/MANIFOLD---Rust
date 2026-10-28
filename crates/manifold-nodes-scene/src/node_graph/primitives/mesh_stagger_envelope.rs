@@ -223,20 +223,20 @@ mod gpu_tests {
     ) -> Vec<f32> {
         let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
-        let src = device.create_buffer_shared(std::mem::size_of_val(src_vertices) as u64);
+        let src = device.create_buffer(std::mem::size_of_val(src_vertices) as u64, manifold_gpu::BufferUse::Upload);
         unsafe {
             src.write(0, bytemuck::cast_slice(src_vertices));
         }
         let weight_buf = if let Some(weights) = weights {
-            let b = device.create_buffer_shared(std::mem::size_of_val(weights) as u64);
+            let b = device.create_buffer(std::mem::size_of_val(weights) as u64, manifold_gpu::BufferUse::Upload);
             unsafe {
                 b.write(0, bytemuck::cast_slice(weights));
             }
             b
         } else {
-            device.create_buffer_shared(std::mem::size_of_val(src_vertices) as u64)
+            device.create_buffer(std::mem::size_of_val(src_vertices) as u64, manifold_gpu::BufferUse::Upload)
         };
-        let dst = device.create_buffer_shared(src_vertices.len() as u64 * 4);
+        let dst = device.create_buffer(src_vertices.len() as u64 * 4, manifold_gpu::BufferUse::Upload);
         let mut encoder = device.create_encoder(label);
         encoder.dispatch_compute(
             &pipeline,

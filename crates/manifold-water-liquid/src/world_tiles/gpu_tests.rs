@@ -1,6 +1,7 @@
 //! GPU proofs of the world tiles build against its CPU mirror (`mirror.rs`),
 //! and of the read side's three lookup paths over a built table.
 
+use manifold_gpu::BufferUse;
 use std::collections::BTreeSet;
 
 use manifold_gpu::testkit::test_device;
@@ -23,7 +24,7 @@ fn read(buffer: &GpuBuffer, words: usize) -> Vec<u32> {
 
 fn shared<T: bytemuck::Pod>(device: &GpuDevice, data: &[T]) -> GpuBuffer {
     let bytes: &[u8] = bytemuck::cast_slice(data);
-    let buffer = device.create_buffer_shared(bytes.len().max(4) as u64);
+    let buffer = device.create_buffer(bytes.len().max(4) as u64, BufferUse::Upload);
     // SAFETY: a new shared buffer at least `bytes` long; no GPU work in flight.
     unsafe { buffer.write(0, bytes) };
     buffer

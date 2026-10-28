@@ -188,7 +188,10 @@ mod gpu_tests {
         device: &manifold_gpu::GpuDevice,
     ) -> Vec<f32> {
         let bytes_per_row = texture.width * 8;
-        let buffer = device.create_buffer_shared(u64::from(texture.height * bytes_per_row));
+        let buffer = device.create_buffer(
+            u64::from(texture.height * bytes_per_row),
+            manifold_gpu::BufferUse::Upload,
+        );
         let mut encoder = device.create_encoder("render-glyph-grid-readback");
         encoder.copy_texture_to_buffer(
             texture,
@@ -220,7 +223,8 @@ mod gpu_tests {
             standalone_for_spec::<RenderGlyphGrid>().expect("render glyph grid standalone codegen");
         let pipeline = device.create_compute_pipeline(&shader, ENTRY, "render-glyph-grid-test");
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
-        let cells_buffer = device.create_buffer_shared((cells.len() * 4) as u64);
+        let cells_buffer =
+            device.create_buffer((cells.len() * 4) as u64, manifold_gpu::BufferUse::Upload);
         unsafe {
             cells_buffer.write(0, bytemuck::cast_slice(cells));
         }

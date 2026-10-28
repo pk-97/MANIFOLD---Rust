@@ -3,6 +3,7 @@
 //! atrous/accumulate dispatch implementations plus their tests. Split out
 //! of `raytrace.rs` (BUG-xmsx driver split); see that file for the map.
 
+use crate::BufferUse;
 use crate::raytrace_types::*;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
@@ -982,8 +983,10 @@ impl GpuShadowRayTracer {
             );
         }
         let make_record = |enabled: bool| {
-            let buffer =
-                device.create_buffer_shared(std::mem::size_of::<RtTraceDiagnostics>() as u64);
+            let buffer = device.create_buffer(
+                std::mem::size_of::<RtTraceDiagnostics>() as u64,
+                BufferUse::Upload,
+            );
             let ptr = buffer.mapped_ptr().expect("shared RT diagnostics");
             unsafe {
                 std::ptr::write_bytes(ptr, 0, std::mem::size_of::<RtTraceDiagnostics>());
@@ -1010,7 +1013,7 @@ impl GpuShadowRayTracer {
             debug_atrous_post_pipeline: p.debug_atrous_post_pipeline.clone(),
             debug_ray_query_pipeline: p.debug_ray_query_pipeline.clone(),
             emissive: p.emissive.clone(),
-            zero_emissive_stats: device.create_buffer_shared(16),
+            zero_emissive_stats: device.create_buffer(16, BufferUse::Upload),
             subsurface_pipeline: p.subsurface_pipeline.clone(),
             subsurface_reconstruct_pipeline: p.subsurface_reconstruct_pipeline.clone(),
             subsurface_filter_pipeline: p.subsurface_filter_pipeline.clone(),
@@ -1357,15 +1360,17 @@ impl GpuShadowRayTracer {
             bary,
             slot_row_base,
         };
-        let params_buffer =
-            device.create_buffer_shared(std::mem::size_of::<DebugFetchNormalParams>() as u64);
+        let params_buffer = device.create_buffer(
+            std::mem::size_of::<DebugFetchNormalParams>() as u64,
+            BufferUse::Upload,
+        );
         let params_ptr = params_buffer
             .mapped_ptr()
             .expect("debug params buffer must be CPU-mapped");
         unsafe {
             std::ptr::write_unaligned(params_ptr as *mut DebugFetchNormalParams, params);
         }
-        let out_buffer = device.create_buffer_shared(16); // packed_float3, rounded up
+        let out_buffer = device.create_buffer(16, BufferUse::Upload); // packed_float3, rounded up
         out_buffer.zero_fill();
 
         let cb = device
@@ -1437,7 +1442,8 @@ impl GpuShadowRayTracer {
         seed_base: u32,
     ) -> GpuBuffer {
         assert!(!rays.is_empty(), "debug_ray_query: at least one ray");
-        let rays_buffer = device.create_buffer_shared(std::mem::size_of_val(rays) as u64);
+        let rays_buffer =
+            device.create_buffer(std::mem::size_of_val(rays) as u64, BufferUse::Upload);
         let rays_ptr = rays_buffer
             .mapped_ptr()
             .expect("debug ray buffer must be CPU-mapped");
@@ -1448,8 +1454,10 @@ impl GpuShadowRayTracer {
                 rays.len(),
             );
         }
-        let hits_buffer = device
-            .create_buffer_shared((rays.len() * std::mem::size_of::<DebugRayQueryHit>()) as u64);
+        let hits_buffer = device.create_buffer(
+            (rays.len() * std::mem::size_of::<DebugRayQueryHit>()) as u64,
+            BufferUse::Upload,
+        );
         hits_buffer.zero_fill();
 
         #[repr(C)]
@@ -1540,14 +1548,14 @@ impl GpuShadowRayTracer {
             .collect();
         device.upload_texture(&neighborhood_tex, &neighborhood_bytes);
 
-        let history_buffer = device.create_buffer_shared(16); // packed_float3, rounded up
+        let history_buffer = device.create_buffer(16, BufferUse::Upload); // packed_float3, rounded up
         let history_ptr = history_buffer
             .mapped_ptr()
             .expect("debug history buffer must be CPU-mapped");
         unsafe {
             std::ptr::copy_nonoverlapping(history.as_ptr(), history_ptr as *mut f32, 3);
         }
-        let out_buffer = device.create_buffer_shared(16); // packed_float3, rounded up
+        let out_buffer = device.create_buffer(16, BufferUse::Upload); // packed_float3, rounded up
         out_buffer.zero_fill();
 
         let cb = device
@@ -1647,14 +1655,14 @@ impl GpuShadowRayTracer {
         device.upload_texture(&depth_tex, &depth_bytes);
 
         let params = FireflyClampParams::new([3, 3], gain, floor);
-        let params_buffer = device.create_buffer_shared(16); // FireflyClampParams
+        let params_buffer = device.create_buffer(16, BufferUse::Upload); // FireflyClampParams
         let params_ptr = params_buffer
             .mapped_ptr()
             .expect("debug firefly params buffer must be CPU-mapped");
         unsafe {
             std::ptr::write_unaligned(params_ptr as *mut FireflyClampParams, params);
         }
-        let out_buffer = device.create_buffer_shared(16); // packed_float3, rounded up
+        let out_buffer = device.create_buffer(16, BufferUse::Upload); // packed_float3, rounded up
         out_buffer.zero_fill();
 
         // P4a: hand-written stats row for the kernel's buffer(2) — same
@@ -1666,7 +1674,7 @@ impl GpuShadowRayTracer {
             mean_power,
             total_area: 0.0,
         };
-        let stats_buffer = device.create_buffer_shared(16);
+        let stats_buffer = device.create_buffer(16, BufferUse::Upload);
         let stats_ptr = stats_buffer
             .mapped_ptr()
             .expect("debug firefly stats buffer must be CPU-mapped");
@@ -1800,14 +1808,14 @@ impl GpuShadowRayTracer {
         device.upload_texture(&src_tex, &src_bytes);
 
         let params = AtrousPostParams::new([3, 3], step, strength);
-        let params_buffer = device.create_buffer_shared(20); // AtrousPostParams
+        let params_buffer = device.create_buffer(20, BufferUse::Upload); // AtrousPostParams
         let params_ptr = params_buffer
             .mapped_ptr()
             .expect("debug atrous post params buffer must be CPU-mapped");
         unsafe {
             std::ptr::write_unaligned(params_ptr as *mut AtrousPostParams, params);
         }
-        let out_buffer = device.create_buffer_shared(16); // packed_float4
+        let out_buffer = device.create_buffer(16, BufferUse::Upload); // packed_float4
         out_buffer.zero_fill();
 
         let cb = device
@@ -2846,11 +2854,12 @@ mod tests {
         });
         let src_tex = test_rgba_texture(&device, "f7f1-src", &src);
         let src_sv = test_sv_array(&device, "f7f1-src-sv");
-        let params_buffer = device.create_buffer_shared(24);
-        let materials = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+        let params_buffer = device.create_buffer(24, BufferUse::Upload);
+        let materials =
+            device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
         materials.zero_fill();
         let read = |tex: &GpuTexture| {
-            let buf = device.create_buffer_shared(9 * 9 * 16);
+            let buf = device.create_buffer(9 * 9 * 16, BufferUse::Upload);
             let mut rb = device.create_encoder("f7f1-readback");
             rb.copy_texture_to_buffer(tex, &buf, 9, 9, 9 * 16);
             rb.try_commit_and_wait_completed()
@@ -3069,8 +3078,8 @@ mod tests {
             [n, t, b, [f32::NAN, 0.0, 1.0, 0.0]],
             [n, [1e-8, 0.0, 0.0, 0.0], b, mapped],
         ];
-        let input = device.create_buffer_shared(std::mem::size_of_val(&cases) as u64);
-        let output = device.create_buffer_shared((cases.len() * 16) as u64);
+        let input = device.create_buffer(std::mem::size_of_val(&cases) as u64, BufferUse::Upload);
+        let output = device.create_buffer((cases.len() * 16) as u64, BufferUse::Upload);
         unsafe {
             std::ptr::copy_nonoverlapping(
                 cases.as_ptr().cast::<u8>(),
@@ -3160,13 +3169,16 @@ mod tests {
             "diag_probe",
             identity_slot_map(&[(0, SlotKind::Buffer), (1, SlotKind::Buffer)]),
         );
-        let record = device.create_buffer_shared(std::mem::size_of::<RtTraceDiagnostics>() as u64);
+        let record = device.create_buffer(
+            std::mem::size_of::<RtTraceDiagnostics>() as u64,
+            BufferUse::Upload,
+        );
         let ptr = record.mapped_ptr().unwrap();
         unsafe {
             std::ptr::write_bytes(ptr, 0, std::mem::size_of::<RtTraceDiagnostics>());
             (*ptr.cast::<RtTraceDiagnostics>()).enabled = 1;
         }
-        let out = device.create_buffer_shared(16);
+        let out = device.create_buffer(16, BufferUse::Upload);
         let mut enc = device.create_encoder("trace diagnostics regression");
         enc.dispatch_compute(
             &pipeline,
@@ -3209,7 +3221,7 @@ mod tests {
     #[test]
     fn blas_opacity_tracks_nonopaque_property() {
         let device = GpuDevice::new();
-        let verts = device.create_buffer(3 * 12);
+        let verts = device.create_buffer(3 * 12, BufferUse::Gpu);
         let base = RtObjectGeometry {
             instance_inner: RtObjectGeometry::NO_INNER,
             vertex_buffer: &verts,

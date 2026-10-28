@@ -5,6 +5,7 @@
 //! the same on every run. Exempt from the codegen mandate as a barriered
 //! reduction (ADDING_PRIMITIVES.md exclusion 1).
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuEncoder};
@@ -370,11 +371,11 @@ impl Primitive for LiquidStats {
             .as_ref()
             .is_none_or(|b| b.size < partial_bytes)
         {
-            self.partials = Some(gpu.device.create_buffer(partial_bytes));
+            self.partials = Some(gpu.device.create_buffer(partial_bytes, BufferUse::Gpu));
         }
         let args = self
             .args
-            .get_or_insert_with(|| gpu.device.create_buffer(ARGS_BYTES));
+            .get_or_insert_with(|| gpu.device.create_buffer(ARGS_BYTES, BufferUse::Gpu));
         pipelines.encode(
             gpu.native_enc,
             &StatsJob {

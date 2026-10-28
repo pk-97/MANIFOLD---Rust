@@ -21,6 +21,7 @@
 //! identity order (object, slot, triangle) ascending, slot-major:
 //! [(t0,s0),(t1,s0),(t0,s1),(t1,s1)].
 
+use manifold_gpu::BufferUse;
 use std::ffi::c_void;
 use std::slice;
 
@@ -119,7 +120,7 @@ fn rand2(p: [u32; 2], frame: u32, ray: u32) -> [f32; 2] {
 
 fn write_shared_buffer<T: Copy>(device: &GpuDevice, data: &[T]) -> GpuBuffer {
     let bytes = std::mem::size_of_val(data) as u64;
-    let buf = device.create_buffer_shared(bytes.max(16));
+    let buf = device.create_buffer(bytes.max(16), BufferUse::Upload);
     let ptr = buf
         .mapped_ptr()
         .expect("shared buffer must expose a mapped pointer");
@@ -329,8 +330,10 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     ensure_normal_sources(&mut nss, &mut nsc, device, &objects);
     let normal_sources = nss.unwrap();
     let gi_rows = 5usize;
-    let gi_buffer =
-        device.create_buffer_shared((gi_rows * std::mem::size_of::<GiMaterial>()) as u64);
+    let gi_buffer = device.create_buffer(
+        (gi_rows * std::mem::size_of::<GiMaterial>()) as u64,
+        BufferUse::Upload,
+    );
     {
         let ptr = gi_buffer.mapped_ptr().expect("gi buffer must be shared") as *mut GiMaterial;
         let row_for = |oi: usize| materials[oi];
@@ -450,7 +453,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     );
     encoder.commit_and_wait_completed();
 
-    let readback = device.create_buffer_shared(8 * 4 * 4);
+    let readback = device.create_buffer(8 * 4 * 4, BufferUse::Upload);
     let mut enc2 = device.create_encoder("rt-emissive-inst-readback");
     enc2.copy_texture_to_buffer(&out_irr, &readback, 8, 1, 8 * 4 * 4);
     enc2.commit_and_wait_completed();
@@ -463,7 +466,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     // unwired-object-model descriptor bug during bring-up (an identity
     // world matrix instead of the model transform put the receiver's copy
     // at the local origin and the primary missed).
-    let rb_n = device.create_buffer_shared(8 * 4 * 4);
+    let rb_n = device.create_buffer(8 * 4 * 4, BufferUse::Upload);
     let mut enc3 = device.create_encoder("rt-emissive-inst-rb-n");
     enc3.copy_texture_to_buffer(&out_n, &rb_n, 8, 1, 8 * 4 * 4);
     enc3.commit_and_wait_completed();

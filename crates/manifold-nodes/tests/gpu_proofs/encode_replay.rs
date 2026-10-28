@@ -6,6 +6,7 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_core::{Beats, Seconds};
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuReplayStats, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::runtime::PresetRuntime;
@@ -50,7 +51,7 @@ fn read_shared(buffer: &manifold_gpu::GpuBuffer, bytes: usize, out: &mut Vec<u8>
         buffer
     } else {
         let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
-        staging = device.create_buffer_shared(bytes as u64);
+        staging = device.create_buffer(bytes as u64, BufferUse::Upload);
         let mut enc = device.create_encoder("encode-replay-readback");
         enc.copy_buffer_to_buffer(buffer, &staging, bytes as u64);
         enc.commit_and_wait_completed();

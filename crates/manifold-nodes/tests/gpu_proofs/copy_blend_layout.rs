@@ -10,6 +10,7 @@ use manifold_core::scene_doc::{
     Item, ItemFields, ItemId, ItemKind, ModifierFields, ModifierTargets, ModifierType, SceneDoc,
 };
 use manifold_core::{PresetTypeId, Seconds};
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 use manifold_node_engine::exec::effect_node::{NodeInstanceId, SimStep};
 use manifold_node_engine::exec::execution_plan::ResourceId;
@@ -175,7 +176,7 @@ impl Run {
             .array_buffer(backend.slot_for(res).expect("resource bound"))
             .expect("array resource");
         let bytes = (COUNT * std::mem::size_of::<InstanceTransform>()) as u64;
-        let shared = self.device.create_buffer_shared(bytes);
+        let shared = self.device.create_buffer(bytes, BufferUse::Upload);
         let mut encoder = self.device.create_encoder("copy-blend-readback");
         encoder.copy_buffer_to_buffer(buffer, &shared, bytes);
         encoder.commit_and_wait_completed();

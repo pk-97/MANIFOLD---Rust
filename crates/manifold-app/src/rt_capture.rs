@@ -31,6 +31,7 @@
 //! MANIFOLD_RT_PROBE is NOT required — the subcommand arms the capture
 //! flags directly.
 
+use manifold_gpu::BufferUse;
 use std::path::PathBuf;
 
 use crate::content_command::ContentCommand;
@@ -75,7 +76,7 @@ pub(crate) fn decode_capture_pixels(
     };
     let bytes_per_row = cap.w * bpp;
     let total = u64::from(cap.h * bytes_per_row);
-    let buf = device.create_buffer_shared(total);
+    let buf = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("rt-capture-readback");
     enc.copy_texture_to_buffer(&cap.tex, &buf, cap.w, cap.h, bytes_per_row);
     enc.commit_and_wait_completed();

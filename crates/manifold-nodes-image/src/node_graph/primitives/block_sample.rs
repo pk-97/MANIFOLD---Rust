@@ -168,7 +168,10 @@ mod gpu_tests {
         texture: &manifold_gpu::GpuTexture,
     ) -> Vec<[f32; 4]> {
         let bytes_per_row = texture.width * 8;
-        let buffer = device.create_buffer_shared(u64::from(texture.height * bytes_per_row));
+        let buffer = device.create_buffer(
+            u64::from(texture.height * bytes_per_row),
+            manifold_gpu::BufferUse::Upload,
+        );
         let mut enc = device.create_encoder("block-sample-readback");
         enc.copy_texture_to_buffer(
             texture,

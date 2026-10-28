@@ -273,7 +273,7 @@ mod gpu_tests {
     }
 
     fn readback(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<[f32; 4]> {
-        let buf = device.create_buffer_shared(u64::from(w * h * 8));
+        let buf = device.create_buffer(u64::from(w * h * 8), manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder("camera-sky-readback");
         enc.copy_texture_to_buffer(tex, &buf, w, h, w * 8);
         enc.commit_and_wait_completed();

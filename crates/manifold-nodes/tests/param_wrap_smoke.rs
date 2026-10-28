@@ -14,6 +14,7 @@
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::ParamSpecDef;
 use manifold_core::params::{Param, ParamManifest};
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -96,7 +97,7 @@ fn render_generator_at(preset_id: &'static str, param_id: &str, value: f32) -> V
 
     let bytes_per_row = W * 8;
     let total = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer_shared(total);
+    let buf = device.create_buffer(total, BufferUse::Upload);
     let mut readback = device.create_encoder("wrap-smoke-readback");
     readback.copy_texture_to_buffer(&target.texture, &buf, W, H, bytes_per_row);
     readback.commit_and_wait_completed();

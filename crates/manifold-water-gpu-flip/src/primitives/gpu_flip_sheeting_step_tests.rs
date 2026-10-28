@@ -9,6 +9,7 @@ use super::gpu_flip_sheeting_tests::{World, padded_cells, padded_markers, sort, 
 use super::gpu_flip_step::{BOX_BAND_CELLS, GpuFlipStep, pool_tiles};
 use super::gpu_flip_step_tests::{cpu_sample_on, step_faces};
 use manifold_fluids::sheeter;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
@@ -45,7 +46,7 @@ fn identity_words(next_id: u32, live: usize) -> [u32; 8] {
 }
 
 fn copy_out(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
-    let staged = device.create_buffer_shared(buffer.size);
+    let staged = device.create_buffer(buffer.size, BufferUse::Upload);
     let mut enc = device.create_encoder("sheeting step proof readback");
     enc.copy_buffer_to_buffer(buffer, &staged, buffer.size);
     enc.commit_and_wait_completed();
@@ -490,7 +491,7 @@ fn step_passes_with_room(room: usize) {
     let (world_markers, local_markers) = to_world(&padded_markers(&markers, 8, h), lo, h);
     let world = World::new(&device, lo, big.map(|n| n as i32), h);
     let shared = |bytes: &[u8], size: usize| {
-        let buffer = device.create_buffer_shared(size.max(16) as u64);
+        let buffer = device.create_buffer(size.max(16) as u64, BufferUse::Upload);
         buffer.zero_fill();
         // SAFETY: a fresh shared buffer at least `bytes` long; no GPU work.
         unsafe { buffer.write(0, bytes) };

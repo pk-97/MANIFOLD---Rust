@@ -9,6 +9,7 @@
 //! bitwise and under NaN poison, on their own and through a step with a
 //! Box3D body (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md D-9).
 
+use manifold_gpu::BufferUse;
 use std::collections::HashMap;
 
 use manifold_gpu::{GpuBuffer, GpuDevice, GpuReplayCache};
@@ -327,7 +328,7 @@ fn gpu_mobility(mobility: &[Mobility]) -> Vec<[f32; 24]> {
 }
 
 fn shared<T: bytemuck::Pod>(device: &GpuDevice, values: &[T]) -> GpuBuffer {
-    let buffer = device.create_buffer_shared((size_of_val(values) as u64).max(16));
+    let buffer = device.create_buffer((size_of_val(values) as u64).max(16), BufferUse::Upload);
     buffer.zero_fill();
     // SAFETY: shared buffer sized for `values`; no GPU work in flight.
     unsafe { buffer.write(0, bytemuck::cast_slice(values)) };

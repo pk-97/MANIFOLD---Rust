@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::fluid_particles::CellRange;
+use manifold_gpu::BufferUse;
 
 const SLOTS: u32 = 512;
 const SENTINEL: u32 = 0xdead_beef;
@@ -11,7 +12,7 @@ const SENTINEL: u32 = 0xdead_beef;
 const EXHAUSTED: u32 = 5;
 
 fn shared(device: &GpuDevice, words: &[u32]) -> GpuBuffer {
-    let buffer = device.create_buffer_shared((words.len() * 4) as u64);
+    let buffer = device.create_buffer((words.len() * 4) as u64, BufferUse::Upload);
     // SAFETY: a shared buffer of exactly these words; no GPU work in flight.
     unsafe { buffer.write(0, bytemuck::cast_slice(words)) };
     buffer
@@ -50,7 +51,7 @@ fn ranges_ending_at(device: &GpuDevice, live: u32, tail: u32) -> GpuBuffer {
             count: tail,
         },
     ];
-    let buffer = device.create_buffer_shared(std::mem::size_of_val(&ranges) as u64);
+    let buffer = device.create_buffer(std::mem::size_of_val(&ranges) as u64, BufferUse::Upload);
     // SAFETY: a shared buffer of exactly these ranges; no GPU work in flight.
     unsafe { buffer.write(0, bytemuck::cast_slice(&ranges)) };
     buffer

@@ -1857,9 +1857,9 @@ fn prepare_rt_table<T>(
         .checked_mul(std::mem::size_of::<T>())
         .ok_or(FrameRenderFailure::RtAllocation)? as u64;
     let result = if shared {
-        device.try_create_buffer_shared(bytes)
+        device.try_create_buffer(bytes, manifold_gpu::BufferUse::Upload)
     } else {
-        device.try_create_buffer(bytes)
+        device.try_create_buffer(bytes, manifold_gpu::BufferUse::Gpu)
     };
     result.map(Some).map_err(|error| {
         log::error!("RT table preparation failed: {error}");

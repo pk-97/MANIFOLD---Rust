@@ -1,3 +1,4 @@
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_core::{Beats, Seconds};
@@ -43,7 +44,7 @@ impl Harness {
 
     pub fn array<T: KnownItem>(&mut self, values: &[T], capacity: usize) -> (Slot, GpuBuffer) {
         let bytes = (capacity.max(values.len()).max(1) * std::mem::size_of::<T>()) as u64;
-        let buffer = self.device.create_buffer_shared(bytes);
+        let buffer = self.device.create_buffer(bytes, BufferUse::Upload);
         buffer.zero_fill();
         if !values.is_empty() {
             // SAFETY: shared buffer sized for `values`; no GPU work in flight.

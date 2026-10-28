@@ -466,8 +466,10 @@ mod gpu_tests {
         let cam = test_camera();
         let derived = derive(&cam, 16.0 / 9.0, level, range, margin).unwrap();
         let count = cols * rows;
-        let out = device
-            .create_buffer_shared(u64::from(count) * std::mem::size_of::<MeshVertex>() as u64);
+        let out = device.create_buffer(
+            u64::from(count) * std::mem::size_of::<MeshVertex>() as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         let uniforms = grid_uniforms(
             cols,
             rows,

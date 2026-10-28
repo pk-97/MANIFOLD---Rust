@@ -26,6 +26,7 @@
 //! `rg` facts checked at review time, not expressed as a test in this file.
 
 use half::f16;
+use manifold_gpu::BufferUse;
 use manifold_gpu::raytrace::{AccumulateParams, GiMaterial, GpuShadowRayTracer, ShadowRayTracer};
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -453,7 +454,7 @@ fn readback_rgba_f32(texture: &GpuTexture) -> Vec<f32> {
     let h = shared();
     let bytes_per_row = W * 8; // Rgba16Float = 8 bytes/px
     let total_bytes = u64::from(H * bytes_per_row);
-    let buf = h.device.create_buffer_shared(total_bytes);
+    let buf = h.device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = h.device.create_encoder("p2-irradiance-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();
@@ -558,7 +559,10 @@ fn run_accumulate_with_sv(
     hi_sv: &GpuTexture,
     label: &str,
 ) {
-    let params_buffer = device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
+    let params_buffer = device.create_buffer(
+        std::mem::size_of::<AccumulateParams>() as u64,
+        BufferUse::Upload,
+    );
     let params = AccumulateParams::new(
         [W, H],
         alpha,
@@ -569,12 +573,14 @@ fn run_accumulate_with_sv(
         IDENTITY,
         prev_view_proj,
     );
-    let obj_motion_buffer =
-        device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
+    let obj_motion_buffer = device.create_buffer(
+        std::mem::size_of::<[[f32; 4]; 4]>() as u64,
+        BufferUse::Upload,
+    );
     {
         let ptr = obj_motion_buffer
             .mapped_ptr()
-            .expect("obj-motion buffer must be CPU-mapped (create_buffer_shared)");
+            .expect("obj-motion buffer must be CPU-mapped (BufferUse::Upload)");
         unsafe {
             std::ptr::copy_nonoverlapping(
                 obj_motion.as_ptr() as *const u8,
@@ -586,7 +592,8 @@ fn run_accumulate_with_sv(
     let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
     let svt_sink = make_history(device, "p2-svt-sink");
     let svt_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-svt-dummy");
-    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buf =
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
     let mut enc = device.create_encoder(label);
     {
         let gpu = RendererGpuEncoder::new(&mut enc, device);
@@ -648,7 +655,10 @@ fn run_accumulate_with_svt(
     hi_svt: &GpuTexture,
     label: &str,
 ) {
-    let params_buffer = device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
+    let params_buffer = device.create_buffer(
+        std::mem::size_of::<AccumulateParams>() as u64,
+        BufferUse::Upload,
+    );
     let params = AccumulateParams::new(
         [W, H],
         alpha,
@@ -659,12 +669,14 @@ fn run_accumulate_with_svt(
         IDENTITY,
         prev_view_proj,
     );
-    let obj_motion_buffer =
-        device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
+    let obj_motion_buffer = device.create_buffer(
+        std::mem::size_of::<[[f32; 4]; 4]>() as u64,
+        BufferUse::Upload,
+    );
     {
         let ptr = obj_motion_buffer
             .mapped_ptr()
-            .expect("obj-motion buffer must be CPU-mapped (create_buffer_shared)");
+            .expect("obj-motion buffer must be CPU-mapped (BufferUse::Upload)");
         unsafe {
             std::ptr::copy_nonoverlapping(
                 obj_motion.as_ptr() as *const u8,
@@ -674,7 +686,8 @@ fn run_accumulate_with_svt(
         }
     }
     let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
-    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buf =
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
     let mut enc = device.create_encoder(label);
     {
         let gpu = RendererGpuEncoder::new(&mut enc, device);
@@ -1162,10 +1175,16 @@ fn refl_channel_blends_history_and_current() {
     let refl_output = make_history(device, "bisect-refl-output");
 
     // ── Buffers ───────────────────────────────────────────────────────
-    let params_buffer = device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
-    let obj_motion_buffer =
-        device.create_buffer_shared(std::mem::size_of::<[[f32; 4]; 4]>() as u64);
-    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let params_buffer = device.create_buffer(
+        std::mem::size_of::<AccumulateParams>() as u64,
+        BufferUse::Upload,
+    );
+    let obj_motion_buffer = device.create_buffer(
+        std::mem::size_of::<[[f32; 4]; 4]>() as u64,
+        BufferUse::Upload,
+    );
+    let gi_materials_buf =
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
     // SV-ACCUM: inert fully-lit visibility input + history/output pair —
     // these legs assert on the refl channel only.
     let hi_sv = upload_sv(device, 1.0, 1.0, 1.0, "bisect-hi-sv");

@@ -30,6 +30,7 @@
 //! double-duties as a hazard barrier between previous-frame work and
 //! the current compact pass).
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuSamplerDesc};
 use std::borrow::Cow;
 
@@ -196,9 +197,9 @@ impl Primitive for SeedParticlesFromTexture {
             let total_texels = u64::from(mask_width) * u64::from(mask_height);
             let list_bytes = total_texels.max(1) * 8; // vec2<f32> stride
             let num_blocks = total_texels.max(1).div_ceil(256);
-            self.bright_list = Some(gpu.device.create_buffer(list_bytes));
-            self.counter = Some(gpu.device.create_buffer(4));
-            self.block_data = Some(gpu.device.create_buffer(num_blocks * 4));
+            self.bright_list = Some(gpu.device.create_buffer(list_bytes, BufferUse::Gpu));
+            self.counter = Some(gpu.device.create_buffer(4, BufferUse::Gpu));
+            self.block_data = Some(gpu.device.create_buffer(num_blocks * 4, BufferUse::Gpu));
             self.cached_mask_dims = (mask_width, mask_height);
         }
         let bright_list = self

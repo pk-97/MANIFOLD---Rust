@@ -197,9 +197,14 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "tri-oracle",
         );
-        let src_buf = device.create_buffer_shared(std::mem::size_of_val(grid) as u64);
-        let dst_buf = device
-            .create_buffer_shared(u64::from(dst_cap) * std::mem::size_of::<MeshVertex>() as u64);
+        let src_buf = device.create_buffer(
+            std::mem::size_of_val(grid) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
+        let dst_buf = device.create_buffer(
+            u64::from(dst_cap) * std::mem::size_of::<MeshVertex>() as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             src_buf.write(0, bytemuck::cast_slice(grid));
         }

@@ -41,6 +41,7 @@
 //! jitter-sensitive penumbra, so an accidentally nonzero Hard cone would
 //! be caught.
 
+use manifold_gpu::BufferUse;
 use std::ffi::c_void;
 use std::slice;
 
@@ -83,7 +84,7 @@ const IDENTITY: [[f32; 4]; 4] = [
 
 fn write_shared_buffer<T: Copy>(device: &GpuDevice, data: &[T]) -> manifold_gpu::GpuBuffer {
     let bytes = std::mem::size_of_val(data) as u64;
-    let buf = device.create_buffer_shared(bytes.max(16));
+    let buf = device.create_buffer(bytes.max(16), BufferUse::Upload);
     let ptr = buf
         .mapped_ptr()
         .expect("shared buffer must expose a mapped pointer");
@@ -309,7 +310,8 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
     let dummy_emissive = harness::dummy_emissive_buffer(device);
-    let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buffer =
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
     // P4a: the GPU emissive preparation indexes one material row per
     // object — this fixture has no emissive geometry, so zeroed rows
     // (luma 0 → zero stats, the old "no emissive table" behavior).
@@ -369,7 +371,7 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
     encoder.commit_and_wait_completed();
 
     let row_bytes = WIDTH * 4 * 4;
-    let readback_buf = device.create_buffer_shared(u64::from(row_bytes));
+    let readback_buf = device.create_buffer(u64::from(row_bytes), BufferUse::Upload);
     let mut enc2 = device.create_encoder("rt-t2c-readback");
     enc2.copy_texture_to_buffer(&out_sv, &readback_buf, WIDTH, 1, row_bytes);
     enc2.commit_and_wait_completed();

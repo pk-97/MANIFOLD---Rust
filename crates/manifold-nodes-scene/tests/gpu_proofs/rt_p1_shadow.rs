@@ -33,6 +33,7 @@
 //! target); a discrete-GPU Vulkan backend would need a render pass here
 //! instead (not this test's concern — Metal-only proof).
 
+use manifold_gpu::BufferUse;
 use std::ffi::c_void;
 use std::slice;
 
@@ -57,7 +58,7 @@ struct PackedVertex {
 
 fn write_shared_buffer<T: Copy>(device: &GpuDevice, data: &[T]) -> manifold_gpu::GpuBuffer {
     let bytes = std::mem::size_of_val(data) as u64;
-    let buf = device.create_buffer_shared(bytes.max(16));
+    let buf = device.create_buffer(bytes.max(16), BufferUse::Upload);
     let ptr = buf
         .mapped_ptr()
         .expect("shared buffer must expose a mapped pointer");
@@ -280,7 +281,8 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     );
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
     // discipline as `out_irr` — one zeroed entry.
-    let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buffer =
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
     // P4a: the GPU emissive preparation indexes one material row per
     // object — this fixture has no emissive geometry, so zeroed rows
     // (luma 0 → zero stats, the old "no emissive table" behavior).
@@ -288,8 +290,10 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     // RT-T1-B: unread by this proof (ao_spp == 0 && gi_spp == 0 above),
     // same ABI-stub discipline as `gi_materials_buffer`.
     let dummy_emissive = harness::dummy_emissive_buffer(device);
-    let normal_sources_buffer = device
-        .create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
+    let normal_sources_buffer = device.create_buffer(
+        std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64,
+        BufferUse::Upload,
+    );
 
     let mut encoder = device.create_encoder("rt-p1-shadow-proof");
     let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
@@ -345,7 +349,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     encoder.commit_and_wait_completed();
 
     // ─── Readback + CPU-oracle comparison ──────────────────────────────
-    let readback_buf = device.create_buffer_shared(2 * 4 * 4); // 2 texels * rgba * f32
+    let readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Upload); // 2 texels * rgba * f32
     let mut enc2 = device.create_encoder("rt-p1-readback");
     enc2.copy_texture_to_buffer(&out_sv, &readback_buf, 2, 1, 2 * 4 * 4);
     enc2.commit_and_wait_completed();
@@ -623,7 +627,8 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
     );
     // RT-P3: unread by this proof (gi_spp == 0 above), same ABI-stub
     // discipline as `out_irr` — one zeroed entry.
-    let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buffer =
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
     // P4a: the GPU emissive preparation indexes one material row per
     // object — this fixture has no emissive geometry, so zeroed rows
     // (luma 0 → zero stats, the old "no emissive table" behavior).
@@ -631,8 +636,10 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
     // RT-T1-B: unread by this proof (ao_spp == 0 && gi_spp == 0 above),
     // same ABI-stub discipline as `gi_materials_buffer`.
     let dummy_emissive = harness::dummy_emissive_buffer(device);
-    let normal_sources_buffer = device
-        .create_buffer_shared(std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64);
+    let normal_sources_buffer = device.create_buffer(
+        std::mem::size_of::<manifold_gpu::raytrace::RtNormalSource>() as u64,
+        BufferUse::Upload,
+    );
 
     let mut encoder = device.create_encoder("rt-p1-2blas-shadow-proof");
     let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];
@@ -677,7 +684,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
     );
     encoder.commit_and_wait_completed();
 
-    let readback_buf = device.create_buffer_shared(2 * 4 * 4);
+    let readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Upload);
     let mut enc2 = device.create_encoder("rt-p1-2blas-readback");
     enc2.copy_texture_to_buffer(&out_sv, &readback_buf, 2, 1, 2 * 4 * 4);
     enc2.commit_and_wait_completed();

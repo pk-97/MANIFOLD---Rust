@@ -12,6 +12,7 @@
 use super::gpu_flip_sheeting::{FILL_THRESHOLD, GpuSheeting, SheetInputs};
 use super::gpu_flip_sheeting_cpu_tests::bucket_fixture;
 use manifold_fluids::sheeter;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::scene::world_tiles::{
@@ -26,7 +27,7 @@ use manifold_water_liquid::world_tiles::{
 use std::collections::HashMap;
 
 pub(super) fn shared(device: &GpuDevice, bytes: &[u8]) -> GpuBuffer {
-    let buffer = device.create_buffer_shared(bytes.len().max(16) as u64);
+    let buffer = device.create_buffer(bytes.len().max(16) as u64, BufferUse::Upload);
     buffer.zero_fill();
     // SAFETY: a fresh shared buffer sized for `bytes`; no GPU work in flight.
     unsafe { buffer.write(0, bytes) };
@@ -34,7 +35,7 @@ pub(super) fn shared(device: &GpuDevice, bytes: &[u8]) -> GpuBuffer {
 }
 
 pub(super) fn copy_out(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
-    let staged = device.create_buffer_shared(buffer.size);
+    let staged = device.create_buffer(buffer.size, BufferUse::Upload);
     let mut enc = device.create_encoder("sheeting proof readback");
     enc.copy_buffer_to_buffer(buffer, &staged, buffer.size);
     enc.commit_and_wait_completed();

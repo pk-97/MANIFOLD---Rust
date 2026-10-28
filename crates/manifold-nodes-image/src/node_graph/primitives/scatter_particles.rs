@@ -405,8 +405,8 @@ mod gpu_tests {
 
         let particle_bytes = std::mem::size_of_val(particles) as u64;
         let accum_bytes = (WIDTH as u64) * (HEIGHT as u64) * 4;
-        let in_buf = device.create_buffer_shared(particle_bytes);
-        let accum_buf = device.create_buffer_shared(accum_bytes);
+        let in_buf = device.create_buffer(particle_bytes, manifold_gpu::BufferUse::Upload);
+        let accum_buf = device.create_buffer(accum_bytes, manifold_gpu::BufferUse::Upload);
 
         // CPU-write the input particles into the shared buffer.
         unsafe {

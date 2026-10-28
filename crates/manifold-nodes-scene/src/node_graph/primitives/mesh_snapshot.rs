@@ -11,6 +11,7 @@
 //! pattern later phases reuse.
 
 use manifold_core::{Beats, Seconds};
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 
 use manifold_node_engine::exec::execution_plan::ResourceId;
@@ -265,7 +266,7 @@ fn readback_rgba_f32(
 ) -> Vec<[f32; 4]> {
     let bytes_per_row = w * 8;
     let total = u64::from(h * bytes_per_row);
-    let buf = device.create_buffer_shared(total);
+    let buf = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("m6-readback");
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
     enc.commit_and_wait_completed();
@@ -337,7 +338,7 @@ fn render_mesh_scene(
 
     // Mesh vertex buffer, pre-filled with the caller's geometry.
     let vert_bytes = std::mem::size_of_val(verts) as u64;
-    let vert_buf = device.create_buffer_shared(vert_bytes);
+    let vert_buf = device.create_buffer(vert_bytes, BufferUse::Upload);
     unsafe {
         vert_buf.write(0, bytemuck::cast_slice(verts));
     }
@@ -601,7 +602,10 @@ fn pre_bind_cube_output(
             _ => None,
         })
         .expect("cube max_capacity default");
-    let buf = device.create_buffer_shared(capacity * std::mem::size_of::<MeshVertex>() as u64);
+    let buf = device.create_buffer(
+        capacity * std::mem::size_of::<MeshVertex>() as u64,
+        BufferUse::Upload,
+    );
     backend.pre_bind_array(resource, buf);
 }
 
@@ -809,7 +813,7 @@ fn render_scene_cel_quad_frame(w: u32, h: u32, num_lights: u32) -> Vec<[f32; 4]>
 
     let verts = quad_verts();
     let vert_bytes = (verts.len() * std::mem::size_of::<MeshVertex>()) as u64;
-    let vert_buf = device.create_buffer_shared(vert_bytes);
+    let vert_buf = device.create_buffer(vert_bytes, BufferUse::Upload);
     unsafe {
         vert_buf.write(0, bytemuck::cast_slice(&verts));
     }
@@ -926,7 +930,7 @@ fn render_scene_bcmap_quad_frame(
 
     let verts = quad_verts();
     let vert_bytes = (verts.len() * std::mem::size_of::<MeshVertex>()) as u64;
-    let vert_buf = device.create_buffer_shared(vert_bytes);
+    let vert_buf = device.create_buffer(vert_bytes, BufferUse::Upload);
     unsafe {
         vert_buf.write(0, bytemuck::cast_slice(&verts));
     }

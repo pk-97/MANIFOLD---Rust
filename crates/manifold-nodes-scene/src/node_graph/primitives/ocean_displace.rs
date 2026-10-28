@@ -563,7 +563,7 @@ pub(crate) mod gpu_tests {
         );
         let (vertices, uniforms, fields) = fixture();
         let upload = |bytes: &[u8]| {
-            let b = device.create_buffer_shared(bytes.len() as u64);
+            let b = device.create_buffer(bytes.len() as u64, manifold_gpu::BufferUse::Upload);
             unsafe { b.write(0, bytes) };
             b
         };
@@ -572,7 +572,7 @@ pub(crate) mod gpu_tests {
             .iter()
             .map(|v| upload(bytemuck::cast_slice(v)))
             .collect();
-        let out = device.create_buffer_shared(std::mem::size_of_val(vertices.as_slice()) as u64);
+        let out = device.create_buffer(std::mem::size_of_val(vertices.as_slice()) as u64, manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder("ocean-displace-test");
         enc.dispatch_compute(
             &pipeline,

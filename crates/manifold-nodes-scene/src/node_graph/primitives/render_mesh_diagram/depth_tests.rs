@@ -6,6 +6,7 @@
 //! is non-empty.
 
 use super::*;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{
     GpuBinding, GpuLoadAction, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
@@ -32,7 +33,7 @@ fn vertices_buffer(
     device: &manifold_gpu::GpuDevice,
     vertices: &[MeshVertex],
 ) -> manifold_gpu::GpuBuffer {
-    let buffer = device.create_buffer_shared(std::mem::size_of_val(vertices) as u64);
+    let buffer = device.create_buffer(std::mem::size_of_val(vertices) as u64, BufferUse::Upload);
     // SAFETY: the shared buffer was allocated to exactly this byte length and
     // is not referenced by a submitted command until after this write.
     unsafe {

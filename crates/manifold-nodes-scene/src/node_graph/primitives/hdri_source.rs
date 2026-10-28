@@ -792,7 +792,10 @@ mod gpu_tests {
             "hdri gpu test",
         );
         let bytes_per_row = dw * 8; // Rgba16Float = 8 bytes/texel
-        let readback = device.create_buffer_shared(u64::from(dh * bytes_per_row));
+        let readback = device.create_buffer(
+            u64::from(dh * bytes_per_row),
+            manifold_gpu::BufferUse::Upload,
+        );
         enc.copy_texture_to_buffer(&out, &readback, dw, dh, bytes_per_row);
         enc.commit_and_wait_completed();
         let ptr = readback.mapped_ptr().expect("shared readback buffer");
@@ -932,7 +935,7 @@ mod gate_gpu_tests {
         let tex = backend.texture_2d(slot).expect("texture retained");
         let bytes_per_row = w * 8; // Rgba16Float
         let total = u64::from(h * bytes_per_row);
-        let readback_buf = device.create_buffer_shared(total);
+        let readback_buf = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder("hdri-gate-readback");
         enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
         enc.commit_and_wait_completed();

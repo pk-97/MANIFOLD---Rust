@@ -27,6 +27,7 @@
 //! instances, and the `num_edges` uniform tells the shader the
 //! boundary.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuLoadAction};
@@ -264,7 +265,7 @@ impl RenderLines {
             return;
         }
         let bytes = needed * std::mem::size_of::<EdgeInstance>() as u64;
-        self.instances_buf = Some(device.create_buffer_shared(bytes));
+        self.instances_buf = Some(device.create_buffer(bytes, BufferUse::Upload));
         self.instances_capacity = needed;
     }
 
@@ -655,7 +656,7 @@ impl Primitive for RenderLines {
         self.ensure_msaa_texture(gpu.device, width, height);
         self.ensure_instances_buf(gpu.device, total_instances as u64);
         if widths_input.is_none() && self.dummy_widths.is_none() {
-            self.dummy_widths = Some(gpu.device.create_buffer_shared(4));
+            self.dummy_widths = Some(gpu.device.create_buffer(4, BufferUse::Upload));
         }
 
         // Upload the CPU instance list into the shared GPU buffer.

@@ -8,6 +8,7 @@
 //! records each texture's native format and per-channel min/max/mean so the
 //! clipped values aren't lost. See the design discussion in the session notes.
 
+use manifold_gpu::BufferUse;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
@@ -62,7 +63,10 @@ fn readback_rgba(device: &GpuDevice, tex: &GpuTexture) -> Option<Vec<[f32; 4]>> 
 
     let tight = tex.width * bpp;
     let aligned = tight.div_ceil(256) * 256;
-    let buf = device.create_buffer_shared(u64::from(aligned) * u64::from(tex.height));
+    let buf = device.create_buffer(
+        u64::from(aligned) * u64::from(tex.height),
+        BufferUse::Upload,
+    );
     let mut enc = device.create_encoder("Graph Dump Readback");
     enc.copy_texture_to_buffer(tex, &buf, tex.width, tex.height, aligned);
     enc.commit_and_wait_completed();
@@ -217,7 +221,7 @@ fn dump_one_array(
         (size / u64::from(a.item_size)) as usize
     };
     // Read the buffer back via a shared staging buffer.
-    let staging = device.create_buffer_shared(size);
+    let staging = device.create_buffer(size, BufferUse::Upload);
     let mut enc = device.create_encoder("Array Dump Readback");
     enc.copy_buffer_to_buffer(a.buffer, &staging, size);
     enc.commit_and_wait_completed();

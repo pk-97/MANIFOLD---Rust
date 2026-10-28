@@ -3,6 +3,7 @@
 //! node's `tiles` output, and the step under the NaN poison (the
 //! defined-value rule).
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
 use crate::contracts::water::primitives::gpu_flip_scene_tests::Run;
@@ -22,7 +23,7 @@ use manifold_water_liquid::testkit::world_box::pool_index_under;
 
 /// Every word of a buffer the step allocated (private storage).
 fn words_of(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
-    let staged = device.create_buffer_shared(buffer.size);
+    let staged = device.create_buffer(buffer.size, BufferUse::Upload);
     let mut enc = device.create_encoder("world tiles proof readback");
     enc.copy_buffer_to_buffer(buffer, &staged, buffer.size);
     enc.commit_and_wait_completed();

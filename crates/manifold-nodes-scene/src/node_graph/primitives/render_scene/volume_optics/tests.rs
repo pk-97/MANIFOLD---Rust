@@ -1,3 +1,4 @@
+use manifold_gpu::BufferUse;
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuCompareFunction, GpuDepthStencilDesc,
     GpuEncoder, GpuLoadAction, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
@@ -117,7 +118,7 @@ fn buffer<T: bytemuck::Pod>(
     data: &[T],
 ) -> manifold_gpu::GpuBuffer {
     let bytes = bytemuck::cast_slice(data);
-    let buffer = device.create_buffer_shared(bytes.len() as u64);
+    let buffer = device.create_buffer(bytes.len() as u64, BufferUse::Upload);
     unsafe { buffer.write(0, bytes) };
     buffer
 }
@@ -186,7 +187,7 @@ fn uniforms_for_camera(
 
 fn read_center(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) -> f32 {
     let row_bytes = SIZE * 4;
-    let readback = device.create_buffer_shared(u64::from(row_bytes * SIZE));
+    let readback = device.create_buffer(u64::from(row_bytes * SIZE), BufferUse::Upload);
     let mut encoder = device.create_encoder("volume optics readback");
     encoder.copy_texture_to_buffer(texture, &readback, SIZE, SIZE, row_bytes);
     encoder.commit_and_wait_completed();

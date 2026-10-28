@@ -1541,8 +1541,10 @@ mod gpu_tests {
     #[test]
     fn instance_upload_crosses_inline_chunk_and_zeroes_shrunk_tail() {
         let device = manifold_gpu::testkit::test_device();
-        let output = device
-            .create_buffer_shared((MAX_COPIES * std::mem::size_of::<InstanceTransform>()) as u64);
+        let output = device.create_buffer(
+            (MAX_COPIES * std::mem::size_of::<InstanceTransform>()) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         let mut state = InstanceUploadState::default();
         for (index, value) in state.data.iter_mut().take(130).enumerate() {
             *value = InstanceTransform {

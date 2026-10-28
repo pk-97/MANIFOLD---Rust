@@ -338,7 +338,10 @@ mod tests {
         native_enc.commit_and_wait_completed();
 
         let bytes_per_row = 2 * 8; // 2 px × rgba16float (8 bytes)
-        let readback = device.create_buffer_shared(u64::from(2 * bytes_per_row));
+        let readback = device.create_buffer(
+            u64::from(2 * bytes_per_row),
+            manifold_gpu::BufferUse::Upload,
+        );
         let mut rb_enc = device.create_encoder("resize-test-readback");
         rb_enc.copy_texture_to_buffer(&dst, &readback, 2, 2, bytes_per_row);
         rb_enc.commit_and_wait_completed();

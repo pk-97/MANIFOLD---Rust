@@ -207,12 +207,17 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "revolve-curve-test",
         );
-        let profile_buf = device.create_buffer_shared(std::mem::size_of_val(profile) as u64);
+        let profile_buf = device.create_buffer(
+            std::mem::size_of_val(profile) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             profile_buf.write(0, bytemuck::cast_slice(profile));
         }
-        let dst_buf =
-            device.create_buffer_shared(dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64);
+        let dst_buf = device.create_buffer(
+            dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
 
         let uniforms = RevolveCurveUniforms {
             segments,
@@ -304,13 +309,18 @@ mod gpu_tests {
                 .expect("triangulate_grid codegen");
         let tri_expected_count = (COLS - 1) * (ROWS - 1) * 6; // (5-1)*(3-1)*6 = 48
 
-        let src_buf = device.create_buffer_shared(std::mem::size_of_val(&revolved[..]) as u64);
+        let src_buf = device.create_buffer(
+            std::mem::size_of_val(&revolved[..]) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             src_buf.write(0, bytemuck::cast_slice(&revolved));
         }
         let tri_dst_cap = tri_expected_count;
-        let tri_dst_buf = device
-            .create_buffer_shared(tri_dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64);
+        let tri_dst_buf = device.create_buffer(
+            tri_dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
 
         #[repr(C)]
         #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

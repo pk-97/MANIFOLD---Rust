@@ -33,6 +33,7 @@
 //!    by hand). Extra bounces must not move this number — no env chain means
 //!    the gather still contributes nothing.
 
+use manifold_gpu::BufferUse;
 use std::ffi::c_void;
 use std::slice;
 use std::sync::Arc;
@@ -73,7 +74,7 @@ fn readback_rgba16f(
     const BYTES_PER_PIXEL: u32 = 8; // Rgba16Float
     let bytes_per_row = W * BYTES_PER_PIXEL;
     let total_bytes = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer_shared(total_bytes);
+    let buf = device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = device.create_encoder("rt-t38-multibounce-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();

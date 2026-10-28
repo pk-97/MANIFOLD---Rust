@@ -22,6 +22,7 @@ use core_text::{
     font::CTFont, font_descriptor::kCTFontOrientationDefault, line::CTLine,
     string_attributes::kCTFontAttributeName,
 };
+use manifold_gpu::BufferUse;
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice, GpuEncoder,
     GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc, GpuTexture,
@@ -1597,7 +1598,7 @@ impl NativeTextRenderer {
         let vdata = bytemuck::cast_slice::<TextVertex, u8>(&self.vertices);
         let vbuf = match self.vbuf_ring[slot].take() {
             Some(buf) if buf.size >= vdata.len() as u64 => buf,
-            _ => device.create_buffer_shared(vdata.len() as u64),
+            _ => device.create_buffer(vdata.len() as u64, BufferUse::Upload),
         };
         unsafe {
             vbuf.write(0, vdata);
@@ -1606,7 +1607,7 @@ impl NativeTextRenderer {
         let idata = bytemuck::cast_slice::<u32, u8>(&self.indices);
         let ibuf = match self.ibuf_ring[slot].take() {
             Some(buf) if buf.size >= idata.len() as u64 => buf,
-            _ => device.create_buffer_shared(idata.len() as u64),
+            _ => device.create_buffer(idata.len() as u64, BufferUse::Upload),
         };
         unsafe {
             ibuf.write(0, idata);

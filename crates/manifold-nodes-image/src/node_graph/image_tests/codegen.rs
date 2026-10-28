@@ -1,3 +1,4 @@
+use manifold_gpu::BufferUse;
 use manifold_node_engine::exec::effect_node::NodeInstanceId;
 
 use manifold_gpu::{GpuBinding, GpuSamplerDesc, GpuTexture, GpuTextureFormat, GpuTextureUsage};
@@ -1712,7 +1713,7 @@ textureStore(vol, vec3<i32>(id), vec4<f32>(f.x, f.y, f.z, 0.5 + 0.5 * f.x));\n\
         enc.commit_and_wait_completed();
         let bytes_per_row = n * 8; // rgba16float
         let total = u64::from(bytes_per_row) * u64::from(n) * u64::from(n);
-        let buf = device.create_buffer_shared(total);
+        let buf = device.create_buffer(total, BufferUse::Upload);
         let mut renc = device.create_encoder("blur3d-readback");
         renc.copy_texture_3d_to_buffer(&out, &buf, n, n, n, bytes_per_row);
         renc.commit_and_wait_completed();

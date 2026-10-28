@@ -6,6 +6,7 @@
 //! buffers keep the content thread non-blocking while the CPU consumes the
 //! newest completed result.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEvent, GpuTexture};
 
 use super::terminal_reaction::SAMPLE_COUNT;
@@ -69,7 +70,7 @@ impl TerminalAnalysis {
         }
         if self.slots.is_none() {
             self.slots = Some(std::array::from_fn(|_| ReadbackSlot {
-                buffer: device.create_buffer_shared(READBACK_BYTES),
+                buffer: device.create_buffer(READBACK_BYTES, BufferUse::Upload),
                 event: device.create_event(),
                 signal: 0,
                 generation: 0,

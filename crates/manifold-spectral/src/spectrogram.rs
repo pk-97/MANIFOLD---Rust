@@ -136,7 +136,7 @@ impl Spectrogram {
         let bytes = (elems * std::mem::size_of::<f32>()) as u64;
         let bufs = (0..BUFFER_ROTATION)
             .map(|_| {
-                let b = device.create_buffer_shared(bytes.max(4));
+                let b = device.create_buffer(bytes.max(4), manifold_gpu::BufferUse::Upload);
                 b.zero_fill();
                 b
             })
@@ -145,7 +145,7 @@ impl Spectrogram {
         let scalar_bytes = (num_cols * std::mem::size_of::<ScopeColumn>()) as u64;
         let scalar_bufs = (0..BUFFER_ROTATION)
             .map(|_| {
-                let b = device.create_buffer_shared(scalar_bytes.max(4));
+                let b = device.create_buffer(scalar_bytes.max(4), manifold_gpu::BufferUse::Upload);
                 b.zero_fill();
                 b
             })
@@ -400,7 +400,10 @@ mod gpu_tests {
         enc.commit_and_wait_completed();
 
         let bytes_per_row = COLS * 4;
-        let readback = device.create_buffer_shared(u64::from(H * bytes_per_row));
+        let readback = device.create_buffer(
+            u64::from(H * bytes_per_row),
+            manifold_gpu::BufferUse::Upload,
+        );
         let mut rb = device.create_encoder("scope-gpu-proof-readback");
         rb.copy_texture_to_buffer(&target, &readback, COLS, H, bytes_per_row);
         rb.commit_and_wait_completed();
@@ -496,7 +499,10 @@ mod gpu_tests {
         enc.commit_and_wait_completed();
 
         let bytes_per_row = COLS * 4;
-        let readback = device.create_buffer_shared(u64::from(H * bytes_per_row));
+        let readback = device.create_buffer(
+            u64::from(H * bytes_per_row),
+            manifold_gpu::BufferUse::Upload,
+        );
         let mut rb = device.create_encoder("scope-gpu-proof-dim-readback");
         rb.copy_texture_to_buffer(&target, &readback, COLS, H, bytes_per_row);
         rb.commit_and_wait_completed();

@@ -1,4 +1,5 @@
 use super::*;
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::headless_readback::readback_raw_halves;
 use manifold_node_engine::scene::camera::CameraMode;
@@ -43,21 +44,28 @@ fn math_view_instance_history_records_per_copy_motion() {
     let device = guard.arc();
     let pipeline =
         device.create_compute_pipeline(CAPTURE_SHADER, "cs_main", "instance-history-proof");
-    let history = device.create_buffer_shared(
+    let history = device.create_buffer(
         HISTORY_SAMPLES as u64 * MAX_VERTICES as u64 * std::mem::size_of::<[f32; 4]>() as u64,
+        BufferUse::Upload,
     );
     history.zero_fill();
-    let ring = device.create_buffer_shared(
+    let ring = device.create_buffer(
         HISTORY_SAMPLES as u64
             * MAX_COPY_INSTANCES as u64
             * std::mem::size_of::<InstanceTransform>() as u64,
+        BufferUse::Upload,
     );
     ring.zero_fill();
-    let counts = device.create_buffer_shared(HISTORY_SAMPLES as u64 * 4);
+    let counts = device.create_buffer(HISTORY_SAMPLES as u64 * 4, BufferUse::Upload);
     counts.zero_fill();
-    let vertex_buffer = device.create_buffer_shared(3 * std::mem::size_of::<MeshVertex>() as u64);
-    let instance_buffer =
-        device.create_buffer_shared(2 * std::mem::size_of::<InstanceTransform>() as u64);
+    let vertex_buffer = device.create_buffer(
+        3 * std::mem::size_of::<MeshVertex>() as u64,
+        BufferUse::Upload,
+    );
+    let instance_buffer = device.create_buffer(
+        2 * std::mem::size_of::<InstanceTransform>() as u64,
+        BufferUse::Upload,
+    );
 
     // Per-frame known inputs: one vertex drifts (mixed vertex+instance
     // motion), copy 1 translates and rotates, copy 0 stays identity.
@@ -247,21 +255,28 @@ fn math_view_trails_render_recorded_copy_motion() {
             .color(GpuTextureFormat::Rgba16Float, Some(DIAGRAM_BLEND))
             .samples(MSAA_SAMPLE_COUNT),
     );
-    let history = device.create_buffer_shared(
+    let history = device.create_buffer(
         HISTORY_SAMPLES as u64 * MAX_VERTICES as u64 * std::mem::size_of::<[f32; 4]>() as u64,
+        BufferUse::Upload,
     );
     history.zero_fill();
-    let ring = device.create_buffer_shared(
+    let ring = device.create_buffer(
         HISTORY_SAMPLES as u64
             * MAX_COPY_INSTANCES as u64
             * std::mem::size_of::<InstanceTransform>() as u64,
+        BufferUse::Upload,
     );
     ring.zero_fill();
-    let counts = device.create_buffer_shared(HISTORY_SAMPLES as u64 * 4);
+    let counts = device.create_buffer(HISTORY_SAMPLES as u64 * 4, BufferUse::Upload);
     counts.zero_fill();
-    let vertex_buffer = device.create_buffer_shared(3 * std::mem::size_of::<MeshVertex>() as u64);
-    let instance_buffer =
-        device.create_buffer_shared(2 * std::mem::size_of::<InstanceTransform>() as u64);
+    let vertex_buffer = device.create_buffer(
+        3 * std::mem::size_of::<MeshVertex>() as u64,
+        BufferUse::Upload,
+    );
+    let instance_buffer = device.create_buffer(
+        2 * std::mem::size_of::<InstanceTransform>() as u64,
+        BufferUse::Upload,
+    );
 
     let frames = 10u32;
     let vertex_frame = |f: u32| {
@@ -535,7 +550,10 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
             ..bytemuck::Zeroable::zeroed()
         },
     ];
-    let vertex_buffer = device.create_buffer_shared(std::mem::size_of_val(&vertices[..]) as u64);
+    let vertex_buffer = device.create_buffer(
+        std::mem::size_of_val(&vertices[..]) as u64,
+        BufferUse::Upload,
+    );
     // SAFETY: exact-size fresh shared buffer, no submitted work references it.
     unsafe { vertex_buffer.write(0, bytemuck::cast_slice(&vertices[..])) };
     let identity = InstanceTransform {
@@ -555,7 +573,7 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
         rot_pad: [0.0; 4],
     };
     let instance_buffer = |copies: &[InstanceTransform]| {
-        let buffer = device.create_buffer_shared(std::mem::size_of_val(copies) as u64);
+        let buffer = device.create_buffer(std::mem::size_of_val(copies) as u64, BufferUse::Upload);
         // SAFETY: exact-size fresh shared buffer, no submitted work references it.
         unsafe { buffer.write(0, bytemuck::cast_slice(copies)) };
         buffer
@@ -737,7 +755,10 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
         MSAA_SAMPLE_COUNT,
         "world-grid-proof",
     );
-    let buffer = device.create_buffer_shared(3 * std::mem::size_of::<MeshVertex>() as u64);
+    let buffer = device.create_buffer(
+        3 * std::mem::size_of::<MeshVertex>() as u64,
+        BufferUse::Upload,
+    );
     buffer.zero_fill();
     let pipeline = device.create_render_pipeline(
         &manifold_gpu::RenderPipelineDesc::new(SHADER, "vs_main", "fs_main", "world-grid-proof")

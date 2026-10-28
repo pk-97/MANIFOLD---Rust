@@ -20,7 +20,9 @@
 
 use crate::gpu_bridge::IoSurfaceMtlTexture;
 use crate::spectrum_worker::{CqtBuildParams, CqtColumnMsg};
-use manifold_gpu::{GpuBinding, GpuBuffer, GpuDevice, GpuRenderPipeline, GpuTextureFormat};
+use manifold_gpu::{
+    GpuBinding, GpuBuffer, GpuDevice, GpuRenderPipeline, GpuTextureFormat, RenderPipelineDesc,
+};
 use std::ffi::c_void;
 
 const SHADER: &str = include_str!("../shaders/spectrum_line.wgsl");
@@ -231,12 +233,12 @@ impl SpectrumGpuRenderer {
         // now hold per-screen-column smoothed dB (one entry per pixel
         // column of the spectrum region). Allocate to `max_columns` so
         // the buffer never reallocates on window resize.
-        let mid_buf = device.create_buffer_shared((max_columns as u64) * 4);
-        let side_buf = device.create_buffer_shared((max_columns as u64) * 4);
+        let mid_buf = device.create_buffer((max_columns as u64) * 4, manifold_gpu::BufferUse::Upload);
+        let side_buf = device.create_buffer((max_columns as u64) * 4, manifold_gpu::BufferUse::Upload);
         let history_buf =
-            device.create_buffer_shared((cqt_num_bins as u64) * (HISTORY_COLS as u64) * 4);
+            device.create_buffer((cqt_num_bins as u64) * (HISTORY_COLS as u64) * 4, manifold_gpu::BufferUse::Upload);
         let history_buf2 =
-            device.create_buffer_shared((cqt_num_bins as u64) * (HISTORY_COLS as u64) * 4);
+            device.create_buffer((cqt_num_bins as u64) * (HISTORY_COLS as u64) * 4, manifold_gpu::BufferUse::Upload);
 
         // Shared buffers are zero-initialised. 0 dB would hit the top of the
         // colourmap (solid red) on every unwritten column — fill with a low
@@ -253,12 +255,8 @@ impl SpectrumGpuRenderer {
         }
 
         let pipeline = device.create_render_pipeline(
-            SHADER,
-            "vs_main",
-            "fs_main",
-            GpuTextureFormat::Bgra8Unorm,
-            None,
-            "spectrum_line",
+            &RenderPipelineDesc::new(SHADER, "vs_main", "fs_main", "spectrum_line")
+                .color(GpuTextureFormat::Bgra8Unorm, None),
         );
 
         Some(Self {

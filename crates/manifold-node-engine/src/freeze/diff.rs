@@ -18,6 +18,7 @@
 //! dispatch through `GpuEncoder`, readback through a shared `GpuBuffer`. No
 //! Metal types appear here; a Vulkan backend runs the identical path.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuDevice, GpuTexture};
 
 /// Parameters handed to the reduction shader. `#[repr(C)]`, 16 bytes, matches
@@ -121,7 +122,7 @@ impl TextureDiff {
         // over_count, _pad]. Zero it before the dispatch — the shader folds
         // into it with atomicMax/atomicAdd, so it must start at the identity
         // (0 = bits of +0.0 = the smallest non-negative float, and 0 counts).
-        let out_buf = device.create_buffer_shared(16);
+        let out_buf = device.create_buffer(16, BufferUse::Upload);
         // SAFETY: shared buffers expose a CPU-visible pointer for exactly this.
         unsafe {
             let ptr = out_buf

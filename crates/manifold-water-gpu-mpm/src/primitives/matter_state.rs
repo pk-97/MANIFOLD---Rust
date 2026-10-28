@@ -5,6 +5,7 @@
 //! A non-finite tick (read back one frame late through a fenced ring) halts
 //! the solver with a node error until the domain's epoch changes (Reset).
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuBuffer;
 
 use crate::matter::{
@@ -287,7 +288,7 @@ impl Primitive for MatterState {
                 bytes,
             )
             .map_err(|error| error.to_string())
-            .and_then(|()| device.try_create_buffer(bytes))
+            .and_then(|()| device.try_create_buffer(bytes, BufferUse::Gpu))
             {
                 Ok(created) => *buffer = Some(created),
                 Err(error) => {
@@ -299,9 +300,10 @@ impl Primitive for MatterState {
                 }
             }
         }
-        let zero_stats = self
-            .zero_stats
-            .get_or_insert_with(|| gpu.device.create_buffer(u64::from(STATS_WORDS) * 4));
+        let zero_stats = self.zero_stats.get_or_insert_with(|| {
+            gpu.device
+                .create_buffer(u64::from(STATS_WORDS) * 4, BufferUse::Gpu)
+        });
 
         if self.epoch != Some(epoch) {
             self.epoch = Some(epoch);
@@ -445,7 +447,9 @@ impl Primitive for MatterState {
             Some(index) => index,
             None if self.readback.len() < READBACK_SLOTS => {
                 self.readback.push(ReadbackSlot {
-                    buffer: gpu.device.create_buffer_shared(u64::from(STATS_WORDS) * 4),
+                    buffer: gpu
+                        .device
+                        .create_buffer(u64::from(STATS_WORDS) * 4, BufferUse::Upload),
                     stamp: 0,
                     epoch,
                     pending: false,

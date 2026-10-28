@@ -8,6 +8,7 @@
 //!   against.
 
 use half::f16;
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuTextureFormat;
 use manifold_gpu::raytrace::{
     EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial, GpuShadowRayTracer,
@@ -281,7 +282,7 @@ struct Pv {
     pos: [f32; 3],
 }
 fn wb(d: &GpuDevice, v: &[Pv]) -> GpuBuffer {
-    let b = d.create_buffer_shared(((v.len() * 12) as u64).max(16));
+    let b = d.create_buffer(((v.len() * 12) as u64).max(16), BufferUse::Upload);
     unsafe {
         std::ptr::copy_nonoverlapping(
             v.as_ptr().cast::<u8>(),

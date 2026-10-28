@@ -1,5 +1,6 @@
 //! Bounded deterministic selection of complete faces from a mesh.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
@@ -55,7 +56,7 @@ impl Primitive for SampleMeshTriangles {
             return;
         };
         if self.unbounded_live_count.is_none() {
-            let buffer = ctx.gpu_encoder().device.create_buffer_shared(4);
+            let buffer = ctx.gpu_encoder().device.create_buffer(4, BufferUse::Upload);
             unsafe { buffer.write(0, bytemuck::bytes_of(&u32::MAX)) };
             self.unbounded_live_count = Some(buffer);
         }
@@ -237,13 +238,15 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
-        let src = device.create_buffer_shared(std::mem::size_of_val(source) as u64);
-        let dst = device
-            .create_buffer_shared(output_len as u64 * std::mem::size_of::<MeshVertex>() as u64);
+        let src = device.create_buffer(std::mem::size_of_val(source) as u64, BufferUse::Upload);
+        let dst = device.create_buffer(
+            output_len as u64 * std::mem::size_of::<MeshVertex>() as u64,
+            BufferUse::Upload,
+        );
         unsafe {
             src.write(0, bytemuck::cast_slice(source));
         }
-        let live = device.create_buffer_shared(4);
+        let live = device.create_buffer(4, BufferUse::Upload);
         unsafe {
             live.write(0, bytemuck::bytes_of(&live_count));
         }

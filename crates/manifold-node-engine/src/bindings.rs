@@ -742,7 +742,7 @@ mod array_accessor_tests {
     fn inputs_array_resolves_pre_bound_buffer_by_port_name() {
         let device = manifold_gpu::testkit::test_device();
         let mut backend = MetalBackend::new(device.arc(), 16, 16, GpuTextureFormat::Rgba16Float);
-        let buffer = device.create_buffer(2048);
+        let buffer = device.create_buffer(2048, manifold_gpu::BufferUse::Gpu);
         let expected_size = buffer.size;
 
         let slot = backend.pre_bind_array(ResourceId(0), buffer);
@@ -758,7 +758,7 @@ mod array_accessor_tests {
     fn outputs_array_resolves_pre_bound_buffer_by_port_name() {
         let device = manifold_gpu::testkit::test_device();
         let mut backend = MetalBackend::new(device.arc(), 16, 16, GpuTextureFormat::Rgba16Float);
-        let buffer = device.create_buffer(4096);
+        let buffer = device.create_buffer(4096, manifold_gpu::BufferUse::Gpu);
         let expected_size = buffer.size;
 
         let slot = backend.pre_bind_array(ResourceId(0), buffer);

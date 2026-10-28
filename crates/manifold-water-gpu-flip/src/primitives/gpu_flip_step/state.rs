@@ -2,6 +2,7 @@
 //! readbacks.
 
 use super::*;
+use manifold_gpu::BufferUse;
 use manifold_water_liquid::tile_storage::pool_len;
 use manifold_water_liquid::world_tiles::LIQUID_POINTS;
 
@@ -57,7 +58,7 @@ impl StepState {
         narrow_band: u32,
     ) -> Result<(), String> {
         if self.zeros.is_none() {
-            let zeros = device.try_create_buffer_shared(ZERO_BYTES)?;
+            let zeros = device.try_create_buffer(ZERO_BYTES, BufferUse::Upload)?;
             zeros.zero_fill();
             self.zeros = Some(zeros);
         }
@@ -195,7 +196,7 @@ impl StepState {
             Some(index) => index,
             None if self.plan_readbacks.len() < PLAN_READBACKS => {
                 self.plan_readbacks.push(PlanReadback {
-                    buffer: device.create_buffer_shared(PLAN_READBACK_BYTES),
+                    buffer: device.create_buffer(PLAN_READBACK_BYTES, BufferUse::Upload),
                     stamp: 0,
                     pending: false,
                 });

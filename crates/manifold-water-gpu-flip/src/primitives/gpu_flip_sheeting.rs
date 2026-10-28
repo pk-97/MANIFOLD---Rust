@@ -44,6 +44,7 @@
 //! at the rate, not the same particles, and not the same distribution near a
 //! solid with strength other than 1 or below the 24-bit draw's resolution.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, lattice_origin, pool_len};
 use manifold_water_liquid::world_tiles::{WorldTiles, allocated_args_offset};
@@ -396,33 +397,33 @@ impl GpuSheeting {
         )
         .map_err(|e| e.to_string())?;
         let n = pool_len(pool_tiles);
-        let plan = device.try_create_buffer_shared(PLAN_BYTES)?;
+        let plan = device.try_create_buffer(PLAN_BYTES, BufferUse::Upload)?;
         plan.zero_fill();
         // The stats carry over a resize: the water still owes its births.
         let stats = match self.buffers.take() {
             Some([.., stats]) => stats,
             None => {
-                let stats = device.try_create_buffer_shared(STATS_BYTES)?;
+                let stats = device.try_create_buffer(STATS_BYTES, BufferUse::Upload)?;
                 stats.zero_fill();
                 stats
             }
         };
         self.buffers = Some([
-            device.try_create_buffer(4 * n)?,
-            device.try_create_buffer(4 * n)?,
-            device.try_create_buffer(4 * n)?,
-            device.try_create_buffer(4 * n)?,
-            device.try_create_buffer(bucket_bytes(pool_tiles))?,
-            device.try_create_buffer(8 * 4 * n)?,
-            device.try_create_buffer(4 * n)?,
-            device.try_create_buffer(16 * u64::from(capacity.max(1)))?,
-            device.try_create_buffer(16)?,
+            device.try_create_buffer(4 * n, BufferUse::Gpu)?,
+            device.try_create_buffer(4 * n, BufferUse::Gpu)?,
+            device.try_create_buffer(4 * n, BufferUse::Gpu)?,
+            device.try_create_buffer(4 * n, BufferUse::Gpu)?,
+            device.try_create_buffer(bucket_bytes(pool_tiles), BufferUse::Gpu)?,
+            device.try_create_buffer(8 * 4 * n, BufferUse::Gpu)?,
+            device.try_create_buffer(4 * n, BufferUse::Gpu)?,
+            device.try_create_buffer(16 * u64::from(capacity.max(1)), BufferUse::Gpu)?,
+            device.try_create_buffer(16, BufferUse::Gpu)?,
             plan,
             stats,
         ]);
         self.scan.buffer(device, pool_tiles as usize)?;
         if self.gated_plan.is_none() {
-            self.gated_plan = Some(device.try_create_buffer(PLAN_BYTES)?);
+            self.gated_plan = Some(device.try_create_buffer(PLAN_BYTES, BufferUse::Gpu)?);
         }
         self.capacity = capacity;
         self.pool_tiles = pool_tiles;

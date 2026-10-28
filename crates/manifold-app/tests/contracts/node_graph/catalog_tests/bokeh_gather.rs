@@ -6,6 +6,7 @@
 //! makes the assertions useful when the internal prefilter changes.
 
 use half::f16;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{
     GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -70,7 +71,10 @@ fn solid_pixels(w: u32, h: u32, rgba: [f32; 4]) -> Vec<Pixel> {
 
 fn readback(device: &GpuDevice, tex: &GpuTexture) -> Vec<[f32; 4]> {
     let row_bytes = tex.width * 8;
-    let buffer = device.create_buffer_shared(u64::from(row_bytes) * u64::from(tex.height));
+    let buffer = device.create_buffer(
+        u64::from(row_bytes) * u64::from(tex.height),
+        BufferUse::Upload,
+    );
     let mut encoder = device.create_encoder("bokeh-proof-readback");
     encoder.copy_texture_to_buffer(tex, &buffer, tex.width, tex.height, row_bytes);
     encoder.commit_and_wait_completed();

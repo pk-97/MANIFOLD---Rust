@@ -32,6 +32,7 @@
 //! "good enough" for control-rate signals; users wanting pixel-exact
 //! reduction can chain a `MipChain` upstream first.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
@@ -93,7 +94,7 @@ impl Primitive for Luminance {
         let gpu = ctx.gpu_encoder();
         let measure_buffer = self
             .measure_buffer
-            .get_or_insert_with(|| gpu.device.create_buffer_shared(16));
+            .get_or_insert_with(|| gpu.device.create_buffer(16, BufferUse::Upload));
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/luminance.wgsl"),

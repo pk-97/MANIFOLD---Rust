@@ -1,5 +1,6 @@
 //! Shared device, readback and graph helpers for GPU proofs.
 
+use manifold_gpu::BufferUse;
 use std::ffi::c_void;
 use std::slice;
 use std::sync::{Arc, OnceLock};
@@ -234,7 +235,7 @@ impl ParityHarness {
     pub fn readback(&self, texture: &GpuTexture) -> Vec<u8> {
         let bytes_per_row = self.width * BYTES_PER_PIXEL;
         let total_bytes = u64::from(self.height * bytes_per_row);
-        let buf = self.device.create_buffer_shared(total_bytes);
+        let buf = self.device.create_buffer(total_bytes, BufferUse::Upload);
 
         let mut enc = self.device.create_encoder("gpu-proof-readback");
         enc.copy_texture_to_buffer(texture, &buf, self.width, self.height, bytes_per_row);

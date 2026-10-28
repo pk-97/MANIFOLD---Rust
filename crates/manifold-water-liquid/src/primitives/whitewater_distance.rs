@@ -2,6 +2,7 @@
 //! the liquid step's world tiles. The stencil is the registered codegen atom
 //! UpwindDistance; reduction is stage-local.
 //! FLIP Fluids particlelevelset.cpp / levelsetsolver.cpp, MIT; see notices.
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_entries};
 use {
@@ -79,14 +80,14 @@ impl SurfaceDistance {
         let bytes = pool_len(pool_tiles) * 4;
         let flags = u64::from(pool_tiles) * 4;
         self.buffers = Some([
-            device.try_create_buffer(bytes)?,
-            device.try_create_buffer(bytes)?,
-            device.try_create_buffer(bytes)?,
-            device.try_create_buffer(flags)?,
-            device.try_create_buffer(16)?,
-            device.try_create_buffer(16)?,
+            device.try_create_buffer(bytes, BufferUse::Gpu)?,
+            device.try_create_buffer(bytes, BufferUse::Gpu)?,
+            device.try_create_buffer(bytes, BufferUse::Gpu)?,
+            device.try_create_buffer(flags, BufferUse::Gpu)?,
+            device.try_create_buffer(16, BufferUse::Gpu)?,
+            device.try_create_buffer(16, BufferUse::Gpu)?,
             {
-                let zeros = device.try_create_buffer_shared(PLAN_BYTES)?;
+                let zeros = device.try_create_buffer(PLAN_BYTES, BufferUse::Upload)?;
                 zeros.zero_fill();
                 zeros
             },

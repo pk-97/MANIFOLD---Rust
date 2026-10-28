@@ -15,6 +15,7 @@
 //! byte-for-byte equal.
 
 use half::f16;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -858,7 +859,7 @@ fn render_readback_hires(json: &str, w: u32, h: u32) -> Vec<u8> {
     }
     let bytes_per_row = w * 8;
     let total = u64::from(h * bytes_per_row);
-    let readback = device.create_buffer_shared(total);
+    let readback = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("p3-night-garden-hires-readback");
     enc.copy_texture_to_buffer(&target.texture, &readback, w, h, bytes_per_row);
     enc.commit_and_wait_completed();

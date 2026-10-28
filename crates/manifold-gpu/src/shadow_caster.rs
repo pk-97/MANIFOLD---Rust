@@ -3,6 +3,7 @@
 //! neutral: plain f32 vec4/mat4 fields, with the Metal and WGSL struct text
 //! generated from the Rust declaration.
 
+use crate::BufferUse;
 use bytemuck::{Pod, Zeroable};
 
 /// Declares a GPU record once: the Rust struct plus the matching MSL and WGSL
@@ -83,8 +84,10 @@ pub fn upload_shadow_casters(
     casters: &[ShadowCaster],
 ) -> crate::GpuBuffer {
     let bytes: &[u8] = bytemuck::cast_slice(casters);
-    let buffer =
-        device.create_buffer_shared(bytes.len().max(std::mem::size_of::<ShadowCaster>()) as u64);
+    let buffer = device.create_buffer(
+        bytes.len().max(std::mem::size_of::<ShadowCaster>()) as u64,
+        BufferUse::Upload,
+    );
     // SAFETY: the buffer was just created with room for `bytes`.
     unsafe { buffer.write(0, bytes) };
     buffer

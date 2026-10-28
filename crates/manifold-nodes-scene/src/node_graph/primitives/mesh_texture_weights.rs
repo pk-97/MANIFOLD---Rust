@@ -263,11 +263,14 @@ mod gpu_tests {
         });
         device.upload_texture(&field, &[51, 0, 0, 255, 255, 0, 0, 255]);
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
-        let input = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+        let input = device.create_buffer(
+            std::mem::size_of_val(src) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             input.write(0, bytemuck::cast_slice(src));
         }
-        let output = device.create_buffer_shared((src.len() * 4) as u64);
+        let output = device.create_buffer((src.len() * 4) as u64, manifold_gpu::BufferUse::Upload);
         let uniforms = TextureWeightsUniforms {
             scale: s.scale,
             offset_x: s.shift[0],

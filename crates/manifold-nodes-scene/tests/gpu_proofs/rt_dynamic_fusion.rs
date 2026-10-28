@@ -38,6 +38,7 @@
 //! exercises both mappings against values the degrade-to-1.0 path would
 //! get wrong.
 
+use manifold_gpu::BufferUse;
 use std::sync::Arc;
 
 use manifold_core::{Beats, NodeId, Seconds, effect_graph_def::EffectGraphDef};
@@ -203,14 +204,15 @@ fn render_and_readback(
     let vertex_bytes = unsafe {
         std::slice::from_raw_parts(input.as_ptr().cast::<u8>(), std::mem::size_of_val(input))
     };
-    let vertex_buf = device.create_buffer_shared(vertex_bytes.len() as u64);
+    let vertex_buf = device.create_buffer(vertex_bytes.len() as u64, BufferUse::Upload);
     unsafe { vertex_buf.write(0, vertex_bytes) };
     backend.pre_bind_array(vertices_res, vertex_buf.clone());
     if let Some(mesh_ref) = mesh_ref {
         backend.pre_bind_array(res_of(mesh_ref, "vertices"), vertex_buf);
     }
     if let Some(weights) = weights {
-        let weights_buf = device.create_buffer_shared(std::mem::size_of_val(weights) as u64);
+        let weights_buf =
+            device.create_buffer(std::mem::size_of_val(weights) as u64, BufferUse::Upload);
         unsafe { weights_buf.write(0, bytemuck::cast_slice(weights)) };
         backend.pre_bind_array(res_of(mesh_in, "weights"), weights_buf);
     }
@@ -235,7 +237,7 @@ fn render_and_readback(
         "the deformer output must hold at least the {VERTEX_COUNT}-vertex buffer, got {} bytes",
         buf.size
     );
-    let staging = device.create_buffer_shared(buf.size);
+    let staging = device.create_buffer(buf.size, BufferUse::Upload);
     let mut read_enc = device.create_encoder("rt-dynamic-fusion-readback");
     read_enc.copy_buffer_to_buffer(buf, &staging, buf.size);
     read_enc.commit_and_wait_completed();

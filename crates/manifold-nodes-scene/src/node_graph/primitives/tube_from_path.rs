@@ -260,34 +260,41 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "tube-from-path-test",
         );
-        let path_buf = device.create_buffer_shared(std::mem::size_of_val(path) as u64);
+        let path_buf = device.create_buffer(
+            std::mem::size_of_val(path) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             path_buf.write(0, bytemuck::cast_slice(path));
         }
 
         let (lift_buf, lift_len) = match lift {
             Some(l) => {
-                let b = device.create_buffer_shared((l.len() * 4).max(4) as u64);
+                let b = device
+                    .create_buffer((l.len() * 4).max(4) as u64, manifold_gpu::BufferUse::Upload);
                 unsafe {
                     b.write(0, bytemuck::cast_slice(l));
                 }
                 (b, l.len() as u32)
             }
-            None => (device.create_buffer_shared(4), 0),
+            None => (device.create_buffer(4, manifold_gpu::BufferUse::Upload), 0),
         };
         let (rs_buf, rs_len) = match radius_scale {
             Some(r) => {
-                let b = device.create_buffer_shared((r.len() * 4).max(4) as u64);
+                let b = device
+                    .create_buffer((r.len() * 4).max(4) as u64, manifold_gpu::BufferUse::Upload);
                 unsafe {
                     b.write(0, bytemuck::cast_slice(r));
                 }
                 (b, r.len() as u32)
             }
-            None => (device.create_buffer_shared(4), 0),
+            None => (device.create_buffer(4, manifold_gpu::BufferUse::Upload), 0),
         };
 
-        let dst_buf =
-            device.create_buffer_shared(dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64);
+        let dst_buf = device.create_buffer(
+            dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
 
         let uniforms = TubeFromPathUniforms {
             radius,

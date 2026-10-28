@@ -161,7 +161,7 @@ mod gpu_tests {
     fn dispatch_plane(wgsl: &str, capacity: u32, uniform: &[u8]) -> Vec<MeshVertex> {
         let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "plane-mesh-oracle");
-        let out_buf = device.create_buffer_shared(capacity as u64 * 64);
+        let out_buf = device.create_buffer(capacity as u64 * 64, manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder("plane-mesh-oracle");
         enc.dispatch_compute(
             &pipeline,

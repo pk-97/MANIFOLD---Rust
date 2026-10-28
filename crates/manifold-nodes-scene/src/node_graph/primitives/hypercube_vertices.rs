@@ -265,7 +265,7 @@ mod gpu_tests {
 
         let r_verts = output_resource(&plan, hv, "vertices");
         let vert_bytes = (HYPERCUBE_VERTEX_COUNT as u64) * std::mem::size_of::<Vec4Vertex>() as u64;
-        let vert_buf = device.create_buffer_shared(vert_bytes);
+        let vert_buf = device.create_buffer(vert_bytes, manifold_gpu::BufferUse::Upload);
 
         let mut backend = MetalBackend::new(device.arc(), 1, 1, format);
         let vert_slot = backend.pre_bind_array(r_verts, vert_buf);

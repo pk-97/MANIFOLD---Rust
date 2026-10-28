@@ -17,6 +17,7 @@ use manifold_core::effects::PresetInstance;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::{Beats, Bpm, PresetTypeId};
+use manifold_gpu::BufferUse;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
@@ -341,7 +342,7 @@ fn inspect_output(ct: &ContentThread) -> (bool, usize, f32) {
     assert_eq!(texture.format, manifold_gpu::GpuTextureFormat::Rgba16Float);
     let row_bytes = texture.width * texture.format.bytes_per_pixel();
     let size = row_bytes as usize * texture.height as usize;
-    let buffer = device.create_buffer_shared(size as u64);
+    let buffer = device.create_buffer(size as u64, BufferUse::Upload);
     let mut encoder = device.create_encoder("blob-v2-performance-output");
     encoder.copy_texture_to_buffer(texture, &buffer, texture.width, texture.height, row_bytes);
     encoder.commit_and_wait_completed();

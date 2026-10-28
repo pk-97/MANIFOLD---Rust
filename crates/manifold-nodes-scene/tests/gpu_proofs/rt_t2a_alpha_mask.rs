@@ -30,6 +30,7 @@
 //! the opaque fast path (`encode_blas_build`'s `setOpaque(true)`) must
 //! ignore the texture entirely, exactly as it did before this feature.
 
+use manifold_gpu::BufferUse;
 use std::ffi::c_void;
 use std::slice;
 
@@ -61,7 +62,7 @@ const COLOR_OFFSET: u32 = 28;
 
 fn write_shared_buffer<T: Copy>(device: &GpuDevice, data: &[T]) -> manifold_gpu::GpuBuffer {
     let bytes = std::mem::size_of_val(data) as u64;
-    let buf = device.create_buffer_shared(bytes.max(16));
+    let buf = device.create_buffer(bytes.max(16), BufferUse::Upload);
     let ptr = buf
         .mapped_ptr()
         .expect("shared buffer must expose a mapped pointer");
@@ -394,7 +395,8 @@ fn run_fixture_on(
         manifold_gpu::raytrace::SVT_SLOT_NONE,
     );
     let dummy_emissive = harness::dummy_emissive_buffer(device);
-    let gi_materials_buffer = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buffer =
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
     // P4a: the GPU emissive preparation indexes one material row per
     // object — this fixture has no emissive geometry, so zeroed rows
     // (luma 0 → zero stats, the old "no emissive table" behavior).
@@ -453,7 +455,7 @@ fn run_fixture_on(
     );
     encoder.commit_and_wait_completed();
 
-    let readback_buf = device.create_buffer_shared(2 * 4 * 4);
+    let readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Upload);
     let mut enc2 = device.create_encoder("rt-t2a-readback");
     enc2.copy_texture_to_buffer(&out_sv, &readback_buf, 2, 1, 2 * 4 * 4);
     enc2.commit_and_wait_completed();

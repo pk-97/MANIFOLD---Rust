@@ -10,6 +10,7 @@
 //! wires, so it owns its storage, sized to exactly the sites it covers, and
 //! fills it once per change. A source atom on the codegen path.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer};
@@ -329,7 +330,11 @@ impl Primitive for LiquidFill {
             .set_scalar("count", ParamValue::Float(filled as f32));
         let bytes = u64::from(capacity) * std::mem::size_of::<FluidParticle>() as u64;
         if self.buffer.as_ref().is_none_or(|b| b.size != bytes) {
-            match ctx.gpu_encoder().device.try_create_buffer_shared(bytes) {
+            match ctx
+                .gpu_encoder()
+                .device
+                .try_create_buffer(bytes, BufferUse::Upload)
+            {
                 Ok(buffer) => {
                     self.buffer = Some(buffer);
                     self.filled = None;

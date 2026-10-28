@@ -16,6 +16,7 @@
 //! Drawn in the same 4b′ slot as the audio waveform (`clip_content_gpu`): a clip
 //! is audio → waveform, or generator/video → thumbnail, never both.
 
+use manifold_gpu::BufferUse;
 use std::sync::Arc;
 
 use manifold_gpu::{
@@ -247,7 +248,7 @@ impl ClipThumbGpu {
         });
 
         let index_data: [u32; 6] = [0, 1, 2, 0, 2, 3];
-        let index_buf = device.create_buffer_shared(24);
+        let index_buf = device.create_buffer(24, BufferUse::Upload);
         unsafe {
             std::ptr::copy_nonoverlapping(
                 index_data.as_ptr(),
@@ -257,7 +258,7 @@ impl ClipThumbGpu {
         }
 
         let vbuf_size = (MAX_THUMB_QUADS * 4 * std::mem::size_of::<ThumbVertex>()) as u64;
-        let vbuf_ring = std::array::from_fn(|_| device.create_buffer_shared(vbuf_size));
+        let vbuf_ring = std::array::from_fn(|_| device.create_buffer(vbuf_size, BufferUse::Upload));
 
         Self {
             pipeline,

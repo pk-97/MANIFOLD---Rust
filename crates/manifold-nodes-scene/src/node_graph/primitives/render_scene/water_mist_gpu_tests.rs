@@ -8,6 +8,7 @@ use super::water_march_gpu_tests::{
     CELL, FieldBuffers, H, W, depth_target, model, mul_point, pixel_ray, scene,
 };
 use crate::testkit::field_tiles::FieldTable;
+use manifold_gpu::BufferUse;
 use manifold_node_engine::scene::scene_object::FIELD_FAR_CELLS;
 
 /// A pixel's optical depth and first moment as the shader wrote them.
@@ -87,7 +88,7 @@ fn run(levelset: &[f32], mist: &[f32]) -> Vec<Mist> {
         .expect("mist encodes");
     assert!(ran, "a field with a mist array must run the mist");
     let bytes = u64::from(W * H) * 8;
-    let read = device.create_buffer_shared(bytes);
+    let read = device.create_buffer(bytes, BufferUse::Upload);
     enc.copy_buffer_to_buffer(march.mist().expect("the mist ran"), &read, bytes);
     enc.commit_and_wait_completed();
     let values: &[f32] = unsafe {

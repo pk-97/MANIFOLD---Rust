@@ -27,9 +27,9 @@ fn usage_for(format: GpuTextureFormat) -> GpuTextureUsage {
 }
 
 #[test]
-fn parity_shared_buffers_map_and_private_ones_do_not() {
+fn parity_upload_and_readback_buffers_map_and_gpu_ones_do_not() {
     let device = GpuDevice::new();
-    let shared = device.create_buffer_shared(64);
+    let shared = device.create_buffer(64, BufferUse::Upload);
     let bytes: Vec<u8> = (0..64).map(|i| i * 3).collect();
     unsafe { shared.write(0, &bytes) };
     let ptr = shared.mapped_ptr().expect("shared buffers are mapped");
@@ -38,12 +38,14 @@ fn parity_shared_buffers_map_and_private_ones_do_not() {
     shared.zero_fill();
     assert!(read.iter().all(|&b| b == 0));
 
-    let private = device.create_buffer(64);
+    let private = device.create_buffer(64, BufferUse::Gpu);
     assert!(private.mapped_ptr().is_none());
     assert_eq!(private.size(), 64);
     let clone = private.clone();
     assert!(clone.ptr_eq(&private) && !clone.ptr_eq(&shared));
-    assert_eq!(device.create_buffer(0).size(), 0);
+    assert_eq!(device.create_buffer(0, BufferUse::Gpu).size(), 0);
+    let readback = device.create_buffer(16, BufferUse::Readback);
+    assert!(readback.mapped_ptr().is_some());
     assert_no_validation_errors();
 }
 
@@ -134,7 +136,7 @@ fn parity_memory_snapshot_counts_new_allocations() {
         return;
     };
     assert!(before.recommended_max_working_set_bytes > 0);
-    let _big = device.create_buffer(64 << 20);
+    let _big = device.create_buffer(64 << 20, BufferUse::Gpu);
     let after = device
         .modifier_memory_snapshot()
         .expect("budget stays available");
@@ -153,7 +155,7 @@ fn parity_siblings_share_one_device_with_their_own_scope() {
     let sibling = device.sibling();
     assert_ne!(device.resource_scope_id(), sibling.resource_scope_id());
     assert_eq!(device.device_name(), sibling.device_name());
-    let buffer = sibling.create_buffer_shared(16);
+    let buffer = sibling.create_buffer(16, BufferUse::Upload);
     assert_eq!(sibling.allocation_counts()[0], 1);
     assert_eq!(device.allocation_counts()[0], 0);
     drop(buffer);
@@ -214,7 +216,7 @@ fn affine(
 }
 
 fn shared_f32(device: &GpuDevice, values: &[f32]) -> GpuBuffer {
-    let buffer = device.create_buffer_shared(values.len() as u64 * 4);
+    let buffer = device.create_buffer(values.len() as u64 * 4, BufferUse::Upload);
     let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_ne_bytes()).collect();
     unsafe { buffer.write(0, &bytes) };
     buffer
@@ -234,9 +236,9 @@ fn parity_dispatch_chains_storage_and_uniform_bytes() {
     // Not a multiple of the workgroup size.
     let n = 1000u32;
     let src = shared_f32(&device, &(0..n).map(|i| i as f32).collect::<Vec<_>>());
-    let mid = device.create_buffer(u64::from(n) * 4);
-    let out = device.create_buffer(u64::from(n) * 4);
-    let readback = device.create_buffer_shared(u64::from(n) * 8);
+    let mid = device.create_buffer(u64::from(n) * 4, BufferUse::Gpu);
+    let out = device.create_buffer(u64::from(n) * 4, BufferUse::Gpu);
+    let readback = device.create_buffer(u64::from(n) * 8, BufferUse::Upload);
     let mut enc = device.create_encoder("parity dispatch");
     affine(&mut enc, &pipeline, &src, &mid, 2.0, 1.0, n);
     affine(&mut enc, &pipeline, &mid, &out, 3.0, -1.0, n);
@@ -287,8 +289,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let n = 300u32;
     let mut params = [0u8; 16];
     params[0..4].copy_from_slice(&n.to_ne_bytes());
-    let args = device.create_buffer(32);
-    let out = device.create_buffer_shared(u64::from(n) * 4);
+    let args = device.create_buffer(32, BufferUse::Gpu);
+    let out = device.create_buffer(u64::from(n) * 4, BufferUse::Upload);
     let mut enc = device.create_encoder("parity indirect");
     enc.dispatch_compute(
         &write_args,
@@ -353,14 +355,14 @@ fn parity_uploads_copies_and_clears_land_in_order() {
     let uint = device.create_texture(&desc(GpuTextureFormat::R32Uint, "parity uint"));
     let pixels: Vec<u8> = (0..7 * 5 * 4).map(|i| (i * 3 % 251) as u8).collect();
     // Rows padded past 7 * 4 bytes.
-    let rows = device.create_buffer_shared(32 * 5);
-    let halves = device.create_buffer_shared(7 * 8 * 5);
-    let uints = device.create_buffer_shared(7 * 4 * 5);
-    let words = device.create_buffer_shared(64);
+    let rows = device.create_buffer(32 * 5, BufferUse::Upload);
+    let halves = device.create_buffer(7 * 8 * 5, BufferUse::Upload);
+    let uints = device.create_buffer(7 * 4 * 5, BufferUse::Upload);
+    let words = device.create_buffer(64, BufferUse::Upload);
     unsafe { words.write(0, &[0xAB; 64]) };
-    let ramp = device.create_buffer_shared(64);
+    let ramp = device.create_buffer(64, BufferUse::Upload);
     unsafe { ramp.write(0, &(0..64).collect::<Vec<u8>>()) };
-    let moved = device.create_buffer_shared(64);
+    let moved = device.create_buffer(64, BufferUse::Upload);
     moved.zero_fill();
 
     let mut enc = device.create_encoder("parity copies");
@@ -404,10 +406,10 @@ fn parity_hazards_order_raw_waw_and_war() {
     let device = GpuDevice::new();
     let pipeline = device.create_compute_pipeline(AFFINE, "main", "parity affine");
     let n = 256u32;
-    let a = device.create_buffer(u64::from(n) * 4);
-    let b = device.create_buffer(u64::from(n) * 4);
-    let zeros = device.create_buffer(u64::from(n) * 4);
-    let readback = device.create_buffer_shared(u64::from(n) * 8);
+    let a = device.create_buffer(u64::from(n) * 4, BufferUse::Gpu);
+    let b = device.create_buffer(u64::from(n) * 4, BufferUse::Gpu);
+    let zeros = device.create_buffer(u64::from(n) * 4, BufferUse::Gpu);
+    let readback = device.create_buffer(u64::from(n) * 8, BufferUse::Upload);
     let mut enc = device.create_encoder("parity hazards");
     enc.clear_buffer(&a);
     enc.clear_buffer(&zeros);
@@ -483,8 +485,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             "store",
         );
     };
-    let mips = [8u32, 4, 2].map(|size| device.create_buffer_shared(u64::from(size * size) * 4));
-    let layers = [0, 1, 2].map(|_| device.create_buffer_shared(16 * 4));
+    let mips = [8u32, 4, 2]
+        .map(|size| device.create_buffer(u64::from(size * size) * 4, BufferUse::Upload));
+    let layers = [0, 1, 2].map(|_| device.create_buffer(16 * 4, BufferUse::Upload));
     let mut enc = device.create_encoder("parity views");
     enc.clear_texture(&mipped, 0.0, 0.0, 0.0, 0.0);
     enc.clear_texture(&layered, 0.0, 0.0, 0.0, 0.0);
@@ -527,7 +530,7 @@ fn main() { dst[params.index] = params.value; }
     // 1100 × 256 bytes passes the first 256 KiB block, and 1100 sets pass
     // two 512-set pools.
     let n = 1100u32;
-    let out = device.create_buffer_shared(u64::from(n) * 4);
+    let out = device.create_buffer(u64::from(n) * 4, BufferUse::Upload);
     for frame in 0..2u32 {
         let mut enc = device.create_encoder("parity ring");
         for i in 0..n {
@@ -570,8 +573,8 @@ fn parity_events_order_encoders_and_wake_the_host() {
     let pipeline = device.create_compute_pipeline(AFFINE, "main", "parity affine");
     let n = 128u32;
     let src = shared_f32(&device, &vec![2.0; n as usize]);
-    let mid = device.create_buffer(u64::from(n) * 4);
-    let out = device.create_buffer_shared(u64::from(n) * 4);
+    let mid = device.create_buffer(u64::from(n) * 4, BufferUse::Gpu);
+    let out = device.create_buffer(u64::from(n) * 4, BufferUse::Upload);
     let event = device.create_event();
     let other = event.second_handle();
 
@@ -615,8 +618,8 @@ fn parity_timed_waits_retirement_and_dropped_encoders() {
     let device = GpuDevice::new();
     let pipeline = device.create_compute_pipeline(AFFINE, "main", "parity affine");
     let n = 1 << 16;
-    let a = device.create_buffer(u64::from(n) * 4);
-    let b = device.create_buffer(u64::from(n) * 4);
+    let a = device.create_buffer(u64::from(n) * 4, BufferUse::Gpu);
+    let b = device.create_buffer(u64::from(n) * 4, BufferUse::Gpu);
 
     // Dropped before commit: its resources go back to the pool unsubmitted.
     let mut abandoned = device.create_encoder("parity abandoned");

@@ -498,27 +498,22 @@ impl GpuDevice {
         Ok(texture)
     }
 
-    /// Create a GPU buffer with private storage (GPU-only).
-    pub fn create_buffer(&self, size: u64) -> GpuBuffer {
-        self.try_create_buffer(size)
+    /// Create a buffer for `usage`: `Gpu` in device-local memory and never
+    /// mapped, `Upload` in host-visible memory written through the mapping,
+    /// `Readback` in host-cached memory (D14).
+    pub fn create_buffer(&self, size: u64, usage: BufferUse) -> GpuBuffer {
+        self.try_create_buffer(size, usage)
             .unwrap_or_else(|e| panic!("Vulkan: {e} — GPU memory exhausted"))
     }
 
     /// Fallible sibling of [`Self::create_buffer`] for staged allocation.
-    pub fn try_create_buffer(&self, size: u64) -> Result<GpuBuffer, String> {
-        self.create_buffer_in(size, MemoryLocation::GpuOnly)
-    }
-
-    /// Create a GPU buffer with shared memory (CPU+GPU coherent).
-    pub fn create_buffer_shared(&self, size: u64) -> GpuBuffer {
-        self.try_create_buffer_shared(size)
-            .unwrap_or_else(|e| panic!("Vulkan: shared {e} — GPU memory exhausted"))
-    }
-
-    /// Fallible sibling of [`Self::create_buffer_shared`] for staged
-    /// allocation.
-    pub fn try_create_buffer_shared(&self, size: u64) -> Result<GpuBuffer, String> {
-        self.create_buffer_in(size, MemoryLocation::CpuToGpu)
+    pub fn try_create_buffer(&self, size: u64, usage: BufferUse) -> Result<GpuBuffer, String> {
+        let location = match usage {
+            BufferUse::Gpu => MemoryLocation::GpuOnly,
+            BufferUse::Upload => MemoryLocation::CpuToGpu,
+            BufferUse::Readback => MemoryLocation::GpuToCpu,
+        };
+        self.create_buffer_in(size, location)
     }
 
     /// Create a sampler state.
@@ -569,7 +564,7 @@ impl GpuDevice {
             texture.height,
             texture.format
         );
-        let staging = self.create_buffer_shared(bytes as u64);
+        let staging = self.create_buffer(bytes as u64, BufferUse::Upload);
         // Safety: the staging buffer is new and `bytes` long.
         unsafe { staging.write(0, &data[..bytes]) };
         let region = [vk::BufferImageCopy::default()

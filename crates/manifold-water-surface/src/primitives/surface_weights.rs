@@ -4,6 +4,7 @@
 //! many neighbours the nearby particles have; the constants live in
 //! `manifold_water_liquid::field_build`.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
@@ -101,7 +102,7 @@ fn ensure_buffer(
     if slot.as_ref().is_none_or(|buffer| buffer.size != bytes) {
         *slot = Some(
             device
-                .try_create_buffer_shared(bytes)
+                .try_create_buffer(bytes, BufferUse::Upload)
                 .map_err(|error| error.to_string())?,
         );
     }

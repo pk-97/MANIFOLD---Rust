@@ -1,4 +1,5 @@
 use half::f16;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuDevice, GpuTexture};
 
 /// Clear `target` to `rgba` and commit the encoder before returning,
@@ -33,7 +34,7 @@ pub fn clear_texture_committed(
 pub fn readback_raw_halves(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
     let bytes_per_row = w * 8;
     let total = u64::from(h * bytes_per_row);
-    let buf = device.create_buffer_shared(total);
+    let buf = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("headless-convergence-readback");
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
     enc.commit_and_wait_completed();
@@ -72,7 +73,7 @@ pub fn linear_to_srgb8(v: f32) -> u8 {
 pub fn readback_srgb_rgba8(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
     let bytes_per_row = w * 8; // Rgba16Float = 8 bytes/pixel
     let total = u64::from(h * bytes_per_row);
-    let buf = device.create_buffer_shared(total);
+    let buf = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("headless-readback-srgb");
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
     enc.commit_and_wait_completed();

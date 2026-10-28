@@ -8,6 +8,7 @@ use super::water_march::{
 use super::{FIELD_TILES_WGSL, mat4_inverse, model_matrix};
 use crate::testkit::field_tiles::FieldTable;
 use half::f16;
+use manifold_gpu::BufferUse;
 use manifold_gpu::*;
 use manifold_node_engine::scene::scene_object::FIELD_FAR_CELLS;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
@@ -145,7 +146,7 @@ fn sphere_levelset(table: &FieldTable, balls: &[Ball]) -> Vec<f32> {
 
 pub(super) fn shared_buffer<T: bytemuck::Pod>(device: &GpuDevice, data: &[T]) -> GpuBuffer {
     let bytes: &[u8] = bytemuck::cast_slice(data);
-    let buf = device.create_buffer_shared(bytes.len() as u64);
+    let buf = device.create_buffer(bytes.len() as u64, BufferUse::Upload);
     unsafe { buf.write(0, bytes) };
     buf
 }
@@ -377,10 +378,10 @@ fn run(fields: &[TestField], wants_velocity: bool, frame_seconds: f32) -> Run {
             .expect("march encodes");
     }
     let hit_bytes = u64::from(W * H) * 12;
-    let hits_read = device.create_buffer_shared(hit_bytes);
+    let hits_read = device.create_buffer(hit_bytes, BufferUse::Upload);
     enc.copy_buffer_to_buffer(march.hits().expect("begin ran"), &hits_read, hit_bytes);
     let motion_read = velocity_out.as_ref().map(|t| {
-        let b = device.create_buffer_shared(u64::from(W * H * 4));
+        let b = device.create_buffer(u64::from(W * H * 4), BufferUse::Upload);
         enc.copy_texture_to_buffer(t, &b, W, H, W * 4);
         b
     });
@@ -700,7 +701,7 @@ fn a_ray_steps_over_an_unheld_tile_in_one_step() {
     let tiles = shared_buffer(&device, &table.words);
     let extent = shared_buffer(&device, &table.extent());
     let probe_in = shared_buffer(&device, &input);
-    let probe_out = device.create_buffer_shared((rays.len() * 16) as u64);
+    let probe_out = device.create_buffer((rays.len() * 16) as u64, BufferUse::Upload);
     let mut enc = device.create_encoder("march probe");
     enc.dispatch_compute(
         &pipeline,
@@ -831,7 +832,7 @@ fn tile_flags_cover_the_far_faces_of_a_tiles_cells() {
         )
         .expect("march encodes");
     let bytes = u64::from(table.pool_tiles) * 4;
-    let read = device.create_buffer_shared(bytes);
+    let read = device.create_buffer(bytes, BufferUse::Upload);
     enc.copy_buffer_to_buffer(march.tile_flags(0).expect("marched"), &read, bytes);
     enc.commit_and_wait_completed();
     let flags: &[u32] = unsafe {

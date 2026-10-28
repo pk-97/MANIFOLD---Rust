@@ -1,4 +1,5 @@
 //! Live field placement and influence ownership, without golden recording.
+use manifold_gpu::BufferUse;
 use super::super::whitewater_obstacle_source::WhitewaterSource;
 use super::super::whitewater_step::empty_slot;
 use super::fused_tests::gpu::identity_record;
@@ -21,7 +22,7 @@ const PORTS: [&str; 7] = [
 ];
 
 fn shared(device: &GpuDevice, bytes: &[u8]) -> GpuBuffer {
-    let buffer = device.create_buffer_shared(bytes.len() as u64);
+    let buffer = device.create_buffer(bytes.len() as u64, BufferUse::Upload);
     // SAFETY: fresh storage of exactly this size, before submission.
     unsafe { buffer.write(0, bytes) };
     buffer
@@ -220,7 +221,7 @@ fn capture(device: &GpuDevice, enc: &mut manifold_gpu::GpuEncoder, step: &Step) 
         .iter()
         .map(|port| {
             let source = step.tick_output(port).unwrap();
-            let out = device.create_buffer_shared(source.size);
+            let out = device.create_buffer(source.size, BufferUse::Upload);
             enc.copy_buffer_to_buffer(source, &out, source.size);
             out
         })
@@ -234,7 +235,7 @@ fn capture_influence(
     step: &Step,
 ) -> GpuBuffer {
     let field = &step.fields().influence[step.influence_current];
-    let copied = device.create_buffer_shared(field.size);
+    let copied = device.create_buffer(field.size, BufferUse::Upload);
     enc.copy_buffer_to_buffer(field, &copied, field.size);
     copied
 }

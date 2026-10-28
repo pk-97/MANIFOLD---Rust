@@ -219,7 +219,10 @@ mod gpu_tests {
 
     fn readback(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) -> Vec<[f32; 4]> {
         let bytes_per_row = texture.width * 8;
-        let buffer = device.create_buffer_shared(u64::from(texture.height * bytes_per_row));
+        let buffer = device.create_buffer(
+            u64::from(texture.height * bytes_per_row),
+            manifold_gpu::BufferUse::Upload,
+        );
         let mut encoder = device.create_encoder("blob-v2-rgb-distance-readback");
         encoder.copy_texture_to_buffer(
             texture,

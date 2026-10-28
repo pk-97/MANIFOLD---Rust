@@ -254,12 +254,17 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "extrude-curve-test",
         );
-        let outline_buf = device.create_buffer_shared(std::mem::size_of_val(outline) as u64);
+        let outline_buf = device.create_buffer(
+            std::mem::size_of_val(outline) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             outline_buf.write(0, bytemuck::cast_slice(outline));
         }
-        let dst_buf =
-            device.create_buffer_shared(dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64);
+        let dst_buf = device.create_buffer(
+            dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
 
         let uniforms = ExtrudeCurveUniforms {
             depth,

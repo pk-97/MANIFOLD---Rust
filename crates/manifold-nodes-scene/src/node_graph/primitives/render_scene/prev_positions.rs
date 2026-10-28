@@ -18,6 +18,7 @@
 //! Geometry that never changes never allocates a buffer, and none of this runs
 //! for a draw that does not write velocity.
 
+use manifold_gpu::BufferUse;
 use super::*;
 
 /// One previous-position record: `vec4<f32>` (xyz, w = 1).
@@ -262,7 +263,7 @@ where
     let (step, mut seen) = advance(entry.as_ref().map(|e| e.seen), now);
     let mut buffer = entry.take().and_then(|e| e.buffer);
     if step.allocate {
-        buffer = match device.try_create_buffer(u64::from(now.extent) * record_bytes) {
+        buffer = match device.try_create_buffer(u64::from(now.extent) * record_bytes, BufferUse::Gpu) {
             Ok(buffer) => Some(buffer),
             Err(error) => {
                 ctx.error(format!("object_{object}: {what} unavailable: {error}"));

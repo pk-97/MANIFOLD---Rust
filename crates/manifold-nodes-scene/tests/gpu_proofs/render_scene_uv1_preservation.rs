@@ -5,6 +5,7 @@
 //! nonzero UV1 value is written into the source vertex, dispatched through
 //! Metal, and read back from the output buffer.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuBinding;
 use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
 use manifold_node_engine::mesh::MeshVertex;
@@ -28,14 +29,14 @@ fn dispatch_production_morph(source: MeshVertex, target: MeshVertex) -> MeshVert
 
     let source_buf = h
         .device
-        .create_buffer_shared(std::mem::size_of::<MeshVertex>() as u64);
+        .create_buffer(std::mem::size_of::<MeshVertex>() as u64, BufferUse::Upload);
     let target_buf = h
         .device
-        .create_buffer_shared(std::mem::size_of::<MeshVertex>() as u64);
-    let weights_buf = h.device.create_buffer_shared(4);
+        .create_buffer(std::mem::size_of::<MeshVertex>() as u64, BufferUse::Upload);
+    let weights_buf = h.device.create_buffer(4, BufferUse::Upload);
     let output_buf = h
         .device
-        .create_buffer_shared(std::mem::size_of::<MeshVertex>() as u64);
+        .create_buffer(std::mem::size_of::<MeshVertex>() as u64, BufferUse::Upload);
     unsafe {
         source_buf.write(0, bytemuck::bytes_of(&source));
         target_buf.write(0, bytemuck::bytes_of(&target));

@@ -4,6 +4,7 @@
 //! the live total cleared, nothing past the slots the outputs hold, and
 //! nothing at all through a shut clock gate.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::ports::ArrayType;
 use manifold_node_engine::scene::world_tiles::{
@@ -320,7 +321,7 @@ impl Input {
     }
 
     fn upload(&self, device: &GpuDevice) -> GpuBuffer {
-        let buffer = device.create_buffer_shared(self.words.len() as u64 * 4);
+        let buffer = device.create_buffer(self.words.len() as u64 * 4, BufferUse::Upload);
         // SAFETY: a shared buffer of exactly these words; no GPU work in flight.
         unsafe { buffer.write(0, bytemuck::cast_slice(&self.words)) };
         buffer
@@ -351,7 +352,7 @@ fn untouched(j: usize) -> u32 {
 }
 
 fn untouched_buffer(device: &GpuDevice, words: usize) -> GpuBuffer {
-    let buffer = device.create_buffer_shared(words as u64 * 4);
+    let buffer = device.create_buffer(words as u64 * 4, BufferUse::Upload);
     fill_untouched(&buffer);
     buffer
 }
@@ -374,7 +375,7 @@ fn clock_plan(device: &GpuDevice, step_dt: f32) -> GpuBuffer {
     let mut plan = [0_u32; 12];
     plan[0] = step_dt.to_bits();
     plan[11] = 1;
-    let buffer = device.create_buffer_shared(48);
+    let buffer = device.create_buffer(48, BufferUse::Upload);
     // SAFETY: a shared buffer of 12 words; no GPU work in flight.
     unsafe { buffer.write(0, bytemuck::cast_slice(&plan)) };
     buffer
@@ -719,11 +720,11 @@ fn sort_particles_into_cells_through_a_count_record_ignores_the_slots_past_it() 
     for _ in records..slots {
         words.extend_from_slice(&[nan, nan, nan, 0.05_f32.to_bits(), 1, 2, 3, 7]);
     }
-    let particles = device.create_buffer_shared(words.len() as u64 * 4);
+    let particles = device.create_buffer(words.len() as u64 * 4, BufferUse::Upload);
     // SAFETY: a shared buffer of exactly these words; no GPU work in flight.
     unsafe { particles.write(0, bytemuck::cast_slice(&words)) };
     // The identity's record: the allocator words, then `[groups, 1, 1, n]`.
-    let identity = device.create_buffer_shared(32);
+    let identity = device.create_buffer(32, BufferUse::Upload);
     let groups = (records as u32).div_ceil(256);
     // SAFETY: a shared buffer of eight words; no GPU work in flight.
     unsafe {
@@ -830,7 +831,7 @@ fn sort_particles_into_cells_pooled_keys_world_cells_through_the_table() {
             .collect();
         let words = table_words_of(pool, &held);
         assert_eq!(words.len() as u64, table_words(pool));
-        let table = device.create_buffer_shared(4 * words.len() as u64);
+        let table = device.create_buffer(4 * words.len() as u64, BufferUse::Upload);
         // SAFETY: a shared buffer of exactly these words; no GPU work in flight.
         unsafe { table.write(0, bytemuck::cast_slice(&words)) };
         let order = untouched_buffer(&device, n);

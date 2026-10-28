@@ -121,14 +121,14 @@ fn translated_kernels_have_no_one_thread_zeroing() {
 #[cfg(feature = "gpu-proofs")]
 #[test]
 fn workgroup_memory_reads_zero_after_a_dirty_kernel() {
-    use crate::{GpuBinding, GpuDevice};
+    use crate::{BufferUse, GpuBinding, GpuDevice};
 
     // Enough workgroups to cover every GPU core several times over.
     const GROUPS: u32 = 4096;
     let device = GpuDevice::new();
     // `out` holds one word per workgroup; every entry writes only out[g.x]
     // with g.x < GROUPS.
-    let out = device.create_buffer_shared(u64::from(GROUPS) * 4);
+    let out = device.create_buffer(u64::from(GROUPS) * 4, BufferUse::Upload);
     let pipelines: Vec<_> = ENTRIES
         .iter()
         .map(|entry| {

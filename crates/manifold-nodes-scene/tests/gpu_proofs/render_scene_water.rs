@@ -10,6 +10,7 @@
 //! metre).
 
 use half::f16;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBuffer, GpuTexture, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -122,7 +123,7 @@ impl EffectNode for LevelsetSource {
             let staging = staging.get_or_insert_with(|| {
                 ctx.gpu_encoder()
                     .device
-                    .create_buffer_shared(bytes.len() as u64)
+                    .create_buffer(bytes.len() as u64, BufferUse::Upload)
             });
             unsafe { staging.write(0, bytes) };
             ctx.gpu_encoder()
@@ -365,7 +366,7 @@ fn read_depth(
     );
     let bytes_per_row = tex.width * 4;
     let total = u64::from(tex.height * bytes_per_row);
-    let buf = h.device.create_buffer_shared(total);
+    let buf = h.device.create_buffer(total, BufferUse::Upload);
     let mut enc = h.device.create_encoder("water-depth-readback");
     enc.copy_texture_to_buffer(tex, &buf, tex.width, tex.height, bytes_per_row);
     enc.commit_and_wait_completed();
@@ -494,7 +495,7 @@ impl WaterScene {
         let buf = self
             .h
             .device
-            .create_buffer_shared(u64::from(mask.width * mask.height));
+            .create_buffer(u64::from(mask.width * mask.height), BufferUse::Upload);
         let mut enc = self.h.device.create_encoder("water-mask-readback");
         enc.copy_texture_to_buffer(mask, &buf, mask.width, mask.height, mask.width);
         enc.commit_and_wait_completed();

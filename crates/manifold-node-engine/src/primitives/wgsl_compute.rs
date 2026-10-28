@@ -3668,7 +3668,7 @@ mod gpu_tests {
             .texture_2d(out_slot)
             .expect("final output texture retained");
         let bytes_per_row = w * 8;
-        let readback = device.create_buffer_shared(u64::from(h * bytes_per_row));
+        let readback = device.create_buffer(u64::from(h * bytes_per_row), manifold_gpu::BufferUse::Upload);
         let mut readback_enc = device.create_encoder("wgsl-compute-readback");
         readback_enc.copy_texture_to_buffer(out_tex, &readback, w, h, bytes_per_row);
         readback_enc.commit_and_wait_completed();

@@ -10,6 +10,7 @@
 //! primitive — a scan is barriered and multi-dispatch, so its atoms are fusion
 //! boundaries (ADDING_PRIMITIVES.md, exclusion 1).
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
 const SHADER: &str = include_str!("shaders/prefix_scan.wgsl");
@@ -64,7 +65,7 @@ fn dispatches(n: usize) -> usize {
 
 /// A zeroed clock plan: the gate that never switches a pass off.
 pub fn open_gate(device: &GpuDevice) -> GpuBuffer {
-    let gate = device.create_buffer_shared(48);
+    let gate = device.create_buffer(48, BufferUse::Upload);
     gate.zero_fill();
     gate
 }
@@ -152,7 +153,7 @@ impl PrefixScan {
                 bytes,
             )
             .map_err(|error| error.to_string())?;
-            self.buffer = Some(device.try_create_buffer_shared(bytes)?);
+            self.buffer = Some(device.try_create_buffer(bytes, BufferUse::Upload)?);
             self.words = words;
         }
         Ok(self.buffer.as_ref().expect("scan storage allocated"))
@@ -442,8 +443,12 @@ mod gpu_tests {
             );
 
             let bytes = (n * 4) as u64;
-            let src = device.try_create_buffer_shared(bytes).expect("src");
-            let dst = device.try_create_buffer_shared(bytes).expect("dst");
+            let src = device
+                .try_create_buffer(bytes, BufferUse::Upload)
+                .expect("src");
+            let dst = device
+                .try_create_buffer(bytes, BufferUse::Upload)
+                .expect("dst");
             // SAFETY: a shared buffer of n words; no GPU work in flight.
             unsafe { src.write(0, bytemuck::cast_slice(&values)) };
             scan.parents(&device, n).expect("scan parents");
@@ -492,7 +497,7 @@ mod gpu_tests {
             // SAFETY: a shared buffer of at least capacity words; no GPU work in flight.
             unsafe { buffer.write(0, bytemuck::cast_slice(&values)) };
             let groups = n.div_ceil(BLOCK).max(1);
-            let record = device.create_buffer_shared(32);
+            let record = device.create_buffer(32, BufferUse::Upload);
             let words = [0u32, 0, 0, 0, groups as u32, 1, 1, n as u32];
             // SAFETY: a shared buffer of eight words; no GPU work in flight.
             unsafe { record.write(0, bytemuck::cast_slice(&words)) };

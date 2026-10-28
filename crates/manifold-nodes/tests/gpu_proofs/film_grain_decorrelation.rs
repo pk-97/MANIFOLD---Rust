@@ -14,6 +14,7 @@
 //! look — the softness/blockiness call is Peter's on the real rig, this test
 //! only proves the re-roll is real and gives him something to glance at.
 
+use manifold_gpu::BufferUse;
 use std::path::PathBuf;
 
 use half::f16;
@@ -230,7 +231,7 @@ fn readback_rgba_f32(
 ) -> Vec<[f32; 4]> {
     let bytes_per_row = w * 8; // Rgba16Float = 8 bytes/pixel
     let total = u64::from(h * bytes_per_row);
-    let buf = device.create_buffer_shared(total);
+    let buf = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("film-grain-decorrelation-readback");
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
     enc.commit_and_wait_completed();

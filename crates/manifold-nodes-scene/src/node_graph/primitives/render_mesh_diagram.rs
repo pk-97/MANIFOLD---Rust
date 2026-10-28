@@ -5,6 +5,7 @@
 //! arrows, axes, the infinite world grid, and temporal trails share one bounded
 //! instanced pass. The grid uses the scene camera without the object transform.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuLoadAction, GpuSamplerDesc,
     GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
@@ -208,7 +209,7 @@ impl RenderMeshDiagram {
         }
         let bytes =
             HISTORY_SAMPLES as u64 * MAX_VERTICES as u64 * std::mem::size_of::<[f32; 4]>() as u64;
-        let history = device.create_buffer_shared(bytes);
+        let history = device.create_buffer(bytes, BufferUse::Upload);
         history.zero_fill();
         self.history = Some(history);
     }
@@ -222,9 +223,9 @@ impl RenderMeshDiagram {
         let ring_bytes = HISTORY_SAMPLES as u64
             * MAX_COPY_INSTANCES as u64
             * std::mem::size_of::<InstanceTransform>() as u64;
-        let ring = device.create_buffer_shared(ring_bytes);
+        let ring = device.create_buffer(ring_bytes, BufferUse::Upload);
         ring.zero_fill();
-        let counts = device.create_buffer_shared(HISTORY_SAMPLES as u64 * 4);
+        let counts = device.create_buffer(HISTORY_SAMPLES as u64 * 4, BufferUse::Upload);
         counts.zero_fill();
         self.instance_history = Some(ring);
         self.instance_counts = Some(counts);
@@ -270,7 +271,7 @@ impl RenderMeshDiagram {
             // shared layout stays valid; the shader never reads it in that
             // mode (instances_wired == 0 selects the identity constant).
             let buffer =
-                device.create_buffer_shared(std::mem::size_of::<InstanceTransform>() as u64);
+                device.create_buffer(std::mem::size_of::<InstanceTransform>() as u64, BufferUse::Upload);
             let identity = [InstanceTransform {
                 pos_scale: [0.0, 0.0, 0.0, 1.0],
                 rot_pad: [0.0; 4],

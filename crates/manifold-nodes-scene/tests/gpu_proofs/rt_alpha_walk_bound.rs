@@ -18,6 +18,7 @@
 //! constant 0.3 reconstructs shading points across x,y in (-1, 1) at z = 0.3;
 //! suns point along +z, so every shadow ray crosses the stack of cards above.
 
+use manifold_gpu::BufferUse;
 use std::slice;
 
 use manifold_gpu::raytrace::{
@@ -55,7 +56,7 @@ const ORDINARY_LAYERS: usize = 12;
 
 fn write_shared<T: Copy>(device: &GpuDevice, data: &[T]) -> GpuBuffer {
     let bytes = std::mem::size_of_val(data) as u64;
-    let buf = device.create_buffer_shared(bytes.max(16));
+    let buf = device.create_buffer(bytes.max(16), BufferUse::Upload);
     let ptr = buf.mapped_ptr().expect("shared buffer must be CPU-mapped");
     unsafe { std::ptr::copy_nonoverlapping(data.as_ptr().cast::<u8>(), ptr, bytes as usize) };
     buf
@@ -239,7 +240,8 @@ fn build<'a>(
         accel,
         normal_sources: ns_slot.expect("ensure_normal_sources must allocate"),
         textures,
-        materials: device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64),
+        materials: device
+            .create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload),
     }
 }
 

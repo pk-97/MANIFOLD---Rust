@@ -7,6 +7,7 @@
 //! history, and both the frame that wrote it and the last frame that read it
 //! have completed on the GPU.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::particles::FluidParticle;
 
@@ -577,7 +578,7 @@ impl FrameHistory<GpuBuffer> {
                 .map_err(|e| e.to_string())
             },
             |bytes, words| {
-                let buffer = device.try_create_buffer_shared(bytes)?;
+                let buffer = device.try_create_buffer(bytes, BufferUse::Upload)?;
                 if !words.is_empty() {
                     // SAFETY: new shared buffer of at least these words, not yet
                     // visible to the GPU.

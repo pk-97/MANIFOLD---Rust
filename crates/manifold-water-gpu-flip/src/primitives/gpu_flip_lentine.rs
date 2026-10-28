@@ -4,6 +4,7 @@
 //! The graph is Pᵀ A_boundary P / 2 in integrated fine-flux units at h=1,
 //! exactly as scripts/lentine_reference.py. Its potential has the opposite
 //! sign to the step pressure. Projection outputs leave caller inputs unchanged.
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use manifold_water_liquid::tile_storage::TILE_GRID;
@@ -103,15 +104,15 @@ impl ComponentSolver {
                 padding: [0; 3],
             },
             pipelines: ENTRIES.map(|entry| device.create_compute_pipeline(&wgsl, entry, entry)),
-            labels: device.create_buffer_shared(bytes),
-            pressure: device.create_buffer_shared(bytes),
-            rhs: device.create_buffer_shared(bytes),
-            transfer: device.create_buffer_shared(bytes * 4),
-            progress: device.create_buffer_shared(64),
-            pockets: device.create_buffer_shared(bytes),
-            sums: device.create_buffer_shared(bytes * 4),
-            compensation: device.create_buffer_shared(bytes * 4),
-            vectors: device.create_buffer_shared(bytes * 4),
+            labels: device.create_buffer(bytes, BufferUse::Upload),
+            pressure: device.create_buffer(bytes, BufferUse::Upload),
+            rhs: device.create_buffer(bytes, BufferUse::Upload),
+            transfer: device.create_buffer(bytes * 4, BufferUse::Upload),
+            progress: device.create_buffer(64, BufferUse::Upload),
+            pockets: device.create_buffer(bytes, BufferUse::Upload),
+            sums: device.create_buffer(bytes * 4, BufferUse::Upload),
+            compensation: device.create_buffer(bytes * 4, BufferUse::Upload),
+            vectors: device.create_buffer(bytes * 4, BufferUse::Upload),
         })
     }
 
@@ -265,11 +266,11 @@ impl ComponentProjection {
         let wgsl = shader();
         Ok(Self {
             coarse,
-            boundary_velocity: device.create_buffer_shared(bytes * 4),
-            velocity: device.create_buffer_shared(bytes * 4),
-            local_pressure: device.create_buffer_shared(bytes),
-            progress: device.create_buffer_shared(16),
-            local_status: device.create_buffer_shared(bytes),
+            boundary_velocity: device.create_buffer(bytes * 4, BufferUse::Upload),
+            velocity: device.create_buffer(bytes * 4, BufferUse::Upload),
+            local_pressure: device.create_buffer(bytes, BufferUse::Upload),
+            progress: device.create_buffer(16, BufferUse::Upload),
+            local_status: device.create_buffer(bytes, BufferUse::Upload),
             pipelines: PROJECTION_ENTRIES
                 .map(|entry| device.create_compute_pipeline(&wgsl, entry, entry)),
         })
@@ -410,7 +411,7 @@ mod gpu_tests {
         transfer: Vec<[f32; 4]>,
     }
     fn upload<T: bytemuck::Pod>(device: &GpuDevice, values: &[T]) -> GpuBuffer {
-        let buffer = device.create_buffer_shared(std::mem::size_of_val(values) as u64);
+        let buffer = device.create_buffer(std::mem::size_of_val(values) as u64, BufferUse::Upload);
         // SAFETY: fresh shared allocation, sized for values, no in-flight work.
         unsafe {
             buffer.write(0, bytemuck::cast_slice(values));

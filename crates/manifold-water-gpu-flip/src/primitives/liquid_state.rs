@@ -5,6 +5,7 @@
 //! tick (read back through a fenced ring) reports an error and reseeds water
 //! without stopping its clock.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
@@ -158,7 +159,7 @@ fn create_shared_buffer(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, Str
     .map_err(|error| error.to_string())
     .and_then(|()| {
         device
-            .try_create_buffer_shared(bytes)
+            .try_create_buffer(bytes, BufferUse::Upload)
             .map_err(|error| error.to_string())
     })
 }
@@ -563,7 +564,7 @@ impl Primitive for LiquidState {
         let stats_bytes = u64::from(LIQUID_STATS_WORDS) * 4;
         let zero_stats = self
             .zero_stats
-            .get_or_insert_with(|| gpu.device.create_buffer(stats_bytes))
+            .get_or_insert_with(|| gpu.device.create_buffer(stats_bytes, BufferUse::Gpu))
             .clone();
         let old_whitewater_capacity = self.whitewater_capacity;
         let whitewater_resized = match self.ensure_whitewater_buffers(
@@ -594,7 +595,7 @@ impl Primitive for LiquidState {
         }
         let identity = self
             .identity
-            .get_or_insert_with(|| gpu.device.create_buffer_shared(IDENTITY_BYTES));
+            .get_or_insert_with(|| gpu.device.create_buffer(IDENTITY_BYTES, BufferUse::Upload));
         if epoch_reset {
             if let (Some(seed), Some(out)) = (seed, out) {
                 let bytes = (u64::from(count) * std::mem::size_of::<FluidParticle>() as u64)
@@ -804,9 +805,9 @@ impl Primitive for LiquidState {
             Some(index) => index,
             None if self.readback.len() < READBACK_SLOTS => {
                 self.readback.push(ReadbackSlot {
-                    buffer: gpu.device.create_buffer_shared(stats_bytes),
-                    identity: gpu.device.create_buffer_shared(IDENTITY_BYTES),
-                    clock_status: gpu.device.create_buffer_shared(32),
+                    buffer: gpu.device.create_buffer(stats_bytes, BufferUse::Upload),
+                    identity: gpu.device.create_buffer(IDENTITY_BYTES, BufferUse::Upload),
+                    clock_status: gpu.device.create_buffer(32, BufferUse::Upload),
                     stamp: 0,
                     epoch,
                     pending: false,

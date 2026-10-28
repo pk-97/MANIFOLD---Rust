@@ -3,6 +3,7 @@
 //! (docs/ADDING_PRIMITIVES.md exclusion 1): workgroup partial sums per row,
 //! then one thread per row adds its partials in a fixed order.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
@@ -105,7 +106,7 @@ impl Primitive for DotProducts {
             }
             let bytes = u64::from(MAX_ROWS * MAX_GROUPS) * 4;
             if self.partials.is_none() {
-                self.partials = Some(gpu.device.create_buffer(bytes));
+                self.partials = Some(gpu.device.create_buffer(bytes, BufferUse::Gpu));
             }
         }
         let (Some(matrix), Some(out)) = (ctx.inputs.array("matrix"), ctx.outputs.array("out"))

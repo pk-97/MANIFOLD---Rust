@@ -18,6 +18,7 @@
 //! layer-idle via the existing `clear_all_effect_state` paths —
 //! same as `node.feedback`.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuBuffer;
 
 use manifold_node_engine::particles::Particle;
@@ -206,7 +207,7 @@ pub(super) fn emit_delayed(
                 // Copy-delay path: own a persistent `prev` buffer. Seed from
                 // the wired `seed`, else fall back to `in` so first-frame
                 // output isn't an uninitialised buffer.
-                let prev = gpu.device.create_buffer(size);
+                let prev = gpu.device.create_buffer(size, BufferUse::Gpu);
                 let init_source = ctx.inputs.array("seed").unwrap_or(in_buf);
                 let copy_size = init_source.size.min(size);
                 if copy_size > 0 {

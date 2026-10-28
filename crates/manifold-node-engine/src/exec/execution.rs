@@ -30,6 +30,7 @@ use crate::runtime::layer_skin::LayerSkinRegistry;
 use crate::scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID;
 use crate::scene::mesh_change::{MeshAspect, MeshRevision};
 use crate::state_store::{OwnerKey, StateStore};
+use manifold_gpu::BufferUse;
 
 /// Resolve a resource's slot dims for `Backend::acquire` / `release`.
 ///
@@ -917,7 +918,7 @@ impl Executor {
                 size,
             )
             .map_err(|error| error.to_string())
-            .and_then(|()| gpu.device.try_create_buffer_shared(size));
+            .and_then(|()| gpu.device.try_create_buffer(size, BufferUse::Upload));
             match admitted {
                 Ok(buffer) => {
                     self.dump_array_snapshots.insert(res, buffer);
@@ -3971,9 +3972,14 @@ mod tests {
                 GpuTextureFormat::Rgba16Float,
             );
             let bytes = 16 * u64::from(layout.item_size);
-            backend.pre_bind_array(resource(source), device.create_buffer_shared(bytes));
-            let stage_slot =
-                backend.pre_bind_array(resource(stage), device.create_buffer_shared(bytes));
+            backend.pre_bind_array(
+                resource(source),
+                device.create_buffer(bytes, BufferUse::Upload),
+            );
+            let stage_slot = backend.pre_bind_array(
+                resource(stage),
+                device.create_buffer(bytes, BufferUse::Upload),
+            );
             if let Some(stale) = stale {
                 backend.set_live_extent(stage_slot, stale);
             }
@@ -3989,7 +3995,7 @@ mod tests {
             bound: u32,
         ) -> crate::scene::live_extent::LiveExtent {
             crate::scene::live_extent::LiveExtent {
-                counts: device.create_buffer_shared(32),
+                counts: device.create_buffer(32, BufferUse::Upload),
                 offset,
                 per_item,
                 bound,
@@ -6695,7 +6701,7 @@ mod alias_gpu_tests {
     }
 
     fn first_red(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::GpuTexture) -> f32 {
-        let buffer = device.create_buffer_shared(4 * 4 * 8);
+        let buffer = device.create_buffer(4 * 4 * 8, BufferUse::Upload);
         let mut enc = device.create_encoder("held-terminal-readback");
         enc.copy_texture_to_buffer(texture, &buffer, 4, 4, 32);
         enc.commit_and_wait_completed();

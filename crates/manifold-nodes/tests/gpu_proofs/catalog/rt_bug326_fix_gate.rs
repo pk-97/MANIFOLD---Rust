@@ -9,6 +9,7 @@
 //! rerun) is verified via render-import 50ms-paced traces (BUG-326
 //! entry: Helmet frame2=0.146->frame3+=0.239, AMG 0.045->0.168).
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{
     GpuDevice, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
@@ -89,7 +90,7 @@ fn readback_rgba_f32(
 ) -> Vec<f32> {
     let bytes_per_row = W * 8;
     let total = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer_shared(total);
+    let buf = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("bug326-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();

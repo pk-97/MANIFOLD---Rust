@@ -16,6 +16,7 @@
 //! whole, so a flush landing inside one cuts the recording there and the
 //! rest of that segment runs directly.
 
+use crate::BufferUse;
 use std::ops::Range;
 use std::ptr::NonNull;
 
@@ -175,7 +176,7 @@ impl ReplayStore {
             + usize::from(self.short_bytes > 0))
         .max(1);
         while self.arenas.len() < arenas {
-            match device.try_create_buffer_shared(ARENA_BYTES as u64) {
+            match device.try_create_buffer(ARENA_BYTES as u64, BufferUse::Upload) {
                 Ok(arena) => {
                     self.arenas.push(arena);
                     stats.store_allocations += 1;

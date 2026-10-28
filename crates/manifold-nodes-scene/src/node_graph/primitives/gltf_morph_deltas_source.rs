@@ -21,6 +21,7 @@
 //! `gltf_load::load_gltf_morph_deltas`'s output exactly, since this
 //! primitive is a thin background-thread wrapper around that function).
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 use std::sync::mpsc;
 
@@ -210,7 +211,7 @@ impl Primitive for GltfMorphDeltasSource {
             let bytes = &self.cached_deltas[..n];
             let len_bytes = (n * std::mem::size_of::<MeshVertex>()) as u64;
             let device = ctx.gpu_encoder().device;
-            let staging = device.create_buffer_shared(len_bytes.max(1));
+            let staging = device.create_buffer(len_bytes.max(1), BufferUse::Upload);
             unsafe {
                 staging.write(0, bytemuck::cast_slice(bytes));
             }
@@ -363,8 +364,10 @@ mod gpu_tests {
             manifold_gpu::GpuTextureFormat::Rgba8Unorm,
         );
         let r_out = ResourceId(0);
-        let buf = device
-            .create_buffer_shared((CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64);
+        let buf = device.create_buffer(
+            (CAPACITY as u64) * std::mem::size_of::<MeshVertex>() as u64,
+            BufferUse::Upload,
+        );
         let slot = backend.pre_bind_array(r_out, buf);
         (backend, r_out, slot)
     }

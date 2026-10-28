@@ -1,3 +1,4 @@
+use manifold_gpu::BufferUse;
 use std::sync::Arc;
 
 use manifold_gpu::{
@@ -650,7 +651,7 @@ impl UIRenderer {
             ..Default::default()
         });
         let image_index_data: [u32; 6] = [0, 1, 2, 0, 2, 3];
-        let image_index_buf = device.create_buffer_shared(24);
+        let image_index_buf = device.create_buffer(24, BufferUse::Upload);
         unsafe {
             std::ptr::copy_nonoverlapping(
                 image_index_data.as_ptr(),
@@ -660,7 +661,7 @@ impl UIRenderer {
         }
         let image_vbuf_size = (MAX_IMAGE_QUADS * 4 * std::mem::size_of::<ImageVertex>()) as u64;
         let image_vbuf_ring = (0..IMAGE_VBUF_RING_SIZE)
-            .map(|_| Some(device.create_buffer_shared(image_vbuf_size)))
+            .map(|_| Some(device.create_buffer(image_vbuf_size, BufferUse::Upload)))
             .collect();
 
         Self {
@@ -2004,7 +2005,7 @@ impl UIRenderer {
             let vdata = bytemuck::cast_slice::<ImageVertex, u8>(&image_vertices);
             let vbuf = match self.image_vbuf_ring[slot].take() {
                 Some(buf) if buf.size >= vdata.len() as u64 => buf,
-                _ => device.create_buffer_shared(vdata.len() as u64),
+                _ => device.create_buffer(vdata.len() as u64, BufferUse::Upload),
             };
             unsafe {
                 vbuf.write(0, vdata);
@@ -2032,7 +2033,7 @@ impl UIRenderer {
             let vdata = bytemuck::cast_slice::<UIVertex, u8>(&self.vertices);
             let vbuf = match self.vbuf_ring[slot].take() {
                 Some(buf) if buf.size >= vdata.len() as u64 => buf,
-                _ => device.create_buffer_shared(vdata.len() as u64),
+                _ => device.create_buffer(vdata.len() as u64, BufferUse::Upload),
             };
             unsafe {
                 vbuf.write(0, vdata);
@@ -2041,7 +2042,7 @@ impl UIRenderer {
             let idata = bytemuck::cast_slice::<u32, u8>(&self.indices);
             let ibuf = match self.ibuf_ring[slot].take() {
                 Some(buf) if buf.size >= idata.len() as u64 => buf,
-                _ => device.create_buffer_shared(idata.len() as u64),
+                _ => device.create_buffer(idata.len() as u64, BufferUse::Upload),
             };
             unsafe {
                 ibuf.write(0, idata);

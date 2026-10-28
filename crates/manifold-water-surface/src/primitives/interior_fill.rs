@@ -243,7 +243,8 @@ mod gpu_tests {
 
     fn shared<T: bytemuck::Pod>(device: &GpuDevice, data: &[T]) -> GpuBuffer {
         let bytes: &[u8] = bytemuck::cast_slice(data);
-        let buffer = device.create_buffer_shared(bytes.len().max(16) as u64);
+        let buffer =
+            device.create_buffer(bytes.len().max(16) as u64, manifold_gpu::BufferUse::Upload);
         // SAFETY: a new shared buffer at least `bytes` long; no GPU work in flight.
         unsafe { buffer.write(0, bytes) };
         buffer

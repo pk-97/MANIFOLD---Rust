@@ -8,6 +8,7 @@
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::{Beats, Seconds};
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::exec::resource_allocation::plan_array_allocations;
 use manifold_node_engine::freeze::install::fuse_generator_view;
@@ -293,7 +294,10 @@ fn run_with_storage(mut graph: Graph, frames: u32, storage: Storage) -> StorageR
         let planned = plan_array_allocations(&graph, &plan, (64, 64), &Default::default())
             .expect("plan allocates");
         for (&resource, array) in &planned.storage {
-            backend.pre_bind_array(resource, device.create_buffer_shared(array.bytes));
+            backend.pre_bind_array(
+                resource,
+                device.create_buffer(array.bytes, BufferUse::Upload),
+            );
         }
     }
     pre_allocate_resources(&mut graph, &plan, device, &mut backend).expect("pre-allocate");

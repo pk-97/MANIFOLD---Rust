@@ -286,11 +286,11 @@ mod gpu_tests {
     ) -> Vec<MeshVertex> {
         let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
-        let input = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+        let input = device.create_buffer(std::mem::size_of_val(src) as u64, manifold_gpu::BufferUse::Upload);
         unsafe {
             input.write(0, bytemuck::cast_slice(src));
         }
-        let output = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+        let output = device.create_buffer(std::mem::size_of_val(src) as u64, manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder(label);
         enc.dispatch_compute(
             &pipeline,

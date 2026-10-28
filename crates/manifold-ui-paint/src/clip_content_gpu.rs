@@ -187,7 +187,7 @@ impl ClipContentGpu {
         });
 
         let index_data: [u32; 6] = [0, 1, 2, 0, 2, 3];
-        let index_buf = device.create_buffer_shared(24);
+        let index_buf = device.create_buffer(24, manifold_gpu::BufferUse::Upload);
         unsafe {
             std::ptr::copy_nonoverlapping(
                 index_data.as_ptr(),
@@ -197,7 +197,9 @@ impl ClipContentGpu {
         }
 
         let vbuf_size = (MAX_CLIP_QUADS * 4 * std::mem::size_of::<ContentVertex>()) as u64;
-        let vbuf_ring = std::array::from_fn(|_| device.create_buffer_shared(vbuf_size));
+        let vbuf_ring = std::array::from_fn(|_| {
+            device.create_buffer(vbuf_size, manifold_gpu::BufferUse::Upload)
+        });
 
         Self {
             pool: AHashMap::new(),
@@ -687,7 +689,7 @@ mod tests {
         fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
             let bytes_per_row = WIDTH * FORMAT.bytes_per_pixel();
             let total = (HEIGHT * bytes_per_row) as u64;
-            let buffer = device.create_buffer_shared(total);
+            let buffer = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
             let mut encoder = device.create_encoder("clip-waveform-proof-readback");
             encoder.copy_texture_to_buffer(texture, &buffer, WIDTH, HEIGHT, bytes_per_row);
             encoder.commit_and_wait_completed();

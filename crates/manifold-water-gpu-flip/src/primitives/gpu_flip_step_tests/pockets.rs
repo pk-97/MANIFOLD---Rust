@@ -5,6 +5,7 @@
 
 use super::super::gpu_flip_step::{POCKET_GATE_WORDS, StepParams, dispatch_pass};
 use super::Stream;
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuBuffer;
 use manifold_node_engine::scene::world_tiles::{
     EMPTY, NONE, find, insert, local_index, neighbour_row_word, pool_len, slot_row_word,
@@ -256,7 +257,7 @@ impl Rig {
         let bytes: &[u8] = bytemuck::cast_slice(values);
         let buffer = self
             .device
-            .create_buffer_shared((bytes.len() as u64).max(16));
+            .create_buffer((bytes.len() as u64).max(16), BufferUse::Upload);
         buffer.zero_fill();
         // SAFETY: shared buffer sized for `bytes`; no GPU work in flight.
         unsafe { buffer.write(0, bytes) };

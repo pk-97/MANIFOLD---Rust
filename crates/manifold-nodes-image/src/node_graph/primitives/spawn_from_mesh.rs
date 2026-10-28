@@ -39,6 +39,7 @@
 //! (a particle's place depends on its slot and `frame_seed`, never on the
 //! count), so a live Count adds particles without moving the others.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuBinding;
 use std::borrow::Cow;
 
@@ -244,7 +245,7 @@ impl Primitive for SpawnFromMesh {
         let needs_alloc = self.cumulative.is_none() || self.cached_triangle_count != triangle_count;
         if needs_alloc {
             let bytes = u64::from(triangle_count.max(1)) * 4;
-            self.cumulative = Some(gpu.device.create_buffer(bytes));
+            self.cumulative = Some(gpu.device.create_buffer(bytes, BufferUse::Gpu));
             self.cached_triangle_count = triangle_count;
         }
         // The table already holds this mesh's areas: a Count rise reuses it.
@@ -367,13 +368,16 @@ mod gpu_tests {
         let vertex_count = vertices.len() as u32;
         let triangle_count = vertex_count / 3;
 
-        let vbuf = device.create_buffer_shared(std::mem::size_of_val(vertices) as u64);
+        let vbuf = device.create_buffer(std::mem::size_of_val(vertices) as u64, BufferUse::Upload);
         unsafe {
             vbuf.write(0, bytemuck::cast_slice(vertices));
         }
-        let pbuf =
-            device.create_buffer_shared(capacity as u64 * std::mem::size_of::<Particle>() as u64);
-        let cumulative = device.create_buffer_shared(u64::from(triangle_count.max(1)) * 4);
+        let pbuf = device.create_buffer(
+            capacity as u64 * std::mem::size_of::<Particle>() as u64,
+            BufferUse::Upload,
+        );
+        let cumulative =
+            device.create_buffer(u64::from(triangle_count.max(1)) * 4, BufferUse::Upload);
 
         let uniforms = SpawnFromMeshUniforms {
             mode,

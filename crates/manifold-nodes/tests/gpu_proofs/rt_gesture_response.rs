@@ -22,6 +22,7 @@
 //! change with `lighting_changed=true` on frame 0 and `gesture=true` on frames
 //! 1–2 reaches 90% within 3 frames from the step (93.75% at frame 3).
 
+use manifold_gpu::BufferUse;
 use std::mem::size_of;
 
 use half::f16;
@@ -358,7 +359,10 @@ fn run_accumulate_frame(
     reset_flags: u32,
     label: &str,
 ) {
-    let params_buffer = device.create_buffer_shared(std::mem::size_of::<AccumulateParams>() as u64);
+    let params_buffer = device.create_buffer(
+        std::mem::size_of::<AccumulateParams>() as u64,
+        BufferUse::Upload,
+    );
     let mut params =
         AccumulateParams::new([W, H], alpha, reset, 1, [0.0; 3], 0.0, IDENTITY, IDENTITY);
     params.reset |= reset_flags;
@@ -407,7 +411,7 @@ fn run_accumulate_frame(
 fn read_r_center(device: &GpuDevice, texture: &GpuTexture) -> f32 {
     let bytes_per_row = W * 8; // Rgba16Float = 8 bytes/px
     let total_bytes = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer_shared(total_bytes);
+    let buf = device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = device.create_encoder("gr-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();
@@ -421,7 +425,7 @@ fn read_rgba_pixels(device: &GpuDevice, texture: &GpuTexture) -> Vec<[f32; 4]> {
     assert_eq!(texture.format, GpuTextureFormat::Rgba16Float);
     let bytes_per_row = W * 8;
     let total_bytes = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer_shared(total_bytes);
+    let buf = device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = device.create_encoder("gr-readback-rgba");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();
@@ -436,7 +440,7 @@ fn read_rgba_pixels(device: &GpuDevice, texture: &GpuTexture) -> Vec<[f32; 4]> {
 fn read_rgb_center(device: &GpuDevice, texture: &GpuTexture) -> [f32; 3] {
     let bytes_per_row = W * 8;
     let total_bytes = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer_shared(total_bytes);
+    let buf = device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = device.create_encoder("gr-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();
@@ -450,7 +454,7 @@ fn read_scalar_pixels(device: &GpuDevice, texture: &GpuTexture) -> Vec<f32> {
     assert_eq!(texture.format, GpuTextureFormat::R16Float);
     let bytes_per_row = W * 2;
     let total_bytes = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer_shared(total_bytes);
+    let buf = device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = device.create_encoder("gr-readback-r16-all");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();
@@ -531,7 +535,7 @@ fn assert_history_parity(
 
 /// Make a shared buffer with identity obj_motion content.
 fn make_identity_obj_motion(device: &GpuDevice) -> manifold_gpu::GpuBuffer {
-    let buf = device.create_buffer_shared(size_of::<[[f32; 4]; 4]>() as u64);
+    let buf = device.create_buffer(size_of::<[[f32; 4]; 4]>() as u64, BufferUse::Upload);
     let ptr = buf.mapped_ptr().expect("shared buffer");
     let ident: [[f32; 4]; 4] = IDENTITY;
     unsafe {
@@ -557,7 +561,8 @@ fn step_response_reaches_90_percent_within_4_frames() {
     let sv = make_sv_layers(device, &[1.0, 1.0], "sr-sv");
     let svt = make_pass_through(device, 1.0, 1.0, 1.0, "sr-svt");
     let refl = make_pass_through(device, 0.0, 0.0, 0.0, "sr-refl");
-    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buf =
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
     let obj_motion_buf = make_identity_obj_motion(device);
     let mut history = FullHistorySet::new(device);
 
@@ -713,7 +718,8 @@ fn sub_threshold_scrub_tracking_error_bounded() {
     let sv = make_sv_layers(device, &[1.0, 1.0], "so-sv");
     let svt = make_pass_through(device, 1.0, 1.0, 1.0, "so-svt");
     let refl = make_pass_through(device, 0.0, 0.0, 0.0, "so-refl");
-    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buf =
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
     let obj_motion_buf = make_identity_obj_motion(device);
     let mut history = FullHistorySet::new(device);
 
@@ -815,7 +821,8 @@ fn sv_channel_follows_geometry_move_within_3_frames() {
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "sgm-normal");
     let refl = make_pass_through(device, 0.0, 0.0, 0.0, "sgm-refl");
     let svt = make_pass_through(device, 1.0, 1.0, 1.0, "sgm-svt");
-    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buf =
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
     let obj_motion_buf = make_identity_obj_motion(device);
     let mut history = FullHistorySet::new(device);
 
@@ -935,7 +942,8 @@ fn sv_channel_holds_through_strobe() {
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "ss-normal");
     let refl = make_pass_through(device, 0.0, 0.0, 0.0, "ss-refl");
     let svt = make_pass_through(device, 1.0, 1.0, 1.0, "ss-svt");
-    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buf =
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
     let obj_motion_buf = make_identity_obj_motion(device);
     let mut history = FullHistorySet::new(device);
 
@@ -1033,7 +1041,8 @@ fn svt_tint_holds_through_strobe() {
     let normal = make_pass_through(device, 0.0, 1.0, 0.0, "sh-normal");
     let sv = make_sv_layers(device, &[1.0, 1.0], "sh-sv");
     let refl = make_pass_through(device, 0.0, 0.0, 0.0, "sh-refl");
-    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buf =
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
     let obj_motion_buf = make_identity_obj_motion(device);
     let mut history = FullHistorySet::new(device);
 
@@ -1131,7 +1140,8 @@ fn scalar_hold_r16_matches_rgba16_history() {
     let sv_second_dark = make_sv_layers(device, &[1.0, 0.0], "scalar-hold-sv-second-dark");
     let svt = make_pass_through(device, 0.7, 0.4, 0.2, "scalar-hold-svt");
     let refl = make_pass_through(device, 0.2, 0.1, 0.05, "scalar-hold-refl");
-    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buf =
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
     gi_materials_buf.zero_fill();
     let obj_motion_buf = make_identity_obj_motion(device);
     let mut compact = FullHistorySet::new(device);
@@ -1264,7 +1274,7 @@ fn scalar_hold_r16_matches_rgba16_history() {
 fn read_moments_w_center(device: &GpuDevice, texture: &GpuTexture) -> f32 {
     let bytes_per_row = W * 16;
     let total_bytes = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer_shared(total_bytes);
+    let buf = device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = device.create_encoder("gr-readback-moments");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait_completed();
@@ -1289,7 +1299,8 @@ fn denoise_near_raw_caps_history_at_four_frames() {
     let sv = make_sv_layers(device, &[1.0, 1.0], "dnl-sv");
     let svt = make_pass_through(device, 1.0, 1.0, 1.0, "dnl-svt");
     let refl = make_pass_through(device, 0.0, 0.0, 0.0, "dnl-refl");
-    let gi_materials_buf = device.create_buffer_shared(std::mem::size_of::<GiMaterial>() as u64);
+    let gi_materials_buf =
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
     let obj_motion_buf = make_identity_obj_motion(device);
     let irr = upload_irr(device, 0.3, 0.3, 0.3);
     const NEAR_RAW: u32 = manifold_gpu::raytrace::ACCUM_FLAG_DENOISE_NEAR_RAW;

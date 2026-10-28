@@ -9,6 +9,7 @@
 //! fluidsimulation.cpp (solid face velocity, the constraint),
 //! pressuresolver.cpp (the pressure subtraction).
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuDevice};
 
 use super::gpu_flip_step::{StepParams, dispatch_pass, pool_tiles};
@@ -55,7 +56,7 @@ pub(super) fn read_staged<T: bytemuck::Pod>(
     buffer: &GpuBuffer,
     count: usize,
 ) -> Vec<T> {
-    let staged = device.create_buffer_shared(buffer.size);
+    let staged = device.create_buffer(buffer.size, BufferUse::Upload);
     let mut enc = device.create_encoder("step proof readback");
     enc.copy_buffer_to_buffer(buffer, &staged, buffer.size);
     enc.commit_and_wait_completed();
@@ -429,7 +430,7 @@ impl Pass {
         };
         let buffer = self
             .device
-            .create_buffer_shared((bytes.len() as u64).max(16));
+            .create_buffer((bytes.len() as u64).max(16), BufferUse::Upload);
         buffer.zero_fill();
         if !bytes.is_empty() {
             // SAFETY: shared buffer sized for `bytes`; no GPU work in flight.

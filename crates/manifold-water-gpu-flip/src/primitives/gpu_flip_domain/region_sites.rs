@@ -9,6 +9,7 @@
 //! start to its end. The kernel still tests every site against the real
 //! distance; the box only bounds which sites it visits.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuBuffer;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
@@ -228,7 +229,7 @@ impl RegionSiteBuffer {
             .as_ref()
             .is_none_or(|buffer| buffer.size < bytes)
         {
-            self.buffer = Some(gpu.device.create_buffer_shared(bytes));
+            self.buffer = Some(gpu.device.create_buffer(bytes, BufferUse::Upload));
         }
         if fresh && let Some(buffer) = &self.buffer {
             uploader.write_rows(gpu, buffer, bytemuck::cast_slice(rows.rows()), label);

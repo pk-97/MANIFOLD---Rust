@@ -1,6 +1,7 @@
 //! Capacity propagation for growing CPU-origin geometry.
 use super::*;
 use crate::ports::PortType;
+use manifold_gpu::BufferUse;
 
 impl Executor {
     pub(super) fn grow_step_arrays(
@@ -64,7 +65,7 @@ impl Executor {
             }
             crate::load::expand::admit_candidate_bytes(device.modifier_memory_snapshot(), bytes)
                 .map_err(|error| error.to_string())?;
-            let buffer = device.try_create_buffer_shared(bytes)?;
+            let buffer = device.try_create_buffer(bytes, BufferUse::Upload)?;
             buffer.zero_fill();
             if !self.backend.install_array_buffer(slot, buffer) {
                 return Err("Backend cannot replace array storage".into());

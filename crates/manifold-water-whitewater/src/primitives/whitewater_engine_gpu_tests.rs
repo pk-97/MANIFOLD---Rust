@@ -8,6 +8,7 @@ use super::advect_whitewater::AdvectWhitewater;
 use super::whitewater_cpu::CANONICAL_SOLID;
 use super::whitewater_engine_cpu::{reinitialize, upwind};
 use super::whitewater_particle_cpu::{Box3, face_index};
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuBuffer;
 use manifold_node_engine::freeze::codegen::InputSource;
 use manifold_node_engine::scene::world_tiles::pool_len;
@@ -1165,9 +1166,9 @@ fn whitewater_surface_distance_replay_matches_direct() {
         let mut stage = SurfaceDistance::default();
         stage.prepare(&device);
         stage.reserve(&device, pool_tiles).unwrap();
-        let plan = device.create_buffer_shared(48);
-        let source = device.create_buffer_shared(len as u64 * 4);
-        let tiles = device.create_buffer_shared(table.words.len() as u64 * 4);
+        let plan = device.create_buffer(48, BufferUse::Upload);
+        let source = device.create_buffer(len as u64 * 4, BufferUse::Upload);
+        let tiles = device.create_buffer(table.words.len() as u64 * 4, BufferUse::Upload);
         // SAFETY: a shared buffer of exactly these words; no GPU work in flight.
         unsafe { tiles.write(0, bytemuck::cast_slice(&table.words)) };
         (stage, plan, source, tiles)
@@ -1191,7 +1192,7 @@ fn whitewater_surface_distance_replay_matches_direct() {
         let staged: Vec<_> = stage.scratch()[..6]
             .iter()
             .map(|b| {
-                let s = device.create_buffer_shared(b.size());
+                let s = device.create_buffer(b.size(), BufferUse::Upload);
                 enc.copy_buffer_to_buffer(b, &s, b.size());
                 (s, (b.size() / 4) as usize)
             })

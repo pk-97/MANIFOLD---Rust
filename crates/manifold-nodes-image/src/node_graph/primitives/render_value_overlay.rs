@@ -21,6 +21,7 @@
 //! same pass. The frame is read once and written once; a separate blit plus a
 //! `Load` pass would move it twice.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{
@@ -614,9 +615,10 @@ impl Primitive for RenderValueOverlay {
         });
         let index_buf = self.index_buf.get_or_insert_with(|| {
             let indices = sequential_indices();
-            let buf = gpu
-                .device
-                .create_buffer_shared((indices.len() * std::mem::size_of::<u32>()) as u64);
+            let buf = gpu.device.create_buffer(
+                (indices.len() * std::mem::size_of::<u32>()) as u64,
+                BufferUse::Upload,
+            );
             unsafe { buf.write(0, bytemuck::cast_slice(&indices)) };
             buf
         });
@@ -661,8 +663,10 @@ impl Primitive for RenderValueOverlay {
                 })
             });
             let quad_buf = self.quad_buf.get_or_insert_with(|| {
-                gpu.device
-                    .create_buffer_shared((MAX_QUADS * std::mem::size_of::<GlyphQuad>()) as u64)
+                gpu.device.create_buffer(
+                    (MAX_QUADS * std::mem::size_of::<GlyphQuad>()) as u64,
+                    BufferUse::Upload,
+                )
             });
 
             let quad_bytes = bytemuck::cast_slice(&self.quads[..quad_count]);

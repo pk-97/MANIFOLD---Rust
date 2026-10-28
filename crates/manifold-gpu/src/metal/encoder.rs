@@ -3360,6 +3360,7 @@ mod tests {
     use objc2_metal::MTLCommandBuffer;
 
     use super::*;
+    use crate::BufferUse;
 
     /// A frame with more dispatches than one sample buffer holds is timed in
     /// full across the chain: every span resolves, in encode order, with no
@@ -3379,7 +3380,7 @@ mod tests {
             }
         "#;
         let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "chain test");
-        let buffer = device.create_buffer_shared(64 * 4);
+        let buffer = device.create_buffer(64 * 4, BufferUse::Upload);
         let frame = |sampler: &GpuTimestampSampler, dispatches: usize| {
             let mut encoder = device.create_encoder("chain test");
             encoder.enable_dispatch_profiling(sampler.clone(), &device);
@@ -3452,7 +3453,7 @@ mod tests {
         "#;
         let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "test pipeline");
 
-        let buffer = device.create_buffer_shared(std::mem::size_of::<u32>() as u64);
+        let buffer = device.create_buffer(std::mem::size_of::<u32>() as u64, BufferUse::Upload);
         let values = [10u32, 20u32, 30u32];
         // Pre-seed with the final value so we can tell if no write happened.
         unsafe {
@@ -3566,7 +3567,7 @@ mod tests {
         };
 
         let count_red = |device: &GpuDevice, target: &crate::GpuTexture| -> u32 {
-            let buf = device.create_buffer_shared(64 * 64 * 4);
+            let buf = device.create_buffer(64 * 64 * 4, BufferUse::Upload);
             let mut enc = device.create_encoder("test points readback");
             enc.copy_texture_to_buffer(target, &buf, 64, 64, 64 * 4);
             enc.commit_and_wait_completed();
@@ -3697,9 +3698,9 @@ mod tests {
             unsafe { std::slice::from_raw_parts(ptr as *const u32, words) }.to_vec()
         };
 
-        let direct = device.create_buffer_shared(512 * 4);
-        let indirect = device.create_buffer_shared(512 * 4);
-        let args = device.create_buffer_shared(8 * 4);
+        let direct = device.create_buffer(512 * 4, BufferUse::Upload);
+        let indirect = device.create_buffer(512 * 4, BufferUse::Upload);
+        let args = device.create_buffer(8 * 4, BufferUse::Upload);
         let mut enc = device.create_encoder("test indirect dispatch");
         enc.dispatch_compute(
             &fill,
@@ -3779,7 +3780,7 @@ mod tests {
         let red_pixels = |indirect_vertices: Option<u32>| -> usize {
             let target = texture(crate::GpuTextureFormat::Rgba8Unorm, "test indirect color");
             let depth = texture(crate::GpuTextureFormat::Depth32Float, "test indirect depth");
-            let args = device.create_buffer_shared(8 * 4);
+            let args = device.create_buffer(8 * 4, BufferUse::Upload);
             let mut enc = device.create_encoder("test indirect draw");
             let mut draw = GpuEncoder::depth_msaa_draw(&pipeline, &[], 3, 1);
             if let Some(vertices) = indirect_vertices {
@@ -3795,7 +3796,7 @@ mod tests {
                 crate::GpuLoadAction::Clear,
                 "test indirect draw",
             );
-            let readback = device.create_buffer_shared(64 * 64 * 4);
+            let readback = device.create_buffer(64 * 64 * 4, BufferUse::Upload);
             enc.copy_texture_to_buffer(&target, &readback, 64, 64, 64 * 4);
             enc.commit_and_wait_completed();
             let ptr = readback

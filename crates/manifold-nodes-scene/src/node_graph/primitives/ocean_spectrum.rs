@@ -508,7 +508,7 @@ mod gpu_tests {
             "ocean-spectrum-test",
         );
         let len = spectrum_len(N);
-        let out = device.create_buffer_shared(u64::from(len) * 8);
+        let out = device.create_buffer(u64::from(len) * 8, manifold_gpu::BufferUse::Upload);
         let uniforms = SpectrumUniforms {
             size: N as i32,
             tile_size: s.tile_size as f32,
@@ -630,7 +630,7 @@ mod gpu_tests {
             &[6, N as usize, N as usize],
             &[1, 2],
         );
-        let field = device.create_buffer_shared(fft.output_len_bytes());
+        let field = device.create_buffer(fft.output_len_bytes(), manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder("ocean-ifft-test");
         fft.encode(&mut enc, &spectrum, &field);
         enc.commit_and_wait_completed();

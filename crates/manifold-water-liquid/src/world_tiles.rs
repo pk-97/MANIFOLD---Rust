@@ -24,6 +24,7 @@
 //! order through a prefix scan); list order is free, so readers index their
 //! partials by slot.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::scene::world_tiles::{
@@ -338,7 +339,7 @@ fn admit(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
         bytes,
     )
     .map_err(|error| error.to_string())?;
-    device.try_create_buffer_shared(bytes)
+    device.try_create_buffer(bytes, BufferUse::Upload)
 }
 
 /// A shared buffer holding `words`, written before any GPU work sees it.

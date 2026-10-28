@@ -15,6 +15,7 @@
 //! captured row onto the final table: a tile the final table lacks drops out,
 //! a tile the substep lacked reads the canonical element.
 use crate::fluid_particles::FaceSample;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_entries, table_words};
 
@@ -212,12 +213,13 @@ impl SubstepHistory {
         .map_err(|e| e.to_string())?;
         let rows = u64::from(slots);
         let row_bytes = pool_len(pool_tiles) * 16;
-        let schedule = device.try_create_buffer_shared(rows * 16)?;
+        let schedule = device.try_create_buffer(rows * 16, BufferUse::Upload)?;
         schedule.zero_fill();
-        let faces = device.try_create_buffer(rows * row_bytes)?;
-        let tables = device.try_create_buffer(rows * table_words(pool_tiles) * 4)?;
-        let stash = device.try_create_buffer(row_bytes)?;
-        let arguments = device.try_create_buffer(rows * ROW_ARGUMENT_BYTES)?;
+        let faces = device.try_create_buffer(rows * row_bytes, BufferUse::Gpu)?;
+        let tables =
+            device.try_create_buffer(rows * table_words(pool_tiles) * 4, BufferUse::Gpu)?;
+        let stash = device.try_create_buffer(row_bytes, BufferUse::Gpu)?;
+        let arguments = device.try_create_buffer(rows * ROW_ARGUMENT_BYTES, BufferUse::Gpu)?;
         self.faces = Some(faces);
         self.schedule = Some(schedule);
         self.tables = Some(tables);

@@ -16,6 +16,7 @@
 //! update path runs). The CPU-side builder is deleted; count/mean/area
 //! assertions read the GPU-written `EmissiveTableStats` buffer.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuDevice;
 use manifold_gpu::raytrace::{
     EmissiveAliasEntry, EmissiveTableStats, EmissiveTriangleGpu, GiMaterial,
@@ -33,7 +34,7 @@ struct PosVertex {
 
 fn write_shared_buffer(device: &GpuDevice, data: &[PosVertex]) -> manifold_gpu::GpuBuffer {
     let bytes = std::mem::size_of_val(data) as u64;
-    let buf = device.create_buffer_shared(bytes.max(16));
+    let buf = device.create_buffer(bytes.max(16), BufferUse::Upload);
     let ptr = buf
         .mapped_ptr()
         .expect("shared buffer must expose a mapped pointer");
@@ -465,7 +466,7 @@ fn emissive_table_truncates_at_cap() {
     // buffer. Share one index buffer across all quad objects — indices are
     // relative to each object's vertex_offset.
     let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
-    let ib = device.create_buffer_shared(std::mem::size_of_val(&indices) as u64);
+    let ib = device.create_buffer(std::mem::size_of_val(&indices) as u64, BufferUse::Upload);
     let ib_ptr = ib
         .mapped_ptr()
         .expect("shared buffer must expose a mapped pointer");

@@ -31,6 +31,7 @@
 //! helper `trace_shadow_rays` calls internally for its AO/GI-normal fetch
 //! and its GI-bounce hit-normal fetch.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::raytrace::{GpuShadowRayTracer, RtObjectGeometry, ensure_normal_sources};
 
 /// Flat (non-indexed) vertex layout: 12-byte position, 12-byte normal, no
@@ -54,7 +55,7 @@ fn write_shared_buffer<T: Copy>(
     data: &[T],
 ) -> manifold_gpu::GpuBuffer {
     let bytes = std::mem::size_of_val(data) as u64;
-    let buf = device.create_buffer_shared(bytes.max(16));
+    let buf = device.create_buffer(bytes.max(16), BufferUse::Upload);
     let ptr = buf
         .mapped_ptr()
         .expect("shared buffer must expose a mapped pointer");

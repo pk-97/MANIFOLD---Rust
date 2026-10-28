@@ -3,6 +3,7 @@
 //! list, the empty-frame clear and temporal-history invalidation.
 
 use super::*;
+use manifold_gpu::BufferUse;
 
 /// Bytes of one `InstanceTransform` record.
 const INSTANCE_RECORD_BYTES: u64 = std::mem::size_of::<InstanceTransform>() as u64;
@@ -14,7 +15,7 @@ fn grown_buffer(
     bytes: u64,
 ) -> manifold_gpu::GpuBuffer {
     if slot.as_ref().is_none_or(|buffer| buffer.size < bytes) {
-        *slot = Some(device.create_buffer(bytes));
+        *slot = Some(device.create_buffer(bytes, BufferUse::Gpu));
     }
     slot.clone().expect("buffer allocated")
 }

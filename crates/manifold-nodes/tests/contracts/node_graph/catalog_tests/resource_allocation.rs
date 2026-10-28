@@ -179,7 +179,10 @@ fn temporary_arrays_match_dedicated_storage_across_animated_and_repeat_frames() 
             // Prebound dedicated storage disables planner reuse without
             // introducing a production toggle or a second planner.
             for (&resource, storage) in &planned.storage {
-                backend.pre_bind_array(resource, device.create_buffer_shared(storage.bytes));
+                backend.pre_bind_array(
+                    resource,
+                    device.create_buffer(storage.bytes, manifold_gpu::BufferUse::Upload),
+                );
             }
         }
         pre_allocate_resources(&mut graph, &plan, &device, &mut backend).unwrap();

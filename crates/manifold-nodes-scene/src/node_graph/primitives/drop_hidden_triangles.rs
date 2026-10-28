@@ -150,11 +150,11 @@ mod gpu_tests {
             "drop-hidden-test",
         );
         let bytes = std::mem::size_of_val(src) as u64;
-        let input = device.create_buffer_shared(bytes);
+        let input = device.create_buffer(bytes, manifold_gpu::BufferUse::Upload);
         unsafe {
             input.write(0, bytemuck::cast_slice(src));
         }
-        let output = device.create_buffer_shared(bytes);
+        let output = device.create_buffer(bytes, manifold_gpu::BufferUse::Upload);
         let uniforms = DropUniforms {
             cutoff,
             dispatch_count: src.len() as u32,

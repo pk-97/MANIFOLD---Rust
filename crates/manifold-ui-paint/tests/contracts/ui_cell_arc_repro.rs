@@ -16,6 +16,7 @@
 
 #![cfg(target_os = "macos")]
 
+use manifold_gpu::BufferUse;
 use std::ffi::c_void;
 use std::slice;
 
@@ -137,7 +138,7 @@ fn render_with(tree: &UITree, device: &GpuDevice, ui: &mut UIRenderer, h: u32) -
 fn readback(device: &GpuDevice, texture: &GpuTexture, h: u32) -> Vec<u8> {
     let bytes_per_row = W * 4;
     let total = u64::from(h * bytes_per_row);
-    let buf = device.create_buffer_shared(total);
+    let buf = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("cell-arc-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, h, bytes_per_row);
     enc.commit_and_wait_completed();

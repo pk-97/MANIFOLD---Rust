@@ -28,6 +28,7 @@
 //! shim (added in commit 3500e7a7) is replaced by this single canonical
 //! pipeline.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use ahash::{AHashMap, AHashSet};
@@ -1532,7 +1533,7 @@ fn pre_allocate_array_buffers(
                 crate::gpu::render_target::allocation_checkpoint()
                     .map_err(PreAllocationError::AllocationFailed)?;
                 let buffer = device
-                    .try_create_buffer_shared(allocation.bytes)
+                    .try_create_buffer(allocation.bytes, BufferUse::Upload)
                     .map_err(PreAllocationError::AllocationFailed)?;
                 if allocation.zero_init {
                     buffer.zero_fill();

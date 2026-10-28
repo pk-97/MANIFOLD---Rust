@@ -6,6 +6,7 @@
 //! holds negative tiles and its slots are the build's order. The residual is
 //! the true relative residual of the masked Poisson equation.
 
+use manifold_gpu::BufferUse;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use manifold_gpu::testkit::{TestDevice, test_device};
@@ -153,7 +154,7 @@ fn ghost_residual(
 /// A shared buffer holding `data`, written before any GPU work sees it.
 fn shared<T: bytemuck::Pod>(device: &GpuDevice, data: &[T]) -> GpuBuffer {
     let bytes: &[u8] = bytemuck::cast_slice(data);
-    let buffer = device.create_buffer_shared(bytes.len().max(4) as u64);
+    let buffer = device.create_buffer(bytes.len().max(4) as u64, BufferUse::Upload);
     // SAFETY: a new shared buffer at least `bytes` long; no GPU work in flight.
     unsafe { buffer.write(0, bytes) };
     buffer
@@ -890,9 +891,9 @@ impl Rig {
             cells,
             index,
             faces: shared(&device, &records),
-            water: device.create_buffer_shared(floats),
-            rhs: device.create_buffer_shared(floats),
-            pressure: device.create_buffer_shared(floats),
+            water: device.create_buffer(floats, BufferUse::Upload),
+            rhs: device.create_buffer(floats, BufferUse::Upload),
+            pressure: device.create_buffer(floats, BufferUse::Upload),
             fine,
             device,
             solver,
@@ -1006,7 +1007,7 @@ impl Rig {
         let [armed, flags, lists] = self.solver.tiles().expect("prepared");
         let mut enc = self.device.create_encoder("gpu-flip-pressure-slot-words");
         let copies = [flags, lists].map(|from| {
-            let into = self.device.create_buffer_shared(pool * 4);
+            let into = self.device.create_buffer(pool * 4, BufferUse::Upload);
             enc.copy_buffer_to_buffer(from, &into, pool * 4);
             into
         });
@@ -1053,7 +1054,7 @@ fn pressure_module_parallel_classification_matches_serial_boolean_oracle() {
         let n = [m; 3];
         let cells = m * m * m;
         let mut rig = Rig::new(m);
-        let plan = rig.device.create_buffer_shared(48);
+        let plan = rig.device.create_buffer(48, BufferUse::Upload);
         rig.solver.set_clock_plan(&plan);
         let mut expected: Option<(Vec<u32>, Vec<u32>)> = None;
         // Empty -> full -> sparse -> halo-only -> empty reuses the storage, then
@@ -1208,7 +1209,7 @@ fn rz(rig: &mut Rig, p: &Problem, iterations: u32) -> Vec<(f32, f32)> {
     rig.upload(&water, &p.f);
     let scalars = rig
         .device
-        .create_buffer_shared(u64::from(2 * MAX_ITERATIONS) * 4);
+        .create_buffer(u64::from(2 * MAX_ITERATIONS) * 4, BufferUse::Upload);
     let mut enc = rig.device.create_encoder("gpu-flip-pressure-rz");
     rig.prepare(&mut enc);
     rig.solve_on(&mut enc, Stop::Fixed(iterations));
@@ -1338,7 +1339,9 @@ fn converge(rig: &mut Rig, p: &Problem, cap: u32) -> Converged {
     let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
     rig.upload(&water, &p.f);
     let floats = PROGRESS_FLOATS as usize;
-    let record = rig.device.create_buffer_shared(floats as u64 * 4);
+    let record = rig
+        .device
+        .create_buffer(floats as u64 * 4, BufferUse::Upload);
     let mut enc = rig.device.create_encoder("gpu-flip-pressure-converge");
     rig.prepare(&mut enc);
     rig.solve_on(&mut enc, Stop::Converged(cap));
@@ -1379,7 +1382,9 @@ fn solve_bits_under(
     let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
     rig.upload(&water, &p.f);
     let floats = PROGRESS_FLOATS as usize;
-    let record = rig.device.create_buffer_shared(floats as u64 * 4);
+    let record = rig
+        .device
+        .create_buffer(floats as u64 * 4, BufferUse::Upload);
     let mut enc = rig.device.create_encoder("gpu-flip-pressure-replay");
     let spanned = cache
         .take()
@@ -1624,15 +1629,15 @@ fn pressure_module_rearms_between_solves() {
     ];
     let mut direct = Rig::new(64);
     let mut replay = Rig::new(64);
-    let direct_plan = direct.device.create_buffer_shared(48);
-    let replay_plan = replay.device.create_buffer_shared(48);
+    let direct_plan = direct.device.create_buffer(48, BufferUse::Upload);
+    let replay_plan = replay.device.create_buffer(48, BufferUse::Upload);
     let bufs = |rig: &Rig| -> Vec<GpuBuffer> {
         let cells = rig.pool_floats() as u64 * 4;
         let record = u64::from(PROGRESS_FLOATS) * 4;
         let sentinel = (u64::from(2 * MAX_ITERATIONS) * 4).max(record);
         [cells, cells, cells, cells, record, record, sentinel]
             .iter()
-            .map(|&size| rig.device.create_buffer_shared(size))
+            .map(|&size| rig.device.create_buffer(size, BufferUse::Upload))
             .collect()
     };
     let (direct_bufs, replay_bufs) = (bufs(&direct), bufs(&replay));
@@ -2016,7 +2021,7 @@ fn pressure_module_rows_match_the_stencil() {
             let pooled = rig.pool_floats();
             let copy = rig
                 .device
-                .create_buffer_shared((pooled * ROW_FLOATS * 4) as u64);
+                .create_buffer((pooled * ROW_FLOATS * 4) as u64, BufferUse::Upload);
             let mut enc = rig.device.create_encoder("gpu-flip-pressure-rows");
             rig.solver.copy_rows(&mut enc, &copy);
             enc.commit_and_wait_completed();
@@ -2372,7 +2377,7 @@ fn chunk_solve(
     let record_bytes = u64::from(PROGRESS_FLOATS) * 4;
     let sentinel = rig
         .device
-        .create_buffer_shared(scalar_bytes.max(record_bytes));
+        .create_buffer(scalar_bytes.max(record_bytes), BufferUse::Upload);
     rig.upload(&water, &p.f);
     // SAFETY: a shared buffer sized for what is written; the last solve completed.
     unsafe {
@@ -2381,8 +2386,8 @@ fn chunk_solve(
             bytemuck::cast_slice(&vec![SENTINEL; (sentinel.size / 4) as usize]),
         );
     }
-    let scalars = rig.device.create_buffer_shared(scalar_bytes);
-    let record = rig.device.create_buffer_shared(record_bytes);
+    let scalars = rig.device.create_buffer(scalar_bytes, BufferUse::Upload);
+    let record = rig.device.create_buffer(record_bytes, BufferUse::Upload);
     let mut enc = rig.device.create_encoder("gpu-flip-pressure-chunk-ranges");
     rig.prepare(&mut enc);
     rig.solver.seed_records(&mut enc, &sentinel);
@@ -2395,7 +2400,7 @@ fn chunk_solve(
         *cache = Some(enc.end_replay());
     }
     let copy = |enc: &mut GpuEncoder, src: &GpuBuffer| {
-        let dst = rig.device.create_buffer_shared(src.size);
+        let dst = rig.device.create_buffer(src.size, BufferUse::Upload);
         enc.copy_buffer_to_buffer(src, &dst, src.size);
         dst
     };
@@ -2447,7 +2452,7 @@ fn pressure_levels_mirror_the_parent_build() {
         let pool = fine.tiles.pool_tiles();
         let pools = level_pools(pool);
         // Dry water: the levels' tables need only the tiles.
-        let dry = device.create_buffer_shared(pool_len(pool) * 32);
+        let dry = device.create_buffer(pool_len(pool) * 32, BufferUse::Upload);
         dry.zero_fill();
         let mut solver = PressureSolver::default();
         solver.prepare_pipelines(&device);
@@ -2464,7 +2469,7 @@ fn pressure_levels_mirror_the_parent_build() {
         let parents: Vec<GpuBuffer> = (1..pools.len())
             .map(|level| {
                 let from = solver.level_parents(level).expect("a coarse level");
-                let into = device.create_buffer_shared(from.size);
+                let into = device.create_buffer(from.size, BufferUse::Upload);
                 enc.copy_buffer_to_buffer(from, &into, from.size);
                 into
             })
@@ -2614,7 +2619,7 @@ fn pressure_vcycle_is_symmetric() {
             rig.prepare(&mut enc);
             rig.solve_on(&mut enc, Stop::Fixed(1));
             let z = rig.solver.work_vectors().expect("prepared")[1];
-            let into = rig.device.create_buffer_shared(z.size);
+            let into = rig.device.create_buffer(z.size, BufferUse::Upload);
             enc.copy_buffer_to_buffer(z, &into, z.size);
             enc.commit_and_wait_completed();
             rig.dense_of(&read::<f32>(&into, rig.pool_floats()))

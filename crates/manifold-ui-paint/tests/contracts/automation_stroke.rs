@@ -2,6 +2,7 @@
 //! and an uninterrupted centre at both desktop scale factors.
 #![cfg(all(target_os = "macos", feature = "gpu-proofs"))]
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTextureFormat};
 use manifold_ui::node::Color32;
 use manifold_ui_paint::ui_renderer::UIRenderer;
@@ -57,7 +58,7 @@ fn automation_stroke_has_antialiased_edges_and_continuous_centre() {
 
         let bytes_per_row = width * 4;
         let size = (height * bytes_per_row) as usize;
-        let buffer = device.create_buffer_shared(size as u64);
+        let buffer = device.create_buffer(size as u64, BufferUse::Upload);
         let mut encoder = device.create_encoder("automation-stroke-readback");
         encoder.copy_texture_to_buffer(&target, &buffer, width, height, bytes_per_row);
         encoder.commit_and_wait_completed();

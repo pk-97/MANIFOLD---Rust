@@ -7,6 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuBinding;
 use manifold_node_engine::freeze::codegen::{ENTRY, standalone_for_spec};
 use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
@@ -130,8 +131,8 @@ fn dispatch_mask(
     label: &str,
 ) -> Vec<f32> {
     let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
-    let source_buf = device.create_buffer_shared(std::mem::size_of_val(source) as u64);
-    let output_buf = device.create_buffer_shared((source.len() * 4) as u64);
+    let source_buf = device.create_buffer(std::mem::size_of_val(source) as u64, BufferUse::Upload);
+    let output_buf = device.create_buffer((source.len() * 4) as u64, BufferUse::Upload);
     unsafe {
         source_buf.write(0, bytemuck::cast_slice(source));
     }
@@ -176,9 +177,10 @@ fn dispatch_stagger(
     label: &str,
 ) -> Vec<f32> {
     let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
-    let source_buf = device.create_buffer_shared(std::mem::size_of_val(source) as u64);
-    let incoming_buf = device.create_buffer_shared(std::mem::size_of_val(incoming) as u64);
-    let output_buf = device.create_buffer_shared((source.len() * 4) as u64);
+    let source_buf = device.create_buffer(std::mem::size_of_val(source) as u64, BufferUse::Upload);
+    let incoming_buf =
+        device.create_buffer(std::mem::size_of_val(incoming) as u64, BufferUse::Upload);
+    let output_buf = device.create_buffer((source.len() * 4) as u64, BufferUse::Upload);
     unsafe {
         source_buf.write(0, bytemuck::cast_slice(source));
         incoming_buf.write(0, bytemuck::cast_slice(incoming));
@@ -223,9 +225,9 @@ fn dispatch_remap_weights(
     label: &str,
 ) -> Vec<f32> {
     let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
-    let source_buf = device.create_buffer_shared((source.len() * 4).max(4) as u64);
-    let map_buf = device.create_buffer_shared((maps.len() * 16).max(16) as u64);
-    let output_buf = device.create_buffer_shared((maps.len() * 4).max(4) as u64);
+    let source_buf = device.create_buffer((source.len() * 4).max(4) as u64, BufferUse::Upload);
+    let map_buf = device.create_buffer((maps.len() * 16).max(16) as u64, BufferUse::Upload);
+    let output_buf = device.create_buffer((maps.len() * 4).max(4) as u64, BufferUse::Upload);
     unsafe {
         source_buf.write(0, bytemuck::cast_slice(source));
         map_buf.write(0, bytemuck::cast_slice(maps));
@@ -271,10 +273,12 @@ fn dispatch_remap_mesh(
     label: &str,
 ) -> Vec<MeshVertex> {
     let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
-    let source_buf = device.create_buffer_shared(std::mem::size_of_val(source) as u64);
-    let map_buf = device.create_buffer_shared((maps.len() * 16) as u64);
-    let output_buf =
-        device.create_buffer_shared((maps.len() * std::mem::size_of::<MeshVertex>()) as u64);
+    let source_buf = device.create_buffer(std::mem::size_of_val(source) as u64, BufferUse::Upload);
+    let map_buf = device.create_buffer((maps.len() * 16) as u64, BufferUse::Upload);
+    let output_buf = device.create_buffer(
+        (maps.len() * std::mem::size_of::<MeshVertex>()) as u64,
+        BufferUse::Upload,
+    );
     unsafe {
         source_buf.write(0, bytemuck::cast_slice(source));
         map_buf.write(0, bytemuck::cast_slice(maps));
@@ -322,10 +326,10 @@ fn dispatch_morph(
     label: &str,
 ) -> Vec<MeshVertex> {
     let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
-    let input_buf = device.create_buffer_shared(std::mem::size_of_val(input) as u64);
-    let target_buf = device.create_buffer_shared(std::mem::size_of_val(target) as u64);
-    let weights_buf = device.create_buffer_shared((weights.len() * 4).max(4) as u64);
-    let output_buf = device.create_buffer_shared(std::mem::size_of_val(input) as u64);
+    let input_buf = device.create_buffer(std::mem::size_of_val(input) as u64, BufferUse::Upload);
+    let target_buf = device.create_buffer(std::mem::size_of_val(target) as u64, BufferUse::Upload);
+    let weights_buf = device.create_buffer((weights.len() * 4).max(4) as u64, BufferUse::Upload);
+    let output_buf = device.create_buffer(std::mem::size_of_val(input) as u64, BufferUse::Upload);
     unsafe {
         input_buf.write(0, bytemuck::cast_slice(input));
         target_buf.write(0, bytemuck::cast_slice(target));

@@ -1,3 +1,4 @@
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuBinding;
 use manifold_node_engine::freeze::codegen::{
     ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,
@@ -17,12 +18,14 @@ fn dispatch(src: &[InstanceTransform]) -> Vec<Vec4Vertex> {
         manifold_node_engine::freeze::codegen::ENTRY,
         "wave-pilot-copy",
     );
-    let input = device.create_buffer_shared(std::mem::size_of_val(src) as u64);
+    let input = device.create_buffer(std::mem::size_of_val(src) as u64, BufferUse::Upload);
     unsafe {
         input.write(0, bytemuck::cast_slice(src));
     }
-    let output =
-        device.create_buffer_shared(std::mem::size_of::<Vec4Vertex>() as u64 * src.len() as u64);
+    let output = device.create_buffer(
+        std::mem::size_of::<Vec4Vertex>() as u64 * src.len() as u64,
+        BufferUse::Upload,
+    );
     let uniforms = Uniforms {
         dispatch_count: src.len() as u32,
         _pad0: 0,
@@ -177,13 +180,19 @@ fn wave_pilot_fused_copy_wave_displace_matches_standalone_and_cpu() {
         "fused wave pilot WGSL must parse"
     );
 
-    let input = device.create_buffer_shared(std::mem::size_of_val(src.as_slice()) as u64);
+    let input = device.create_buffer(
+        std::mem::size_of_val(src.as_slice()) as u64,
+        BufferUse::Upload,
+    );
     unsafe {
         input.write(0, bytemuck::cast_slice(&src));
     }
-    let positions = device.create_buffer_shared(16 * src.len() as u64);
-    let weights = device.create_buffer_shared(4 * src.len() as u64);
-    let standalone_out = device.create_buffer_shared(std::mem::size_of_val(src.as_slice()) as u64);
+    let positions = device.create_buffer(16 * src.len() as u64, BufferUse::Upload);
+    let weights = device.create_buffer(4 * src.len() as u64, BufferUse::Upload);
+    let standalone_out = device.create_buffer(
+        std::mem::size_of_val(src.as_slice()) as u64,
+        BufferUse::Upload,
+    );
     let cp = device.create_compute_pipeline(
         &manifold_node_engine::freeze::codegen::standalone_for_spec::<CopyPositions>().unwrap(),
         ENTRY,
@@ -299,7 +308,10 @@ fn wave_pilot_fused_copy_wave_displace_matches_standalone_and_cpu() {
 
     let fused_pipeline =
         device.create_compute_pipeline(&fused.wgsl, ENTRY, "wave-pilot-fused-chain");
-    let fused_out = device.create_buffer_shared(std::mem::size_of_val(src.as_slice()) as u64);
+    let fused_out = device.create_buffer(
+        std::mem::size_of_val(src.as_slice()) as u64,
+        BufferUse::Upload,
+    );
     let mut words = [0_u32; 12];
     for (slot, value) in [
         frequency,

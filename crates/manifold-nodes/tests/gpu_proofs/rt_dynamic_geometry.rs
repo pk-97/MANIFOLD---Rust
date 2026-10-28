@@ -9,6 +9,7 @@
 //! tests per phase; P0 owns `rt_dynamic_baseline`, P3 owns
 //! `rt_dynamic_ordering` (A2 same-command-buffer and lifetime probes).
 
+use manifold_gpu::BufferUse;
 use std::slice;
 
 use manifold_gpu::raytrace::{
@@ -63,7 +64,7 @@ fn triangle_at(cx: f32) -> [PackedVertex; 3] {
 }
 
 fn write_vertices(device: &GpuDevice, verts: &[PackedVertex]) -> GpuBuffer {
-    let buffer = device.create_buffer_shared(std::mem::size_of_val(verts) as u64);
+    let buffer = device.create_buffer(std::mem::size_of_val(verts) as u64, BufferUse::Upload);
     let ptr = buffer
         .mapped_ptr()
         .expect("fixture vertex buffer must be CPU-mapped");
@@ -749,13 +750,13 @@ fn cs_main() {
         );
 
         // Section 1: flat (non-indexed) triangle, one persistent buffer.
-        let vertex_buffer = device.create_buffer_shared(3 * u64::from(VERTEX_STRIDE));
+        let vertex_buffer = device.create_buffer(3 * u64::from(VERTEX_STRIDE), BufferUse::Upload);
         run_same_frame_loop(&tracer, device, &flat_pipe, &vertex_buffer, None);
 
         // Section 2: indexed; connectivity flips in place at equal capacity
         // (6 u32 index slots every frame, one dead-degenerate slot).
-        let vertex_buffer = device.create_buffer_shared(6 * u64::from(VERTEX_STRIDE));
-        let index_buffer = device.create_buffer_shared(6 * 4);
+        let vertex_buffer = device.create_buffer(6 * u64::from(VERTEX_STRIDE), BufferUse::Upload);
+        let index_buffer = device.create_buffer(6 * 4, BufferUse::Upload);
         run_same_frame_loop(
             &tracer,
             device,
@@ -863,7 +864,7 @@ fn cs_main() {
         let offsets = [0.0f32, 0.5, -0.5];
         let local = triangle_at(0.0);
         let vertex_buffer = write_vertices(device, &local);
-        let instances_buffer = device.create_buffer_shared(32);
+        let instances_buffer = device.create_buffer(32, BufferUse::Upload);
         let objects = [RtObjectGeometry {
             instance_inner: RtObjectGeometry::NO_INNER,
             material_attributes: Default::default(),
@@ -1401,7 +1402,7 @@ fn cs_main() {
             },
             "triangle count far past the buffer",
         );
-        let tiny_index = device.create_buffer_shared(4);
+        let tiny_index = device.create_buffer(4, BufferUse::Upload);
         expect_invalid(
             RtObjectGeometry {
                 instance_inner: RtObjectGeometry::NO_INNER,
@@ -1417,7 +1418,7 @@ fn cs_main() {
         // set stays valid. Buffer A is sized for TWO triangles from the
         // start (one used now) so a later 2-triangle shape change is a
         // pure shape change, not a capacity problem.
-        let verts_a = device.create_buffer_shared(2 * 3 * u64::from(VERTEX_STRIDE));
+        let verts_a = device.create_buffer(2 * 3 * u64::from(VERTEX_STRIDE), BufferUse::Upload);
         {
             let ptr = verts_a
                 .mapped_ptr()

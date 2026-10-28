@@ -10,6 +10,7 @@
 //!
 //! [`Luminance`]: super::luminance::Luminance
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
@@ -64,7 +65,7 @@ impl Primitive for Peak {
         let gpu = ctx.gpu_encoder();
         let measure_buffer = self
             .measure_buffer
-            .get_or_insert_with(|| gpu.device.create_buffer_shared(16));
+            .get_or_insert_with(|| gpu.device.create_buffer(16, BufferUse::Upload));
         let pipeline = self.pipeline.get_or_insert_with(|| {
             gpu.device.create_compute_pipeline(
                 include_str!("shaders/peak.wgsl"),

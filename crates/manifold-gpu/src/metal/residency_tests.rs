@@ -1,3 +1,4 @@
+use crate::BufferUse;
 use objc2_metal::MTLResidencySet;
 
 use super::super::device::GpuDevice;
@@ -54,7 +55,7 @@ fn fence_retirement_holds_lease_until_completion() {
     let (sender, mut retire_queue) = RetireQueue::new();
     device.set_retirement(RetireMark::new(event.second_handle(), sender));
 
-    let buffer = device.create_buffer(4096);
+    let buffer = device.create_buffer(4096, BufferUse::Gpu);
     manager.drain();
     assert_eq!(manager.stats().allocation_count, 1);
     drop(buffer);
@@ -110,7 +111,7 @@ fn pool_recycle_keeps_registration_alive() {
 fn budget_transition_ends_and_restores_residency() {
     let device = GpuDevice::new();
     let mut manager = residency_manager(&device);
-    let retained = device.create_buffer(4096);
+    let retained = device.create_buffer(4096, BufferUse::Gpu);
     manager.drain();
     assert!(manager.stats().requested);
     device
@@ -119,7 +120,7 @@ fn budget_transition_ends_and_restores_residency() {
         .unwrap();
     manager.budget_bytes = manager.stats().allocated_bytes;
 
-    let extra = device.create_buffer(64 * 1024);
+    let extra = device.create_buffer(64 * 1024, BufferUse::Gpu);
     manager.drain();
     assert_eq!(manager.stats().allocation_count, 2);
     assert!(!manager.stats().requested);
@@ -142,7 +143,7 @@ fn budget_transition_ends_and_restores_residency() {
     assert!(!manager.stats().requested);
 
     manager.budget_bytes = 0;
-    let _buffer = device.create_buffer(4096);
+    let _buffer = device.create_buffer(4096, BufferUse::Gpu);
     manager.drain();
     assert!(!manager.stats().requested);
 }
@@ -152,7 +153,7 @@ fn manager_drop_clears_native_set() {
     let device = GpuDevice::new();
     let mut manager = residency_manager(&device);
     let set = manager.set.clone();
-    let buffer = device.create_buffer(4096);
+    let buffer = device.create_buffer(4096, BufferUse::Gpu);
     manager.drain();
     assert_eq!(set.allocationCount(), 1);
     drop(manager);

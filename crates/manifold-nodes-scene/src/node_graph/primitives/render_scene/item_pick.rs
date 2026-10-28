@@ -7,6 +7,7 @@
 //! waiting, reads back on the next render, and never touches the output
 //! (REALTIME_3D_DESIGN.md D9).
 
+use manifold_gpu::BufferUse;
 use manifold_node_engine::scene::pick::{
     PICK_REGION, PickHit, PickRequest, nearest_slot, pick_view_proj,
 };
@@ -124,7 +125,7 @@ impl RenderScene {
             .readback
             .get_or_insert_with(|| {
                 gpu.device
-                    .create_buffer_shared(u64::from(ROW_BYTES * PICK_REGION))
+                    .create_buffer(u64::from(ROW_BYTES * PICK_REGION), BufferUse::Upload)
             })
             .clone();
         let pipeline = self

@@ -9,6 +9,7 @@
 //! asked for, read a frame or two late from the GPU's own count. Growth is the
 //! only allocation; steady state allocates nothing.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 use std::sync::LazyLock;
 
@@ -118,7 +119,7 @@ pub(crate) struct Mesh {
 }
 
 fn shared(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
-    let buffer = device.try_create_buffer_shared(bytes.max(16))?;
+    let buffer = device.try_create_buffer(bytes.max(16), BufferUse::Upload)?;
     buffer.zero_fill();
     Ok(buffer)
 }

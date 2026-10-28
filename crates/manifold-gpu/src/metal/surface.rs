@@ -407,6 +407,7 @@ impl super::encoder::GpuEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BufferUse;
     use crate::types::*;
 
     #[test]
@@ -497,7 +498,7 @@ mod tests {
                 std::mem::size_of_val(&vertices),
             )
         };
-        let vertex_buffer = device.create_buffer_shared(vertex_data.len() as u64);
+        let vertex_buffer = device.create_buffer(vertex_data.len() as u64, BufferUse::Upload);
         unsafe {
             vertex_buffer.write(0, vertex_data);
         }
@@ -509,7 +510,7 @@ mod tests {
                 std::mem::size_of_val(&indices),
             )
         };
-        let index_buffer = device.create_buffer_shared(index_data.len() as u64);
+        let index_buffer = device.create_buffer(index_data.len() as u64, BufferUse::Upload);
         unsafe {
             index_buffer.write(0, index_data);
         }

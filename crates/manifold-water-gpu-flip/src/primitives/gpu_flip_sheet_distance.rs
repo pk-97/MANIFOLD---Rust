@@ -16,6 +16,7 @@
 //! The narrow band builds its distance the same way, to its own depth
 //! (`gpu_flip_step/narrow_band.rs`).
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len};
 use manifold_water_liquid::world_tiles::{WorldTiles, allocated_args_offset};
@@ -132,11 +133,11 @@ impl SheetDistance {
         )
         .map_err(|e| e.to_string())?;
         self.buffers = Some([
-            device.try_create_buffer(bytes)?,
-            device.try_create_buffer(bytes)?,
+            device.try_create_buffer(bytes, BufferUse::Gpu)?,
+            device.try_create_buffer(bytes, BufferUse::Gpu)?,
         ]);
         self.wet = if self.through_solids {
-            Some(device.try_create_buffer(bytes)?)
+            Some(device.try_create_buffer(bytes, BufferUse::Gpu)?)
         } else {
             None
         };
@@ -299,7 +300,7 @@ mod gpu_tests {
     }
 
     fn shared(device: &GpuDevice, words: &[u32]) -> GpuBuffer {
-        let buffer = device.create_buffer_shared((4 * words.len()).max(16) as u64);
+        let buffer = device.create_buffer((4 * words.len()).max(16) as u64, BufferUse::Upload);
         buffer.zero_fill();
         // SAFETY: a fresh shared buffer sized for `words`; no GPU work in flight.
         unsafe { buffer.write(0, bytemuck::cast_slice(words)) };
@@ -307,7 +308,7 @@ mod gpu_tests {
     }
 
     fn copy_out(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
-        let staged = device.create_buffer_shared(buffer.size);
+        let staged = device.create_buffer(buffer.size, BufferUse::Upload);
         let mut enc = device.create_encoder("sheet distance readback");
         enc.copy_buffer_to_buffer(buffer, &staged, buffer.size);
         enc.commit_and_wait_completed();

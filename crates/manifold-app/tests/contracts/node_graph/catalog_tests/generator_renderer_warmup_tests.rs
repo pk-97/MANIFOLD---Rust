@@ -11,6 +11,7 @@ use manifold_core::{ClipId, LayerId};
 use manifold_foundation::cold_touch::{
     reset_cold_touch_counts, set_transport_playing, total_cold_touches,
 };
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::gpu::render_target::RenderTarget;
@@ -247,7 +248,7 @@ fn thumbnail_capture_survives_owner_drop_before_gpu_submission() {
         "thumbnail capture destination",
     );
     let bytes_per_row = THUMB_W * 4;
-    let readback = device.create_buffer_shared(u64::from(bytes_per_row * THUMB_H));
+    let readback = device.create_buffer(u64::from(bytes_per_row * THUMB_H), BufferUse::Upload);
     let mut encoder = device.create_encoder("thumbnail capture retirement");
     let source = renderer.thumb_texture("captured").unwrap();
     encoder.clear_texture(source, 1.0, 0.0, 0.0, 1.0);

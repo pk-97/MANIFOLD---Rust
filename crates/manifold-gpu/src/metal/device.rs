@@ -527,90 +527,48 @@ impl GpuDevice {
         })
     }
 
-    /// Create a GPU buffer with private storage (GPU-only).
-    pub fn create_buffer(&self, size: u64) -> GpuBuffer {
-        if alloc_log_enabled() {
-            eprintln!("[gpu-alloc] buf {size}");
-        }
-        let raw = self
-            .device
-            .newBufferWithLength_options(size as usize, MTLResourceOptions::StorageModePrivate)
-            .unwrap_or_else(|| {
-                panic!("Metal: buffer allocation failed ({size} bytes) — GPU memory exhausted")
-            });
-        self.record_allocation(BUFFER_ALLOCATION);
-        GpuBuffer {
-            raw: raw.clone(),
-            size,
-            mapped_ptr: None,
-            retire: self.retirement_mark(),
-            residency: self.residency_buffer_lease(&raw),
-        }
-    }
-
-    /// Fallible sibling of [`Self::create_buffer`] for staged allocation.
-    pub fn try_create_buffer(&self, size: u64) -> Result<GpuBuffer, String> {
-        if alloc_log_enabled() {
-            eprintln!("[gpu-alloc] buf {size}");
-        }
-        let raw = self
-            .device
-            .newBufferWithLength_options(size as usize, MTLResourceOptions::StorageModePrivate)
-            .ok_or_else(|| format!("Metal: buffer allocation failed ({size} bytes)"))?;
-        self.record_allocation(BUFFER_ALLOCATION);
-        Ok(GpuBuffer {
-            raw: raw.clone(),
-            size,
-            mapped_ptr: None,
-            retire: self.retirement_mark(),
-            residency: self.residency_buffer_lease(&raw),
+    /// Create a buffer for `usage`. `Gpu` buffers are private and never
+    /// mapped; `Upload` and `Readback` buffers are shared, with a persistent
+    /// mapped pointer.
+    pub fn create_buffer(&self, size: u64, usage: BufferUse) -> GpuBuffer {
+        self.try_create_buffer(size, usage).unwrap_or_else(|error| {
+            panic!("{error} — GPU memory exhausted");
         })
     }
 
-    /// Create a GPU buffer with shared memory (CPU+GPU coherent).
-    /// Returns a buffer with a persistent mapped pointer for zero-copy writes.
-    pub fn create_buffer_shared(&self, size: u64) -> GpuBuffer {
+    /// Fallible sibling of [`Self::create_buffer`] for staged allocation.
+    /// The returned buffer is not zeroed; callers must preserve the existing
+    /// simulation reset contract and zero only a genuinely new atomic storage
+    /// allocation before its first GPU read.
+    pub fn try_create_buffer(&self, size: u64, usage: BufferUse) -> Result<GpuBuffer, String> {
+        let (storage, kind) = match usage {
+            BufferUse::Gpu => (MTLResourceOptions::StorageModePrivate, "buf"),
+            BufferUse::Upload | BufferUse::Readback => {
+                (MTLResourceOptions::StorageModeShared, "bufshared")
+            }
+        };
         if alloc_log_enabled() {
-            eprintln!("[gpu-alloc] bufshared {size}");
-            alloc_log_backtrace();
+            eprintln!("[gpu-alloc] {kind} {size}");
+            if usage != BufferUse::Gpu {
+                alloc_log_backtrace();
+            }
         }
         let raw = self
             .device
-            .newBufferWithLength_options(size as usize, MTLResourceOptions::StorageModeShared)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Metal: shared buffer allocation failed ({size} bytes) — GPU memory exhausted"
-                )
-            });
-        let ptr = unsafe { raw.contents() }.as_ptr() as *mut u8;
-        self.record_allocation(BUFFER_ALLOCATION);
-        GpuBuffer {
-            raw: raw.clone(),
-            size,
-            mapped_ptr: if ptr.is_null() { None } else { Some(ptr) },
-            retire: self.retirement_mark(),
-            residency: self.residency_buffer_lease(&raw),
-        }
-    }
-
-    /// Fallible sibling of [`Self::create_buffer_shared`] for staged
-    /// allocation.  The returned buffer is not zeroed; callers must preserve
-    /// the existing simulation reset contract and zero only a genuinely new
-    /// atomic storage allocation before its first GPU read.
-    pub fn try_create_buffer_shared(&self, size: u64) -> Result<GpuBuffer, String> {
-        if alloc_log_enabled() {
-            eprintln!("[gpu-alloc] bufshared {size}");
-        }
-        let raw = self
-            .device
-            .newBufferWithLength_options(size as usize, MTLResourceOptions::StorageModeShared)
-            .ok_or_else(|| format!("Metal: shared buffer allocation failed ({size} bytes)"))?;
-        let ptr = unsafe { raw.contents() }.as_ptr() as *mut u8;
+            .newBufferWithLength_options(size as usize, storage)
+            .ok_or_else(|| format!("Metal: {kind} allocation failed ({size} bytes)"))?;
+        let mapped_ptr = match usage {
+            BufferUse::Gpu => None,
+            BufferUse::Upload | BufferUse::Readback => {
+                let ptr = unsafe { raw.contents() }.as_ptr() as *mut u8;
+                (!ptr.is_null()).then_some(ptr)
+            }
+        };
         self.record_allocation(BUFFER_ALLOCATION);
         Ok(GpuBuffer {
             raw: raw.clone(),
             size,
-            mapped_ptr: if ptr.is_null() { None } else { Some(ptr) },
+            mapped_ptr,
             retire: self.retirement_mark(),
             residency: self.residency_buffer_lease(&raw),
         })

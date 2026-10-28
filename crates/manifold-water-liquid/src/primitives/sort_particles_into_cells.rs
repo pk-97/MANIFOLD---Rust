@@ -11,6 +11,7 @@
 //! `id`, live when the id is non-zero and the position finite. So the matter
 //! solver sorts its own points in place of a converted copy each tick.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
@@ -326,7 +327,7 @@ impl ParticleSorter {
             range_bytes,
         )
         .map_err(|error| error.to_string())
-        .and_then(|()| device.try_create_buffer_shared(range_bytes))?;
+        .and_then(|()| device.try_create_buffer(range_bytes, BufferUse::Upload))?;
         // Nothing reads a range the passes did not write as anything but empty.
         buffer.zero_fill();
         self.ranges = Some(buffer);
@@ -403,14 +404,14 @@ impl ParticleSorter {
         .fold(u64::from(job.capacity), u64::min) as u32;
         let rank_bytes = u64::from(job.capacity.max(1)) * 4;
         if self.rank.as_ref().is_none_or(|rank| rank.size < rank_bytes) {
-            self.rank = Some(device.create_buffer(rank_bytes));
+            self.rank = Some(device.create_buffer(rank_bytes, BufferUse::Gpu));
         }
         if self
             .slot_input
             .as_ref()
             .is_none_or(|slots| slots.size < rank_bytes)
         {
-            self.slot_input = Some(device.create_buffer(rank_bytes));
+            self.slot_input = Some(device.create_buffer(rank_bytes, BufferUse::Gpu));
         }
         let ranges = self
             .ranges

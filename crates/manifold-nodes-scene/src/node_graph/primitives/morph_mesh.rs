@@ -325,27 +325,27 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "morph-mesh-test",
         );
-        let a_buf = device.create_buffer_shared(std::mem::size_of_val(a) as u64);
+        let a_buf = device.create_buffer(std::mem::size_of_val(a) as u64, manifold_gpu::BufferUse::Upload);
         unsafe {
             a_buf.write(0, bytemuck::cast_slice(a));
         }
-        let b_buf = device.create_buffer_shared(std::mem::size_of_val(b) as u64);
+        let b_buf = device.create_buffer(std::mem::size_of_val(b) as u64, manifold_gpu::BufferUse::Upload);
         unsafe {
             b_buf.write(0, bytemuck::cast_slice(b));
         }
-        let dbuf = device.create_buffer_shared(std::mem::size_of_val(a) as u64);
+        let dbuf = device.create_buffer(std::mem::size_of_val(a) as u64, manifold_gpu::BufferUse::Upload);
 
         let (wbuf, weights_len) = match weights {
             Some(w) => {
                 let mut padded = vec![0.0f32; a.len()];
                 padded[..w.len().min(a.len())].copy_from_slice(&w[..w.len().min(a.len())]);
-                let buf = device.create_buffer_shared((padded.len() * 4).max(4) as u64);
+                let buf = device.create_buffer((padded.len() * 4).max(4) as u64, manifold_gpu::BufferUse::Upload);
                 unsafe {
                     buf.write(0, bytemuck::cast_slice(&padded));
                 }
                 (buf, weights_len_override.unwrap_or(w.len() as u32))
             }
-            None => (device.create_buffer_shared(std::mem::size_of_val(a) as u64), 0),
+            None => (device.create_buffer(std::mem::size_of_val(a) as u64, manifold_gpu::BufferUse::Upload), 0),
         };
 
         let uniforms = MorphUniforms {
@@ -395,10 +395,10 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "morph-mesh-fused-test",
         );
-        let a_buf = device.create_buffer_shared(std::mem::size_of_val(a) as u64);
-        let b_buf = device.create_buffer_shared(std::mem::size_of_val(b) as u64);
-        let w_buf = device.create_buffer_shared(std::mem::size_of_val(weights) as u64);
-        let dst_buf = device.create_buffer_shared(std::mem::size_of_val(a) as u64);
+        let a_buf = device.create_buffer(std::mem::size_of_val(a) as u64, manifold_gpu::BufferUse::Upload);
+        let b_buf = device.create_buffer(std::mem::size_of_val(b) as u64, manifold_gpu::BufferUse::Upload);
+        let w_buf = device.create_buffer(std::mem::size_of_val(weights) as u64, manifold_gpu::BufferUse::Upload);
+        let dst_buf = device.create_buffer(std::mem::size_of_val(a) as u64, manifold_gpu::BufferUse::Upload);
         unsafe {
             a_buf.write(0, bytemuck::cast_slice(a));
             b_buf.write(0, bytemuck::cast_slice(b));

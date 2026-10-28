@@ -1,6 +1,7 @@
 //! Device proofs against the pass-1 publication contract, and byte for byte
 //! against the transcribed 1-bit publisher (`particle_publication::reference`).
 use crate::contracts::node_graph::catalog_tests::particle_frame_blend_tests::publication_contract::publish as reference;
+use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::read;
@@ -15,7 +16,10 @@ use manifold_water_liquid::primitives::particle_publication::{
 };
 
 fn shared<T: bytemuck::Pod>(device: &manifold_gpu::testkit::TestDevice, values: &[T]) -> GpuBuffer {
-    let buffer = device.create_buffer_shared(std::mem::size_of_val(values).max(16) as u64);
+    let buffer = device.create_buffer(
+        std::mem::size_of_val(values).max(16) as u64,
+        BufferUse::Upload,
+    );
     buffer.zero_fill();
     // SAFETY: fresh storage, no device work in flight.
     unsafe { buffer.write(0, bytemuck::cast_slice(values)) };

@@ -5,6 +5,7 @@
 //! the open runaway span. A `GpuEvent` gate the CPU holds back makes the
 //! order observable: while the gate is closed, nothing behind it may finish.
 
+use crate::BufferUse;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCommandBuffer, MTLCommandQueue, MTLSharedEvent};
@@ -52,7 +53,7 @@ fn pattern(seed: u32) -> Vec<u32> {
 }
 
 fn shared(device: &GpuDevice, values: &[u32]) -> GpuBuffer {
-    let buffer = device.create_buffer_shared(BYTES);
+    let buffer = device.create_buffer(BYTES, BufferUse::Upload);
     let ptr = buffer.mapped_ptr().expect("shared buffer").cast::<u32>();
     // SAFETY: the buffer is shared, `BYTES` long and not yet in use.
     unsafe { std::ptr::copy_nonoverlapping(values.as_ptr(), ptr, values.len()) };

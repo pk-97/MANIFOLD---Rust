@@ -2,6 +2,7 @@
 
 use super::super::gpu_flip_step::GpuFlipStep;
 use super::*;
+use manifold_gpu::BufferUse;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::exec::effect_node::ParamValues;
 
@@ -94,7 +95,7 @@ pub(super) fn gpu_flip_step_order_cell_cap_compacts_preserving_ids() {
         assert_eq!(p.id, sorted[i].id);
     }
     let input = &pass.bound.iter().find(|(b, _)| *b == 38).unwrap().1;
-    let output = pass.device.create_buffer_shared(300 * 32);
+    let output = pass.device.create_buffer(300 * 32, BufferUse::Upload);
     let mut sorter = ParticleSorter::default();
     sorter.prepare(&pass.device);
     sorter

@@ -273,7 +273,10 @@ mod gpu_tests {
     use manifold_node_engine::primitive::PrimitiveSpec;
 
     fn shared(device: &GpuDevice, data: &[f32]) -> GpuBuffer {
-        let buffer = device.create_buffer_shared(std::mem::size_of_val(data).max(16) as u64);
+        let buffer = device.create_buffer(
+            std::mem::size_of_val(data).max(16) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         // SAFETY: no GPU work references this newly created shared buffer.
         unsafe { buffer.write(0, bytemuck::cast_slice(data)) };
         buffer
@@ -299,7 +302,10 @@ mod gpu_tests {
         );
         let a_buf = shared(device, a);
         let b_buf = shared(device, b);
-        let out_buf = device.create_buffer_shared(std::mem::size_of_val(a).max(16) as u64);
+        let out_buf = device.create_buffer(
+            std::mem::size_of_val(a).max(16) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         let uniforms = Uniforms {
             amount,
             dispatch_count: a.len() as u32,
@@ -421,7 +427,10 @@ mod gpu_tests {
         let a_buf = shared(&device, &a);
         let b_buf = shared(&device, &b);
         let c_buf = shared(&device, &c);
-        let out_buf = device.create_buffer_shared(std::mem::size_of_val(&a) as u64);
+        let out_buf = device.create_buffer(
+            std::mem::size_of_val(&a) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         let mut words = vec![amount_a.to_bits(), amount_b.to_bits()];
         while !words.len().is_multiple_of(4) {
             words.push(0);

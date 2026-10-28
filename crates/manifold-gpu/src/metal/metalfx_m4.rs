@@ -872,6 +872,7 @@ impl Metal4FxTemporalScaler {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod tests {
     use super::*;
+    use crate::BufferUse;
     use crate::metal::GpuDevice;
     use crate::{GpuTextureDesc, GpuTextureDimension, GpuTextureUsage};
 
@@ -969,7 +970,7 @@ mod tests {
         let bpp = tex.format.bytes_per_pixel();
         let row_bytes = bpp * tex.width;
         let total = (row_bytes * tex.height) as u64;
-        let readback = device.create_buffer_shared(total);
+        let readback = device.create_buffer(total, BufferUse::Upload);
         let mut enc = device.create_encoder("readback");
         enc.copy_texture_to_buffer(tex, &readback, tex.width, tex.height, row_bytes);
         enc.commit_and_wait_completed();
@@ -1294,7 +1295,7 @@ mod tests {
         let bpp = output.format.bytes_per_pixel();
         let row_bytes = bpp * output.width;
         let total = (row_bytes * output.height) as u64;
-        let readback = device.create_buffer_shared(total);
+        let readback = device.create_buffer(total, BufferUse::Upload);
         let mut enc = device.create_encoder("readback");
         enc.copy_texture_to_buffer(&output, &readback, output.width, output.height, row_bytes);
         enc.commit_and_wait_completed();

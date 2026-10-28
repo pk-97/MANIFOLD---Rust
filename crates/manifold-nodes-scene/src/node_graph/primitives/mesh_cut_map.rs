@@ -5,6 +5,7 @@
 //! write a `Vec4Vertex` map: xyz are reference-triangle barycentrics and w is
 //! the source triangle index. Unused records are zero with w = -1.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuEvent};
@@ -263,7 +264,7 @@ fn ensure_readbacks(state: &mut CutMapState, device: &manifold_gpu::GpuDevice) {
     if state.readbacks.is_empty() {
         state.readbacks = (0..3)
             .map(|_| CutMapReadback {
-                buffer: device.create_buffer_shared(16),
+                buffer: device.create_buffer(16, BufferUse::Upload),
                 event: None,
                 signal: 0,
             })
@@ -330,7 +331,7 @@ fn run_cut_map(
         return;
     };
     if state.live_count.is_none() {
-        let buffer = ctx.gpu_encoder().device.create_buffer_shared(4);
+        let buffer = ctx.gpu_encoder().device.create_buffer(4, BufferUse::Upload);
         buffer.zero_fill();
         state.live_count = Some(buffer);
     }
@@ -490,12 +491,12 @@ fn run_cut_map(
     };
     if state.candidate_capacity < candidate_count {
         let bytes = scratch_bytes.max(4);
-        state.counts = Some(gpu.device.create_buffer_shared(bytes));
-        state.prefix = Some(gpu.device.create_buffer_shared(bytes));
+        state.counts = Some(gpu.device.create_buffer(bytes, BufferUse::Upload));
+        state.prefix = Some(gpu.device.create_buffer(bytes, BufferUse::Upload));
         state.candidate_capacity = candidate_count;
     }
     if state.status.is_none() {
-        let status = gpu.device.create_buffer_shared(16);
+        let status = gpu.device.create_buffer(16, BufferUse::Upload);
         status.zero_fill();
         state.status = Some(status);
     }
@@ -742,7 +743,8 @@ mod tests {
         output_capacity: u32,
     ) -> (Vec<Vec4Vertex>, [u32; 4]) {
         let device = manifold_gpu::testkit::test_device();
-        let reference = device.create_buffer_shared(std::mem::size_of_val(vertices) as u64);
+        let reference =
+            device.create_buffer(std::mem::size_of_val(vertices) as u64, BufferUse::Upload);
         unsafe {
             reference.write(0, bytemuck::cast_slice(vertices));
         }
@@ -750,11 +752,14 @@ mod tests {
         let candidate_count = triangle_count;
         let block_count = candidate_count.div_ceil(256);
         let scratch_words = u64::from(candidate_count + block_count);
-        let counts = device.create_buffer_shared(scratch_words.max(1) * 4);
-        let prefix = device.create_buffer_shared(scratch_words.max(1) * 4);
-        let status = device.create_buffer_shared(16);
+        let counts = device.create_buffer(scratch_words.max(1) * 4, BufferUse::Upload);
+        let prefix = device.create_buffer(scratch_words.max(1) * 4, BufferUse::Upload);
+        let status = device.create_buffer(16, BufferUse::Upload);
         status.zero_fill();
-        let map = device.create_buffer_shared(u64::from(output_capacity.max(1)) * VEC4_VERTEX_SIZE);
+        let map = device.create_buffer(
+            u64::from(output_capacity.max(1)) * VEC4_VERTEX_SIZE,
+            BufferUse::Upload,
+        );
         let uniforms = CutMapUniforms {
             mode,
             bands,
@@ -1144,18 +1149,23 @@ mod tests {
                     vertex([0.0, 1.0, 0.0]),
                 ]);
             }
-            let reference =
-                device.create_buffer_shared(std::mem::size_of_val(vertices.as_slice()) as u64);
+            let reference = device.create_buffer(
+                std::mem::size_of_val(vertices.as_slice()) as u64,
+                BufferUse::Upload,
+            );
             unsafe { reference.write(0, bytemuck::cast_slice(&vertices)) };
             let blocks = triangles.div_ceil(256);
             let words = u64::from(triangles + blocks);
-            let counts = device.create_buffer_shared(words * 4);
-            let prefix = device.create_buffer_shared(words * 4);
-            let status = device.create_buffer_shared(16);
+            let counts = device.create_buffer(words * 4, BufferUse::Upload);
+            let prefix = device.create_buffer(words * 4, BufferUse::Upload);
+            let status = device.create_buffer(16, BufferUse::Upload);
             status.zero_fill();
-            let live = device.create_buffer_shared(4);
+            let live = device.create_buffer(4, BufferUse::Upload);
             let output_capacity = triangles * 3;
-            let map = device.create_buffer_shared(u64::from(output_capacity) * VEC4_VERTEX_SIZE);
+            let map = device.create_buffer(
+                u64::from(output_capacity) * VEC4_VERTEX_SIZE,
+                BufferUse::Upload,
+            );
             let uniforms = CutMapUniforms {
                 mode: 0,
                 bands: 1,

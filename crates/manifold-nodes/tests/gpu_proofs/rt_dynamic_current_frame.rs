@@ -6,6 +6,7 @@
 //! `MeshVertex` output also supplies an analytical centroid-ray witness, so
 //! the proof cannot pass on RT dispatch alone with stale or degenerate data.
 
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_node_engine::mesh::MeshVertex;
@@ -580,7 +581,7 @@ fn read_rgba32_channel(
     assert_eq!(capture.tex.format, GpuTextureFormat::Rgba32Float);
     let bytes_per_row = capture.w * 16;
     let total = u64::from(capture.h * bytes_per_row);
-    let buffer = device.create_buffer_shared(total);
+    let buffer = device.create_buffer(total, BufferUse::Upload);
     let mut encoder = device.create_encoder("rt-history-proof-readback");
     encoder.copy_texture_to_buffer(&capture.tex, &buffer, capture.w, capture.h, bytes_per_row);
     encoder.commit_and_wait_completed();

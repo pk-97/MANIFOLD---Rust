@@ -820,7 +820,9 @@ mod native_reference {
                 .2;
             let buffer = run.exec.dump_array_buffer(res).expect("step buffer");
             let bytes = 4 * words as u64;
-            let staging = run.device.create_buffer_shared(bytes);
+            let staging = run
+                .device
+                .create_buffer(bytes, manifold_gpu::BufferUse::Upload);
             let mut enc = run.device.create_encoder("wall phi readback");
             enc.copy_buffer_to_buffer(buffer, &staging, bytes);
             enc.commit_and_wait_completed();

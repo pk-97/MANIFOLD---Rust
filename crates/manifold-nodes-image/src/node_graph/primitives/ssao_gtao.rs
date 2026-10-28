@@ -1162,7 +1162,10 @@ mod gpu_tests {
         );
         enc.commit_and_wait_completed();
         let bytes_per_row = w * 8;
-        let readback = device.create_buffer_shared(u64::from(h * bytes_per_row));
+        let readback = device.create_buffer(
+            u64::from(h * bytes_per_row),
+            manifold_gpu::BufferUse::Upload,
+        );
         let mut enc = device.create_encoder("gtao-readback");
         enc.copy_texture_to_buffer(&out.texture, &readback, w, h, bytes_per_row);
         enc.commit_and_wait_completed();

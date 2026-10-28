@@ -5,6 +5,7 @@
 //! above zero; any other field allocates and dispatches nothing here. Each
 //! frame the tile is rebuilt (spectrum, inverse FFT, slopes, mip chain) at the
 //! frame's time, and `look_ripple_detail.wgsl` reads it through the water shade.
+use manifold_gpu::BufferUse;
 use manifold_gpu::*;
 
 use super::super::ocean_spectrum::{OceanSpectrum, SpectrumUniforms};
@@ -140,7 +141,7 @@ impl RippleDetail {
             }));
         }
         if self.dummy_velocity.is_none() {
-            self.dummy_velocity = Some(device.create_buffer(16));
+            self.dummy_velocity = Some(device.create_buffer(16, BufferUse::Gpu));
         }
     }
 
@@ -162,8 +163,8 @@ impl RippleDetail {
         }
         if self.spectrum.is_none() {
             let n = u64::from(RIPPLE_TEXELS);
-            self.spectrum = Some(device.create_buffer(n * (n / 2 + 1) * 8));
-            self.heights = Some(device.create_buffer(n * n * 4));
+            self.spectrum = Some(device.create_buffer(n * (n / 2 + 1) * 8, BufferUse::Gpu));
+            self.heights = Some(device.create_buffer(n * n * 4, BufferUse::Gpu));
         }
     }
 

@@ -1,6 +1,7 @@
 //! Nearest solid-object metadata for FLIP whitewater influence and dust emission.
 //! Ported from FLIP Fluids (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
@@ -195,7 +196,7 @@ impl Primitive for WhitewaterObstacleSource {
                 bytes,
             )
             .map_err(|error| error.to_string())
-            .and_then(|()| device.try_create_buffer_shared(bytes));
+            .and_then(|()| device.try_create_buffer(bytes, BufferUse::Upload));
             match created {
                 Ok(created) => {
                     created.zero_fill();

@@ -15,6 +15,7 @@
 //! is new), and a wired selector or a refused alias blits the chosen live
 //! bytes on the frame's encoder.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::GpuBuffer;
@@ -196,7 +197,7 @@ impl ArraySwitch {
         let (live, extent, zero_tail) = match (src, input_extent) {
             (None, _) => {
                 let counts = self.zero_counts.get_or_insert_with(|| {
-                    let buffer = gpu.device.create_buffer_shared(4);
+                    let buffer = gpu.device.create_buffer(4, BufferUse::Upload);
                     buffer.zero_fill();
                     buffer
                 });
@@ -222,7 +223,7 @@ impl ArraySwitch {
             (Some(src), None) => {
                 let items = (src.size / item).min(out_items) as u32;
                 if self.fixed_counts.as_ref().is_none_or(|(n, _)| *n != items) {
-                    let buffer = gpu.device.create_buffer_shared(4);
+                    let buffer = gpu.device.create_buffer(4, BufferUse::Upload);
                     // SAFETY: fresh 4-byte shared buffer; no GPU work has seen it.
                     unsafe { buffer.write(0, bytemuck::bytes_of(&items)) };
                     self.fixed_counts = Some((items, buffer));

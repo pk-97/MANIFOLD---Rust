@@ -1,3 +1,4 @@
+use manifold_gpu::BufferUse;
 /// Per-frame uniform sub-allocator that batches all uniform writes.
 ///
 /// Uses a shared-memory GpuBuffer (Metal MTLStorageMode::Shared). push() writes
@@ -14,7 +15,7 @@ pub struct UniformArena {
 
 impl UniformArena {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
-        let buffer = device.create_buffer_shared(DEFAULT_CAPACITY);
+        let buffer = device.create_buffer(DEFAULT_CAPACITY, BufferUse::Upload);
         Self {
             buffer,
             cursor: 0,
@@ -61,7 +62,7 @@ impl UniformArena {
     /// Recreates the buffer if capacity grew beyond current allocation.
     pub fn flush(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.capacity > self.buffer.size() {
-            self.buffer = device.create_buffer_shared(self.capacity);
+            self.buffer = device.create_buffer(self.capacity, BufferUse::Upload);
         }
     }
 

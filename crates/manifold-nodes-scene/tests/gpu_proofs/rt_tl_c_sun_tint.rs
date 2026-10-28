@@ -36,6 +36,7 @@
 //! production fn in render_scene.rs's cfg(test) mod — a duplicated copy
 //! here would drift silently.
 
+use manifold_gpu::BufferUse;
 use std::ffi::c_void;
 use std::slice;
 
@@ -61,7 +62,7 @@ struct PackedVertexUV {
 
 fn write_shared_buffer<T: Copy>(device: &GpuDevice, data: &[T]) -> manifold_gpu::GpuBuffer {
     let bytes = std::mem::size_of_val(data) as u64;
-    let buf = device.create_buffer_shared(bytes.max(16));
+    let buf = device.create_buffer(bytes.max(16), BufferUse::Upload);
     let ptr = buf
         .mapped_ptr()
         .expect("shared buffer must expose a mapped pointer");
@@ -339,7 +340,7 @@ fn run_tlc_fixture(
     encoder.commit_and_wait_completed();
 
     // Read back out_svt (Rgba32Float, at 2x1) — same approach as out_sv.
-    let svt_readback_buf = device.create_buffer_shared(2 * 4 * 4);
+    let svt_readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Upload);
     let mut enc_svt = device.create_encoder("tlc-svt-readback");
     enc_svt.copy_texture_to_buffer(&out_svt, &svt_readback_buf, 2, 1, 2 * 4 * 4);
     enc_svt.commit_and_wait_completed();
@@ -353,7 +354,7 @@ fn run_tlc_fixture(
     let svt1: [f32; 3] = [svt_floats[4], svt_floats[5], svt_floats[6]];
 
     // Read back out_sv (Rgba32Float, at 2x1).
-    let sv_readback_buf = device.create_buffer_shared(2 * 4 * 4);
+    let sv_readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Upload);
     let mut enc2 = device.create_encoder("tlc-sv-readback");
     enc2.copy_texture_to_buffer(&out_sv, &sv_readback_buf, 2, 1, 2 * 4 * 4);
     enc2.commit_and_wait_completed();

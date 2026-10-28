@@ -14,6 +14,7 @@
 //! (`over(fg, fg_a, bg) = fg*fg_a + bg*(1-fg_a)`) is exact, not a ratio.
 
 use half::f16;
+use manifold_gpu::BufferUse;
 use manifold_gpu::GpuBuffer;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
@@ -158,7 +159,7 @@ impl EffectNode for GlassMeshSource {
         let staging = self.staging.get_or_insert_with(|| {
             ctx.gpu_encoder()
                 .device
-                .create_buffer_shared(bytes.len() as u64)
+                .create_buffer(bytes.len() as u64, BufferUse::Upload)
         });
         unsafe { staging.write(0, bytes) };
         ctx.gpu_encoder()

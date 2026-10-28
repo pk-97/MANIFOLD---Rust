@@ -6,6 +6,7 @@
 //!
 //! Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
+use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
@@ -1042,9 +1043,9 @@ fn allocate(device: &GpuDevice, bytes: u64, shared: bool) -> Result<GpuBuffer, S
     .map_err(|error| error.to_string())?;
     let bytes = bytes.max(16);
     if shared {
-        device.try_create_buffer_shared(bytes)
+        device.try_create_buffer(bytes, BufferUse::Upload)
     } else {
-        device.try_create_buffer(bytes)
+        device.try_create_buffer(bytes, BufferUse::Gpu)
     }
 }
 

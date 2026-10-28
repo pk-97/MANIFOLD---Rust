@@ -6,6 +6,7 @@
 //! through `PresetRuntime` at 1280x720; held-out parsing remains explicit
 //! when the project format is unavailable to this bounded proof.
 
+use manifold_gpu::BufferUse;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
@@ -90,7 +91,7 @@ fn grid_vertices() -> Vec<PackedVertex> {
 }
 
 fn write_vertices(device: &GpuDevice, vertices: &[PackedVertex]) -> GpuBuffer {
-    let buffer = device.create_buffer_shared(std::mem::size_of_val(vertices) as u64);
+    let buffer = device.create_buffer(std::mem::size_of_val(vertices) as u64, BufferUse::Upload);
     let ptr = buffer.mapped_ptr().expect("grid buffer must be CPU-mapped");
     unsafe {
         std::ptr::copy_nonoverlapping(

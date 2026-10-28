@@ -171,7 +171,7 @@ mod gpu_tests {
 
         // Cell i holds i * 4096 → expected density i.0 (exact in f16 for i < 2048).
         let accum_raw: Vec<u32> = (0..cells as u32).map(|i| i * 4096).collect();
-        let accum = device.create_buffer_shared((cells * 4) as u64);
+        let accum = device.create_buffer((cells * 4) as u64, manifold_gpu::BufferUse::Upload);
         unsafe {
             accum.write(0, bytemuck::cast_slice(&accum_raw));
         }
@@ -238,7 +238,7 @@ mod gpu_tests {
         let bytes_per_row = vr * 8;
         let bytes_per_image = bytes_per_row * vr;
         let total = u64::from(bytes_per_image * vd);
-        let readback = device.create_buffer_shared(total);
+        let readback = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
         let mut rb = device.create_encoder("resolve3d-readback");
         rb.copy_texture_3d_to_buffer(&density, &readback, vr, vr, vd, bytes_per_row);
         rb.commit_and_wait_completed();

@@ -304,11 +304,15 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "mesh-ramp-test",
         );
-        let src = device.create_buffer_shared(std::mem::size_of_val(vertices) as u64);
+        let src = device.create_buffer(
+            std::mem::size_of_val(vertices) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             src.write(0, bytemuck::cast_slice(vertices));
         }
-        let dst = device.create_buffer_shared((vertices.len() * 4) as u64);
+        let dst =
+            device.create_buffer((vertices.len() * 4) as u64, manifold_gpu::BufferUse::Upload);
 
         let uniforms = MeshRampUniforms {
             axis,
