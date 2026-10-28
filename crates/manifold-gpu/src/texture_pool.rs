@@ -9,7 +9,7 @@
 //! 1. FENCE-AWARE (primary, when a completion event is attached via
 //!    `set_completion_event`): `release()` stamps the entry with the signal
 //!    value the releasing frame's commit WILL reach on the GPU timeline
-//!    (`event.current_value() + 1` — signal_event increments once per
+//!    (`event.encoded_value() + 1` — signal_event increments once per
 //!    commit). `acquire()` recycles an entry only when
 //!    `event.signaled_value() >= release_signal`, i.e. the GPU has actually
 //!    retired the frame that last used it. This is correct on ANY encode
@@ -204,13 +204,13 @@ impl TexturePool {
         }
         let key = (texture.width, texture.height, texture.format);
         // Fence-aware stamp: the releasing frame's commit will signal
-        // current_value + 1 (signal_event increments once per commit). If
+        // encoded_value + 1 (signal_event increments once per commit). If
         // that commit never happens, no later signal passes the stamp and
         // the entry simply never recycles — safe direction.
         let release_signal = inner
             .completion_event
             .as_ref()
-            .map(|e| e.current_value().saturating_add(1));
+            .map(|e| e.encoded_value().saturating_add(1));
         inner.available.entry(key).or_default().push(PoolEntry {
             texture,
             release_frame: inner.current_frame,
@@ -401,7 +401,7 @@ mod tests {
         let pool = TexturePool::new(&device, 3);
         pool.set_completion_event(&event);
 
-        // Release stamps current_value()+1 = 1; nothing committed yet.
+        // Release stamps encoded_value()+1 = 1; nothing committed yet.
         let t = pool.acquire(64, 64, FORMAT, USAGE, "a");
         pool.release(t);
         let t2 = pool.acquire(64, 64, FORMAT, USAGE, "b");

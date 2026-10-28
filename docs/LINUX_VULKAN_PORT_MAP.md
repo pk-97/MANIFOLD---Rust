@@ -70,7 +70,7 @@ Every row below exists on Metal and is missing on Vulkan. Phases are the design 
 | Copies and clears | `clear_buffer` (25), `clear_texture` (120), `copy_buffer_to_buffer` (149), `copy_buffer_range` (14), `copy_texture_to_buffer` (159), `copy_texture_3d_to_buffer` (4), `copy_texture_to_texture` (51), `copy_depth_to_float` (1) | P1 |
 | Mipmaps | `generate_mipmaps` (20) | P2 |
 | Submission | `commit`, `commit_and_continue`, `commit_wait_and_continue`, `commit_and_wait_completed` and its try, timed and profiled forms, `add_completed_handler`, `add_completed_handler_with_status`, `add_gpu_time_handler`, `tap_gpu_time`; shrinking first (section 11) | P1 (D8) |
-| Events and lanes | `create_event` (8); `GpuEvent` (`current_value` 69, the CPU counter, see D7; `signaled_value`, `is_done`, `wait_until_done`); `signal_event` (12), `signal_event_value`, `wait_event`; `use_async_lane`, `use_main_lane`, `finish_async_lane`, `wait_async_lane`; `GpuFenceWaiter` | P1 (D5, D7, D8) |
+| Events and lanes | `create_event` (8); `GpuEvent` (`encoded_value`, the CPU counter, see D7; `signaled_value`, `is_done`, `wait_until_done`); `signal_event` (12), `signal_event_value`, `wait_event`; `use_async_lane`, `use_main_lane`, `finish_async_lane`, `wait_async_lane`; `GpuFenceWaiter` | P1 (D5, D7, D8) |
 | Frame lifetime | `frame_clock` (31), `FrameClock`, `RetireQueue`, `RetireMark`, `RetireSender`, `set_retirement`, `FrameFence`, `TexturePool` (`acquire`, `release`, `begin_frame`) | P1, after the hoist in section 9 step 4 |
 | Memory | `modifier_memory_snapshot` (44, D18), `allocation_counts`, `resource_scope_id` | P1 |
 | Water fast paths | `begin_replay`/`end_replay` (stubbed already), `begin_gated_segment`, `dispatch_compute_gated`, `end_gated_segments`, `GpuTemplateStore` (`prepare_template`, `execute_template`), `GatedRecorder`, `TemplateTicket`, `TemplateRanges` | P1 correct, P6 fast (design section 7) |
@@ -280,7 +280,6 @@ Every API the Vulkan backend copies gets built twice and tested twice. So shrink
 | About 20 draw forms (`draw_instanced_depth*` alone has 8) | One draw call taking a descriptor: pass, viewport, depth, instance batch, topology | Same | Overnight |
 | 7 commit forms | `commit`, `commit_and_continue`, `commit_wait_and_continue` (coupled liquids wait mid-graph, `substep_region.rs:223`), and `commit_and_wait` returning a Result | Compiler | Overnight |
 | Two upload forms, both immediate CPU writes | One (D22) | Compiler, one `ui-snap` | Overnight |
-| `GpuEvent::current_value` reads like a GPU value but is the CPU counter | `encoded_value` (D7) | Compiler | Overnight |
 | 5 ways to read GPU time: `tap_gpu_time`, `add_gpu_time_handler`, `commit_and_wait_completed_timed`, `commit_and_wait_profiled`, `GpuSpanTimer` (plus `raytrace/trace_timing.rs`) | One per-submit GPU time stream that the profiler, the span timer and the perf tools all read, plus the per-dispatch profiler. It redesigns the profiler, which proves every speed claim, so it gets its own spec | A profiler session before and after | Attended, before P2 |
 | Dead: `UniformArena` (`node-engine/gpu/uniform_arena.rs`: reset and flushed every frame, never written; plumbing in `generator_renderer.rs`, `gpu_encoder.rs`, `scene_viewport.rs`) | Delete | Build | Overnight |
 

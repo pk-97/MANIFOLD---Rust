@@ -17,7 +17,7 @@
 //!   drawable wraps, mip views of a marked parent) carry `None` and keep
 //!   releasing immediately.
 //! - On drop, a marked texture is NOT released. It is stamped with
-//!   `event.current_value() + 1` — the signal value the dropping frame's
+//!   `event.encoded_value() + 1` — the signal value the dropping frame's
 //!   commit will reach on the GPU timeline (same clock as the fence-aware
 //!   TexturePool recycling) — and pushed onto a lock-free queue.
 //! - The content thread drains the queue once per frame in its render path:
@@ -79,7 +79,7 @@ pub struct RetireMark {
 }
 
 impl RetireMark {
-    /// Build a mark: the frame-completion event whose `current_value()` is
+    /// Build a mark: the frame-completion event whose `encoded_value()` is
     /// the retirement clock, plus the queue to enqueue drops onto.
     pub fn new(event: GpuEvent, sender: RetireSender) -> std::sync::Arc<Self> {
         std::sync::Arc::new(Self { event, sender })
@@ -89,7 +89,7 @@ impl RetireMark {
     /// from the backend's texture and buffer drops; never blocks.
     pub(crate) fn retire(&self, resource: RetiredResource) {
         let item = RetireItem {
-            stamp: self.event.current_value().saturating_add(1),
+            stamp: self.event.encoded_value().saturating_add(1),
             event: self.event.second_handle(),
             resource,
             age: 0,
@@ -135,7 +135,7 @@ impl FrameClock {
 
     /// The signal value the frame now being encoded will reach at commit.
     pub fn stamp(&self) -> u64 {
-        self.event.current_value().saturating_add(1)
+        self.event.encoded_value().saturating_add(1)
     }
 
     /// Whether every GPU read stamped `stamp` has retired. Non-blocking.
@@ -153,7 +153,7 @@ impl FrameClock {
         stamp == 0
             || self
                 .event
-                .wait_until_done_timeout(stamp.min(self.event.current_value()), 5000)
+                .wait_until_done_timeout(stamp.min(self.event.encoded_value()), 5000)
     }
 
     /// GPU proofs: how many times this thread has called [`Self::wait`].
@@ -231,7 +231,7 @@ impl RetireQueue {
         // the process is already on its way out. Release without waiting.
         if !crate::backend::submissions_ignored() {
             for item in &self.pending {
-                let target = item.stamp.min(item.event.current_value());
+                let target = item.stamp.min(item.event.encoded_value());
                 item.event.wait_until_done(target);
             }
         }

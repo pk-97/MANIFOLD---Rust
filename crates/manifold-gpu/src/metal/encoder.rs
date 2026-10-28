@@ -3072,7 +3072,7 @@ impl GpuEncoder {
         // buffer that waits on it can exist: no async buffer is ever queued
         // ahead of the signal it waits for.
         self.signal_event(handoff);
-        let value = handoff.current_value();
+        let value = handoff.encoded_value();
         self.commit_and_continue(device);
         if self.parked.is_none() {
             let queue = device.async_queue();
@@ -3126,7 +3126,7 @@ impl GpuEncoder {
             self.swap_lane();
         }
         self.signal_event(handoff);
-        self.async_wait = Some(handoff.current_value());
+        self.async_wait = Some(handoff.encoded_value());
         self.submit_current();
         // The committed async buffer is done with; the main lane takes over.
         self.swap_lane();

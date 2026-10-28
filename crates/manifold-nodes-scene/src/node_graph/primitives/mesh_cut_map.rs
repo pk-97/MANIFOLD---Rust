@@ -305,7 +305,7 @@ fn snapshot_status(
         .event
         .get_or_insert_with(|| gpu.device.create_event());
     gpu.native_enc.signal_event(event);
-    readback.signal = event.current_value();
+    readback.signal = event.encoded_value();
     true
 }
 

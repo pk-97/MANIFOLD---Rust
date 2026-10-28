@@ -205,7 +205,7 @@ impl TerminalAnalysis {
             PIPELINE_LABEL,
         );
         gpu.native_enc.signal_event(&slot.event);
-        slot.signal = slot.event.current_value();
+        slot.signal = slot.event.encoded_value();
         slot.generation = generation;
         slot.sequence = sequence;
 

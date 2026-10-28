@@ -101,7 +101,7 @@ fn async_lane_waits_for_the_main_work_before_it() {
     assert!(enc.use_async_lane(&device, &handoff));
     enc.copy_buffer_to_buffer(&a, &b, BYTES);
     enc.finish_async_lane(&handoff);
-    let finished = handoff.current_value();
+    let finished = handoff.encoded_value();
     assert_eq!(finished, 2, "one handoff signal and one finish signal");
     assert!(
         !handoff.wait_until_done_timeout(finished, SETTLE_MS),
@@ -142,7 +142,7 @@ fn main_lane_waits_for_a_finished_async_lane() {
     enc.finish_async_lane(&handoff);
     enc.wait_async_lane(&handoff);
     enc.signal_event(&probe);
-    let probed = probe.current_value();
+    let probed = probe.encoded_value();
     enc.commit();
     assert!(
         !probe.wait_until_done_timeout(probed, SETTLE_MS),
@@ -180,7 +180,7 @@ fn returning_to_the_async_lane_hands_off_again() {
     assert!(enc.use_async_lane(&device, &handoff));
     enc.copy_buffer_to_buffer(&a2, &b2, BYTES);
     enc.finish_async_lane(&handoff);
-    let finished = handoff.current_value();
+    let finished = handoff.encoded_value();
     assert_eq!(finished, 3, "two handoff signals and one finish signal");
     assert!(
         !handoff.wait_until_done_timeout(finished, SETTLE_MS),
@@ -253,7 +253,7 @@ fn profiled_encoder_refuses_the_async_lane() {
     enc.use_main_lane();
     enc.finish_async_lane(&handoff);
     enc.wait_async_lane(&handoff);
-    assert_eq!(handoff.current_value(), 0, "no signal was encoded");
+    assert_eq!(handoff.encoded_value(), 0, "no signal was encoded");
     enc.commit_and_wait_profiled(&device);
 
     assert_eq!(counters(), before);

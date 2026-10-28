@@ -1373,7 +1373,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         if let (Some(device), Some(event)) = (&self.native_device, &self.native_event) {
             let mut encoder = device.create_encoder("Warmup retirement checkpoint");
             encoder.signal_event(event);
-            self.native_signal_value = event.current_value();
+            self.native_signal_value = event.encoded_value();
             if let Err(error) = encoder.try_commit_and_wait_completed() {
                 log::error!("Warmup retirement checkpoint failed: {error}");
                 crate::abort_gpu_work("GPU failure during warmup retirement checkpoint");
@@ -3453,7 +3453,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // Signal frame completion + commit
         let native_event = self.native_event.as_ref().unwrap();
         native_enc.signal_event(native_event);
-        self.native_signal_value = native_event.current_value();
+        self.native_signal_value = native_event.encoded_value();
         // BUG-119 item 3: a clip-atlas layout built this frame (fill_clip_atlas /
         // restore_clip_atlas) was stashed UNSTAMPED, before this commit — and
         // therefore this frame's real signal value — existed. Stamp it now; the
@@ -4116,7 +4116,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             );
         if let Some(event) = &self.native_event {
             enc.signal_event(event);
-            self.native_signal_value = event.current_value();
+            self.native_signal_value = event.encoded_value();
         }
         enc.commit();
         target
@@ -4204,7 +4204,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // Signal the same event so wait_for_render_complete covers PQ output.
         if let Some(ref event) = self.native_event {
             enc.signal_event(event);
-            self.native_signal_value = event.current_value();
+            self.native_signal_value = event.encoded_value();
         }
         enc.commit();
 
@@ -4233,7 +4233,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         // Signal the same event so wait_for_render_complete covers the copy.
         if let Some(ref event) = self.native_event {
             enc.signal_event(event);
-            self.native_signal_value = event.current_value();
+            self.native_signal_value = event.encoded_value();
         }
         enc.commit();
         (w, h)

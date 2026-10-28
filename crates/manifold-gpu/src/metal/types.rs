@@ -557,7 +557,7 @@ impl GpuEvent {
 
     /// Second handle to the SAME underlying shared event and host counter.
     /// `signaled_value()`/`is_done()` on either handle observe the same GPU
-    /// timeline; `current_value()` on either sees the same predicted value.
+    /// timeline; `encoded_value()` on either sees the same predicted value.
     /// Used by TexturePool (fence-aware recycling) to observe the frame
     /// completion event without owning the encoder's handle.
     pub fn second_handle(&self) -> Self {
@@ -577,8 +577,10 @@ impl GpuEvent {
         unsafe { self.raw.signaledValue() >= value }
     }
 
-    /// Current signal counter (store after signal_event).
-    pub fn current_value(&self) -> u64 {
+    /// The value the last encoded signal will reach once its command buffer
+    /// completes: a CPU counter bumped at encode time, not a GPU reading.
+    /// Compare against `signaled_value` to see how far the GPU has got.
+    pub fn encoded_value(&self) -> u64 {
         self.counter.load(std::sync::atomic::Ordering::Relaxed)
     }
 
