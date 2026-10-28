@@ -2,19 +2,23 @@
 // node.particle_volume — one workgroup per slot of the display's world tiles
 // (`buf_tiles`, `pool_tiles` tiles), and one more for the canonical element.
 // Element p is display node p, at (p - 1/2) cells, the low corner of cell p.
-// Negative-inside port of FLIP Fluids ParticleMesher: the value starts at
-// 3 * blob_reach (Particle Scale times the largest particle radius) and takes
-// the nearest kernel sphere's |x - c| - r over every blob whose inclusive
-// floor(c - 1.5r)..floor(c + 1.5r)+1 grid box holds the node.
+// Blended spheres (Zhu and Bridson 2005, "Animating sand as a fluid"): over
+// the blobs within R = 1.5 * blob_reach (Particle Scale times the largest
+// particle radius) of node x, weighted w = (1 - (|x - c| / R)^2)^3, the
+// weighted mean centre c̄ and radius r̄ give phi = |x - c̄| - r̄, negative
+// inside. Two blobs up to 2R apart blend into one body where their round
+// kernels alone would leave a gap, so a thin spread of particles reads as a
+// film, and a lone blob is its own sphere. A node that gathers less than
+// PV_MIN_WEIGHT reads 3 * blob_reach. A blob visits the nodes of its inclusive
+// floor(c - R)..floor(c + R)+1 grid box.
 //
 // The blobs are sorted into the display cells (`cell_ranges`, one range per
 // pool element). A node searches the cells from floor(node - 1 - u) to
-// floor(node + 1 + u), u being 1.5 * blob_reach in cells, which hold every
-// blob that can reach it; a larger blob is cut where its support leaves the
-// searched cells. The workgroup walks the union of its tile's windows once:
-// each blob lowers the nodes of the tile its box holds and whose window holds
-// its cell, through an order-preserving key in workgroup memory, so the
-// minimum is exact whatever order the blobs land in. A node inside a solid
+// floor(node + 1 + u), u being R in cells, which hold every blob that can
+// reach it. The workgroup walks the union of its tile's windows once: each
+// blob adds to the nodes of the tile its box holds and whose window holds its
+// cell, through fixed-point sums in workgroup memory, so the result is exact
+// whatever order the blobs land in. A node inside a solid
 // (`solid`, the solid's distance on the same tiles, negative inside) takes at
 // least its depth in the solid less PV_WALL_REACH cells: water against a wall
 // reaches half a cell into it, so the water's surface meets the wall's face
@@ -56,19 +60,18 @@ const PV_FAR_CELLS: f32 = 3.0;
 // 16 cells of support, whose window spans at most 8 + 2 * 17 + 1.
 const PV_MAX_WINDOW: i32 = 48;
 
-var<workgroup> pv_best: array<atomic<u32>, 512>;
+// Per node, five fixed-point sums over the blobs within R of it: the weight,
+// the weighted offset to the blob centre in R (xyz), and the weighted radius
+// in R.
+var<workgroup> pv_sum: array<atomic<i32>, 2560>;
+// The fixed-point scale of the sums. Each term is at most 1 in R units and a
+// node's weights sum to at most about a hundred blobs, far inside an i32.
+const PV_FIXED: f32 = 1048576.0;
+// The least weight a node must gather to read as near a blob: R * 0.95 from a
+// lone one. Below it the rounded sums say nothing about where the blobs are,
+// and the node reads as air.
+const PV_MIN_WEIGHT: f32 = 1.0e-3;
 var<workgroup> pv_held: u32;
-
-// A key whose unsigned order is the float order: the sign bit set for
-// positives, every bit flipped for negatives.
-fn pv_key(v: f32) -> u32 {
-    let b = bitcast<u32>(v);
-    return select(b | 0x80000000u, ~b, (b & 0x80000000u) != 0u);
-}
-
-fn pv_value(key: u32) -> f32 {
-    return bitcast<f32>(select(~key, key & 0x7fffffffu, (key & 0x80000000u) != 0u));
-}
 
 // The first and last cell node n searches along one axis. The slack covers
 // rounding in the sort's cell product and in the support test; it only
@@ -120,9 +123,12 @@ fn cs_main(
             levelset[ts_canon()] = far;
         }
     }
-    let band = pv_key(3.0 * reach);
-    atomicStore(&pv_best[lane], band);
-    atomicStore(&pv_best[lane + PV_THREADS], band);
+    let band = 3.0 * reach;
+    for (var l = lane; l < 2560u; l = l + PV_THREADS) {
+        atomicStore(&pv_sum[l], 0);
+    }
+    // Zhu and Bridson's blend radius: the support every blob already visits.
+    let blend = 1.5 * reach;
     if workgroupUniformLoad(&pv_held) == 0u {
         if slot < params.pool_tiles {
             levelset[slot * 512u + lane] = far;
@@ -152,8 +158,8 @@ fn cs_main(
                 continue;
             }
             // Native support is a grid-aligned box including its outer
-            // interpolation node. Spherical rejection loses the corners.
-            let support = 1.5 * r;
+            // interpolation node.
+            let support = blend;
             let first = vec3<i32>(floor((blob.xyz - vec3<f32>(support)) / h + vec3<f32>(0.5)));
             let last = vec3<i32>(floor((blob.xyz + vec3<f32>(support)) / h + vec3<f32>(0.5))) + vec3<i32>(1);
             let rx = pv_run(first.x, last.x, t0.x, k.x, u);
@@ -164,8 +170,19 @@ fn cs_main(
                     for (var x = rx.x; x <= rx.y; x = x + 1) {
                         let node = vec3<i32>(x, y, z);
                         let p = (vec3<f32>(node) - vec3<f32>(0.5)) * h;
-                        let local = ts_local(node);
-                        atomicMin(&pv_best[local], pv_key(length(p - blob.xyz) - r));
+                        let to_centre = (blob.xyz - p) / blend;
+                        let s2 = dot(to_centre, to_centre);
+                        if s2 >= 1.0 {
+                            continue;
+                        }
+                        let fall = 1.0 - s2;
+                        let w = fall * fall * fall;
+                        let base = 5u * ts_local(node);
+                        atomicAdd(&pv_sum[base], i32(round(w * PV_FIXED)));
+                        atomicAdd(&pv_sum[base + 1u], i32(round(w * to_centre.x * PV_FIXED)));
+                        atomicAdd(&pv_sum[base + 2u], i32(round(w * to_centre.y * PV_FIXED)));
+                        atomicAdd(&pv_sum[base + 3u], i32(round(w * to_centre.z * PV_FIXED)));
+                        atomicAdd(&pv_sum[base + 4u], i32(round(w * r / blend * PV_FIXED)));
                     }
                 }
             }
@@ -174,7 +191,19 @@ fn cs_main(
     workgroupBarrier();
     for (var l = lane; l < 512u; l = l + PV_THREADS) {
         let e = slot * 512u + l;
-        var phi = pv_value(atomicLoad(&pv_best[l]));
+        // phi = |x - c̄| - r̄, the weighted mean centre and radius of the blobs
+        // within R (Zhu and Bridson 2005); no blob within R is air.
+        let weight = f32(atomicLoad(&pv_sum[5u * l]));
+        var phi = band;
+        if weight >= PV_MIN_WEIGHT * PV_FIXED {
+            let offset = vec3<f32>(
+                f32(atomicLoad(&pv_sum[5u * l + 1u])),
+                f32(atomicLoad(&pv_sum[5u * l + 2u])),
+                f32(atomicLoad(&pv_sum[5u * l + 3u])),
+            ) / weight;
+            let radius = f32(atomicLoad(&pv_sum[5u * l + 4u])) / weight;
+            phi = min((length(offset) - radius) * blend, band);
+        }
         if solid[e] < 0.0 {
             phi = max(phi, -solid[e] - PV_WALL_REACH * h);
         }

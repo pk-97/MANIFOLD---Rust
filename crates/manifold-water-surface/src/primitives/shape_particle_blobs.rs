@@ -27,7 +27,7 @@ struct BlobUniforms {
 manifold_node_engine::primitive! {
     name: ShapeParticleBlobs,
     type_id: "node.shape_particle_blobs",
-    purpose: "Give each sorted liquid particle a spherical surface kernel: the particle's centre and a radius of particle_scale × the particle's own radius. The level set is the distance to the nearest sphere surface. An inactive particle (radius 0) gives a kernel of radius 0.",
+    purpose: "Give each sorted liquid particle a spherical surface kernel: the particle's centre and a radius of particle_scale × the particle's own radius. node.particle_volume blends the spheres within reach of each node into the level set. An inactive particle (radius 0) gives a kernel of radius 0.",
     inputs: {
         sorted: Array(FluidParticle) required,
         particle_scale: ScalarF32 optional,

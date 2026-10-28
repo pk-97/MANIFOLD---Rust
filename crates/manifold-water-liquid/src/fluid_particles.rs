@@ -22,7 +22,8 @@ const _: () = {
 
 /// One spherical surface kernel, from `node.shape_particle_blobs`: the
 /// particle's centre and its drawn radius (Particle Scale × the particle's
-/// radius). The level set is the distance to the nearest sphere surface.
+/// radius). `node.particle_volume` blends the spheres near each node into
+/// the level set.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct FluidBlob {

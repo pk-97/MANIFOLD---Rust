@@ -1,7 +1,7 @@
 //! Uses the search-radius ratio (1.5 radii) from FLIP Fluids particlemesher.cpp `_searchRadiusFactor` (MIT); see THIRD_PARTY_NOTICES.md.
 //! `node.particle_volume` — the liquid level set on the display's world
-//! tiles: one value per node, the distance to the nearest spherical kernel
-//! among the blobs sorted into the display cells around it. One workgroup
+//! tiles: one value per node, the blended-sphere distance (Zhu and Bridson
+//! 2005) over the blobs sorted into the display cells around it. One workgroup
 //! per tile slot walks the blobs round its tile once
 //! (`shaders/particle_volume.wgsl`).
 
@@ -65,7 +65,7 @@ fn check_reach(blob_reach: f32, cell_size: f32) -> Result<(), String> {
 manifold_node_engine::primitive! {
     name: ParticleVolume,
     type_id: "node.particle_volume",
-    purpose: "The liquid's level set on the display's world tiles: at each node (node p at (p - 1/2) cells, the low corner of cell p), the distance to the nearest kernel sphere, |x - c| - r, negative inside and initialized to three times the blob reach (particle_scale × particle_radius simulation cells × sim_cell_size, the largest blob radius); each kernel visits the inclusive FLIP grid support box from floor((centre - 1.5r)/cell + 1/2) through floor((centre + 1.5r)/cell + 1/2)+1. The blobs arrive sorted into the display cells and a node reads the cells within 1.5 reaches of it; a larger blob is cut where its support leaves the searched cells. A node inside a solid (solid is the solid's distance on the same tiles, negative inside) takes at least its depth in the solid less half a cell: water against a wall reaches half a cell into it, so its surface meets the face at an angle behind it instead of lying on it, and deeper in no node reads as inside the liquid. A free slot and the canonical element hold three cells, the far value.",
+    purpose: "The liquid's level set on the display's world tiles: at each node (node p at (p - 1/2) cells, the low corner of cell p), blended spheres (Zhu and Bridson 2005): over the blobs within R = 1.5 blob reaches (particle_scale × particle_radius simulation cells × sim_cell_size, the largest blob radius), weighted (1 - (|x - c|/R)^2)^3, the weighted mean centre c̄ and radius r̄ give |x - c̄| - r̄, negative inside, so particles up to 2R apart blend into one body; a node no blob reaches reads three blob reaches. Each blob visits the inclusive FLIP grid support box from floor((centre - R)/cell + 1/2) through floor((centre + R)/cell + 1/2)+1. The blobs arrive sorted into the display cells and a node reads the cells within R of it. A node inside a solid (solid is the solid's distance on the same tiles, negative inside) takes at least its depth in the solid less half a cell: water against a wall reaches half a cell into it, so its surface meets the face at an angle behind it instead of lying on it, and deeper in no node reads as inside the liquid. A free slot and the canonical element hold three cells, the far value.",
     inputs: {
         blobs: Array(FluidBlob) required,
         cell_ranges: Array(CellRange) required,
