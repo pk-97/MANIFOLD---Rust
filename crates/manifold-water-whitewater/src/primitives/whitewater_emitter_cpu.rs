@@ -3,7 +3,9 @@
 
 use super::whitewater_particle_cpu::{Box3, face_index};
 
-/// FLIP's influence-scaled rate over one duration, rounded before tick replication.
+/// FLIP's influence-scaled rate over the frame's ticks, rounded down after
+/// adding `unit` (the shader's `ww_emission_unit`, 0 to 1).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn emission_count(
     energy: f32,
     potentials: [f32; 2],
@@ -12,51 +14,70 @@ pub(super) fn emission_count(
     points_per_cell: f32,
     ticks: f32,
     dt: f32,
+    unit: f32,
 ) -> u32 {
     let per_tick =
         influence * energy * (rates[0] * potentials[0] + rates[1] * potentials[1]) * dt * 8.0
             / points_per_cell;
     if per_tick > 0.0 {
-        (per_tick + 0.5).floor() as u32 * ticks.round().max(0.0) as u32
+        (per_tick * ticks.round().max(0.0) + unit).floor() as u32
     } else {
         0
     }
 }
 
 #[test]
-fn turbulence_emission_count_uses_duration_and_rounds_each_tick() {
-    // Engine _getNumberOfEmissionParticles: round(175 * dt) at full potential.
+fn turbulence_emission_count_covers_the_duration_then_rounds() {
+    // round(175 * dt) at full potential is 2.92 particles a tick at 60 Hz.
     assert_eq!(
-        emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 1.0, 1.0 / 60.0),
+        emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 1.0, 1.0 / 60.0, 0.0),
+        2
+    );
+    assert_eq!(
+        emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 1.0, 1.0 / 60.0, 0.5),
         3
     );
+    // Three ticks of 5.83 are 17.5, rounded once: rounding each tick would
+    // give 18 whatever the unit.
     assert_eq!(
-        emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 1.0, 1.0 / 30.0),
-        6
+        emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 3.0, 1.0 / 30.0, 0.25),
+        17
     );
-    // Rounding after multiplying the duration by three would give 17.
     assert_eq!(
-        emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 3.0, 1.0 / 30.0),
+        emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 3.0, 1.0 / 30.0, 0.75),
         18
     );
 }
 
-/// A second of full-potential emission keeps the authored per-second rate at
-/// every Sim Rate: each step rounds its own count, so `hz` steps land within
-/// half a particle a step of it.
+/// Ten seconds of full-potential emission keep the authored per-second rate
+/// within 2% at every Sim Rate, where rounding each step to the nearest
+/// particle was a third short at 240 Hz.
 #[test]
 fn emission_per_second_holds_at_every_sim_rate() {
     use super::emission_count::WAVECREST_RATE;
+    use super::whitewater_particle_cpu::random;
     for rate in manifold_physics::SimRate::ALL {
         let dt = rate.interval() as f32;
-        let emitted: u32 = (0..rate.hz())
-            .map(|_| emission_count(1.0, [1.0, 1.0], [WAVECREST_RATE; 2], 1.0, 8.0, 1.0, dt))
+        let steps = 10 * rate.hz();
+        let emitted: u32 = (0..steps)
+            .map(|step| {
+                let unit = random(3, step, 0, 12);
+                emission_count(
+                    1.0,
+                    [1.0, 1.0],
+                    [WAVECREST_RATE; 2],
+                    1.0,
+                    8.0,
+                    1.0,
+                    dt,
+                    unit,
+                )
+            })
             .sum();
-        let authored = 2.0 * WAVECREST_RATE;
-        let rounding = rate.hz() as f32 / 2.0;
+        let authored = 10.0 * 2.0 * WAVECREST_RATE;
         assert!(
-            (emitted as f32 - authored).abs() <= rounding,
-            "{} Hz: {emitted} particles in a second against {authored} authored",
+            (emitted as f32 - authored).abs() <= 0.02 * authored,
+            "{} Hz: {emitted} particles in ten seconds against {authored} authored",
             rate.hz()
         );
     }
@@ -335,6 +356,8 @@ fn whitewater_inside_emission_counts_match_vendored_engine() {
                 8.0,
                 1.0,
                 dt as f32,
+                // The engine rounds each count to the nearest.
+                0.5,
             ) as usize
                 * markers.len()
         };

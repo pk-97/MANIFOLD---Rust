@@ -9,12 +9,13 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_water_liquid::float_param;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_water_liquid::float_param;
+use manifold_water_liquid::whitewater::WHITEWATER_COMMON;
 
 /// FLIP's wavecrest emission rate, particles per second at full potential.
 pub(crate) const WAVECREST_RATE: f32 = 175.0;
@@ -67,17 +68,27 @@ manifold_node_engine::primitive! {
     aliases: ["emission count", "whitewater count", "emit"],
     fusion_kind: MultiInputCoincident,
     wgsl_body: include_str!("shaders/emission_count_body.wgsl"),
+    wgsl_includes: [WHITEWATER_COMMON],
 }
 
 impl Primitive for EmissionCount {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
-        (port == "out").then(|| inputs.iter().map(|&(_, n)| n).min()).flatten()
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        inputs: &[(&str, u32)],
+    ) -> Option<u32> {
+        (port == "out")
+            .then(|| inputs.iter().map(|&(_, n)| n).min())
+            .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let points_per_cell = ctx.scalar_or_param("points_per_cell", 8.0);
         if !(points_per_cell > 0.0 && points_per_cell.is_finite()) {
-            ctx.error(format!("Emission Count: {points_per_cell} points per cell is not a sampling density"));
+            ctx.error(format!(
+                "Emission Count: {points_per_cell} points per cell is not a sampling density"
+            ));
             return;
         }
         let uniforms = CountUniforms {
@@ -92,12 +103,16 @@ impl Primitive for EmissionCount {
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(particles), Some(energy), Some(wavecrest)) =
-            (ctx.inputs.array("particles"), ctx.inputs.array("energy"), ctx.inputs.array("wavecrest"))
-        else {
+        let (Some(particles), Some(energy), Some(wavecrest)) = (
+            ctx.inputs.array("particles"),
+            ctx.inputs.array("energy"),
+            ctx.inputs.array("wavecrest"),
+        ) else {
             return;
         };
-        let Some(out) = ctx.outputs.array("out") else { return };
+        let Some(out) = ctx.outputs.array("out") else {
+            return;
+        };
         let count = (particles.size / std::mem::size_of::<FluidParticle>() as u64)
             .min(energy.size / 4)
             .min(wavecrest.size / 4)
@@ -105,16 +120,38 @@ impl Primitive for EmissionCount {
         if count == 0 {
             return;
         }
-        let uniforms = CountUniforms { dispatch_count: count, ..uniforms };
+        let uniforms = CountUniforms {
+            dispatch_count: count,
+            ..uniforms
+        };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: energy, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: wavecrest, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: out, offset: 0 },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 1,
+                    buffer: particles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 2,
+                    buffer: energy,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: wavecrest,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
+                    buffer: out,
+                    offset: 0,
+                },
             ],
             [count.div_ceil(256), 1, 1],
             "node.emission_count",

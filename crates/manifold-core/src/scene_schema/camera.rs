@@ -143,7 +143,17 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
     place("target_z").when(look_at),
     clip("near").when(look_at),
     clip("far").default(HORIZON_FAR).when(look_at),
-    // Lens.
+    // Depth of field and motion blur, both off in a new scene; each switch
+    // sits above the rows it gates.
+    row(
+        "dof_enabled",
+        BOKEH,
+        DepthOfField,
+        perform(CardBand::Look, 0),
+    )
+    .param("enabled")
+    .switch(Feature::DepthOfField)
+    .default(0.0),
     row(
         "focus_distance",
         LENS,
@@ -159,6 +169,15 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
         .gate(Gate::Fold(Feature::DepthOfField))
         .limit(HardLimit::AtLeast(0.5)),
     row(
+        "motion_blur_enabled",
+        BLUR,
+        MotionBlur,
+        perform(CardBand::Look, 10),
+    )
+    .param("enabled")
+    .switch(Feature::MotionBlur)
+    .default(0.0),
+    row(
         "shutter_angle",
         LENS,
         MotionBlur,
@@ -172,16 +191,6 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
         Camera,
         Exposure::Automatic("the Environment's Exposure"),
     ),
-    // Depth of field and motion blur, both off in a new scene.
-    row(
-        "dof_enabled",
-        BOKEH,
-        DepthOfField,
-        perform(CardBand::Look, 0),
-    )
-    .param("enabled")
-    .switch(Feature::DepthOfField)
-    .default(0.0),
     row("max_blur", BOKEH, DepthOfField, perform(CardBand::Look, 3))
         .param("max_radius")
         .gate(Gate::Fold(Feature::DepthOfField))
@@ -208,15 +217,6 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
         DepthOfField,
         Exposure::Automatic("one scene unit is one metre"),
     ),
-    row(
-        "motion_blur_enabled",
-        BLUR,
-        MotionBlur,
-        perform(CardBand::Look, 10),
-    )
-    .param("enabled")
-    .switch(Feature::MotionBlur)
-    .default(0.0),
     row("max_blur_px", BLUR, MotionBlur, perform(CardBand::Look, 12))
         .gate(Gate::Fold(Feature::MotionBlur))
         .unit(Unit::Pixels)

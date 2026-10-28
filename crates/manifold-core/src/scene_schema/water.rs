@@ -424,7 +424,7 @@ pub static WATER_ROWS: [PropertyRow; 50] = [
         .tip("How fast wet surfaces dry: at 1 a splash fades to a third in 15 s, at 0 they stay wet")
         .gate(Gate::Fold(Feature::WetSurfaces))
         .default(1.0)
-        .range(0.0, 1000.0)
+        .range(0.0, 10.0)
         .when(flip_surface),
     row("look_caustics", LOOKS, Surface, setup())
         .param("caustics")

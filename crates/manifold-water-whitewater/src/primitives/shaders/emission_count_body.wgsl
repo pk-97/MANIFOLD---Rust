@@ -1,9 +1,10 @@
 // node.emission_count — fusable BUFFER body, COINCIDENT. FLIP's whitewater
-// count per emitter (diffuseparticlesimulation.cpp:1989, :1918) for one
-// tick, times the frame's ticks: each tick
-// rounds rate · Ie · Iwc · dt · 8/points_per_cell to the nearest whole
-// number on its own (export supplies dt = 1/60). 0 for a slot at or past live_count, a slot with radius
-// 0, a velocity under 1e-3 m/s, Ie under 1e-6 or Iwc of 0.
+// count per emitter (diffuseparticlesimulation.cpp:1989, :1918) over the
+// frame's ticks: rate · Ie · Iwc · dt · 8/points_per_cell a tick, times the
+// ticks, rounded down after adding a random unit (`ww_emission_unit`), so
+// the count per second is the authored rate whatever the Sim Rate. 0 for a
+// slot at or past live_count, a slot with radius 0, a velocity under 1e-3
+// m/s, Ie under 1e-6 or Iwc of 0.
 //
 // Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
@@ -30,5 +31,5 @@ fn body(
     if !(per_tick > 0.0) {
         return 0u;
     }
-    return u32(floor(per_tick + 0.5)) * u32(max(round(ticks), 0.0));
+    return u32(floor(per_tick * max(round(ticks), 0.0) + ww_emission_unit(idx, e_particles.position_radius.xyz)));
 }

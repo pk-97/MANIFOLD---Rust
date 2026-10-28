@@ -56,7 +56,18 @@ fn keep_seconds(drying: f32) -> f32 {
     }
 }
 
-/// Field order identical to the shader's `Params`; two 16-byte rows.
+/// The water a contact adds to a decal a second of display time: a quarter of
+/// full (`WD_FULL`, 256) a 60th of a second.
+const HIT_PER_SECOND: f32 = 64.0 * 60.0;
+
+/// The water a contact adds over `elapsed` seconds of display time, at most
+/// full: the same per second at any frame rate, nothing while time stands
+/// still.
+fn contact_hit(elapsed: f32) -> u32 {
+    (HIT_PER_SECOND * elapsed).round().clamp(0.0, 256.0) as u32
+}
+
+/// Field order identical to the shader's `Params`; three 16-byte rows.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct WetMapUniforms {
@@ -68,6 +79,8 @@ struct WetMapUniforms {
     pool_tiles: u32,
     cell: f32,
     keep: f32,
+    hit: u32,
+    pad: [u32; 3],
 }
 
 /// What the last run saw: the decals carry on from it only at the same epoch
@@ -96,7 +109,7 @@ fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
 manifold_node_engine::primitive! {
     name: WetMap,
     type_id: "node.wet_map",
-    purpose: "Soft round wet marks (decals) where the water touched a surface, kept between frames. Each run every liquid particle within two radii of the solid (its trilinear distance on the display tiles) finds the surface point it touches (back along the solid's normal by that distance), that surface's normal and its facing (the axis the normal is nearest, either way). The decal of that facing and that water-cell square across its axis, its plane within a water cell and facing within about 45 degrees, takes the touch (its time, and a quarter more water up to full), or else a new decal starts halfway between the point and the square's middle. A decal is 1.5 water cells across in radius, with a soft edge, so the decals of a spread's cells overlap into one film; the scene draws them over what it sees and a decal wets only the pixels facing its way, so a floor mark never wets the wall it meets. Its wetness is how much water hit it times exp(-age * drying / 15 s) since its last touch, so it dries without any pass over the decals. Once a second the decals dried to e^-5 are dropped. It holds 131072 decals; past that a new decal overwrites the oldest. It starts over, cleared, on its first run, when epoch changes, when the water's cell size changes and when time goes backwards.",
+    purpose: "Soft round wet marks (decals) where the water touched a surface, kept between frames. Each run every liquid particle within two radii of the solid (its trilinear distance on the display tiles) finds the surface point it touches (back along the solid's normal by that distance), that surface's normal and its facing (the axis the normal is nearest, either way). The decal of that facing and that water-cell square across its axis, its plane within a water cell and facing within about 45 degrees, takes the touch (its time, and water for the display time since the last run, a quarter of full a 60th of a second, up to full; none while time stands still), or else a new decal starts halfway between the point and the square's middle. A decal is 1.5 water cells across in radius, with a soft edge, so the decals of a spread's cells overlap into one film; the scene draws them over what it sees and a decal wets only the pixels facing its way, so a floor mark never wets the wall it meets. Its wetness is how much water hit it times exp(-age * drying / 15 s) since its last touch, so it dries without any pass over the decals. Once a second the decals dried to e^-5 are dropped. It holds 131072 decals; past that a new decal overwrites the oldest. It starts over, cleared, on its first run, when epoch changes, when the water's cell size changes and when time goes backwards.",
     inputs: {
         particles: Array(FluidParticle) required,
         solid: Array(f32) required,
@@ -261,6 +274,13 @@ impl Primitive for WetMap {
             ctx.error("Wet Map: particles holds more records than a pass indexes");
             return;
         };
+        let restart = restarts(self.last, run);
+        // A cleared map has no last run: it takes the frame's interval.
+        let elapsed = match self.last {
+            Some(last) if !restart => time - last.time,
+            _ => ctx.time.delta.0 as f32,
+        };
+        let hit = contact_hit(elapsed);
         let uniforms = WetMapUniforms {
             now: time,
             drying,
@@ -270,6 +290,8 @@ impl Primitive for WetMap {
             pool_tiles: pool.pool_tiles,
             cell: pool.cell_size,
             keep: keep_seconds(drying),
+            hit,
+            pad: [0; 3],
         };
         let prepared = {
             let gpu = ctx.gpu_encoder();
@@ -285,7 +307,6 @@ impl Primitive for WetMap {
         let (Some(kernels), Some(map)) = (self.kernels.as_ref(), self.map.as_ref()) else {
             return;
         };
-        let restart = restarts(self.last, run);
         let compact = !restart && self.frames_since_compact + 1 >= COMPACT_FRAMES;
         let bindings = [
             GpuBinding::Bytes {
@@ -321,7 +342,7 @@ impl Primitive for WetMap {
             enc.dispatch_compute(&kernels.finish, &bindings, [1, 1, 1], "node.wet_map.finish");
             enc.compute_memory_barrier_buffers();
         }
-        if capacity > 0 {
+        if capacity > 0 && hit > 0 {
             enc.dispatch_compute(
                 &kernels.mark,
                 &bindings,
@@ -363,7 +384,18 @@ mod tests {
                 "missing {entry}"
             );
         }
-        assert_eq!(std::mem::size_of::<WetMapUniforms>(), 32);
+        assert_eq!(std::mem::size_of::<WetMapUniforms>(), 48);
+    }
+
+    #[test]
+    fn a_contact_wets_by_the_time_it_covers() {
+        assert_eq!(contact_hit(1.0 / 60.0), 64);
+        assert_eq!(contact_hit(1.0 / 144.0), 27);
+        // Two frames at 120 fps add what one does at 60.
+        assert_eq!(2 * contact_hit(1.0 / 120.0), contact_hit(1.0 / 60.0));
+        assert_eq!(contact_hit(1.0 / 24.0), 160);
+        assert_eq!(contact_hit(0.0), 0, "time standing still adds nothing");
+        assert_eq!(contact_hit(2.0), 256, "never past full");
     }
 
     #[test]

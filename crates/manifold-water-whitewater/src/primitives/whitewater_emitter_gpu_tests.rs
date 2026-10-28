@@ -72,7 +72,8 @@ fn close(actual: &[f32], expected: &[f32]) {
 fn whitewater_inside_dust_counts_and_fusion() {
     let rig = rig();
     let mut h = Harness::new();
-    let part = h.array(&placed(&rig, [3.5, 3.5, 2.5], [12.0, 0.0, 0.0]), 32);
+    let particles = placed(&rig, [3.5, 3.5, 2.5], [12.0, 0.0, 0.0]);
+    let part = h.array(&particles, 32);
     let phi = rig.cell_pool(&mut h, &vec![-4.0f32; 512], canonical_distance(H));
     let turb = rig.cell_pool(&mut h, &vec![150.0f32; 512], 0.0);
     let cells = rig.cell_pool(&mut h, &vec![1u32; 512], CELL_AIR);
@@ -148,6 +149,7 @@ fn whitewater_inside_dust_counts_and_fusion() {
                 8.0,
                 1.0,
                 dt,
+                cpu::emission_unit(i, particles[i as usize]),
             )
         }
     };

@@ -158,7 +158,9 @@ fn assert_near(got: [f32; 3], want: [f32; 3], tolerance: f32, what: &str) {
 fn a_contact_wets_its_cells_decal_others_start_their_own_and_a_full_half_overwrites_the_oldest() {
     let mut rig = Rig::new();
     // A centimetre above the floor, then 14 mm along it in the same 40 mm
-    // cell a second later, beside it in the next cell, and 3 mm off the wall.
+    // cell a frame later, beside it in the next cell, and 3 mm off the wall.
+    let frame = 1.0 / 60.0;
+    let (second_time, third_time) = (1.0 + frame, 1.0 + 2.0 * frame);
     let first = [1.003, 0.01, 2.004];
     let second = [1.013, 0.01, 2.014];
     let next_cell = [1.045, 0.01, 2.014];
@@ -166,14 +168,14 @@ fn a_contact_wets_its_cells_decal_others_start_their_own_and_a_full_half_overwri
     rig.run(&[particle(first)], 1.0);
     let (header, decals) = rig.run(
         &[particle(second), particle(next_cell), particle(on_the_wall)],
-        2.0,
+        second_time,
     );
     assert_eq!(
         (header[0], header[1]),
         (9, 1),
         "three vertices a decal, one instance"
     );
-    assert_eq!(f32::from_bits(header[4]), 2.0);
+    assert_eq!(f32::from_bits(header[4]), second_time);
     assert_eq!(f32::from_bits(header[5]), 2.0);
     assert_eq!(f32::from_bits(header[9]), DECAL_RADIUS_CELLS * SIM_CELL);
     assert_eq!(f32::from_bits(header[10]), MERGE_CELLS * SIM_CELL);
@@ -182,7 +184,7 @@ fn a_contact_wets_its_cells_decal_others_start_their_own_and_a_full_half_overwri
     let floor = &decals[0];
     assert_near(floor.position, [1.0115, 0.0, 2.012], 1e-5, "floor centre");
     assert_near(floor.normal, [0.0, 1.0, 0.0], 1e-3, "floor normal");
-    assert_eq!((floor.touch, floor.amount), (touch_key(2.0), 128));
+    assert_eq!((floor.touch, floor.amount), (touch_key(second_time), 128));
     let (walls, floors): (Vec<&Decal>, Vec<&Decal>) =
         decals[1..].iter().partition(|d| d.normal[0] > 0.5);
     let ([wall], [beside]) = (walls.as_slice(), floors.as_slice()) else {
@@ -190,11 +192,21 @@ fn a_contact_wets_its_cells_decal_others_start_their_own_and_a_full_half_overwri
     };
     // The next cell's middle is (1.06, 2.02); the wall cell's (y, z) middle
     // is (0.30, 0.42).
-    assert_near(beside.position, [1.0525, 0.0, 2.017], 1e-5, "next cell centre");
-    assert_eq!((beside.touch, beside.amount), (touch_key(2.0), 64));
-    assert_near(wall.position, [WALL_FACE, 0.305, 0.412], 1e-5, "wall centre");
+    assert_near(
+        beside.position,
+        [1.0525, 0.0, 2.017],
+        1e-5,
+        "next cell centre",
+    );
+    assert_eq!((beside.touch, beside.amount), (touch_key(second_time), 64));
+    assert_near(
+        wall.position,
+        [WALL_FACE, 0.305, 0.412],
+        1e-5,
+        "wall centre",
+    );
     assert_near(wall.normal, [1.0, 0.0, 0.0], 1e-3, "wall normal");
-    assert_eq!((wall.touch, wall.amount), (touch_key(2.0), 64));
+    assert_eq!((wall.touch, wall.amount), (touch_key(second_time), 64));
 
     // A full half: a contact in a fresh cell overwrites the oldest decal,
     // the first, and the half stays full.
@@ -203,14 +215,22 @@ fn a_contact_wets_its_cells_decal_others_start_their_own_and_a_full_half_overwri
     // SAFETY: the run above was waited on, so the GPU no longer touches the
     // map, and word 0 lies inside it.
     unsafe { ptr.write(3 * CAPACITY) };
-    let (header, decals) = rig.run(&[particle([1.21, 0.01, 2.11])], 3.0);
+    let (header, decals) = rig.run(&[particle([1.21, 0.01, 2.11])], third_time);
     assert_eq!(header[0], 3 * CAPACITY, "the half stays full");
     assert_eq!(
         (header[7], header[11]),
         (1, 1),
         "one overwritten, from the front"
     );
-    assert_near(decals[0].position, [1.215, 0.0, 2.105], 1e-5, "the new decal");
-    assert_eq!((decals[0].touch, decals[0].amount), (touch_key(3.0), 64));
-    assert_eq!(decals[1].touch, touch_key(2.0), "the rest stay");
+    assert_near(
+        decals[0].position,
+        [1.215, 0.0, 2.105],
+        1e-5,
+        "the new decal",
+    );
+    assert_eq!(
+        (decals[0].touch, decals[0].amount),
+        (touch_key(third_time), 64)
+    );
+    assert_eq!(decals[1].touch, touch_key(second_time), "the rest stay");
 }

@@ -501,12 +501,12 @@ mod gpu_tests {
         enc.commit_and_wait_completed();
         let fused: Vec<InstanceTransform> = read(&output, b.len());
         // At t=1/2 with zero endpoint velocities Hermite is the midpoint.
-        // Births have zero velocity and half radius; the plane clamps y to 0.
+        // Births have zero velocity and full radius; the plane clamps y to 0.
         let expected = [
             [0.5, 0.0, 0.0, 0.2],
-            [0.5, 0.0, 0.0, 0.1],
+            [0.5, 0.0, 0.0, 0.2],
             [2.5, 0.5, 0.0, 0.2],
-            [1.0, 0.25, 0.0, 0.1],
+            [1.0, 0.25, 0.0, 0.2],
             [0.0; 4],
         ];
         for ((actual, standalone), want) in fused.iter().zip(&unfused).zip(expected) {

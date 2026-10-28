@@ -46,3 +46,12 @@ fn ww_random(slot: u32, seed: u32, epoch: u32, stream: u32) -> f32 {
     let h = ww_hash(slot + ww_hash(seed + ww_hash(epoch * 16u + stream)));
     return f32(h >> 8u) * (1.0 / 16777216.0);
 }
+
+// The unit an emission count is rounded with, 0 to 1: a draw from the slot
+// and the emitter's position, which moves every tick. Rounding a count down
+// after adding it keeps the authored number on average, where rounding to
+// the nearest drops every count under a half and doubles a rate's
+// rounding at twice the Sim Rate.
+fn ww_emission_unit(slot: u32, position: vec3<f32>) -> f32 {
+    return ww_random(slot, bitcast<u32>(position.x), bitcast<u32>(position.y), 12u);
+}

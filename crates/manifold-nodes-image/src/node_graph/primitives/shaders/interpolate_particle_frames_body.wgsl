@@ -3,10 +3,12 @@
 //
 // `particles_b` is the coincident stream and therefore supplies e_particles_b.
 // `particles_a` is BufferGather: frames are sorted by nonzero id, so the body
-// can find a match with a bounded binary search. An unwired A is represented
-// by count_a = 0: every B record is then rewound like a birth but keeps its
-// radius, since with no frame A nothing was just born (whitewater publishes
-// no A, and its display blend sits at 0 once an interval behind transport).
+// can find a match with a bounded binary search. A birth (a B record with no
+// match) is rewound along its path by the rest of the tick at its full
+// radius: at a fixed blend phase, which is every frame when the display runs
+// at the Sim Rate, a radius grown with the blend would hold every newborn
+// particle at that fraction of its size. An unwired A is count_a = 0, and
+// every B record is then rewound like a birth (whitewater publishes no A).
 
 fn b_count(value: f32, capacity: u32) -> u32 {
     if value < 0.0 {
@@ -73,11 +75,11 @@ fn hermite_particle(a: Element, b: Element, t: f32, span: f32) -> Element {
     return Element(vec4<f32>(position, radius), velocity, b.id);
 }
 
-fn birth_particle(b: Element, t: f32, span: f32, acceleration: vec3<f32>, grow: f32) -> Element {
+fn birth_particle(b: Element, t: f32, span: f32, acceleration: vec3<f32>) -> Element {
     let tau = (1.0 - t) * span;
     let position = b.position_radius.xyz - tau * b.velocity + 0.5 * acceleration * tau * tau;
     let velocity = b.velocity - acceleration * tau;
-    return Element(vec4<f32>(position, b.position_radius.w * grow), velocity, b.id);
+    return Element(vec4<f32>(position, b.position_radius.w), velocity, b.id);
 }
 
 fn body(
@@ -139,6 +141,5 @@ fn body(
         t,
         h,
         vec3<f32>(acceleration_x, acceleration_y, acceleration_z),
-        select(1.0, t, a_limit > 0u),
     );
 }

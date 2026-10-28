@@ -1,6 +1,9 @@
 // FLIP diffuseparticlesimulation.cpp:1989: nearest-cell influence times energy
 // times wavecrest/turbulence rates; independent emitter-generation coin.
-// The existing GPU marker-density compensation and per-tick rounding are retained.
+// The GPU marker-density compensation is retained. The count over the
+// frame's ticks is rounded down after adding a random unit
+// (`ww_emission_unit`), so the count per second is the authored rate
+// whatever the Sim Rate.
 // The influence is the node floor(q) of the particle's cell, read through the
 // step's world-tile table (`tiles`, `pool_tiles` tiles); a particle whose
 // cell lies in no stored tile emits nothing.
@@ -42,5 +45,5 @@ fn body(
     if !(per_tick > 0.0) {
         return 0u;
     }
-    return u32(floor(per_tick + 0.5)) * u32(max(round(ticks), 0.0));
+    return u32(floor(per_tick * max(round(ticks), 0.0) + ww_emission_unit(idx, e_particles.position_radius.xyz)));
 }

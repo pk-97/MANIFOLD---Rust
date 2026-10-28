@@ -531,7 +531,18 @@ pub(super) struct Emission {
     pub live_count: f32,
 }
 
-/// `node.emission_count` for slot `idx`, and how far the per-tick count sat
+/// The shader's `ww_emission_unit` for slot `idx` holding `p`.
+#[cfg(test)]
+pub(super) fn emission_unit(idx: u32, p: FluidParticle) -> f32 {
+    random(
+        idx,
+        p.position_radius[0].to_bits(),
+        p.position_radius[1].to_bits(),
+        12,
+    )
+}
+
+/// `node.emission_count` for slot `idx`, and how far the count sat
 /// from a rounding edge.
 #[cfg(test)]
 pub(super) fn emission_count(
@@ -552,9 +563,7 @@ pub(super) fn emission_count(
         return (0, (speed - 1e-3).abs());
     }
     let per_tick = e.rate * energy * wavecrest * e.dt * 8.0 / e.points_per_cell;
-    let edge = ((per_tick + 0.5) - (per_tick + 0.5).round()).abs();
-    (
-        (per_tick + 0.5).floor() as u32 * e.ticks.round().max(0.0) as u32,
-        edge.min((speed - 1e-3).abs()),
-    )
+    let count = per_tick * e.ticks.round().max(0.0) + emission_unit(idx, p);
+    let edge = (count - count.round()).abs();
+    (count.floor() as u32, edge.min((speed - 1e-3).abs()))
 }

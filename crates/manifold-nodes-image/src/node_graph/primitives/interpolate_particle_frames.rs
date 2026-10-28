@@ -4,20 +4,20 @@
 //! The output is one record for every slot in frame B.  A's sorted,
 //! non-zero particle ids are searched for a matching B id; matches use cubic
 //! Hermite interpolation, while births are rewound from B by the remaining
-//! part of the tick and grow in with radius × blend.  An unwired or empty A
-//! frame is an intentional empty-A path (used by whitewater): its particles
-//! are rewound the same way but keep their radius, because nothing was born.
+//! part of the tick at their full radius.  An unwired or empty A frame is an
+//! intentional empty-A path (used by whitewater): its particles are rewound
+//! the same way.
 
 use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::freeze::classify::FusedOutputCapacity;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
 /// Generated-codegen uniform layout: the scalar params in declaration order,
 /// then the injected dispatch count.  All seam metadata is carried as f32
@@ -43,7 +43,7 @@ struct InterpolationUniforms {
 manifold_node_engine::primitive! {
     name: InterpolateParticleFrames,
     type_id: "node.interpolate_particle_frames",
-    purpose: "Present frame B's liquid particles at display time. Matching nonzero ids in the same identity epoch use cubic Hermite interpolation with span-scaled endpoint velocities; births are rewound from B by the remaining time and grow in with radius × blend. The output has one slot per particles_b record. An unwired or empty particles_a is an intentional empty-A path: every B particle is rewound like a birth but keeps its radius.",
+    purpose: "Present frame B's liquid particles at display time. Matching nonzero ids in the same identity epoch use cubic Hermite interpolation with span-scaled endpoint velocities; births are rewound from B by the remaining time at their full radius. The output has one slot per particles_b record. An unwired or empty particles_a is an intentional empty-A path: every B particle is rewound like a birth.",
     inputs: {
         particles_a: Array(FluidParticle) optional,
         particles_b: Array(FluidParticle) required,
@@ -135,10 +135,10 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire particles_a/b, count_a/b, identity_a/b, blend and span from node.fluid_surface. Frames are sorted by strictly increasing nonzero id within an identity epoch. A matching id uses cubic Hermite position and derivative velocity; an unmatched B birth uses x_B − τ·v_B + ½·a·τ², v_B − a·τ and radius × blend, where τ = (1 − blend)·span. blend is clamped to 0..1 and span to >=0 in the body, so display time never extrapolates past B. Leave particles_a unwired for the deliberate empty-A path; leave count_b at its -1 default to process the whole B capacity, whose unused slots are already radius 0.",
+    composition_notes: "Wire particles_a/b, count_a/b, identity_a/b, blend and span from node.fluid_surface. Frames are sorted by strictly increasing nonzero id within an identity epoch. A matching id uses cubic Hermite position and derivative velocity; an unmatched B birth uses x_B − τ·v_B + ½·a·τ², v_B − a·τ and B's radius, where τ = (1 − blend)·span. blend is clamped to 0..1 and span to >=0 in the body, so display time never extrapolates past B. Leave particles_a unwired for the deliberate empty-A path; leave count_b at its -1 default to process the whole B capacity, whose unused slots are already radius 0.",
     examples: [],
     picker: { label: "Interpolate Particle Frames", category: Atom },
-    summary: "Smooths a particle simulation between two accepted frames while letting new particles grow in naturally.",
+    summary: "Smooths a particle simulation between two accepted frames and moves new particles along their path.",
     category: Particles3D,
     role: Filter,
     aliases: ["particle interpolation", "Hermite particles", "frame blend"],
@@ -296,9 +296,9 @@ mod tests {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    use manifold_node_engine::testkit::array_harness::{Harness, params, read};
     use super::*;
     use manifold_node_engine::bindings::Slot;
+    use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 
     fn particle(position: [f32; 3], velocity: [f32; 3], radius: f32, id: u32) -> FluidParticle {
         FluidParticle {
@@ -404,7 +404,7 @@ mod gpu_tests {
                             position[0] as f32,
                             position[1] as f32,
                             position[2] as f32,
-                            (f64::from(b.position_radius[3]) * if a_len > 0 { t } else { 1.0 }) as f32,
+                            b.position_radius[3],
                         ],
                         velocity: velocity.map(|value| value as f32),
                         id: b.id,
@@ -557,7 +557,7 @@ mod gpu_tests {
 
         // No particles_a input reaches the real `run()` path here. The
         // runtime binds B as the safe gather dummy and forces the empty-A
-        // default, so births still rewind and grow rather than holding B.
+        // default, so births still rewind rather than holding B.
         let values = [
             ("count_a", 3.0),
             ("blend", 0.25),

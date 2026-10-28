@@ -1314,38 +1314,3 @@ fn whitewater_spawn_chain_fused_matches_unfused() {
     }
     assert!(typed.iter().sum::<usize>() > 100, "{typed:?} typed spawns");
 }
-
-/// I7: each tick rounds on its own. Per-tick counts of 0.4, 0.6 and 1.4 over
-/// three ticks give 0, 3 and 3, where rounding the frame's total would give
-/// 1, 2 and 4.
-#[test]
-fn emission_count_rounds_per_tick() {
-    let per_tick = [0.4f32, 0.6, 1.4];
-    let scale = 175.0 * (1.0 / 60.0) * 8.0 / 8.0;
-    let input: Vec<FluidParticle> = (0..3)
-        .map(|i| FluidParticle {
-            position_radius: [0.0, 0.0, 0.0, 0.05],
-            velocity: [1.0, 0.0, 0.0],
-            id: i + 1,
-        })
-        .collect();
-    let energy = vec![1.0f32; 3];
-    let wavecrest: Vec<f32> = per_tick.iter().map(|n| n / scale).collect();
-    let mut harness = Harness::new();
-    let slot = harness.array(&input, 3);
-    let (e, w) = (harness.array(&energy, 3), harness.array(&wavecrest, 3));
-    let p = params(&[
-        ("rate", 175.0),
-        ("points_per_cell", 8.0),
-        ("ticks", 3.0),
-        ("dt", 1.0 / 60.0),
-    ]);
-    let got: Vec<u32> = run(
-        &mut harness,
-        &mut EmissionCount::new(),
-        &[("particles", slot.0), ("energy", e.0), ("wavecrest", w.0)],
-        3,
-        &p,
-    );
-    assert_eq!(got, [0, 3, 3], "per tick, not per frame ([1, 2, 4])");
-}

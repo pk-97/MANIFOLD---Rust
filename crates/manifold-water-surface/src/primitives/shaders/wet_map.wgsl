@@ -39,6 +39,12 @@ struct Params {
     cell: f32,
     // A compaction keeps the decals touched within this many seconds.
     keep: f32,
+    // The water a contact adds to a decal: its share of WD_FULL for the
+    // display time since the last run.
+    hit: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 }
 
 struct WetParticle {
@@ -266,7 +272,7 @@ fn cs_mark(@builtin(global_invocation_id) gid: vec3<u32>) {
                 atomicStore(&map[word + WD_POSITION + 2u], bitcast<u32>(site.z));
                 atomicStore(&map[word + WD_NORMAL], wd_normal_word(normal));
                 atomicStore(&map[word + WD_TOUCH], touch);
-                atomicStore(&map[word + WD_AMOUNT], WD_HIT);
+                atomicStore(&map[word + WD_AMOUNT], params.hit);
                 atomicStore(&map[word + WD_FACING], facing);
                 atomicStore(&map[slot], index + 1u);
                 return;
@@ -290,7 +296,7 @@ fn cs_mark(@builtin(global_invocation_id) gid: vec3<u32>) {
             if same_key && on_plane && dot(n, normal) > WET_MERGE_AGREE {
                 atomicMax(&map[word + WD_TOUCH], touch);
                 if atomicLoad(&map[word + WD_AMOUNT]) < WD_FULL {
-                    atomicAdd(&map[word + WD_AMOUNT], WD_HIT);
+                    atomicAdd(&map[word + WD_AMOUNT], params.hit);
                 }
                 return;
             }

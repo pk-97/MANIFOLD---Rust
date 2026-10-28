@@ -282,8 +282,9 @@ impl ScenePanel {
             if hidden || in_header {
                 continue;
             }
-            let switch_first = p.spec.scene.is_none_or(|scene| scene.switch.is_none());
-            picked.push(((self.group_key(p), 1 + u32::from(switch_first)), i));
+            // Manifest order within the group: a switch sits right above the
+            // rows it gates.
+            picked.push(((self.group_key(p), 1), i));
         }
         // Structural fields: the item's own, then its Material's, each
         // addressed at the item that holds it. Fields the header carries are

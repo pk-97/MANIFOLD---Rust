@@ -14,7 +14,7 @@
 // A decal is a soft round wet mark where the water touched a surface, one a
 // merge cell and facing: its object-space centre (xyz), its surface normal
 // (octahedral, two snorm16), the display time of its last touch (touch key),
-// how much water hit it (WD_HIT a contact, full at WD_FULL) and its facing
+// how much water hit it (full at WD_FULL) and its facing
 // (the axis its normal is nearest, 0 to 2, plus 3 pointing down it).
 
 const WD_DRAW_VERTICES: u32 = 0u;
@@ -38,8 +38,7 @@ const WD_AMOUNT: u32 = 5u;
 const WD_FACING: u32 = 6u;
 
 const WD_CLAIMING: u32 = 0xffffffffu;
-// One contact wets a decal a quarter; four make it full.
-const WD_HIT: u32 = 64u;
+// A decal's water when full.
 const WD_FULL: u32 = 256u;
 
 // The first word of hash slot `slot`.
