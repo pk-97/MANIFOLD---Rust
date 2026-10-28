@@ -2,7 +2,8 @@
 // surface colour at the hit. Foam is a matte white scatterer lying on the
 // water, covering a fraction `c` of each surface patch (`foam_field.wgsl`).
 // Where it covers it hides the water's reflection and the light through it, so
-// the colour is `mix(water, foam_lit, c)`. Foam also damps the small capillary
+// the colour is `mix(water, foam_lit, c)`, returned with `c` so the caller
+// can count the foam as opaque. Foam also damps the small capillary
 // ripples (surface films and foam damp capillary waves: Alpers and Huhnerfuss
 // 1989, "The damping of ocean waves by surface films"), which
 // `look_ripple_detail` applies by scaling its strength by `1 - c`.
@@ -19,10 +20,10 @@ fn look_foam(
     view: vec3<f32>,
     normal: vec3<f32>,
     rgb: vec3<f32>,
-) -> vec3<f32> {
+) -> vec4<f32> {
     let c = foam_coverage_at(world_pos);
     if c <= 0.0 {
-        return rgb;
+        return vec4<f32>(rgb, 0.0);
     }
     // A rough dielectric with no specular lobe: zero F0 and F90, every other
     // lobe off, as `fs_water` turns them off.
@@ -38,5 +39,5 @@ fn look_foam(
     // `fs_pbr`'s own diffuse: the direct diffuse plus the irradiance times the
     // albedo (its diffuse energy split is one with no specular lobe).
     let foam_lit = pbr_direct_lighting(surface).diffuse + FOAM_ALBEDO * ibl_irradiance(normal, frag_xy);
-    return mix(rgb, foam_lit, c);
+    return vec4<f32>(mix(rgb, foam_lit, c), c);
 }

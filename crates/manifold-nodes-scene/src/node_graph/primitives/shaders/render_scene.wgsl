@@ -768,12 +768,12 @@ fn transmission_diffuse(
         let ior_r = ior - half_spread;
         let ior_g = ior;
         let ior_b = ior + half_spread;
-        let sample_r = sample_transmission(N, V, world_pos, thickness, model_scale, ior_r, mip_level);
-        let sample_g = sample_transmission(N, V, world_pos, thickness, model_scale, ior_g, mip_level);
-        let sample_b = sample_transmission(N, V, world_pos, thickness, model_scale, ior_b, mip_level);
+        let sample_r = transmission_with_env(sample_transmission(N, V, world_pos, thickness, model_scale, ior_r, mip_level));
+        let sample_g = transmission_with_env(sample_transmission(N, V, world_pos, thickness, model_scale, ior_g, mip_level));
+        let sample_b = transmission_with_env(sample_transmission(N, V, world_pos, thickness, model_scale, ior_b, mip_level));
         transmitted = vec3<f32>(sample_r.r, sample_g.g, sample_b.b);
     } else {
-        transmitted = sample_transmission(N, V, world_pos, thickness, model_scale, ior, mip_level);
+        transmitted = transmission_with_env(sample_transmission(N, V, world_pos, thickness, model_scale, ior, mip_level));
     }
 
     // Beer-Lambert (KHR_materials_volume): attenuation_coefficient =

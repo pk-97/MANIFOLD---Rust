@@ -79,26 +79,39 @@ fn fs_water(@builtin(position) pos: vec4<f32>) -> WaterOut {
     let reflection = direct.total - direct.diffuse + ibl.specular;
 
     // Light through the water as glass does it, with the march's thickness
-    // as the path.
-    let background = sample_transmission(
+    // as the path. Where nothing is drawn behind the water the layer stays
+    // open: the water lets what is under the layer through, as it lets the
+    // scene through, and adds only its own light. The environment lights the
+    // water but is not seen through it, as the camera does not see it round
+    // the water either.
+    let behind = sample_transmission(
         n, view, world, thickness, vec3<f32>(1.0), ior,
         transmission_mip_level(surface.roughness, ior),
     );
-    var through = background * exp(-volume_attenuation_coefficient() * thickness);
+    // The share of the light from behind that crosses the water.
+    var carried = exp(-volume_attenuation_coefficient() * thickness);
+    var through = behind.behind * carried;
     // The water's own scattering over the same path, where its material has any.
     let scattering = u.volume_optics.y;
     if scattering > 0.0 {
         through = volume_inscatter(through, scattering * thickness);
+        carried = carried * exp(-scattering * thickness);
     }
-    let transmitted = (vec3<f32>(1.0) - transmission_specular_fraction(ibl.ibl_f0, base_f90, ibl.env_brdf))
-        * through * u.base_color.rgb;
+    let passed = (vec3<f32>(1.0) - transmission_specular_fraction(ibl.ibl_f0, base_f90, ibl.env_brdf))
+        * u.base_color.rgb;
+    let transmitted = passed * through;
 
-    var lit = look_thin_water_light(thickness, reflection + transmitted);
-    lit = look_foam(world, pos.xy, view, n, lit);
-    let rgb = apply_fog(lit, world) * exp2(u.scene_params.z);
+    let lit = look_thin_water_light(thickness, reflection + transmitted);
+    let foamed = look_foam(world, pos.xy, view, n, lit);
+    // Covered by the water and its foam, the rest open to what is under it.
+    let open = dot(passed * carried, vec3<f32>(1.0 / 3.0)) * (1.0 - behind.coverage);
+    let alpha = mix(1.0 - open, 1.0, foamed.a);
+    // Fog covers only what the water covers, as the snapshot's own fog does.
+    let fog = fog_amount(world);
+    let rgb = (foamed.rgb * (1.0 - fog) + u.fog_color.rgb * fog * alpha) * exp2(u.scene_params.z);
 
     var out: WaterOut;
-    out.color = vec4<f32>(rgb, 1.0);
+    out.color = vec4<f32>(rgb, alpha);
     out.depth = hit.depth;
     return out;
 }

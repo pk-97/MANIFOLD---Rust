@@ -656,15 +656,19 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
 // fragment stays transparent and keys downstream. fog_density 0 → factor 0
 // → identity, so an unwired atmosphere is byte-identical to no atmosphere.
 fn apply_fog(rgb: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
+    return mix(rgb, u.fog_color.rgb, fog_amount(world_pos));
+}
+
+// The share of the fog colour between the camera and `world_pos`.
+fn fog_amount(world_pos: vec3<f32>) -> f32 {
     let density = u.fog_params.x;
     if density <= 0.0 {
-        return rgb;
+        return 0.0;
     }
     let falloff = u.fog_params.y;
     let dist = length(u.camera_pos.xyz - world_pos);
     let h = exp(-falloff * max(world_pos.y, 0.0));
-    let fog = clamp(1.0 - exp(-density * dist * h), 0.0, 1.0);
-    return mix(rgb, u.fog_color.rgb, fog);
+    return clamp(1.0 - exp(-density * dist * h), 0.0, 1.0);
 }
 
 // `KHR_materials_sheen`'s Charlie
@@ -1211,6 +1215,22 @@ fn pbr_ibl(s: PbrSurface) -> PbrIbl {
 // so E6's dispersion can call it once per channel with a different `ior`
 // each time (see below) — a single call at the base `ior` reproduces
 // pre-E6 `transmission_diffuse`'s inline computation exactly.
+// What light bent through a transmissive surface meets: `behind`, the scene
+// drawn on screen along the refracted ray (premultiplied radiance at this
+// surface; black where nothing is drawn or the ray leaves the screen),
+// `coverage`, how much of the ray that scene covers, and `env`, the
+// environment along the ray.
+struct Transmission {
+    behind: vec3<f32>,
+    coverage: f32,
+    env: vec3<f32>,
+};
+
+// Glass sees the environment wherever no scene lies behind it.
+fn transmission_with_env(t: Transmission) -> vec3<f32> {
+    return t.behind + t.env * (1.0 - t.coverage);
+}
+
 fn sample_transmission(
     N: vec3<f32>,
     V: vec3<f32>,
@@ -1219,7 +1239,7 @@ fn sample_transmission(
     model_scale: vec3<f32>,
     ior: f32,
     mip_level: f32,
-) -> vec3<f32> {
+) -> Transmission {
     // WGSL's `refract` returns a zero vector on total internal reflection
     // (grazing exits at high IOR) — fall back to straight-through along -N
     // so the sample never NaNs on normalize(0).
@@ -1243,13 +1263,12 @@ fn sample_transmission(
         clamp(refraction_uv, vec2<f32>(0.0), vec2<f32>(1.0)), mip_level);
     // The screen snapshot is premultiplied, exposed and fogged. Recover
     // radiance at this surface before its own fog/exposure is applied.
-    // Empty background coverage receives the environment, not black.
     let screen_rgb = background.rgb * exp2(-u.scene_params.z);
     let fog_transmittance = exp(-max(u.fog_params.x, 0.0) * length(u.camera_pos.xyz - world_pos)
         * exp(-u.fog_params.y * max(world_pos.y, 0.0)));
     let surface_rgb = max((screen_rgb - u.fog_color.rgb * (1.0 - fog_transmittance) * background.a)
         / max(fog_transmittance, 1e-4), vec3<f32>(0.0));
-    return mix(env, surface_rgb + env * (1.0 - background.a), screen_weight);
+    return Transmission(surface_rgb * screen_weight, background.a * screen_weight, env);
 }
 
 // Beer-Lambert absorption per metre of the volume material:
