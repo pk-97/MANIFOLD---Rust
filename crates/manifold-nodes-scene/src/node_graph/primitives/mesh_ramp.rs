@@ -312,7 +312,7 @@ mod gpu_tests {
             src.write(0, bytemuck::cast_slice(vertices));
         }
         let dst =
-            device.create_buffer((vertices.len() * 4) as u64, manifold_gpu::BufferUse::Upload);
+            device.create_buffer((vertices.len() * 4) as u64, manifold_gpu::BufferUse::Readback);
 
         let uniforms = MeshRampUniforms {
             axis,

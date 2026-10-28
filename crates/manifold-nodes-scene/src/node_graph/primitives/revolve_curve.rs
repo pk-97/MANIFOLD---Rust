@@ -216,7 +216,7 @@ mod gpu_tests {
         }
         let dst_buf = device.create_buffer(
             dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
 
         let uniforms = RevolveCurveUniforms {
@@ -319,7 +319,7 @@ mod gpu_tests {
         let tri_dst_cap = tri_expected_count;
         let tri_dst_buf = device.create_buffer(
             tri_dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
 
         #[repr(C)]

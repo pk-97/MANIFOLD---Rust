@@ -61,7 +61,7 @@ pub fn readback_tonemapped_rgba8(
 ) -> Result<Vec<u8>, String> {
     let bytes_per_row = w * 8; // Rgba16Float = 8 bytes/pixel
     let total = u64::from(h * bytes_per_row);
-    let buf = device.create_buffer(total, BufferUse::Upload);
+    let buf = device.create_buffer(total, BufferUse::Readback);
     let mut enc = device.create_encoder("headless-readback");
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
     enc.commit_and_wait()?;
@@ -121,7 +121,7 @@ pub fn readback_srgb_rgba8(
 ) -> Result<Vec<u8>, String> {
     let bytes_per_row = w * 8; // Rgba16Float = 8 bytes/pixel
     let total = u64::from(h * bytes_per_row);
-    let buf = device.create_buffer(total, BufferUse::Upload);
+    let buf = device.create_buffer(total, BufferUse::Readback);
     let mut enc = device.create_encoder("headless-readback-srgb");
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
     enc.commit_and_wait()?;
@@ -161,7 +161,7 @@ pub fn readback_raw_halves(
 ) -> Result<Vec<u8>, String> {
     let bytes_per_row = w * 8;
     let total = u64::from(h * bytes_per_row);
-    let buf = device.create_buffer(total, BufferUse::Upload);
+    let buf = device.create_buffer(total, BufferUse::Readback);
     let mut enc = device.create_encoder("headless-convergence-readback");
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
     enc.commit_and_wait()?;

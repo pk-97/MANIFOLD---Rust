@@ -1164,7 +1164,7 @@ mod gpu_tests {
         let bytes_per_row = w * 8;
         let readback = device.create_buffer(
             u64::from(h * bytes_per_row),
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let mut enc = device.create_encoder("gtao-readback");
         enc.copy_texture_to_buffer(&out.texture, &readback, w, h, bytes_per_row);

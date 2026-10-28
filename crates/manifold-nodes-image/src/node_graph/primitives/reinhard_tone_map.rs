@@ -231,7 +231,7 @@ mod gpu_tests {
         let bytes_per_row = w * 8;
         let buf = device.create_buffer(
             u64::from(h * bytes_per_row),
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let mut rb_enc = device.create_encoder("reinhard-readback");
         rb_enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);

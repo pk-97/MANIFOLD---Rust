@@ -143,7 +143,7 @@ fn cymatics_survives_live_resize() {
             enc.commit_and_wait().expect("GPU work completes");
         }
         let bytes_per_row = w * 8;
-        let buf = device.create_buffer(u64::from(h * bytes_per_row), BufferUse::Upload);
+        let buf = device.create_buffer(u64::from(h * bytes_per_row), BufferUse::Readback);
         let mut rb = device.create_encoder("cymatics-resize-readback");
         rb.copy_texture_to_buffer(&target.texture, &buf, w, h, bytes_per_row);
         rb.commit_and_wait().expect("GPU work completes");

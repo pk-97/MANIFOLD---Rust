@@ -241,7 +241,7 @@ mod gpu_tests {
         let src = device.create_buffer(std::mem::size_of_val(source) as u64, BufferUse::Upload);
         let dst = device.create_buffer(
             output_len as u64 * std::mem::size_of::<MeshVertex>() as u64,
-            BufferUse::Upload,
+            BufferUse::Readback,
         );
         unsafe {
             src.write(0, bytemuck::cast_slice(source));

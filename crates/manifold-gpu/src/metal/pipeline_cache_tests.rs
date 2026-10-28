@@ -120,7 +120,7 @@ fn read_first_pixel(device: &GpuDevice, target: &GpuTexture) -> [u8; 4] {
     let bytes_per_row = target.width * target.format.bytes_per_pixel();
     let buffer = device.create_buffer(
         bytes_per_row as u64 * target.height as u64,
-        BufferUse::Upload,
+        BufferUse::Readback,
     );
     let mut encoder = device.create_encoder("pipeline-cache-readback");
     encoder.copy_texture_to_buffer(target, &buffer, target.width, target.height, bytes_per_row);

@@ -184,7 +184,7 @@ mod gpu_tests {
         // Read back the density texture (Rgba16Float = 8 bytes/pixel).
         let bytes_per_row = w * 8;
         let total = u64::from(h * bytes_per_row);
-        let readback = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(total, manifold_gpu::BufferUse::Readback);
         let mut rb = device.create_encoder("resolve-readback");
         rb.copy_texture_to_buffer(&out_target.texture, &readback, w, h, bytes_per_row);
         rb.commit_and_wait().expect("GPU work completes");

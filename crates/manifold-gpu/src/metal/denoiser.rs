@@ -425,7 +425,7 @@ mod tests {
         let bpp = tex.format.bytes_per_pixel();
         let row_bytes = bpp * tex.width;
         let total = (row_bytes * tex.height) as u64;
-        let readback = device.create_buffer(total, BufferUse::Upload);
+        let readback = device.create_buffer(total, BufferUse::Readback);
         let mut enc = device.create_encoder("readback");
         enc.copy_texture_to_buffer(tex, &readback, tex.width, tex.height, row_bytes);
         enc.commit_and_wait().expect("GPU work completes");

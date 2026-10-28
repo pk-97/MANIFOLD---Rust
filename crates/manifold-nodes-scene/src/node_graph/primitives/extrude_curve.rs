@@ -263,7 +263,7 @@ mod gpu_tests {
         }
         let dst_buf = device.create_buffer(
             dst_cap as u64 * std::mem::size_of::<MeshVertex>() as u64,
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
 
         let uniforms = ExtrudeCurveUniforms {

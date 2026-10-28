@@ -207,7 +207,7 @@ mod gpu_tests {
         }
         let dbuf = device.create_buffer(
             std::mem::size_of_val(src) as u64,
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
 
         // One thread per VERTEX (dispatch_count = vertex count).

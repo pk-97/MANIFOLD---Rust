@@ -1366,7 +1366,7 @@ impl GpuShadowRayTracer {
         unsafe {
             std::ptr::write_unaligned(params_ptr as *mut DebugFetchNormalParams, params);
         }
-        let out_buffer = device.create_buffer(16, BufferUse::Upload); // packed_float3, rounded up
+        let out_buffer = device.create_buffer(16, BufferUse::Readback); // packed_float3, rounded up
         out_buffer.zero_fill();
 
         let cb = device
@@ -1551,7 +1551,7 @@ impl GpuShadowRayTracer {
         unsafe {
             std::ptr::copy_nonoverlapping(history.as_ptr(), history_ptr as *mut f32, 3);
         }
-        let out_buffer = device.create_buffer(16, BufferUse::Upload); // packed_float3, rounded up
+        let out_buffer = device.create_buffer(16, BufferUse::Readback); // packed_float3, rounded up
         out_buffer.zero_fill();
 
         let cb = device
@@ -1658,7 +1658,7 @@ impl GpuShadowRayTracer {
         unsafe {
             std::ptr::write_unaligned(params_ptr as *mut FireflyClampParams, params);
         }
-        let out_buffer = device.create_buffer(16, BufferUse::Upload); // packed_float3, rounded up
+        let out_buffer = device.create_buffer(16, BufferUse::Readback); // packed_float3, rounded up
         out_buffer.zero_fill();
 
         // P4a: hand-written stats row for the kernel's buffer(2) — same
@@ -1811,7 +1811,7 @@ impl GpuShadowRayTracer {
         unsafe {
             std::ptr::write_unaligned(params_ptr as *mut AtrousPostParams, params);
         }
-        let out_buffer = device.create_buffer(16, BufferUse::Upload); // packed_float4
+        let out_buffer = device.create_buffer(16, BufferUse::Readback); // packed_float4
         out_buffer.zero_fill();
 
         let cb = device
@@ -2855,7 +2855,7 @@ mod tests {
             device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
         materials.zero_fill();
         let read = |tex: &GpuTexture| {
-            let buf = device.create_buffer(9 * 9 * 16, BufferUse::Upload);
+            let buf = device.create_buffer(9 * 9 * 16, BufferUse::Readback);
             let mut rb = device.create_encoder("f7f1-readback");
             rb.copy_texture_to_buffer(tex, &buf, 9, 9, 9 * 16);
             rb.commit_and_wait().expect("denoiser readback");
@@ -3072,7 +3072,7 @@ mod tests {
             [n, [1e-8, 0.0, 0.0, 0.0], b, mapped],
         ];
         let input = device.create_buffer(std::mem::size_of_val(&cases) as u64, BufferUse::Upload);
-        let output = device.create_buffer((cases.len() * 16) as u64, BufferUse::Upload);
+        let output = device.create_buffer((cases.len() * 16) as u64, BufferUse::Readback);
         unsafe {
             std::ptr::copy_nonoverlapping(
                 cases.as_ptr().cast::<u8>(),
@@ -3170,7 +3170,7 @@ mod tests {
             std::ptr::write_bytes(ptr, 0, std::mem::size_of::<RtTraceDiagnostics>());
             (*ptr.cast::<RtTraceDiagnostics>()).enabled = 1;
         }
-        let out = device.create_buffer(16, BufferUse::Upload);
+        let out = device.create_buffer(16, BufferUse::Readback);
         let mut enc = device.create_encoder("trace diagnostics regression");
         enc.dispatch_compute(
             &pipeline,

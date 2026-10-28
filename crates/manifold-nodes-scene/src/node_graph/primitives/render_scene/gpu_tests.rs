@@ -17,7 +17,7 @@ fn readback_rgba16f(
 ) -> Vec<[f32; 4]> {
     let bytes_per_row = w * 8;
     let total = u64::from(h * bytes_per_row);
-    let readback = device.create_buffer(total, BufferUse::Upload);
+    let readback = device.create_buffer(total, BufferUse::Readback);
     let mut enc = device.create_encoder("shaft-march-readback");
     enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");
@@ -45,7 +45,7 @@ fn readback_depth32f(
 ) -> Vec<f32> {
     let bytes_per_row = w * 4;
     let total = u64::from(h * bytes_per_row);
-    let readback = device.create_buffer(total, BufferUse::Upload);
+    let readback = device.create_buffer(total, BufferUse::Readback);
     let mut enc = device.create_encoder("appearance-depth-readback");
     enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");
@@ -1694,7 +1694,7 @@ fn sample_grazing_row(
     sampler: &manifold_gpu::GpuSampler,
 ) -> Vec<[f32; 4]> {
     let pipeline = device.create_compute_pipeline(ANISO_TEST_WGSL, "cs_main", "aniso-test-sample");
-    let out_buf = device.create_buffer(u64::from(ANISO_TEST_ROW_LEN) * 16, BufferUse::Upload);
+    let out_buf = device.create_buffer(u64::from(ANISO_TEST_ROW_LEN) * 16, BufferUse::Readback);
     let bindings = [
         GpuBinding::Texture {
             binding: 0,
@@ -1939,7 +1939,7 @@ fn ray_resolution_or_canvas_change_fires_rt_realloc_reset() {
     // keep the render-pass clear fallback usable for the reset sentinel.
     let hold = s.rt_sv_hold_history[0].as_ref().expect("R16 hold history");
     let bytes_per_row = 257 * 2;
-    let readback = device.create_buffer(u64::from(257 * bytes_per_row), BufferUse::Upload);
+    let readback = device.create_buffer(u64::from(257 * bytes_per_row), BufferUse::Readback);
     let mut enc = device.create_encoder("rt-r16-history-clear-read");
     enc.clear_texture(hold, 0.25, 0.0, 0.0, 0.0);
     enc.copy_texture_to_buffer(hold, &readback, 257, 257, bytes_per_row);

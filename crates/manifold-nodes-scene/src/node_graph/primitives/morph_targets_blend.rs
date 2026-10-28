@@ -285,7 +285,7 @@ mod gpu_tests {
         }
         let out_buf = device.create_buffer(
             std::mem::size_of_val(verts) as u64,
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
 
         let uniforms = MorphTargetsBlendUniforms {

@@ -181,7 +181,7 @@ mod gpu_tests {
             input.write(0, bytemuck::cast_slice(src));
             weight_buf.write(0, bytemuck::cast_slice(weights));
         }
-        let output = device.create_buffer(std::mem::size_of_val(src) as u64, manifold_gpu::BufferUse::Upload);
+        let output = device.create_buffer(std::mem::size_of_val(src) as u64, manifold_gpu::BufferUse::Readback);
         let uniforms = Uniforms {
             amount,
             direction_x: direction[0],

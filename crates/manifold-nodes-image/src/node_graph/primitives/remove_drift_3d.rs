@@ -263,7 +263,7 @@ mod gpu_tests {
         let p_buf =
             device.create_buffer(std::mem::size_of_val(particles) as u64, BufferUse::Upload);
         let partials = device.create_buffer(u64::from(NUM_PARTIALS) * 16, BufferUse::Upload);
-        let out_buf = device.create_buffer(std::mem::size_of_val(forces) as u64, BufferUse::Upload);
+        let out_buf = device.create_buffer(std::mem::size_of_val(forces) as u64, BufferUse::Readback);
         unsafe {
             in_buf.write(0, bytemuck::cast_slice(forces));
             p_buf.write(0, bytemuck::cast_slice(particles));

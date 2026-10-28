@@ -201,7 +201,7 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
         let src = device.create_buffer(std::mem::size_of_val(src_vertices) as u64, manifold_gpu::BufferUse::Upload);
-        let dst = device.create_buffer(std::mem::size_of_val(src_vertices) as u64, manifold_gpu::BufferUse::Upload);
+        let dst = device.create_buffer(std::mem::size_of_val(src_vertices) as u64, manifold_gpu::BufferUse::Readback);
         unsafe {
             src.write(0, bytemuck::cast_slice(src_vertices));
         }

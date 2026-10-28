@@ -88,7 +88,7 @@ fn run(levelset: &[f32], mist: &[f32]) -> Vec<Mist> {
         .expect("mist encodes");
     assert!(ran, "a field with a mist array must run the mist");
     let bytes = u64::from(W * H) * 8;
-    let read = device.create_buffer(bytes, BufferUse::Upload);
+    let read = device.create_buffer(bytes, BufferUse::Readback);
     enc.copy_buffer_to_buffer(march.mist().expect("the mist ran"), &read, bytes);
     enc.commit_and_wait().expect("GPU work completes");
     let values: &[f32] = unsafe {

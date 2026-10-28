@@ -110,7 +110,7 @@ fn readback_rgba_f32(texture: &GpuTexture, w: u32, h: u32) -> Vec<f32> {
     let total_bytes = u64::from(h * bytes_per_row);
     let buf = h_harness
         .device
-        .create_buffer(total_bytes, BufferUse::Upload);
+        .create_buffer(total_bytes, BufferUse::Readback);
     let mut enc = h_harness.device.create_encoder("p4-temporal-readback");
     enc.copy_texture_to_buffer(texture, &buf, w, h, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");

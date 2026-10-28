@@ -124,7 +124,7 @@ impl ReadbackRequest {
         if self.buffer_capacity < buffer_size {
             let shared_buf = gpu
                 .device
-                .create_buffer(buffer_size, manifold_gpu::BufferUse::Upload);
+                .create_buffer(buffer_size, manifold_gpu::BufferUse::Readback);
             let mapped_ptr = shared_buf
                 .mapped_ptr()
                 .expect("shared buffer must have mapped pointer")

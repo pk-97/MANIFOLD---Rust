@@ -409,7 +409,7 @@ mod gpu_tests {
         }
         let ibuf = device.create_buffer(
             capacity as u64 * std::mem::size_of::<InstanceTransform>() as u64,
-            BufferUse::Upload,
+            BufferUse::Readback,
         );
         let cumulative =
             device.create_buffer(u64::from(triangle_count.max(1)) * 4, BufferUse::Upload);

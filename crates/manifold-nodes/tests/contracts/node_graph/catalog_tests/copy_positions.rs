@@ -24,7 +24,7 @@ fn dispatch(src: &[InstanceTransform]) -> Vec<Vec4Vertex> {
     }
     let output = device.create_buffer(
         std::mem::size_of::<Vec4Vertex>() as u64 * src.len() as u64,
-        BufferUse::Upload,
+        BufferUse::Readback,
     );
     let uniforms = Uniforms {
         dispatch_count: src.len() as u32,
@@ -191,7 +191,7 @@ fn wave_pilot_fused_copy_wave_displace_matches_standalone_and_cpu() {
     let weights = device.create_buffer(4 * src.len() as u64, BufferUse::Upload);
     let standalone_out = device.create_buffer(
         std::mem::size_of_val(src.as_slice()) as u64,
-        BufferUse::Upload,
+        BufferUse::Readback,
     );
     let cp = device.create_compute_pipeline(
         &manifold_node_engine::freeze::codegen::standalone_for_spec::<CopyPositions>().unwrap(),
@@ -310,7 +310,7 @@ fn wave_pilot_fused_copy_wave_displace_matches_standalone_and_cpu() {
         device.create_compute_pipeline(&fused.wgsl, ENTRY, "wave-pilot-fused-chain");
     let fused_out = device.create_buffer(
         std::mem::size_of_val(src.as_slice()) as u64,
-        BufferUse::Upload,
+        BufferUse::Readback,
     );
     let mut words = [0_u32; 12];
     for (slot, value) in [

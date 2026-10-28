@@ -689,7 +689,7 @@ mod tests {
         fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
             let bytes_per_row = WIDTH * FORMAT.bytes_per_pixel();
             let total = (HEIGHT * bytes_per_row) as u64;
-            let buffer = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
+            let buffer = device.create_buffer(total, manifold_gpu::BufferUse::Readback);
             let mut encoder = device.create_encoder("clip-waveform-proof-readback");
             encoder.copy_texture_to_buffer(texture, &buffer, WIDTH, HEIGHT, bytes_per_row);
             encoder.commit_and_wait().expect("GPU work completes");

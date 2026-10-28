@@ -105,7 +105,7 @@ mod gpu_tests {
         }
         let dbuf = device.create_buffer(
             std::mem::size_of_val(src) as u64,
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
 
         let zeros = device.create_buffer(4096, manifold_gpu::BufferUse::Upload);

@@ -340,7 +340,7 @@ fn run_tlc_fixture(
     encoder.commit_and_wait().expect("GPU work completes");
 
     // Read back out_svt (Rgba32Float, at 2x1) — same approach as out_sv.
-    let svt_readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Upload);
+    let svt_readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Readback);
     let mut enc_svt = device.create_encoder("tlc-svt-readback");
     enc_svt.copy_texture_to_buffer(&out_svt, &svt_readback_buf, 2, 1, 2 * 4 * 4);
     enc_svt.commit_and_wait().expect("GPU work completes");
@@ -354,7 +354,7 @@ fn run_tlc_fixture(
     let svt1: [f32; 3] = [svt_floats[4], svt_floats[5], svt_floats[6]];
 
     // Read back out_sv (Rgba32Float, at 2x1).
-    let sv_readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Upload);
+    let sv_readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Readback);
     let mut enc2 = device.create_encoder("tlc-sv-readback");
     enc2.copy_texture_to_buffer(&out_sv, &sv_readback_buf, 2, 1, 2 * 4 * 4);
     enc2.commit_and_wait().expect("GPU work completes");

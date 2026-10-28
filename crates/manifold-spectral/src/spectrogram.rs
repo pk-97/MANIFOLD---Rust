@@ -402,7 +402,7 @@ mod gpu_tests {
         let bytes_per_row = COLS * 4;
         let readback = device.create_buffer(
             u64::from(H * bytes_per_row),
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let mut rb = device.create_encoder("scope-gpu-proof-readback");
         rb.copy_texture_to_buffer(&target, &readback, COLS, H, bytes_per_row);
@@ -501,7 +501,7 @@ mod gpu_tests {
         let bytes_per_row = COLS * 4;
         let readback = device.create_buffer(
             u64::from(H * bytes_per_row),
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let mut rb = device.create_encoder("scope-gpu-proof-dim-readback");
         rb.copy_texture_to_buffer(&target, &readback, COLS, H, bytes_per_row);

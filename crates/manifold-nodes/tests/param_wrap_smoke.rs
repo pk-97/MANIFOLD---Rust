@@ -97,7 +97,7 @@ fn render_generator_at(preset_id: &'static str, param_id: &str, value: f32) -> V
 
     let bytes_per_row = W * 8;
     let total = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer(total, BufferUse::Upload);
+    let buf = device.create_buffer(total, BufferUse::Readback);
     let mut readback = device.create_encoder("wrap-smoke-readback");
     readback.copy_texture_to_buffer(&target.texture, &buf, W, H, bytes_per_row);
     readback.commit_and_wait().expect("GPU work completes");

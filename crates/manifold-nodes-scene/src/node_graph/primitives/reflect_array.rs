@@ -714,7 +714,7 @@ mod gpu_tests {
         ];
         let in_buf = upload(&device, &input);
         let out_cap = (input.len() * 2) as u32;
-        let out_buf = device.create_buffer(out_cap as u64 * 32, BufferUse::Upload);
+        let out_buf = device.create_buffer(out_cap as u64 * 32, BufferUse::Readback);
 
         for axis in 0u32..6u32 {
             dispatch(
@@ -746,7 +746,7 @@ mod gpu_tests {
         ];
         let in_buf = upload(&device, &input);
         let out_cap = (input.len() * 2) as u32;
-        let out_buf = device.create_buffer(out_cap as u64 * 32, BufferUse::Upload);
+        let out_buf = device.create_buffer(out_cap as u64 * 32, BufferUse::Readback);
 
         dispatch(
             &device, &pipeline, &in_buf, &out_buf, out_cap, 2, 1.5, 0.0, ALL,
@@ -802,7 +802,7 @@ mod gpu_tests {
         ];
         let in_buf = upload(&device, &input);
         let out_cap = (input.len() * 2) as u32;
-        let out_buf = device.create_buffer(out_cap as u64 * 32, BufferUse::Upload);
+        let out_buf = device.create_buffer(out_cap as u64 * 32, BufferUse::Readback);
 
         for axis in 0u32..6u32 {
             dispatch(
@@ -841,7 +841,7 @@ mod gpu_tests {
         let input = [live_instance([1.0, 2.0, -3.0], 1.5, [0.4, -0.8, 1.7])];
         let in_buf = upload(&device, &input);
         let out_cap = (input.len() * 2) as u32;
-        let out_buf = device.create_buffer(out_cap as u64 * 32, BufferUse::Upload);
+        let out_buf = device.create_buffer(out_cap as u64 * 32, BufferUse::Readback);
 
         // Gate on, offset 1.0.
         dispatch(
@@ -915,7 +915,7 @@ mod gpu_tests {
         ];
         let in_buf = upload(&device, &input);
         let out_cap = (input.len() * 2) as u32;
-        let out_buf = device.create_buffer(out_cap as u64 * 32, BufferUse::Upload);
+        let out_buf = device.create_buffer(out_cap as u64 * 32, BufferUse::Readback);
 
         dispatch(
             &device, &pipeline, &in_buf, &out_buf, out_cap, 3, 1.25, 1.0, ALL,
@@ -966,7 +966,7 @@ mod gpu_tests {
         // Rotated, scaled, off-origin — nothing symmetric about anything.
         let src = live_instance([1.5, 4.0, -2.5], 0.8, [0.7, -1.3, 2.1]);
         let in_buf = upload(&device, &[src]);
-        let out_buf = device.create_buffer(2 * 32, BufferUse::Upload);
+        let out_buf = device.create_buffer(2 * 32, BufferUse::Readback);
 
         let d = 1.25f32; // floor plane y = 1.25
         dispatch(&device, &pipeline, &in_buf, &out_buf, 2, 2, d, 1.0, ALL);
@@ -1056,7 +1056,7 @@ mod gpu_tests {
             rot_pad: [0.0; 4],
         }];
         let in_buf = upload(&device, &identity);
-        let out_buf = device.create_buffer(2 * 32, BufferUse::Upload);
+        let out_buf = device.create_buffer(2 * 32, BufferUse::Readback);
 
         // -Y floor at d = 3: mirrored identity sits at y = -2 d = -6.
         dispatch(&device, &pipeline, &in_buf, &out_buf, 2, 3, 3.0, 1.0, ALL);
@@ -1172,7 +1172,7 @@ mod gpu_tests {
         ];
         let in_buf = upload(&device, &input);
         let out_cap = (input.len() * 2) as u32;
-        let out_buf = device.create_buffer(out_cap as u64 * 32, BufferUse::Upload);
+        let out_buf = device.create_buffer(out_cap as u64 * 32, BufferUse::Readback);
 
         // Fused Params layout: n0_axis: u32, n0_plane_offset: f32,
         // n0_enabled: f32, n0_live_count: f32 (16 bytes, no pad).
@@ -1250,7 +1250,7 @@ mod gpu_tests {
             .collect();
         let in_buf = upload(&device, &input);
         let out_cap = (input.len() * 2) as u32;
-        let out_buf = device.create_buffer(out_cap as u64 * 32, BufferUse::Upload);
+        let out_buf = device.create_buffer(out_cap as u64 * 32, BufferUse::Readback);
         for live in [0.0f32, 2.0, 3.6, 6.0] {
             dispatch(
                 &device, &pipeline, &in_buf, &out_buf, out_cap, 2, 0.0, 1.0, live,

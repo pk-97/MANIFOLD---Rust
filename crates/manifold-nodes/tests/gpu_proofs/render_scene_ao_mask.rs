@@ -173,7 +173,7 @@ fn readback_r8unorm(
     const BYTES_PER_PIXEL: u32 = 1;
     let bytes_per_row = texture.width * BYTES_PER_PIXEL;
     let total_bytes = u64::from(texture.height * bytes_per_row);
-    let buf = device.create_buffer(total_bytes, BufferUse::Upload);
+    let buf = device.create_buffer(total_bytes, BufferUse::Readback);
 
     let mut enc = device.create_encoder("ao-mask-readback");
     enc.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);

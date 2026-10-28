@@ -73,7 +73,7 @@ fn readback(device: &GpuDevice, tex: &GpuTexture) -> Vec<[f32; 4]> {
     let row_bytes = tex.width * 8;
     let buffer = device.create_buffer(
         u64::from(row_bytes) * u64::from(tex.height),
-        BufferUse::Upload,
+        BufferUse::Readback,
     );
     let mut encoder = device.create_encoder("bokeh-proof-readback");
     encoder.copy_texture_to_buffer(tex, &buffer, tex.width, tex.height, row_bytes);

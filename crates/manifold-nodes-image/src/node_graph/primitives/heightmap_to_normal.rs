@@ -228,7 +228,7 @@ fn body(tex_in: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
     fn readback_rgba(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<[f32; 4]> {
         let bytes_per_row = w * 8;
         let total = u64::from(h * bytes_per_row);
-        let readback = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(total, manifold_gpu::BufferUse::Readback);
         let mut enc = device.create_encoder("surface-bumps-readback");
         enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
         enc.commit_and_wait().expect("GPU work completes");

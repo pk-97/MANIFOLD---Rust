@@ -236,7 +236,7 @@ mod gpu_tests {
         } else {
             device.create_buffer(std::mem::size_of_val(src_vertices) as u64, manifold_gpu::BufferUse::Upload)
         };
-        let dst = device.create_buffer(src_vertices.len() as u64 * 4, manifold_gpu::BufferUse::Upload);
+        let dst = device.create_buffer(src_vertices.len() as u64 * 4, manifold_gpu::BufferUse::Readback);
         let mut encoder = device.create_encoder(label);
         encoder.dispatch_compute(
             &pipeline,

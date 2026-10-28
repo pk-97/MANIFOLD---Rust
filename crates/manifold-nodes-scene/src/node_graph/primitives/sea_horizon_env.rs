@@ -180,7 +180,7 @@ mod gpu_tests {
             "sea-horizon",
         );
         enc.commit_and_wait().expect("GPU work completes");
-        let buf = device.create_buffer(u64::from(w * h * 8), manifold_gpu::BufferUse::Upload);
+        let buf = device.create_buffer(u64::from(w * h * 8), manifold_gpu::BufferUse::Readback);
         let mut enc = device.create_encoder("sea-horizon-readback");
         enc.copy_texture_to_buffer(&out.texture, &buf, w, h, w * 8);
         enc.commit_and_wait().expect("GPU work completes");

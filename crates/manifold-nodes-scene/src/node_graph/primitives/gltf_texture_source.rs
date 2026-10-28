@@ -970,7 +970,7 @@ mod gpu_tests {
     ) -> Vec<u8> {
         let bytes_per_row = w * tex.format.bytes_per_pixel();
         let total = u64::from(h * bytes_per_row);
-        let readback_buf = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
+        let readback_buf = device.create_buffer(total, manifold_gpu::BufferUse::Readback);
         let mut enc = device.create_encoder("gltf-texture-source-provided-readback");
         enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
         enc.commit_and_wait().expect("GPU work completes");
@@ -995,7 +995,7 @@ mod gpu_tests {
         let tex = backend.texture_2d(slot).expect("texture retained");
         let bytes_per_row = w * 4; // Rgba8Unorm[Srgb]
         let total = u64::from(h * bytes_per_row);
-        let readback_buf = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
+        let readback_buf = device.create_buffer(total, manifold_gpu::BufferUse::Readback);
         let mut enc = device.create_encoder("gltf-texture-source-readback");
         enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
         enc.commit_and_wait().expect("GPU work completes");

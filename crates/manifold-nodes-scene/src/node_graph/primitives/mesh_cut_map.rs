@@ -758,7 +758,7 @@ mod tests {
         status.zero_fill();
         let map = device.create_buffer(
             u64::from(output_capacity.max(1)) * VEC4_VERTEX_SIZE,
-            BufferUse::Upload,
+            BufferUse::Readback,
         );
         let uniforms = CutMapUniforms {
             mode,
@@ -1167,11 +1167,11 @@ mod tests {
             let prefix = device.create_buffer(words * 4, BufferUse::Upload);
             let status = device.create_buffer(16, BufferUse::Upload);
             status.zero_fill();
-            let live = device.create_buffer(4, BufferUse::Upload);
+            let live = device.create_buffer(4, BufferUse::Readback);
             let output_capacity = triangles * 3;
             let map = device.create_buffer(
                 u64::from(output_capacity) * VEC4_VERTEX_SIZE,
-                BufferUse::Upload,
+                BufferUse::Readback,
             );
             let uniforms = CutMapUniforms {
                 mode: 0,

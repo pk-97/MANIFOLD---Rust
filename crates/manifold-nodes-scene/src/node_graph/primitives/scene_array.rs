@@ -601,7 +601,7 @@ mod gpu_tests {
         ahead: u32,
     ) -> Vec<InstanceTransform> {
         let capacity = WINDOW_CAPACITY;
-        let out_buf = device.create_buffer(capacity as u64 * 32, manifold_gpu::BufferUse::Upload);
+        let out_buf = device.create_buffer(capacity as u64 * 32, manifold_gpu::BufferUse::Readback);
         let mut enc = device.create_encoder("scene_array_test");
         let uniforms = SceneArrayUniforms {
             pattern_length: pattern_length as i32,

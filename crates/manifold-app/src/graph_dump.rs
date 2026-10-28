@@ -65,7 +65,7 @@ fn readback_rgba(device: &GpuDevice, tex: &GpuTexture) -> Option<Vec<[f32; 4]>> 
     let aligned = tight.div_ceil(256) * 256;
     let buf = device.create_buffer(
         u64::from(aligned) * u64::from(tex.height),
-        BufferUse::Upload,
+        BufferUse::Readback,
     );
     let mut enc = device.create_encoder("Graph Dump Readback");
     enc.copy_texture_to_buffer(tex, &buf, tex.width, tex.height, aligned);
@@ -221,7 +221,7 @@ fn dump_one_array(
         (size / u64::from(a.item_size)) as usize
     };
     // Read the buffer back via a shared staging buffer.
-    let staging = device.create_buffer(size, BufferUse::Upload);
+    let staging = device.create_buffer(size, BufferUse::Readback);
     let mut enc = device.create_encoder("Array Dump Readback");
     enc.copy_buffer_to_buffer(a.buffer, &staging, size);
     enc.commit_and_wait().expect("GPU work completes");

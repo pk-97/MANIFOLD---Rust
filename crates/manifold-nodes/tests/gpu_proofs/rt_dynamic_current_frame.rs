@@ -581,7 +581,7 @@ fn read_rgba32_channel(
     assert_eq!(capture.tex.format, GpuTextureFormat::Rgba32Float);
     let bytes_per_row = capture.w * 16;
     let total = u64::from(capture.h * bytes_per_row);
-    let buffer = device.create_buffer(total, BufferUse::Upload);
+    let buffer = device.create_buffer(total, BufferUse::Readback);
     let mut encoder = device.create_encoder("rt-history-proof-readback");
     encoder.copy_texture_to_buffer(&capture.tex, &buffer, capture.w, capture.h, bytes_per_row);
     encoder.commit_and_wait().expect("GPU work completes");

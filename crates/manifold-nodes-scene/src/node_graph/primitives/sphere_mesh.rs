@@ -177,7 +177,7 @@ mod gpu_tests {
         let pipeline = device.create_compute_pipeline(&wgsl, "cs_main", "sphere-mesh-oracle");
         let out = device.create_buffer(
             capacity as u64 * std::mem::size_of::<MeshVertex>() as u64,
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let mut enc = device.create_encoder("sphere-mesh-oracle");
         enc.dispatch_compute(

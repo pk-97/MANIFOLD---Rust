@@ -454,7 +454,7 @@ fn readback_rgba_f32(texture: &GpuTexture) -> Vec<f32> {
     let h = shared();
     let bytes_per_row = W * 8; // Rgba16Float = 8 bytes/px
     let total_bytes = u64::from(H * bytes_per_row);
-    let buf = h.device.create_buffer(total_bytes, BufferUse::Upload);
+    let buf = h.device.create_buffer(total_bytes, BufferUse::Readback);
     let mut enc = h.device.create_encoder("p2-irradiance-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");
@@ -593,7 +593,7 @@ fn run_accumulate_with_sv(
     let svt_sink = make_history(device, "p2-svt-sink");
     let svt_dummy = upload_irr(device, 1.0, 1.0, 1.0, "p2-svt-dummy");
     let gi_materials_buf =
-        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Readback);
     let mut enc = device.create_encoder(label);
     {
         let gpu = RendererGpuEncoder::new(&mut enc, device);
@@ -687,7 +687,7 @@ fn run_accumulate_with_svt(
     }
     let hi_refl_dummy = upload_irr(device, 0.0, 0.0, 0.0, "p2-hi-refl-dummy");
     let gi_materials_buf =
-        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
+        device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Readback);
     let mut enc = device.create_encoder(label);
     {
         let gpu = RendererGpuEncoder::new(&mut enc, device);

@@ -705,7 +705,7 @@ impl Show {
             .unwrap_or_else(|| panic!("{name} provides no {port}"));
         let bytes = buffer.size;
         // The storage may be GPU-private: copy it to shared storage first.
-        let staged = self.device.create_buffer(bytes.max(4), BufferUse::Upload);
+        let staged = self.device.create_buffer(bytes.max(4), BufferUse::Readback);
         let mut encoder = self
             .device
             .create_encoder("whitewater-scene provided readback");
@@ -762,7 +762,7 @@ impl Show {
         );
         // The storage may be GPU-private: copy it to shared storage first.
         let bytes = (len * std::mem::size_of::<T>()) as u64;
-        let staged = self.device.create_buffer(bytes.max(4), BufferUse::Upload);
+        let staged = self.device.create_buffer(bytes.max(4), BufferUse::Readback);
         let mut encoder = self
             .device
             .create_encoder("whitewater-scene provided readback");

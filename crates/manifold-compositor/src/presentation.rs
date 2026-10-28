@@ -437,7 +437,7 @@ mod gpu_tests {
             GpuTextureUsage::RENDER_TARGET_FULL,
             "presentation-proof-target",
         );
-        let readback = device.create_buffer(ROW_BYTES as u64, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(ROW_BYTES as u64, manifold_gpu::BufferUse::Readback);
         let pipeline = PresentationPipeline::new(device);
         let plan = DisplayPlan::new(capabilities, curve);
         let mut enc = device.create_encoder("presentation-proof");
@@ -468,7 +468,7 @@ mod gpu_tests {
             "scene-linear-proof-source",
         );
         let tonemap = TonemapPipeline::new(device, W, H);
-        let readback = device.create_buffer(ROW_BYTES as u64, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(ROW_BYTES as u64, manifold_gpu::BufferUse::Readback);
         let mut native = device.create_encoder("scene-linear-proof");
         enc_upload(&mut native, &source, input);
         {

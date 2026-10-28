@@ -314,7 +314,7 @@ fn capture_frame(
 ) {
     assert_eq!(tex.format.bytes_per_pixel(), 8);
     let row_bytes = tex.width * 8;
-    let buffer = device.create_buffer((row_bytes * tex.height) as u64, BufferUse::Upload);
+    let buffer = device.create_buffer((row_bytes * tex.height) as u64, BufferUse::Readback);
     let mut encoder = device.create_encoder("corridor-capture");
     encoder.copy_texture_to_buffer(tex, &buffer, tex.width, tex.height, row_bytes);
     encoder.commit_and_wait().expect("GPU work completes");
@@ -352,7 +352,7 @@ fn readback_mean_rgba(
     assert_eq!(tex.format, manifold_gpu::GpuTextureFormat::Rgba16Float);
     let row_bytes = tex.width * tex.format.bytes_per_pixel();
     let size = row_bytes as usize * tex.height as usize;
-    let buffer = device.create_buffer(size as u64, BufferUse::Upload);
+    let buffer = device.create_buffer(size as u64, BufferUse::Readback);
     let mut encoder = device.create_encoder("corridor-acceptance-readback");
     encoder.copy_texture_to_buffer(tex, &buffer, tex.width, tex.height, row_bytes);
     encoder.commit_and_wait().expect("GPU work completes");

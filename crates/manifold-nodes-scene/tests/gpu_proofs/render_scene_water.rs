@@ -366,7 +366,7 @@ fn read_depth(
     );
     let bytes_per_row = tex.width * 4;
     let total = u64::from(tex.height * bytes_per_row);
-    let buf = h.device.create_buffer(total, BufferUse::Upload);
+    let buf = h.device.create_buffer(total, BufferUse::Readback);
     let mut enc = h.device.create_encoder("water-depth-readback");
     enc.copy_texture_to_buffer(tex, &buf, tex.width, tex.height, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");
@@ -495,7 +495,7 @@ impl WaterScene {
         let buf = self
             .h
             .device
-            .create_buffer(u64::from(mask.width * mask.height), BufferUse::Upload);
+            .create_buffer(u64::from(mask.width * mask.height), BufferUse::Readback);
         let mut enc = self.h.device.create_encoder("water-mask-readback");
         enc.copy_texture_to_buffer(mask, &buf, mask.width, mask.height, mask.width);
         enc.commit_and_wait().expect("GPU work completes");

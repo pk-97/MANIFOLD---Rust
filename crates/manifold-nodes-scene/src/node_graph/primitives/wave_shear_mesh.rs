@@ -290,7 +290,7 @@ mod gpu_tests {
         unsafe {
             input.write(0, bytemuck::cast_slice(src));
         }
-        let output = device.create_buffer(std::mem::size_of_val(src) as u64, manifold_gpu::BufferUse::Upload);
+        let output = device.create_buffer(std::mem::size_of_val(src) as u64, manifold_gpu::BufferUse::Readback);
         let mut enc = device.create_encoder(label);
         enc.dispatch_compute(
             &pipeline,

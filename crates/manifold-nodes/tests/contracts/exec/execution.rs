@@ -64,7 +64,7 @@ mod bug_216_gpu_tests {
             .expect("resource's texture must be retained");
         let bytes_per_row = w * 8; // rgba16float = 8 bytes/pixel
         let total_bytes = u64::from(h * bytes_per_row);
-        let readback_buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Upload);
+        let readback_buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Readback);
         let mut readback_enc = device.create_encoder("bug216-readback");
         readback_enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
         readback_enc.commit_and_wait().expect("GPU work completes");

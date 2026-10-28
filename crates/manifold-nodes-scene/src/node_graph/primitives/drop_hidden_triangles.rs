@@ -154,7 +154,7 @@ mod gpu_tests {
         unsafe {
             input.write(0, bytemuck::cast_slice(src));
         }
-        let output = device.create_buffer(bytes, manifold_gpu::BufferUse::Upload);
+        let output = device.create_buffer(bytes, manifold_gpu::BufferUse::Readback);
         let uniforms = DropUniforms {
             cutoff,
             dispatch_count: src.len() as u32,

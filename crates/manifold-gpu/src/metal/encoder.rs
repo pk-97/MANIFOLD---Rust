@@ -2917,7 +2917,7 @@ mod tests {
         };
 
         let count_red = |device: &GpuDevice, target: &crate::GpuTexture| -> u32 {
-            let buf = device.create_buffer(64 * 64 * 4, BufferUse::Upload);
+            let buf = device.create_buffer(64 * 64 * 4, BufferUse::Readback);
             let mut enc = device.create_encoder("test points readback");
             enc.copy_texture_to_buffer(target, &buf, 64, 64, 64 * 4);
             enc.commit_and_wait().expect("GPU work completes");
@@ -3149,7 +3149,7 @@ mod tests {
                 std::slice::from_ref(&draw),
                 "test indirect draw",
             );
-            let readback = device.create_buffer(64 * 64 * 4, BufferUse::Upload);
+            let readback = device.create_buffer(64 * 64 * 4, BufferUse::Readback);
             enc.copy_texture_to_buffer(&target, &readback, 64, 64, 64 * 4);
             enc.commit_and_wait().expect("GPU work completes");
             let ptr = readback

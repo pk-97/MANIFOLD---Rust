@@ -38,7 +38,7 @@ fn dispatch_production_morph(source: MeshVertex, target: MeshVertex) -> MeshVert
     let weights_buf = h.device.create_buffer(4, BufferUse::Upload);
     let output_buf = h
         .device
-        .create_buffer(std::mem::size_of::<MeshVertex>() as u64, BufferUse::Upload);
+        .create_buffer(std::mem::size_of::<MeshVertex>() as u64, BufferUse::Readback);
     unsafe {
         source_buf.write(0, bytemuck::bytes_of(&source));
         target_buf.write(0, bytemuck::bytes_of(&target));

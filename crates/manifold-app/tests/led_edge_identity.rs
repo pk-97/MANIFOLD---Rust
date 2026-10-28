@@ -63,7 +63,7 @@ fn edge_extend_half_widths_is_identity_mapping() {
     enc.commit_and_wait().expect("GPU work completes");
 
     let bytes_per_row = STRIPS * 4;
-    let buf = device.create_buffer(u64::from(LEDS * bytes_per_row), BufferUse::Upload);
+    let buf = device.create_buffer(u64::from(LEDS * bytes_per_row), BufferUse::Readback);
     let mut read_enc = device.create_encoder("edge-identity-readback");
     read_enc.copy_texture_to_buffer(blit.output_texture(), &buf, STRIPS, LEDS, bytes_per_row);
     read_enc.commit_and_wait().expect("GPU work completes");

@@ -360,7 +360,7 @@ fn generated_atomic_side_output_matches_cpu_reference() {
 
     let point_bytes: &[u8] = bytemuck::cast_slice(&points);
     let points_buf = device.create_buffer(point_bytes.len() as u64, BufferUse::Upload);
-    let momentum_buf = device.create_buffer(u64::from(MOMENTUM_WORDS) * 4, BufferUse::Upload);
+    let momentum_buf = device.create_buffer(u64::from(MOMENTUM_WORDS) * 4, BufferUse::Readback);
     unsafe {
         std::ptr::copy_nonoverlapping(
             point_bytes.as_ptr(),

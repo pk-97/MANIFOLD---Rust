@@ -651,7 +651,7 @@ impl LiquidRun {
             .find(|dump| dump.type_id == type_id && dump.port == port)
             .unwrap_or_else(|| panic!("no {type_id}.{port} in the dump"));
         let bytes = dump.buffer.size();
-        let staging = self.device.create_buffer(bytes, BufferUse::Upload);
+        let staging = self.device.create_buffer(bytes, BufferUse::Readback);
         let mut encoder = self.device.create_encoder("liquid-conformance-readback");
         encoder.copy_buffer_to_buffer(dump.buffer, &staging, bytes);
         encoder.commit_and_wait().expect("GPU work completes");

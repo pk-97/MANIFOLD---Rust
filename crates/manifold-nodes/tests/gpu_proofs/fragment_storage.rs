@@ -82,7 +82,7 @@ fn fragment_reads_storage_buffer_via_bytes_binding() {
     enc.commit_and_wait().expect("GPU work completes");
 
     let bytes_per_row = w * 8;
-    let buf = device.create_buffer(u64::from(hgt * bytes_per_row), BufferUse::Upload);
+    let buf = device.create_buffer(u64::from(hgt * bytes_per_row), BufferUse::Readback);
     let mut rb = device.create_encoder("fsp-readback");
     rb.copy_texture_to_buffer(&target.texture, &buf, w, hgt, bytes_per_row);
     rb.commit_and_wait().expect("GPU work completes");

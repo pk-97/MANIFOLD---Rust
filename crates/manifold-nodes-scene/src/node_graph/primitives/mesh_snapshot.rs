@@ -266,7 +266,7 @@ fn readback_rgba_f32(
 ) -> Vec<[f32; 4]> {
     let bytes_per_row = w * 8;
     let total = u64::from(h * bytes_per_row);
-    let buf = device.create_buffer(total, BufferUse::Upload);
+    let buf = device.create_buffer(total, BufferUse::Readback);
     let mut enc = device.create_encoder("m6-readback");
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");

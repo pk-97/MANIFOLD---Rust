@@ -342,7 +342,7 @@ fn inspect_output(ct: &ContentThread) -> (bool, usize, f32) {
     assert_eq!(texture.format, manifold_gpu::GpuTextureFormat::Rgba16Float);
     let row_bytes = texture.width * texture.format.bytes_per_pixel();
     let size = row_bytes as usize * texture.height as usize;
-    let buffer = device.create_buffer(size as u64, BufferUse::Upload);
+    let buffer = device.create_buffer(size as u64, BufferUse::Readback);
     let mut encoder = device.create_encoder("blob-v2-performance-output");
     encoder.copy_texture_to_buffer(texture, &buffer, texture.width, texture.height, row_bytes);
     encoder.commit_and_wait().expect("GPU work completes");

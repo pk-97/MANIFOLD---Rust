@@ -241,7 +241,7 @@ mod gpu_tests {
             .expect("masked_mix output should be retained on backend");
         let bytes_per_row = w * 8;
         let total_bytes = u64::from(h * bytes_per_row);
-        let buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Upload);
+        let buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Readback);
         let mut rb_enc = device.create_encoder("masked-mix-readback");
         rb_enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
         rb_enc.commit_and_wait().expect("GPU work completes");

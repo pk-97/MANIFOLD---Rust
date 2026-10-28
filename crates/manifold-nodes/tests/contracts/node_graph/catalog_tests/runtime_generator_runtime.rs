@@ -1119,7 +1119,7 @@ fn fluidsim2d_survives_live_resize() {
         let bytes_per_row = w * 8;
         let buf = device.create_buffer(
             u64::from(h * bytes_per_row),
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let mut rb = device.create_encoder("fluid-resize-readback");
         rb.copy_texture_to_buffer(&target.texture, &buf, w, h, bytes_per_row);

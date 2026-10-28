@@ -237,7 +237,7 @@ fn render_and_readback(
         "the deformer output must hold at least the {VERTEX_COUNT}-vertex buffer, got {} bytes",
         buf.size
     );
-    let staging = device.create_buffer(buf.size, BufferUse::Upload);
+    let staging = device.create_buffer(buf.size, BufferUse::Readback);
     let mut read_enc = device.create_encoder("rt-dynamic-fusion-readback");
     read_enc.copy_buffer_to_buffer(buf, &staging, buf.size);
     read_enc.commit_and_wait().expect("GPU work completes");

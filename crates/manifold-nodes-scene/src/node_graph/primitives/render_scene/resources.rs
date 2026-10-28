@@ -704,7 +704,7 @@ impl RenderScene {
     /// when `render_mode.z` is set.
     pub(super) fn ensure_prev_positions_dummy(&mut self, device: &manifold_gpu::GpuDevice) {
         if self.prev_positions_dummy.is_none() {
-            let buf = device.create_buffer(prev_positions::RECORD_BYTES, BufferUse::Upload);
+            let buf = device.create_buffer(prev_positions::RECORD_BYTES, BufferUse::Readback);
             // The newly allocated buffer is exclusively owned and not yet
             // submitted, and the write covers exactly its allocation.
             unsafe {
@@ -725,7 +725,7 @@ impl RenderScene {
             let bytes = std::mem::size_of::<manifold_gpu::raytrace::EmissiveTriangleGpu>().max(
                 std::mem::size_of::<manifold_gpu::raytrace::EmissiveAliasEntry>(),
             );
-            let buf = device.create_buffer(bytes as u64, BufferUse::Upload);
+            let buf = device.create_buffer(bytes as u64, BufferUse::Readback);
             // The newly allocated buffer is exclusively owned and not yet
             // submitted, and the write covers exactly its allocation.
             unsafe {

@@ -208,7 +208,7 @@ mod gpu_tests {
             .expect("clamp output texture retained");
         let bytes_per_row = w * 8;
         let total = u64::from(h * bytes_per_row);
-        let readback = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(total, manifold_gpu::BufferUse::Readback);
         let mut readback_enc = device.create_encoder("clamp-readback");
         readback_enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
         readback_enc.commit_and_wait().expect("GPU work completes");

@@ -6701,7 +6701,7 @@ mod alias_gpu_tests {
     }
 
     fn first_red(device: &manifold_gpu::GpuDevice, texture: &manifold_gpu::GpuTexture) -> f32 {
-        let buffer = device.create_buffer(4 * 4 * 8, BufferUse::Upload);
+        let buffer = device.create_buffer(4 * 4 * 8, BufferUse::Readback);
         let mut enc = device.create_encoder("held-terminal-readback");
         enc.copy_texture_to_buffer(texture, &buffer, 4, 4, 32);
         enc.commit_and_wait().expect("GPU work completes");

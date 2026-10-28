@@ -21,7 +21,7 @@ pub(super) fn read_f32(buffer: &GpuBuffer, count: usize) -> Vec<f32> {
 
 /// Mip 0 of `texture` read back as (sx, sz) per texel, row-major.
 fn read_slopes(device: &GpuDevice, texture: &GpuTexture) -> Vec<[f32; 2]> {
-    let out = device.create_buffer((N * N * 4) as u64, BufferUse::Upload);
+    let out = device.create_buffer((N * N * 4) as u64, BufferUse::Readback);
     let mut enc = device.create_encoder("ripple slopes readback");
     enc.copy_texture_to_buffer(texture, &out, N as u32, N as u32, N as u32 * 4);
     enc.commit_and_wait().expect("GPU work completes");

@@ -761,7 +761,7 @@ fn read_back<T: bytemuck::Pod>(
     let record = std::mem::size_of::<T>() as u64;
     let count = count.min(buffer.size() / record);
     let bytes = (count * record).max(record);
-    let staging = device.create_buffer(bytes, BufferUse::Upload);
+    let staging = device.create_buffer(bytes, BufferUse::Readback);
     let mut encoder = device.create_encoder("fluid-capture-readback");
     encoder.copy_buffer_to_buffer(buffer, &staging, bytes.min(buffer.size()));
     encoder.commit_and_wait().expect("GPU work completes");

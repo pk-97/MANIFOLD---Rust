@@ -12,7 +12,7 @@ fn readback_mean_rgb(device: &manifold_gpu::GpuDevice, tex: &GpuTexture) -> [f64
     assert_eq!(tex.format, manifold_gpu::GpuTextureFormat::Rgba16Float);
     let bpp = tex.format.bytes_per_pixel();
     let row_bytes = bpp * tex.width;
-    let buffer = device.create_buffer((row_bytes * tex.height) as u64, BufferUse::Upload);
+    let buffer = device.create_buffer((row_bytes * tex.height) as u64, BufferUse::Readback);
     let mut encoder = device.create_encoder("gap-start-regression-readback");
     encoder.copy_texture_to_buffer(tex, &buffer, tex.width, tex.height, row_bytes);
     encoder.commit_and_wait().expect("GPU work completes");

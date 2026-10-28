@@ -248,7 +248,7 @@ fn thumbnail_capture_survives_owner_drop_before_gpu_submission() {
         "thumbnail capture destination",
     );
     let bytes_per_row = THUMB_W * 4;
-    let readback = device.create_buffer(u64::from(bytes_per_row * THUMB_H), BufferUse::Upload);
+    let readback = device.create_buffer(u64::from(bytes_per_row * THUMB_H), BufferUse::Readback);
     let mut encoder = device.create_encoder("thumbnail capture retirement");
     let source = renderer.thumb_texture("captured").unwrap();
     encoder.clear_texture(source, 1.0, 0.0, 0.0, 1.0);

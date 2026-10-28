@@ -188,7 +188,7 @@ mod gpu_tests {
         for shape in 0..5u32 {
             let out = device.create_buffer(
                 (PLATONIC_MESH_CAPACITY * std::mem::size_of::<MeshVertex>()) as u64,
-                BufferUse::Upload,
+                BufferUse::Readback,
             );
             let uniforms = UploadUniforms {
                 count: platonic_mesh_upload_count(shape),

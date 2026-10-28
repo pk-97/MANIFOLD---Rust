@@ -117,7 +117,7 @@ pub fn read_rt_channel(
     };
     let bytes_per_row = cap.w * bpp;
     let total = u64::from(cap.h * bytes_per_row);
-    let buf = device.create_buffer(total, BufferUse::Upload);
+    let buf = device.create_buffer(total, BufferUse::Readback);
     let mut enc = device.create_encoder("rt-channel-readback");
     enc.copy_texture_to_buffer(&cap.tex, &buf, cap.w, cap.h, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");
@@ -142,7 +142,7 @@ pub fn readback_rgba_f32(
     use half::f16;
     let bytes_per_row = texture.width * 8; // Rgba16Float = 8 bytes/px
     let total_bytes = u64::from(texture.height * bytes_per_row);
-    let buf = device.create_buffer(total_bytes, BufferUse::Upload);
+    let buf = device.create_buffer(total_bytes, BufferUse::Readback);
     let mut enc = device.create_encoder("rt-t2b-readback");
     enc.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");

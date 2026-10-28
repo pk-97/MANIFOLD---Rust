@@ -854,7 +854,7 @@ fn infrared_centre_rgb(palette: f32, fill: [f32; 4]) -> [f32; 3] {
     fn center_rgb(device: &GpuDevice, rt: &RenderTarget) -> [f32; 3] {
         let (w, h) = (rt.width, rt.height);
         let bpr = w * 8;
-        let buf = device.create_buffer(u64::from(h * bpr), BufferUse::Upload);
+        let buf = device.create_buffer(u64::from(h * bpr), BufferUse::Readback);
         let mut e = device.create_encoder("ir-read");
         e.copy_texture_to_buffer(&rt.texture, &buf, w, h, bpr);
         e.commit_and_wait().expect("GPU work completes");
@@ -1010,7 +1010,7 @@ fn wireframe_generator_background_is_black() {
     // Read the whole frame, report per-channel min/max and the corner pixel
     // (almost certainly background for a centred wireframe).
     let bpr = w * 8;
-    let buf = device.create_buffer(u64::from(h * bpr), BufferUse::Upload);
+    let buf = device.create_buffer(u64::from(h * bpr), BufferUse::Readback);
     let mut renc = device.create_encoder("wz-read");
     renc.copy_texture_to_buffer(&target.texture, &buf, w, h, bpr);
     renc.commit_and_wait().expect("GPU work completes");

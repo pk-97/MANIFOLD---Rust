@@ -353,7 +353,7 @@ mod gpu_tests {
         let vert_bytes = (capacity as u64) * std::mem::size_of::<Vec4Vertex>() as u64;
         let point_bytes = (capacity as u64) * std::mem::size_of::<CurvePoint>() as u64;
         let in_buf = device.create_buffer(vert_bytes, manifold_gpu::BufferUse::Upload);
-        let out_buf = device.create_buffer(point_bytes, manifold_gpu::BufferUse::Upload);
+        let out_buf = device.create_buffer(point_bytes, manifold_gpu::BufferUse::Readback);
 
         // CPU-write the 4D input vertices into the shared input
         // buffer. Slots past `verts.len()` keep their zero-init

@@ -702,7 +702,7 @@ mod gpu_tests {
         let bytes_per_row = texture.width * 8;
         let buffer = device.create_buffer(
             u64::from(texture.height * bytes_per_row),
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let mut enc = device.create_encoder("feedback-seed-readback");
         enc.copy_texture_to_buffer(
@@ -997,7 +997,7 @@ mod gpu_tests {
             .expect("output texture retained");
         let bytes_per_row = w * 8;
         let total_bytes = u64::from(h * bytes_per_row);
-        let readback_buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Upload);
+        let readback_buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Readback);
         let mut readback_enc = device.create_encoder("seed-readback");
         readback_enc.copy_texture_to_buffer(out_tex, &readback_buf, w, h, bytes_per_row);
         readback_enc.commit_and_wait().expect("GPU work completes");

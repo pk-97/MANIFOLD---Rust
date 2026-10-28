@@ -238,7 +238,7 @@ mod gpu_tests {
         let bytes_per_row = vr * 8;
         let bytes_per_image = bytes_per_row * vr;
         let total = u64::from(bytes_per_image * vd);
-        let readback = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(total, manifold_gpu::BufferUse::Readback);
         let mut rb = device.create_encoder("resolve3d-readback");
         rb.copy_texture_3d_to_buffer(&density, &readback, vr, vr, vd, bytes_per_row);
         rb.commit_and_wait().expect("GPU work completes");

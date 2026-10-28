@@ -324,7 +324,7 @@ mod tests {
         let bytes_per_row = 2 * 8; // 2 px × rgba16float (8 bytes)
         let readback = device.create_buffer(
             u64::from(2 * bytes_per_row),
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let mut rb_enc = device.create_encoder("resize-test-readback");
         rb_enc.copy_texture_to_buffer(&dst, &readback, 2, 2, bytes_per_row);

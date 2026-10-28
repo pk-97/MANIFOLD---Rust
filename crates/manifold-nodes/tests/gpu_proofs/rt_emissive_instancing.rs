@@ -453,7 +453,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     );
     encoder.commit_and_wait().expect("GPU work completes");
 
-    let readback = device.create_buffer(8 * 4 * 4, BufferUse::Upload);
+    let readback = device.create_buffer(8 * 4 * 4, BufferUse::Readback);
     let mut enc2 = device.create_encoder("rt-emissive-inst-readback");
     enc2.copy_texture_to_buffer(&out_irr, &readback, 8, 1, 8 * 4 * 4);
     enc2.commit_and_wait().expect("GPU work completes");
@@ -466,7 +466,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     // unwired-object-model descriptor bug during bring-up (an identity
     // world matrix instead of the model transform put the receiver's copy
     // at the local origin and the primary missed).
-    let rb_n = device.create_buffer(8 * 4 * 4, BufferUse::Upload);
+    let rb_n = device.create_buffer(8 * 4 * 4, BufferUse::Readback);
     let mut enc3 = device.create_encoder("rt-emissive-inst-rb-n");
     enc3.copy_texture_to_buffer(&out_n, &rb_n, 8, 1, 8 * 4 * 4);
     enc3.commit_and_wait().expect("GPU work completes");

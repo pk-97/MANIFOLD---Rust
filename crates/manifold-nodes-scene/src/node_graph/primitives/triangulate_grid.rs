@@ -203,7 +203,7 @@ mod gpu_tests {
         );
         let dst_buf = device.create_buffer(
             u64::from(dst_cap) * std::mem::size_of::<MeshVertex>() as u64,
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         unsafe {
             src_buf.write(0, bytemuck::cast_slice(grid));

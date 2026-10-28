@@ -128,7 +128,7 @@ fn workgroup_memory_reads_zero_after_a_dirty_kernel() {
     let device = GpuDevice::new();
     // `out` holds one word per workgroup; every entry writes only out[g.x]
     // with g.x < GROUPS.
-    let out = device.create_buffer(u64::from(GROUPS) * 4, BufferUse::Upload);
+    let out = device.create_buffer(u64::from(GROUPS) * 4, BufferUse::Readback);
     let pipelines: Vec<_> = ENTRIES
         .iter()
         .map(|entry| {

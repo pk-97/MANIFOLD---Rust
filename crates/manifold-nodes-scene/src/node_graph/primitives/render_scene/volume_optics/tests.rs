@@ -187,7 +187,7 @@ fn uniforms_for_camera(
 
 fn read_center(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) -> f32 {
     let row_bytes = SIZE * 4;
-    let readback = device.create_buffer(u64::from(row_bytes * SIZE), BufferUse::Upload);
+    let readback = device.create_buffer(u64::from(row_bytes * SIZE), BufferUse::Readback);
     let mut encoder = device.create_encoder("volume optics readback");
     encoder.copy_texture_to_buffer(texture, &readback, SIZE, SIZE, row_bytes);
     encoder.commit_and_wait().expect("GPU work completes");

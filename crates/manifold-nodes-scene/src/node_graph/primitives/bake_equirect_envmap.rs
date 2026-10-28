@@ -693,7 +693,7 @@ mod gpu_tests {
     fn readback_rgba16f(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<[f32; 4]> {
         let bytes_per_row = w * 8;
         let total = u64::from(h * bytes_per_row);
-        let readback = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(total, manifold_gpu::BufferUse::Readback);
         let mut enc = device.create_encoder("bake-env-readback");
         enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
         enc.commit_and_wait().expect("GPU work completes");
@@ -1281,7 +1281,7 @@ mod gate_gpu_tests {
         let tex = backend.texture_2d(slot).expect("texture retained");
         let bytes_per_row = w * 8; // Rgba16Float
         let total = u64::from(h * bytes_per_row);
-        let readback_buf = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
+        let readback_buf = device.create_buffer(total, manifold_gpu::BufferUse::Readback);
         let mut enc = device.create_encoder("bake-env-gate-readback");
         enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
         enc.commit_and_wait().expect("GPU work completes");
@@ -1490,7 +1490,7 @@ mod hdri_gpu_tests {
         );
         enc.commit_and_wait().expect("GPU work completes");
 
-        let readback = device.create_buffer(u64::from(w * h * 8), manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(u64::from(w * h * 8), manifold_gpu::BufferUse::Readback);
         let mut enc = device.create_encoder("bake-env-hdri-readback");
         enc.copy_texture_to_buffer(&out.texture, &readback, w, h, w * 8);
         enc.commit_and_wait().expect("GPU work completes");

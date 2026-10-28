@@ -411,7 +411,7 @@ fn run_accumulate_frame(
 fn read_r_center(device: &GpuDevice, texture: &GpuTexture) -> f32 {
     let bytes_per_row = W * 8; // Rgba16Float = 8 bytes/px
     let total_bytes = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer(total_bytes, BufferUse::Upload);
+    let buf = device.create_buffer(total_bytes, BufferUse::Readback);
     let mut enc = device.create_encoder("gr-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");
@@ -425,7 +425,7 @@ fn read_rgba_pixels(device: &GpuDevice, texture: &GpuTexture) -> Vec<[f32; 4]> {
     assert_eq!(texture.format, GpuTextureFormat::Rgba16Float);
     let bytes_per_row = W * 8;
     let total_bytes = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer(total_bytes, BufferUse::Upload);
+    let buf = device.create_buffer(total_bytes, BufferUse::Readback);
     let mut enc = device.create_encoder("gr-readback-rgba");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");
@@ -440,7 +440,7 @@ fn read_rgba_pixels(device: &GpuDevice, texture: &GpuTexture) -> Vec<[f32; 4]> {
 fn read_rgb_center(device: &GpuDevice, texture: &GpuTexture) -> [f32; 3] {
     let bytes_per_row = W * 8;
     let total_bytes = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer(total_bytes, BufferUse::Upload);
+    let buf = device.create_buffer(total_bytes, BufferUse::Readback);
     let mut enc = device.create_encoder("gr-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");
@@ -454,7 +454,7 @@ fn read_scalar_pixels(device: &GpuDevice, texture: &GpuTexture) -> Vec<f32> {
     assert_eq!(texture.format, GpuTextureFormat::R16Float);
     let bytes_per_row = W * 2;
     let total_bytes = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer(total_bytes, BufferUse::Upload);
+    let buf = device.create_buffer(total_bytes, BufferUse::Readback);
     let mut enc = device.create_encoder("gr-readback-r16-all");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");
@@ -1274,7 +1274,7 @@ fn scalar_hold_r16_matches_rgba16_history() {
 fn read_moments_w_center(device: &GpuDevice, texture: &GpuTexture) -> f32 {
     let bytes_per_row = W * 16;
     let total_bytes = u64::from(H * bytes_per_row);
-    let buf = device.create_buffer(total_bytes, BufferUse::Upload);
+    let buf = device.create_buffer(total_bytes, BufferUse::Readback);
     let mut enc = device.create_encoder("gr-readback-moments");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");

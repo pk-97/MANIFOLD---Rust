@@ -96,7 +96,7 @@ fn render(scene: &str, gizmo_depth: bool) -> Frame {
 
 fn read(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
     let bytes_per_row = texture.width * 8;
-    let buf = device.create_buffer(u64::from(texture.height * bytes_per_row), BufferUse::Upload);
+    let buf = device.create_buffer(u64::from(texture.height * bytes_per_row), BufferUse::Readback);
     let mut enc = device.create_encoder("gizmo-proof-readback");
     enc.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");

@@ -382,7 +382,7 @@ fn run(fields: &[TestField], wants_velocity: bool, frame_seconds: f32) -> Run {
             .expect("march encodes");
     }
     let hit_bytes = u64::from(W * H) * 12;
-    let hits_read = device.create_buffer(hit_bytes, BufferUse::Upload);
+    let hits_read = device.create_buffer(hit_bytes, BufferUse::Readback);
     enc.copy_buffer_to_buffer(march.hits().expect("begin ran"), &hits_read, hit_bytes);
     let motion_read = velocity_out.as_ref().map(|t| {
         let b = device.create_buffer(u64::from(W * H * 4), BufferUse::Upload);
@@ -705,7 +705,7 @@ fn a_ray_steps_over_an_unheld_tile_in_one_step() {
     let tiles = shared_buffer(&device, &table.words);
     let extent = shared_buffer(&device, &table.extent());
     let probe_in = shared_buffer(&device, &input);
-    let probe_out = device.create_buffer((rays.len() * 16) as u64, BufferUse::Upload);
+    let probe_out = device.create_buffer((rays.len() * 16) as u64, BufferUse::Readback);
     let mut enc = device.create_encoder("march probe");
     enc.dispatch_compute(
         &pipeline,
@@ -836,7 +836,7 @@ fn tile_flags_cover_the_far_faces_of_a_tiles_cells() {
         )
         .expect("march encodes");
     let bytes = u64::from(table.pool_tiles) * 4;
-    let read = device.create_buffer(bytes, BufferUse::Upload);
+    let read = device.create_buffer(bytes, BufferUse::Readback);
     enc.copy_buffer_to_buffer(march.tile_flags(0).expect("marched"), &read, bytes);
     enc.commit_and_wait().expect("GPU work completes");
     let flags: &[u32] = unsafe {

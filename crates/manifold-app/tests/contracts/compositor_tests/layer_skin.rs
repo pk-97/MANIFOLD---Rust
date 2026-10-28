@@ -404,7 +404,7 @@ fn region_luma_pixels(
     texture: &manifold_gpu::GpuTexture,
 ) -> Vec<f32> {
     let bytes_per_row = W * 8;
-    let buf = device.create_buffer(u64::from(H * bytes_per_row), BufferUse::Upload);
+    let buf = device.create_buffer(u64::from(H * bytes_per_row), BufferUse::Readback);
     let mut rb = device.create_encoder("layer-skin-readback");
     rb.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
     rb.commit_and_wait().expect("GPU work completes");
@@ -633,7 +633,7 @@ fn skin_tracks_source_content_and_missing_id_falls_back() {
         let dump_png = |texture: &manifold_gpu::GpuTexture, path: std::path::PathBuf| {
             let bytes_per_row = texture.width * 8;
             let buf =
-                device.create_buffer(u64::from(texture.height * bytes_per_row), BufferUse::Upload);
+                device.create_buffer(u64::from(texture.height * bytes_per_row), BufferUse::Readback);
             let mut rb = device.create_encoder("layer-skin-demo-readback");
             rb.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);
             rb.commit_and_wait().expect("GPU work completes");

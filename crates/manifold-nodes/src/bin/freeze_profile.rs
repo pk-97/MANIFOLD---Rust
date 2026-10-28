@@ -790,7 +790,7 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
     let read_frame = |target: &RenderTarget, w: u32, h: u32| -> (f64, Vec<u8>) {
         let bytes_per_row = w * 8;
         let total_bytes = u64::from(h * bytes_per_row);
-        let buf = device.create_buffer(total_bytes, BufferUse::Upload);
+        let buf = device.create_buffer(total_bytes, BufferUse::Readback);
         let mut enc = device.create_encoder("scene-readback");
         enc.copy_texture_to_buffer(&target.texture, &buf, w, h, bytes_per_row);
         enc.commit_and_wait().expect("GPU work completes");

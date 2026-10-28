@@ -572,7 +572,7 @@ pub(crate) mod gpu_tests {
             .iter()
             .map(|v| upload(bytemuck::cast_slice(v)))
             .collect();
-        let out = device.create_buffer(std::mem::size_of_val(vertices.as_slice()) as u64, manifold_gpu::BufferUse::Upload);
+        let out = device.create_buffer(std::mem::size_of_val(vertices.as_slice()) as u64, manifold_gpu::BufferUse::Readback);
         let mut enc = device.create_encoder("ocean-displace-test");
         enc.dispatch_compute(
             &pipeline,

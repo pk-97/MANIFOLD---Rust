@@ -611,7 +611,7 @@ fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3];
     );
     encoder.commit_and_wait().expect("GPU work completes");
 
-    let readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Upload);
+    let readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Readback);
     let mut enc2 = device.create_encoder("rt-r3-readback");
     enc2.copy_texture_to_buffer(&out_refl, &readback_buf, 2, 1, 2 * 4 * 4);
     enc2.commit_and_wait().expect("GPU work completes");

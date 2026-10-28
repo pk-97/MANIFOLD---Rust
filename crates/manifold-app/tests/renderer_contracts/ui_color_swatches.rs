@@ -489,7 +489,7 @@ fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
 fn readback_w(device: &GpuDevice, texture: &GpuTexture, width: u32, height: u32) -> Vec<u8> {
     let bytes_per_row = width * FORMAT.bytes_per_pixel();
     let total = u64::from(height * bytes_per_row);
-    let buf = device.create_buffer(total, BufferUse::Upload);
+    let buf = device.create_buffer(total, BufferUse::Readback);
 
     let mut enc = device.create_encoder("swatch-readback");
     enc.copy_texture_to_buffer(texture, &buf, width, height, bytes_per_row);

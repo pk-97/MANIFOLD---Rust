@@ -254,7 +254,7 @@ mod gpu_tests {
             .expect("mix output texture should be retained on backend");
         let bytes_per_row = w * 8; // Rgba16Float = 8 bytes/pixel.
         let total_bytes = u64::from(h * bytes_per_row);
-        let readback_buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Upload);
+        let readback_buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Readback);
         let mut readback_enc = device.create_encoder("mix-readback");
         readback_enc.copy_texture_to_buffer(mix_tex, &readback_buf, w, h, bytes_per_row);
         readback_enc.commit_and_wait().expect("GPU work completes");
@@ -341,7 +341,7 @@ mod gpu_tests {
             .expect("mix output texture should be retained on backend");
         let bytes_per_row = w * 8;
         let total_bytes = u64::from(h * bytes_per_row);
-        let readback_buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Upload);
+        let readback_buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Readback);
         let mut readback_enc = device.create_encoder("mix-modes-readback");
         readback_enc.copy_texture_to_buffer(mix_tex, &readback_buf, w, h, bytes_per_row);
         readback_enc.commit_and_wait().expect("GPU work completes");

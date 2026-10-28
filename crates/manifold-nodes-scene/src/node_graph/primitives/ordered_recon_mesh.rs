@@ -255,7 +255,7 @@ mod gpu_tests {
         let pipeline = device.create_compute_pipeline(wgsl, ENTRY, label);
         let src = device.create_buffer(std::mem::size_of_val(current) as u64, manifold_gpu::BufferUse::Upload);
         let rbuf = device.create_buffer(std::mem::size_of_val(reference) as u64, manifold_gpu::BufferUse::Upload);
-        let out = device.create_buffer(std::mem::size_of_val(current) as u64, manifold_gpu::BufferUse::Upload);
+        let out = device.create_buffer(std::mem::size_of_val(current) as u64, manifold_gpu::BufferUse::Readback);
         unsafe {
             src.write(0, bytemuck::cast_slice(current));
             rbuf.write(0, bytemuck::cast_slice(reference));

@@ -270,7 +270,7 @@ mod gpu_tests {
         unsafe {
             input.write(0, bytemuck::cast_slice(src));
         }
-        let output = device.create_buffer((src.len() * 4) as u64, manifold_gpu::BufferUse::Upload);
+        let output = device.create_buffer((src.len() * 4) as u64, manifold_gpu::BufferUse::Readback);
         let uniforms = TextureWeightsUniforms {
             scale: s.scale,
             offset_x: s.shift[0],

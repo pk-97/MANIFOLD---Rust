@@ -438,7 +438,7 @@ mod gpu_tests {
             src.write(0, bytemuck::cast_slice(current));
             rbuf.write(0, bytemuck::cast_slice(reference));
         }
-        let dst = device.create_buffer(std::mem::size_of_val(current) as u64, manifold_gpu::BufferUse::Upload);
+        let dst = device.create_buffer(std::mem::size_of_val(current) as u64, manifold_gpu::BufferUse::Readback);
         let mut enc = device.create_encoder(label);
         enc.dispatch_compute(
             &pipeline,

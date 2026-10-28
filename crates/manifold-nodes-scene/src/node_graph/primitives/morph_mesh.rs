@@ -333,7 +333,7 @@ mod gpu_tests {
         unsafe {
             b_buf.write(0, bytemuck::cast_slice(b));
         }
-        let dbuf = device.create_buffer(std::mem::size_of_val(a) as u64, manifold_gpu::BufferUse::Upload);
+        let dbuf = device.create_buffer(std::mem::size_of_val(a) as u64, manifold_gpu::BufferUse::Readback);
 
         let (wbuf, weights_len) = match weights {
             Some(w) => {
@@ -398,7 +398,7 @@ mod gpu_tests {
         let a_buf = device.create_buffer(std::mem::size_of_val(a) as u64, manifold_gpu::BufferUse::Upload);
         let b_buf = device.create_buffer(std::mem::size_of_val(b) as u64, manifold_gpu::BufferUse::Upload);
         let w_buf = device.create_buffer(std::mem::size_of_val(weights) as u64, manifold_gpu::BufferUse::Upload);
-        let dst_buf = device.create_buffer(std::mem::size_of_val(a) as u64, manifold_gpu::BufferUse::Upload);
+        let dst_buf = device.create_buffer(std::mem::size_of_val(a) as u64, manifold_gpu::BufferUse::Readback);
         unsafe {
             a_buf.write(0, bytemuck::cast_slice(a));
             b_buf.write(0, bytemuck::cast_slice(b));

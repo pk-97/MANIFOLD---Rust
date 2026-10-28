@@ -76,7 +76,7 @@ pub(crate) fn decode_capture_pixels(
     };
     let bytes_per_row = cap.w * bpp;
     let total = u64::from(cap.h * bytes_per_row);
-    let buf = device.create_buffer(total, BufferUse::Upload);
+    let buf = device.create_buffer(total, BufferUse::Readback);
     let mut enc = device.create_encoder("rt-capture-readback");
     enc.copy_texture_to_buffer(&cap.tex, &buf, cap.w, cap.h, bytes_per_row);
     enc.commit_and_wait().expect("GPU work completes");

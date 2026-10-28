@@ -997,7 +997,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 pub(super) fn readback(device: &GpuDevice, texture: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
     let bytes_per_row = w * UI_FORMAT.bytes_per_pixel();
     let total = u64::from(h * bytes_per_row);
-    let buf = device.create_buffer(total, BufferUse::Upload);
+    let buf = device.create_buffer(total, BufferUse::Readback);
 
     let mut enc = device.create_encoder("ui-snap-readback");
     enc.copy_texture_to_buffer(texture, &buf, w, h, bytes_per_row);

@@ -220,7 +220,7 @@ mod gpu_tests {
         let bytes_per_row = texture.width * 8;
         let buffer = device.create_buffer(
             u64::from(texture.height * bytes_per_row),
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let mut encoder = device.create_encoder("mask-extrema-blob-v2-readback");
         encoder.copy_texture_to_buffer(

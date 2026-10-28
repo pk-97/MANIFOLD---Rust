@@ -193,7 +193,7 @@ mod gpu_tests {
         );
         let second = device.create_buffer(
             8 * std::mem::size_of::<InstanceTransform>() as u64,
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let source: Vec<_> = (0..3).map(instance).collect();
         let mut upload = InstanceSnapshotUpload::default();
@@ -217,7 +217,7 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let dst = device.create_buffer(
             12 * std::mem::size_of::<InstanceTransform>() as u64,
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let source: Vec<_> = (0..9).map(instance).collect();
         let short: Vec<_> = (0..3).map(|index| instance(index + 20)).collect();
@@ -249,7 +249,7 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let dst = device.create_buffer(
             3 * std::mem::size_of::<InstanceTransform>() as u64,
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         unsafe {
             std::ptr::write_bytes(
@@ -278,11 +278,11 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let first = device.create_buffer(
             3 * std::mem::size_of::<InstanceTransform>() as u64,
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let second = device.create_buffer(
             3 * std::mem::size_of::<InstanceTransform>() as u64,
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let first_source: Vec<_> = (0..3).map(instance).collect();
         let second_source: Vec<_> = (100..103).map(instance).collect();

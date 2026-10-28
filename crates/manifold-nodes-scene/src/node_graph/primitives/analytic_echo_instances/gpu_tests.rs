@@ -67,7 +67,7 @@ fn dispatch(src: &[InstanceTransform], uniforms: Uniforms) -> Vec<InstanceTransf
     let output_count = src.len() * ECHO_CAPACITY as usize;
     let output = device.create_buffer(
         output_count as u64 * std::mem::size_of::<InstanceTransform>() as u64,
-        BufferUse::Upload,
+        BufferUse::Readback,
     );
     let mut encoder = device.create_encoder("structured-modifier-analytic-echo");
     encoder.dispatch_compute(

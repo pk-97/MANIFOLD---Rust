@@ -1338,8 +1338,8 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         let markers = device.create_buffer(u64::from(COUNT) * 32, manifold_gpu::BufferUse::Upload);
         let vertices = device.create_buffer(u64::from(COUNT) * 96, manifold_gpu::BufferUse::Upload);
         let plan_input = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
-        let plan_readback = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
-        let aggregate_readback = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
+        let plan_readback = device.create_buffer(48, manifold_gpu::BufferUse::Readback);
+        let aggregate_readback = device.create_buffer(48, manifold_gpu::BufferUse::Readback);
         let scratch_readback = [
             device.create_buffer(clock.scratch_a.size, manifold_gpu::BufferUse::Upload),
             device.create_buffer(clock.scratch_b.size, manifold_gpu::BufferUse::Upload),
@@ -1518,7 +1518,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         let clock = GpuFlipClock::new(&device, 512, 1, 1);
         let markers = device.create_buffer(512 * 32, manifold_gpu::BufferUse::Upload);
         let empty = device.create_buffer(96, manifold_gpu::BufferUse::Upload);
-        let readback = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(48, manifold_gpu::BufferUse::Readback);
         let mut particles = [particle(1.0); 512];
         particles[511].velocity = [3.0, 4.0, 0.0];
         particles[2] = particle(1000.0);
@@ -1612,7 +1612,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
             let clock = GpuFlipClock::new(&device, count, 1, 1);
             let markers = device.create_buffer(u64::from(count) * 32, manifold_gpu::BufferUse::Upload);
             let empty = device.create_buffer(96, manifold_gpu::BufferUse::Upload);
-            let readback = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
+            let readback = device.create_buffer(48, manifold_gpu::BufferUse::Readback);
             let mut particles = vec![particle(1.25); count as usize];
             for (i, marker) in particles.iter_mut().enumerate() {
                 marker.id = i as u32 + 101;
@@ -1707,7 +1707,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         let markers = device.create_buffer(32, manifold_gpu::BufferUse::Upload);
         let obstacles = device.create_buffer(192, manifold_gpu::BufferUse::Upload);
         let sources = device.create_buffer(96, manifold_gpu::BufferUse::Upload);
-        let readback = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(48, manifold_gpu::BufferUse::Readback);
         let vertex = GpuFlipBodyVertex {
             position: [1.0, 0.0, 0.0, 1.0],
             velocity: [1.0, 0.0, 0.0, 0.0],
@@ -1774,7 +1774,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         let sources = device.create_buffer(96, manifold_gpu::BufferUse::Upload);
         let rows = device.create_buffer(size_of::<LiquidBody>() as u64, manifold_gpu::BufferUse::Upload);
         let reaction = device.create_buffer(8 * size_of::<f32>() as u64, manifold_gpu::BufferUse::Upload);
-        let readback = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(48, manifold_gpu::BufferUse::Readback);
         let vertex = GpuFlipBodyVertex {
             position: [1.0, 0.0, 0.0, 1.0],
             velocity: [0.0, 0.0, 0.0, 1.0],
@@ -1887,7 +1887,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
             body_rows_offset: 0,
             body_reaction: &zeros,
         };
-        let readback = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(48, manifold_gpu::BufferUse::Readback);
         let initial = GpuFlipClockParams {
             flags: flags::FIRST_SUBSTEP,
             ..params()
@@ -1901,7 +1901,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         let untouched = vec![0x12345678u32; (clock.scratch_a.size / 4) as usize];
         let seed = device.create_buffer(clock.scratch_a.size, manifold_gpu::BufferUse::Upload);
-        let scratch = device.create_buffer(clock.scratch_a.size, manifold_gpu::BufferUse::Upload);
+        let scratch = device.create_buffer(clock.scratch_a.size, manifold_gpu::BufferUse::Readback);
         unsafe { seed.write(0, bytemuck::cast_slice(&untouched)) };
         let later = params();
         let mut enc = device.create_encoder("flip-clock later source work proof");
@@ -1942,7 +1942,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         let one = slots_record(&device, 1);
         let markers = device.create_buffer(32, manifold_gpu::BufferUse::Upload);
         let bodies = device.create_buffer(96, manifold_gpu::BufferUse::Upload);
-        let readback = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(48, manifold_gpu::BufferUse::Readback);
         let source = GpuFlipBodyVertex {
             position: [0.0, 0.0, 0.0, 1.0],
             velocity: [3.0, 0.0, 0.0, 0.0],
@@ -2096,8 +2096,8 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         let one = slots_record(&device, 1);
         let markers = device.create_buffer(32, manifold_gpu::BufferUse::Upload);
         let empty = device.create_buffer(96, manifold_gpu::BufferUse::Upload);
-        let readback = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
-        let before_cap = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(48, manifold_gpu::BufferUse::Readback);
+        let before_cap = device.create_buffer(48, manifold_gpu::BufferUse::Readback);
         let p = params();
         unsafe {
             markers.write(0, bytemuck::bytes_of(&particle(1000.0)));
@@ -2291,7 +2291,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         phase: ReductionPhase,
     ) -> Vec<u32> {
         let plan_seed = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
-        let readback = device.create_buffer(16, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(16, manifold_gpu::BufferUse::Readback);
         // SAFETY: fresh shared buffer, no GPU work in flight.
         unsafe { plan_seed.write(0, bytemuck::bytes_of(plan)) };
         let mut enc = device.create_encoder("flip-clock marker args proof");
@@ -2380,7 +2380,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         record: &GpuBuffer,
     ) -> PlanValue {
         let empty = device.create_buffer(96, manifold_gpu::BufferUse::Upload);
-        let readback = device.create_buffer(48, manifold_gpu::BufferUse::Upload);
+        let readback = device.create_buffer(48, manifold_gpu::BufferUse::Readback);
         let p = params();
         let mut enc = device.create_encoder("flip-clock slots in use proof");
         clock.begin_frame(&mut enc, &p);

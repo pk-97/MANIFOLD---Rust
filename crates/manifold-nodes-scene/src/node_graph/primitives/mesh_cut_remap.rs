@@ -250,7 +250,7 @@ mod gpu_tests {
         );
         let source_buf = device.create_buffer((source.len() * 4).max(1) as u64, manifold_gpu::BufferUse::Upload);
         let map_buf = device.create_buffer((maps.len() * 16).max(1) as u64, manifold_gpu::BufferUse::Upload);
-        let output_buf = device.create_buffer((maps.len() * 4).max(1) as u64, manifold_gpu::BufferUse::Upload);
+        let output_buf = device.create_buffer((maps.len() * 4).max(1) as u64, manifold_gpu::BufferUse::Readback);
         unsafe {
             source_buf.write(0, bytemuck::cast_slice(source));
             map_buf.write(0, bytemuck::cast_slice(maps));
@@ -552,7 +552,7 @@ mod gpu_tests {
         let map_buf = device.create_buffer((maps.len() * 16) as u64, manifold_gpu::BufferUse::Upload);
         let weights_buf = device.create_buffer((weights.len() * 4) as u64, manifold_gpu::BufferUse::Upload);
         let output_buf =
-            device.create_buffer((maps.len() * std::mem::size_of::<MeshVertex>()) as u64, manifold_gpu::BufferUse::Upload);
+            device.create_buffer((maps.len() * std::mem::size_of::<MeshVertex>()) as u64, manifold_gpu::BufferUse::Readback);
         unsafe {
             source_buf.write(0, bytemuck::cast_slice(&source));
             map_buf.write(0, bytemuck::cast_slice(&maps));

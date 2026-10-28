@@ -59,7 +59,7 @@ fn target(device: &GpuDevice, label: &str) -> GpuTexture {
 }
 
 fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<[f32; 4]> {
-    let buf = device.create_buffer(u64::from(W * H * 8), BufferUse::Upload);
+    let buf = device.create_buffer(u64::from(W * H * 8), BufferUse::Readback);
     let mut enc = device.create_encoder("d102 readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, W * 8);
     enc.commit_and_wait().expect("GPU work completes");
@@ -103,7 +103,7 @@ fn render(device: &GpuDevice, runtime: &mut PresetRuntime, picture: &GpuTexture,
 /// One byte per texel of an R8 `texture`.
 fn readback_r8(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
     let (w, h) = (texture.width, texture.height);
-    let buf = device.create_buffer(u64::from(w * h), BufferUse::Upload);
+    let buf = device.create_buffer(u64::from(w * h), BufferUse::Readback);
     let mut enc = device.create_encoder("d102 mask readback");
     enc.copy_texture_to_buffer(texture, &buf, w, h, w);
     enc.commit_and_wait().expect("GPU work completes");

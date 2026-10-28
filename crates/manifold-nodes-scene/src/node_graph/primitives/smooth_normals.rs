@@ -298,7 +298,7 @@ mod gpu_tests {
             input.write(0, bytemuck::cast_slice(src));
         }
         let table = device.create_buffer(u64::from(slots) * SLOT_BYTES, BufferUse::Gpu);
-        let output = device.create_buffer(std::mem::size_of_val(src) as u64, BufferUse::Upload);
+        let output = device.create_buffer(std::mem::size_of_val(src) as u64, BufferUse::Readback);
         let uniforms = SmoothUniforms {
             count,
             slots,

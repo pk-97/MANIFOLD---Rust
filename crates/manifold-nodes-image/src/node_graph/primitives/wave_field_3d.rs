@@ -160,7 +160,7 @@ mod gpu_tests {
         unsafe {
             input.write(0, bytemuck::cast_slice(src));
         }
-        let output = device.create_buffer(4 * src.len() as u64, manifold_gpu::BufferUse::Upload);
+        let output = device.create_buffer(4 * src.len() as u64, manifold_gpu::BufferUse::Readback);
         let uniforms = Uniforms {
             frequency,
             phase,

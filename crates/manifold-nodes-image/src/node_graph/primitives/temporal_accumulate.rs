@@ -434,7 +434,7 @@ mod gpu_tests {
         let bytes_per_row = W * 8;
         let readback = device.create_buffer(
             u64::from(H * bytes_per_row),
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let mut enc = device.create_encoder("temporal-accumulate-readback");
         enc.copy_texture_to_buffer(tex, &readback, W, H, bytes_per_row);

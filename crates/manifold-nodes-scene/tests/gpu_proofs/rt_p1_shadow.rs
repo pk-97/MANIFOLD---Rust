@@ -349,7 +349,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     encoder.commit_and_wait().expect("GPU work completes");
 
     // ─── Readback + CPU-oracle comparison ──────────────────────────────
-    let readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Upload); // 2 texels * rgba * f32
+    let readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Readback); // 2 texels * rgba * f32
     let mut enc2 = device.create_encoder("rt-p1-readback");
     enc2.copy_texture_to_buffer(&out_sv, &readback_buf, 2, 1, 2 * 4 * 4);
     enc2.commit_and_wait().expect("GPU work completes");
@@ -684,7 +684,7 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
     );
     encoder.commit_and_wait().expect("GPU work completes");
 
-    let readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Upload);
+    let readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Readback);
     let mut enc2 = device.create_encoder("rt-p1-2blas-readback");
     enc2.copy_texture_to_buffer(&out_sv, &readback_buf, 2, 1, 2 * 4 * 4);
     enc2.commit_and_wait().expect("GPU work completes");

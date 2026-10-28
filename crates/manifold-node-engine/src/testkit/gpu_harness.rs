@@ -235,7 +235,7 @@ impl ParityHarness {
     pub fn readback(&self, texture: &GpuTexture) -> Vec<u8> {
         let bytes_per_row = self.width * BYTES_PER_PIXEL;
         let total_bytes = u64::from(self.height * bytes_per_row);
-        let buf = self.device.create_buffer(total_bytes, BufferUse::Upload);
+        let buf = self.device.create_buffer(total_bytes, BufferUse::Readback);
 
         let mut enc = self.device.create_encoder("gpu-proof-readback");
         enc.copy_texture_to_buffer(texture, &buf, self.width, self.height, bytes_per_row);

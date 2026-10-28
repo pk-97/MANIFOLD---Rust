@@ -177,8 +177,8 @@ mod gpu_tests {
             std::mem::size_of_val(input.as_slice()) as u64,
             manifold_gpu::BufferUse::Upload,
         );
-        let x_buf = device.create_buffer((input.len() * 4) as u64, manifold_gpu::BufferUse::Upload);
-        let y_buf = device.create_buffer((input.len() * 4) as u64, manifold_gpu::BufferUse::Upload);
+        let x_buf = device.create_buffer((input.len() * 4) as u64, manifold_gpu::BufferUse::Readback);
+        let y_buf = device.create_buffer((input.len() * 4) as u64, manifold_gpu::BufferUse::Readback);
         unsafe {
             in_buf.write(0, bytemuck::cast_slice(&input));
         }

@@ -562,7 +562,7 @@ fn render_with_material_reset(json: &str) -> RenderStats {
 fn readback(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) -> Vec<u8> {
     let bytes_per_row = texture.width * 8;
     let total_bytes = u64::from(texture.height * bytes_per_row);
-    let buffer = device.create_buffer(total_bytes, BufferUse::Upload);
+    let buffer = device.create_buffer(total_bytes, BufferUse::Readback);
     let mut encoder = device.create_encoder("render-scene-subsurface-readback");
     encoder.copy_texture_to_buffer(
         texture,
@@ -1233,7 +1233,7 @@ fn read_sss_channel(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) -> V
     };
     let row_bytes = texture.width * stride;
     let size = u64::from(row_bytes * texture.height);
-    let buffer = device.create_buffer(size, BufferUse::Upload);
+    let buffer = device.create_buffer(size, BufferUse::Readback);
     let mut encoder = device.create_encoder("SSS history proof readback");
     encoder.copy_texture_to_buffer(texture, &buffer, texture.width, texture.height, row_bytes);
     encoder.commit_and_wait().expect("GPU work completes");

@@ -336,7 +336,7 @@ mod gpu_tests {
         unsafe {
             sbuf.write(0, bytemuck::cast_slice(src));
         }
-        let dbuf = device.create_buffer(std::mem::size_of_val(src) as u64, manifold_gpu::BufferUse::Upload);
+        let dbuf = device.create_buffer(std::mem::size_of_val(src) as u64, manifold_gpu::BufferUse::Readback);
 
         let (wbuf, weights_len) = match weights {
             Some(w) => {

@@ -468,7 +468,7 @@ mod gpu_tests {
         let count = cols * rows;
         let out = device.create_buffer(
             u64::from(count) * std::mem::size_of::<MeshVertex>() as u64,
-            manifold_gpu::BufferUse::Upload,
+            manifold_gpu::BufferUse::Readback,
         );
         let uniforms = grid_uniforms(
             cols,

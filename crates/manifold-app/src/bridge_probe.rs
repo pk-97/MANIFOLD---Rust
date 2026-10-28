@@ -161,7 +161,7 @@ pub fn run(args: &[String]) -> ! {
         }
         let sink = writer_dev.create_buffer(4096, BufferUse::Upload);
         let buf =
-            writer_dev.create_buffer(u64::from(BYTES_PER_ROW) * u64::from(H), BufferUse::Upload);
+            writer_dev.create_buffer(u64::from(BYTES_PER_ROW) * u64::from(H), BufferUse::Readback);
         let t0 = std::time::Instant::now();
         {
             let mut enc = writer_dev.create_encoder("selftest");
