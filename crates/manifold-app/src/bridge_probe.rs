@@ -159,7 +159,7 @@ pub fn run(args: &[String]) -> ! {
             let ptr = params_buf.mapped_ptr().expect("mapped");
             std::ptr::copy_nonoverlapping(params.as_ptr() as *const u8, ptr, 24);
         }
-        let sink = writer_dev.create_buffer(4096, BufferUse::Upload);
+        let sink = writer_dev.create_buffer(4096, BufferUse::Gpu);
         let buf =
             writer_dev.create_buffer(u64::from(BYTES_PER_ROW) * u64::from(H), BufferUse::Readback);
         let t0 = std::time::Instant::now();
@@ -227,7 +227,7 @@ pub fn run(args: &[String]) -> ! {
         let writer_dev = writer_dev.clone();
         std::thread::spawn(move || {
             let t0 = std::time::Instant::now();
-            let sink_buf = writer_dev.create_buffer(4096, BufferUse::Upload);
+            let sink_buf = writer_dev.create_buffer(4096, BufferUse::Gpu);
             for i in 1..=frames {
                 manifold_gpu::autorelease_scope(|| {
                     let slot = ((i - 1) % SURFACE_COUNT as u64) as usize;
@@ -344,7 +344,7 @@ pub fn run(args: &[String]) -> ! {
             // own completion handlers — the reader paces itself to GPU
             // retirement instead of flooding allocations behind the writer's
             // command-buffer stream (first probe version starved: 2 reads).
-            let sink_buf = reader_dev.create_buffer(4096, BufferUse::Upload);
+            let sink_buf = reader_dev.create_buffer(4096, BufferUse::Gpu);
             let offscreens = Arc::new(
                 (0..3)
                     .map(|_| {
@@ -366,7 +366,7 @@ pub fn run(args: &[String]) -> ! {
                     .map(|_| {
                         reader_dev.create_buffer(
                             u64::from(BYTES_PER_ROW) * u64::from(H),
-                            BufferUse::Upload,
+                            BufferUse::Readback,
                         )
                     })
                     .collect::<Vec<manifold_gpu::GpuBuffer>>(),

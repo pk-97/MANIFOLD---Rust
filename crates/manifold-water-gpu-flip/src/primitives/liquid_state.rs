@@ -595,7 +595,7 @@ impl Primitive for LiquidState {
         }
         let identity = self
             .identity
-            .get_or_insert_with(|| gpu.device.create_buffer(IDENTITY_BYTES, BufferUse::Upload));
+            .get_or_insert_with(|| gpu.device.create_buffer(IDENTITY_BYTES, BufferUse::Gpu));
         if epoch_reset {
             if let (Some(seed), Some(out)) = (seed, out) {
                 let bytes = (u64::from(count) * std::mem::size_of::<FluidParticle>() as u64)
