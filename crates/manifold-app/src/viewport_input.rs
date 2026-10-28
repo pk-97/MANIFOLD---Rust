@@ -123,6 +123,17 @@ pub fn classify_scroll(notches: f32) -> ViewportGesture {
 /// wheel reports many at once; past this the step would jump.
 pub const MAX_DOLLY_NOTCHES_PER_EVENT: f32 = 5.0;
 
+/// The key that turns a trackpad scroll into a dolly: Control on the Mac,
+/// where Cmd is the shortcut key, and Ctrl (the `command` slot) elsewhere,
+/// since the Super key that fills `ctrl` there belongs to the desktop.
+pub fn dolly_modifier_held(modifiers: &manifold_ui::input::Modifiers) -> bool {
+    if cfg!(target_os = "macos") {
+        modifiers.ctrl
+    } else {
+        modifiers.command
+    }
+}
+
 /// The one wheel mapping every viewport host uses: a `LineDelta` is wheel
 /// notches and dollies; a Ctrl-held `PixelDelta` (Ctrl + two-finger scroll)
 /// dollies by the notches its pixels make, at the line height the timeline

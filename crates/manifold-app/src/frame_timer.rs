@@ -132,6 +132,74 @@ impl MachTimebase {
     }
 }
 
+/// Sleep for `after` against an absolute CLOCK_MONOTONIC deadline (the
+/// clock `Instant` reads), so a signal that interrupts the sleep resumes
+/// toward the same instant.
+#[cfg(not(target_os = "macos"))]
+fn sleep_until_monotonic(after: Duration) {
+    let mut deadline = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `deadline` is a valid out-pointer.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut deadline) };
+    let nanos = deadline.tv_nsec as u64 + u64::from(after.subsec_nanos());
+    deadline.tv_sec += (after.as_secs() + nanos / 1_000_000_000) as libc::time_t;
+    deadline.tv_nsec = (nanos % 1_000_000_000) as libc::c_long;
+    // SAFETY: `deadline` is a valid absolute time, and TIMER_ABSTIME takes
+    // no remainder pointer.
+    while unsafe {
+        libc::clock_nanosleep(
+            libc::CLOCK_MONOTONIC,
+            libc::TIMER_ABSTIME,
+            &deadline,
+            std::ptr::null_mut(),
+        )
+    } == libc::EINTR
+    {}
+}
+
+/// Real-time scheduling for the calling thread off the Mac: SCHED_FIFO when
+/// the user's rtprio limit allows it (an `rtprio` entry in limits.conf),
+/// otherwise a raised nice level granted by rtkit. rtkit's real-time grant
+/// is not used: it requires RLIMIT_RTTIME, which kills the process when one
+/// tick burns that much CPU without sleeping, as a cold shader compile can.
+#[cfg(not(target_os = "macos"))]
+fn raise_thread_priority() {
+    const FIFO_PRIORITY: i32 = 10;
+    const RTKIT_NICE: i32 = -15;
+    let param = libc::sched_param {
+        sched_priority: FIFO_PRIORITY,
+    };
+    // SAFETY: sets the calling thread's policy with a valid parameter.
+    let ret =
+        unsafe { libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_FIFO, &param) };
+    if ret == 0 {
+        log::info!("[ContentThread] Real-time thread priority set (SCHED_FIFO {FIFO_PRIORITY})");
+        return;
+    }
+    // SAFETY: gettid has no preconditions.
+    let tid = unsafe { libc::gettid() } as u64;
+    let rtkit = zbus::blocking::Connection::system().and_then(|bus| {
+        bus.call_method(
+            Some("org.freedesktop.RealtimeKit1"),
+            "/org/freedesktop/RealtimeKit1",
+            Some("org.freedesktop.RealtimeKit1"),
+            "MakeThreadHighPriority",
+            &(tid, RTKIT_NICE),
+        )
+    });
+    match rtkit {
+        Ok(_) => log::info!(
+            "[ContentThread] SCHED_FIFO refused (err={ret}); nice {RTKIT_NICE} through rtkit"
+        ),
+        Err(err) => log::warn!(
+            "[ContentThread] SCHED_FIFO refused (err={ret}) and rtkit failed ({err}); \
+             the thread keeps normal priority"
+        ),
+    }
+}
+
 /// EWMA smoothing time constant in seconds. Controls how quickly the
 /// FPS readout responds to changes. 0.3s settles in ~5 frames at 60fps —
 /// fast enough to show frame drops, slow enough to filter jitter.
@@ -237,6 +305,9 @@ impl FrameTimer {
     /// `mach_wait_until` is a software timer with ~1ms wake resolution —
     /// the spin bridges the gap using the nanosecond-resolution clock.
     /// Total CPU: ~2ms/frame = 12% of one core at 60fps.
+    ///
+    /// Elsewhere: `clock_nanosleep` on an absolute monotonic deadline wakes
+    /// within the kernel's timer slack, so only the final 0.5 ms spins.
     pub fn wait_for_deadline(&self) {
         let remaining = self.time_until_next_tick();
         if remaining.is_zero() {
@@ -265,8 +336,9 @@ impl FrameTimer {
 
         #[cfg(not(target_os = "macos"))]
         {
-            if remaining > Duration::from_millis(4) {
-                std::thread::sleep(remaining - Duration::from_millis(3));
+            const SPIN_MARGIN: Duration = Duration::from_micros(500);
+            if remaining > SPIN_MARGIN {
+                sleep_until_monotonic(remaining - SPIN_MARGIN);
             }
             while !self.should_tick() {
                 std::hint::spin_loop();
@@ -281,6 +353,8 @@ impl FrameTimer {
         if self.take_policy_refresh() {
             #[cfg(target_os = "macos")]
             self.apply_thread_policy();
+            #[cfg(not(target_os = "macos"))]
+            raise_thread_priority();
         }
     }
 

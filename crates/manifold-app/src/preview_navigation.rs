@@ -321,7 +321,8 @@ impl crate::app::Application {
     /// The wheel over the picture with gizmos on dollies the preview.
     pub(crate) fn preview_navigation_wheel(&mut self, delta: MouseScrollDelta) -> bool {
         let over = self.pointer_on_navigable_preview();
-        let (size, ctrl) = (self.preview_navigation_size(), self.modifiers.ctrl);
+        let size = self.preview_navigation_size();
+        let ctrl = crate::viewport_input::dolly_modifier_held(&self.modifiers);
         let Some(started) = self.ws.preview_navigation.wheel(
             over,
             delta,

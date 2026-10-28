@@ -628,6 +628,7 @@ impl Application {
                             inner.width as f64,
                             inner.height as f64,
                         ]);
+                        #[cfg(target_os = "macos")]
                         if let Some(monitor) = ws.window.current_monitor() {
                             let mon_pos = monitor.position();
                             let mon_size = monitor.size();
@@ -643,6 +644,13 @@ impl Application {
                             ws.window
                                 .set_outer_position(winit::dpi::LogicalPosition::new(lx, ly));
                         }
+                        // Wayland cannot place a window: off the Mac the
+                        // output goes borderless fullscreen on its monitor.
+                        #[cfg(not(target_os = "macos"))]
+                        ws.window
+                            .set_fullscreen(Some(winit::window::Fullscreen::Borderless(
+                                ws.window.current_monitor(),
+                            )));
                         // Set window level above menu bar (NSMainMenuWindowLevel=24)
                         // so our borderless window covers it on this
                         // display only — no global setPresentationOptions.
@@ -654,6 +662,8 @@ impl Application {
                         crate::edr_surface::set_window_shadow(&ws.window, false);
                     } else {
                         // → Windowed: restore saved frame + menu bar
+                        #[cfg(not(target_os = "macos"))]
+                        ws.window.set_fullscreen(None);
                         ws.window.set_decorations(true);
                         #[cfg(target_os = "macos")]
                         crate::edr_surface::set_window_shadow(&ws.window, true);

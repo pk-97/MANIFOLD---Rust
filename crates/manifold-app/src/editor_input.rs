@@ -440,7 +440,10 @@ pub(crate) fn wheel(cx: &mut EditorPointer<'_>, delta: MouseScrollDelta) -> bool
         && rect.contains(pos)
         && let Some(session) = ws.viewport_session.as_mut()
     {
-        if let Some(gesture) = crate::viewport_input::classify_wheel(delta, cx.modifiers.ctrl) {
+        if let Some(gesture) = crate::viewport_input::classify_wheel(
+            delta,
+            crate::viewport_input::dolly_modifier_held(&cx.modifiers),
+        ) {
             crate::viewport_input::apply(
                 session.camera_mut(),
                 gesture,

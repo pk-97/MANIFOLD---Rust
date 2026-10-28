@@ -1355,14 +1355,23 @@ impl Application {
         let center_y = logical_y + (logical_h - proj_h) * 0.5;
 
         let attrs = if presentation {
-            winit::window::Window::default_attributes()
+            let attrs = winit::window::Window::default_attributes()
                 .with_title(format!("MANIFOLD - {}", name))
                 .with_decorations(false)
-                .with_resizable(false)
+                .with_resizable(false);
+            #[cfg(target_os = "macos")]
+            let attrs = attrs
                 .with_position(winit::dpi::Position::Logical(
                     winit::dpi::LogicalPosition::new(logical_x, logical_y),
                 ))
-                .with_inner_size(winit::dpi::LogicalSize::new(logical_w, logical_h))
+                .with_inner_size(winit::dpi::LogicalSize::new(logical_w, logical_h));
+            // Wayland cannot place a window, so off the Mac the presentation
+            // window is borderless fullscreen on the chosen monitor.
+            #[cfg(not(target_os = "macos"))]
+            let attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(Some(
+                monitor.clone(),
+            ))));
+            attrs
         } else {
             winit::window::Window::default_attributes()
                 .with_title(format!("MANIFOLD - {}", name))

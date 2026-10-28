@@ -243,9 +243,15 @@ pub(crate) fn display_uuid_for_monitor(monitor: &winit::monitor::MonitorHandle) 
     display_uuid_for_display_id(monitor.native_id())
 }
 
+/// Off the Mac a monitor has no stable UUID: its connector name and pixel
+/// size stand in, so a show reopens on the same output while the cabling
+/// stays put.
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn display_uuid_for_monitor(_monitor: &winit::monitor::MonitorHandle) -> Option<String> {
-    None
+pub(crate) fn display_uuid_for_monitor(monitor: &winit::monitor::MonitorHandle) -> Option<String> {
+    let size = monitor.size();
+    monitor
+        .name()
+        .map(|name| format!("{name}:{}x{}", size.width, size.height))
 }
 
 #[cfg(target_os = "macos")]

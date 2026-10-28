@@ -2175,18 +2175,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // No presenter blit needed — the content thread presents to the
         // output drawable in its own command buffer.
 
-        // Keep the event loop alive. On macOS the CVDisplayLink callback
-        // calls request_redraw to wake us at each vsync. On other platforms
-        // (or if the display link isn't started yet) we self-wake.
+        // Off the Mac no display link wakes the loop: it sleeps until the
+        // next frame tick or input, whichever comes first. A FIFO swapchain
+        // then holds the acquire until the display frees an image.
         #[cfg(not(target_os = "macos"))]
-        for window in self
-            .window_registry
-            .window_arcs()
-            .cloned()
-            .collect::<Vec<_>>()
-        {
-            window.request_redraw();
-        }
+        event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+            std::time::Instant::now() + self.frame_timer.time_until_next_tick(),
+        ));
     }
 }
 
