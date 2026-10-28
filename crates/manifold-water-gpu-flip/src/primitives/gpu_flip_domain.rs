@@ -1560,8 +1560,9 @@ impl GpuFlipDomain {
     /// This frame's scene box and kill height, from the bodies and regions
     /// of the last rows. With Bounds on the scene box is the Bounds box and
     /// nothing reads the kill height. With Bounds off the scene box is the box
-    /// round every body, region and the Initial Fill `column` (the Water
-    /// item's own box when none is placed, so the lattices keep an extent),
+    /// round every body above the kill height, region and the Initial Fill
+    /// `column` (the Water item's own box when none is placed, so the
+    /// lattices keep an extent),
     /// and the kill height hangs from the bodies ([`kill_height`]) or, with
     /// none, from the lowest source of the epoch `epoch`'s start.
     fn scene(
@@ -1589,10 +1590,13 @@ impl GpuFlipDomain {
             floor,
             drawn_radius,
         );
+        // A body that has fallen wholly below the kill height is past every
+        // drop of water, so it no longer stretches the scene.
         let placed = self
             .bodies
             .body_boxes()
             .map(|(_, placed)| placed)
+            .filter(|placed| placed[1][1] >= kill)
             .chain(self.bodies.region_boxes().map(|(_, placed)| placed))
             .chain(column.map(|fill| box_about(fill.pos, fill.scale)));
         match union_box(placed) {
