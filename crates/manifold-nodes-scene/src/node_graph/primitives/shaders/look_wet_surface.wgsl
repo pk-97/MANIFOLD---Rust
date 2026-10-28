@@ -1,5 +1,5 @@
 // Look hook: wet surfaces. Called from `fs_pbr` after the material resolves,
-// keyed on world position because materials are shared. A water film on a rough
+// keyed on the pixel because materials are shared. A water film on a rough
 // diffuse surface darkens it: light the surface scatters is caught under the
 // film by total internal reflection and returns to the surface, which absorbs
 // part of it each time (Lekner and Dorf 1988, "Why some things are darker when
@@ -9,22 +9,18 @@
 //   A_wet = (1 - r_e) (1 - r_i) A / (1 - r_i A),   per channel.
 // A film is also optically smooth, so its roughness is water's: 0.
 //
-// The wetness comes from the water's wet map (`node.wet_map`, layout in
-// `wet_map_layout.wgsl`), a top-down map over the water's object space of
-// where and when the water touched a surface, read by world position: a point
-// outside the map, or outside the heights its texel was touched at, is dry,
-// and a touched one dries by the age of the last touch.
+// The wetness comes from the scene's wet mask: the wet pass draws the water's
+// wet marks (`node.wet_map`, `wet_pass.wgsl`) over the opaque depth before
+// any colour, so this reads it at the pixel being shaded.
 //
-// Binds 68-69 itself; the water shade includes this file but never calls the
-// hook, so the water binds neither of them.
+// Binds 68 itself; the water shade includes this file but never calls the
+// hook, so the water does not bind it.
 
-struct WetUniforms {
-    world_to_local: mat4x4<f32>,
-    bound: vec4<u32>,  // x = 1 if a wet map is bound
-};
-
-@group(0) @binding(68) var<uniform> wet: WetUniforms;
-@group(0) @binding(69) var<storage, read> wet_map: array<u32>;
+// How wet the surface is, 0 to 1, at 1 / WET_MASK_SCALE of the render's size
+// (`wet_pass::MASK_SCALE`); the renderer's one black texel, which reads dry,
+// when no water has a wet map and for glass, which the mask is not about.
+@group(0) @binding(68) var wet_mask: texture_2d<f32>;
+const WET_MASK_SCALE: f32 = 2.0;
 
 struct WetSurface {
     albedo: vec3<f32>,
@@ -42,57 +38,21 @@ const WATER_INNER_REFLECTANCE: f32 = 1.0 - (1.0 - WATER_DIFFUSE_REFLECTANCE) / (
 // The smallest roughness `resolve_mr` hands the GGX terms, which divide by it.
 const WET_MIN_ROUGHNESS: f32 = 0.01;
 
-// One texel's wetness at height y: 0 off the map or never touched, else its
-// drying wetness times how much it speaks for that height.
-fn wet_texel(t: vec2<i32>, side: u32, y: f32, up: bool, now: f32, drying: f32, margin: f32) -> f32 {
-    if any(t < vec2<i32>(0)) || any(t >= vec2<i32>(i32(side))) {
-        return 0.0;
-    }
-    let word = wm_texel_word(vec2<u32>(t), side);
-    let touch = wet_map[word];
-    if touch == 0u {
-        return 0.0;
-    }
-    let reach = wm_height_weight(wet_map[word + 1u], wet_map[word + 2u], wet_map[word + 3u], y, margin, up);
-    return reach * wm_wetness(touch, now, drying);
+// The wetness at pixel `frag_xy`, 0 to 1, bilinear between the mask's texels.
+fn wetness_at(frag_xy: vec2<f32>) -> f32 {
+    let last = vec2<i32>(textureDimensions(wet_mask)) - vec2<i32>(1);
+    let p = frag_xy / WET_MASK_SCALE - vec2<f32>(0.5);
+    let low = floor(p);
+    let f = p - low;
+    let a = clamp(vec2<i32>(low), vec2<i32>(0), last);
+    let b = clamp(vec2<i32>(low) + vec2<i32>(1), vec2<i32>(0), last);
+    let top = mix(textureLoad(wet_mask, a, 0).r, textureLoad(wet_mask, vec2<i32>(b.x, a.y), 0).r, f.x);
+    let bottom = mix(textureLoad(wet_mask, vec2<i32>(a.x, b.y), 0).r, textureLoad(wet_mask, b, 0).r, f.x);
+    return mix(top, bottom, f.y);
 }
 
-// The wetness at a world position on a surface with world normal `normal`,
-// 0 to 1, bilinear between the four texels round it; 0 with no map bound,
-// before the map is placed, or off it.
-fn wetness_at(world_pos: vec3<f32>, normal: vec3<f32>) -> f32 {
-    if wet.bound.x == 0u {
-        return 0.0;
-    }
-    let texel = bitcast<f32>(wet_map[WM_TEXEL]);
-    if !(texel > 0.0) {
-        return 0.0;
-    }
-    let side = wet_map[WM_SIDE];
-    let local = (wet.world_to_local * vec4<f32>(world_pos, 1.0)).xyz;
-    let origin = vec2<f32>(bitcast<f32>(wet_map[WM_ORIGIN_X]), bitcast<f32>(wet_map[WM_ORIGIN_Z]));
-    // Texel centres sit half a texel in from their low corner.
-    let uv = (local.xz - origin) / texel - vec2<f32>(0.5);
-    if any(uv < vec2<f32>(-1.0)) || any(uv > vec2<f32>(f32(side))) {
-        return 0.0;
-    }
-    let low = floor(uv);
-    let f = uv - low;
-    let t = vec2<i32>(low);
-    let now = bitcast<f32>(wet_map[WM_NOW]);
-    let drying = bitcast<f32>(wet_map[WM_DRYING]);
-    let margin = WM_HEIGHT_MARGIN_TEXELS * texel;
-    let y = local.y;
-    let up = normalize((wet.world_to_local * vec4<f32>(normal, 0.0)).xyz).y > WM_UP_FACING;
-    let w00 = wet_texel(t, side, y, up, now, drying, margin);
-    let w10 = wet_texel(t + vec2<i32>(1, 0), side, y, up, now, drying, margin);
-    let w01 = wet_texel(t + vec2<i32>(0, 1), side, y, up, now, drying, margin);
-    let w11 = wet_texel(t + vec2<i32>(1, 1), side, y, up, now, drying, margin);
-    return clamp(mix(mix(w00, w10, f.x), mix(w01, w11, f.x), f.y), 0.0, 1.0);
-}
-
-fn look_wet_surface(world_pos: vec3<f32>, normal: vec3<f32>, albedo: vec3<f32>, roughness: f32) -> WetSurface {
-    let w = wetness_at(world_pos, normal);
+fn look_wet_surface(frag_xy: vec2<f32>, albedo: vec3<f32>, roughness: f32) -> WetSurface {
+    let w = wetness_at(frag_xy);
     if w <= 0.0 {
         return WetSurface(albedo, roughness);
     }

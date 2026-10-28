@@ -85,7 +85,7 @@ mod water_march;
 use water_march::{FieldDraw, FieldView};
 mod ripple_detail;
 mod water_shade;
-mod wetness;
+mod wet_pass;
 use frustum::box_outside_clip;
 use prepasses::ShadowUniforms;
 use water_shade::shade_uniforms;
@@ -117,7 +117,6 @@ static RENDER_SCENE_WGSL: std::sync::LazyLock<String> = std::sync::LazyLock::new
         include_str!("shaders/look_foam.wgsl"),
         include_str!("shaders/look_mist.wgsl"),
         include_str!("shaders/look_thin_water_light.wgsl"),
-        manifold_node_engine::scene::wet_map::LAYOUT,
         include_str!("shaders/look_wet_surface.wgsl"),
         include_str!("shaders/render_scene.wgsl"),
     ]
@@ -1419,6 +1418,7 @@ pub struct RenderScene {
     opaque_depth_snapshot_width: u32,
     opaque_depth_snapshot_height: u32,
     volume_optics: volume_optics::VolumeOptics,
+    wet_pass: wet_pass::WetPass,
     water_march: water_march::WaterMarch,
     water_shade: water_shade::WaterShade,
     ripple_detail: ripple_detail::RippleDetail,
@@ -3243,6 +3243,21 @@ impl RenderScene {
                 Self::fail_frame(ctx, None, error);
                 return;
             }
+            // Water fields always take this branch, so a wet map always
+            // finds the opaque depth here.
+            let gpu = ctx.gpu_encoder();
+            if let Err(error) = self.wet_pass.encode(
+                gpu.device,
+                gpu.native_enc,
+                &fields,
+                pre.view_proj,
+                self.opaque_depth_snapshot
+                    .as_ref()
+                    .expect("transmission depth ensured"),
+            ) {
+                Self::fail_frame(ctx, None, error);
+                return;
+            }
         }
 
         // ---- RAYTRACING_DESIGN.md RT-D3 (P1-part-2): half-res hard-
@@ -3400,8 +3415,6 @@ mod subsurface;
 mod water_march_gpu_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod water_mist_gpu_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod wetness_gpu_tests;
 
 mod scene_viewport;
 

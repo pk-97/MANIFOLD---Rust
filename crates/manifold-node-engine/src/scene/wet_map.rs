@@ -1,27 +1,46 @@
-//! The wet map's layout: one array of u32 words over the water's object-space
-//! XZ, written by `node.wet_map` and read by every mesh shader's wet-surface
-//! look. It lives here, beside its WGSL helpers ([`LAYOUT`]), because the
-//! water crate that marks it and the scene renderer that reads it do not
-//! depend on each other.
+//! The wet map's layout: one array of u32 words holding the soft wet marks
+//! (decals) the water leaves on surfaces, written by `node.wet_map` and drawn
+//! by the scene's wet pass. It lives here, beside its WGSL helpers
+//! ([`layout`]), because the water crate that marks it and the scene renderer
+//! that draws it do not depend on each other.
 
-/// Header words before the first texel: origin x and z, texel size, side,
-/// the display time of the last mark, the drying rate, two unused.
-pub const HEADER_WORDS: u64 = 8;
+/// Header words: the decals' draw arguments (vertices, count, 0, 0), the
+/// display time of the last mark, the drying rate, the half in use, the
+/// contacts refused for want of room, the next half's count while compacting,
+/// the decal radius and the merge distance (both metres), five unused.
+pub const HEADER_WORDS: u64 = 16;
 
-/// Words per texel: touch key, lowest and highest touched height, the touched
-/// height bins.
-pub const TEXEL_WORDS: u64 = 4;
+/// Slots of the merge hash a contact finds its decal through.
+pub const HASH_SLOTS: u64 = 1 << 17;
 
-/// Texels per side of the map.
-pub const SIDE: u32 = 1024;
+/// Decals a half holds.
+pub const CAPACITY: u32 = 1 << 16;
 
-/// The WGSL layout helpers (`wet_map_layout.wgsl`): header indices, the touch
-/// and height keys, whether a texel speaks for a height, and its wetness.
-pub const LAYOUT: &str = include_str!("wet_map_layout.wgsl");
+/// Words per decal: centre xyz, normal, touch key, amount, two unused.
+pub const DECAL_WORDS: u64 = 8;
 
-/// Bytes of a map `side` texels a side.
-pub fn map_bytes(side: u32) -> u64 {
-    4 * (HEADER_WORDS + TEXEL_WORDS * u64::from(side) * u64::from(side))
+/// Seconds a surface the water left takes to dry to 1/e at Drying 1, so a
+/// splash fades in about half a minute on stage. A real 0.1 mm film takes
+/// about half an hour (FAO-56 evaporation), which reads as never drying.
+pub const DRY_SECONDS: f32 = 15.0;
+
+/// Words of the whole map.
+pub fn map_words() -> u64 {
+    HEADER_WORDS + HASH_SLOTS + 2 * u64::from(CAPACITY) * DECAL_WORDS
+}
+
+/// The WGSL layout: these constants, then the helpers
+/// (`wet_map_layout.wgsl`): header and decal word indices, the merge hash,
+/// the touch key, the normal's word, and a decal's strength and soft edge.
+pub fn layout() -> String {
+    format!(
+        "const WD_HEADER_WORDS: u32 = {HEADER_WORDS}u;\n\
+         const WD_HASH_SLOTS: u32 = {HASH_SLOTS}u;\n\
+         const WD_CAPACITY: u32 = {CAPACITY}u;\n\
+         const WD_DECAL_WORDS: u32 = {DECAL_WORDS}u;\n\
+         const WD_DRY_SECONDS: f32 = {DRY_SECONDS:?};\n{}",
+        include_str!("wet_map_layout.wgsl")
+    )
 }
 
 /// The touch key of display time `now`, as the shader writes it.
@@ -29,39 +48,9 @@ pub fn touch_key(now: f32) -> u32 {
     now.max(0.0).to_bits() + 1
 }
 
-/// A height as a u32 that orders like the float, as the shader writes it.
-pub fn height_key(y: f32) -> u32 {
-    let bits = y.to_bits();
-    if bits & 0x8000_0000 != 0 {
-        !bits
-    } else {
-        bits | 0x8000_0000
-    }
-}
-
-/// The bit of height `y`'s bin, bins `bin` metres tall wrapping every 16, in
-/// the high half for a touch on an up-facing surface, as the shader sets it.
-pub fn height_bit(y: f32, bin: f32, up: bool) -> u32 {
-    (1 << (((y / bin).floor() as i32) & 15)) << if up { 16 } else { 0 }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn height_keys_order_like_the_floats() {
-        let heights = [-1.0e6_f32, -2.5, -0.0, 0.0, 1.0e-6, 0.3, 7.0, 1.0e6];
-        for pair in heights.windows(2) {
-            assert!(height_key(pair[0]) <= height_key(pair[1]), "{pair:?}");
-        }
-        // Zero is below every key: an untouched word never wins a max.
-        assert!(
-            heights
-                .iter()
-                .all(|&y| height_key(y) > 0 && !height_key(y) > 0)
-        );
-    }
 
     #[test]
     fn touch_keys_order_like_time_and_never_read_zero() {
@@ -71,7 +60,8 @@ mod tests {
     }
 
     #[test]
-    fn a_full_map_is_sixteen_megabytes_and_a_header() {
-        assert_eq!(map_bytes(SIDE), 32 + 16 * 1024 * 1024);
+    fn the_map_is_a_header_a_hash_and_two_halves_of_decals() {
+        assert_eq!(map_words() * 4, 64 + 4 * (1 << 17) + 2 * 32 * (1 << 16));
+        assert!(HASH_SLOTS.is_power_of_two());
     }
 }

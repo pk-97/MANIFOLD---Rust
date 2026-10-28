@@ -125,6 +125,11 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
         "temporal_accumulate.wgsl",
         [DEPTH_COMMON, VIEW_NORMAL_COMMON].join("\n"),
     ));
+    // The wet pass reads the wet map through its layout.
+    composed.push((
+        "wet_pass.wgsl",
+        manifold_node_engine::scene::wet_map::layout(),
+    ));
     // `render_scene`'s composed shader (`RENDER_SCENE_WGSL`): the field's
     // world-tile reads, the instance transforms, the scene shading and the
     // five look hooks, then the mesh shader. The per-copy cull and the water
@@ -142,7 +147,6 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
             LOOK_FOAM,
             LOOK_MIST,
             LOOK_THIN_WATER_LIGHT,
-            manifold_node_engine::scene::wet_map::LAYOUT,
             LOOK_WET_SURFACE,
         ]
         .join("\n"),
@@ -177,7 +181,6 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
             LOOK_FOAM,
             LOOK_MIST,
             LOOK_THIN_WATER_LIGHT,
-            manifold_node_engine::scene::wet_map::LAYOUT,
             LOOK_WET_SURFACE,
             WATER_FIELD_COMMON,
         ]

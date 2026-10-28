@@ -155,9 +155,9 @@ pub struct FieldSurface {
     /// droplets in the air, which the march integrates under Beer-Lambert.
     /// `None` draws no mist.
     pub mist: Option<Slot>,
-    /// Optional `Array<u32>`: the water's wet map (`wet_map`), a top-down map
-    /// of where and when the water touched a surface, which every mesh in the
-    /// scene reads by world position. Not a pooled field. `None` wets nothing.
+    /// Optional `Array<u32>`: the water's wet map (`wet_map`), the soft wet
+    /// marks the water left on surfaces, which the scene draws over what it
+    /// sees before every mesh shades. Not a pooled field. `None` wets nothing.
     pub wet_map: Option<Slot>,
     /// `Array<u32>`: the world-tile table the arrays above are laid out under.
     pub tiles: Slot,

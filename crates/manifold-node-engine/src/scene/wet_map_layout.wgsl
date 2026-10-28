@@ -1,99 +1,96 @@
-// The wet map's layout (`manifold_node_engine::scene::wet_map`), shared by the
-// node that marks it (`node.wet_map`) and the look that reads it
-// (`look_wet_surface.wgsl`). One array of u32 words over the water's
-// object-space XZ: an eight-word header, then four words a texel, row-major
-// along x.
+// The wet map's helpers (`manifold_node_engine::scene::wet_map`), shared by
+// the node that marks it (`node.wet_map`) and the scene's wet pass that draws
+// it. Composed after the layout constants `wet_map::layout()` writes.
 //
-// Header: origin x and z (f32 bits, the low corner of texel 0), the texel
-// size (f32 bits, 0 while the map has not been placed), the side in texels,
-// the display time of the last mark (f32 bits) and the drying rate (f32 bits).
-// Texel: the touch key, the lowest height touched (inverted height key), the
-// highest height touched (height key), and the heights touched as bits, one
-// bin of WM_HEIGHT_MARGIN_TEXELS texels a bit, wrapping every 16 bins, walls
-// in the low half and up-facing surfaces in the high half. A
-// zeroed texel is untouched, so dry. A touch stamps the WM_STAMP x WM_STAMP
-// texels round the point it touched, so the bilinear read is full over it
-// and fades over one texel past it.
+// One array of u32 words: a header, a merge hash of WD_HASH_SLOTS slots, then
+// two halves of WD_CAPACITY decals of WD_DECAL_WORDS words; the header names
+// the half in use. The header's first four words are Metal's draw arguments
+// for the decals in use (six vertices, the count, 0, 0), so the wet pass
+// draws them with no count on the CPU. A hash slot holds a decal's index + 1,
+// 0 when empty, WD_CLAIMING while a contact writes the decal it claimed.
+//
+// A decal is a soft round wet mark where the water touched a surface: its
+// object-space centre (xyz), its surface normal (octahedral, two snorm16),
+// the display time of its last touch (touch key) and how much water hit it
+// (WD_HIT a contact, full at WD_FULL).
 
-const WM_HEADER_WORDS: u32 = 8u;
-const WM_TEXEL_WORDS: u32 = 4u;
-const WM_ORIGIN_X: u32 = 0u;
-const WM_ORIGIN_Z: u32 = 1u;
-const WM_TEXEL: u32 = 2u;
-const WM_SIDE: u32 = 3u;
-const WM_NOW: u32 = 4u;
-const WM_DRYING: u32 = 5u;
-// A touch stamps this many texels a side, centred on the texel it lands in.
-const WM_STAMP: i32 = 3;
+const WD_DRAW_VERTICES: u32 = 0u;
+const WD_COUNT: u32 = 1u;
+const WD_NOW: u32 = 4u;
+const WD_DRYING: u32 = 5u;
+const WD_ACTIVE: u32 = 6u;
+const WD_REFUSED: u32 = 7u;
+const WD_NEXT_COUNT: u32 = 8u;
+const WD_RADIUS: u32 = 9u;
+const WD_MERGE: u32 = 10u;
 
-// A floor the water left dries to 1/e in this many seconds at Drying 1, so a
-// splash fades in about half a minute on stage. A real 0.1 mm film takes about
-// half an hour (FAO-56 evaporation), which reads as never drying.
-const WM_DRY_SECONDS: f32 = 15.0;
+const WD_POSITION: u32 = 0u;
+const WD_NORMAL: u32 = 3u;
+const WD_TOUCH: u32 = 4u;
+const WD_AMOUNT: u32 = 5u;
 
-// The height bins, and how far past a touched height wetness fades out, in
-// texels.
-const WM_HEIGHT_MARGIN_TEXELS: f32 = 2.0;
+const WD_CLAIMING: u32 = 0xffffffffu;
+// One contact wets a decal a quarter; four make it full.
+const WD_HIT: u32 = 64u;
+const WD_FULL: u32 = 256u;
+
+// The first word of hash slot `slot`.
+fn wd_hash_word(slot: u32) -> u32 {
+    return WD_HEADER_WORDS + slot;
+}
+
+// The first word of decal `index` in half `half`.
+fn wd_decal_word(half: u32, index: u32) -> u32 {
+    return WD_HEADER_WORDS + WD_HASH_SLOTS + (half * WD_CAPACITY + index) * WD_DECAL_WORDS;
+}
+
+// The hash slot a merge cell starts probing at (Teschner et al. 2003).
+fn wd_cell_slot(cell: vec3<i32>) -> u32 {
+    let h = (u32(cell.x) * 73856093u) ^ (u32(cell.y) * 19349663u) ^ (u32(cell.z) * 83492791u);
+    return h & (WD_HASH_SLOTS - 1u);
+}
 
 // The touch key of a display time: its f32 bits plus one, so 0 stays "never".
 // Non-negative floats order like their bits; time below zero marks as zero.
-fn wm_touch_key(now: f32) -> u32 {
+fn wd_touch_key(now: f32) -> u32 {
     return bitcast<u32>(max(now, 0.0)) + 1u;
 }
 
-fn wm_touch_time(key: u32) -> f32 {
+fn wd_touch_time(key: u32) -> f32 {
     return bitcast<f32>(key - 1u);
 }
 
-// A height as a u32 that orders like the float: positive floats get the sign
-// bit set, negative floats are inverted.
-fn wm_height_key(y: f32) -> u32 {
-    let bits = bitcast<u32>(y);
-    return select(bits | 0x80000000u, ~bits, (bits & 0x80000000u) != 0u);
+// A unit normal as one word: octahedral (Meyer et al. 2010), two snorm16.
+fn wd_normal_word(n: vec3<f32>) -> u32 {
+    let p = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
+    let sign_xy = select(vec2<f32>(-1.0), vec2<f32>(1.0), p >= vec2<f32>(0.0));
+    let folded = select(p, (vec2<f32>(1.0) - abs(p.yx)) * sign_xy, n.z < 0.0);
+    return pack2x16snorm(folded);
 }
 
-fn wm_height(key: u32) -> f32 {
-    return bitcast<f32>(select(~key, key & 0x7fffffffu, (key & 0x80000000u) != 0u));
+fn wd_normal(word: u32) -> vec3<f32> {
+    let f = unpack2x16snorm(word);
+    var n = vec3<f32>(f, 1.0 - abs(f.x) - abs(f.y));
+    let t = max(-n.z, 0.0);
+    n.x = n.x + select(t, -t, n.x >= 0.0);
+    n.y = n.y + select(t, -t, n.y >= 0.0);
+    return normalize(n);
 }
 
-// The first word of texel t.
-fn wm_texel_word(t: vec2<u32>, side: u32) -> u32 {
-    return WM_HEADER_WORDS + WM_TEXEL_WORDS * (t.y * side + t.x);
+// How wet a decal is, 0 to 1: how much water hit it, dried by
+// exp(-age * drying / WD_DRY_SECONDS) since its last touch.
+fn wd_strength(touch: u32, amount: u32, now: f32, drying: f32) -> f32 {
+    if touch == 0u {
+        return 0.0;
+    }
+    let age = max(now - wd_touch_time(touch), 0.0);
+    return min(f32(amount) / f32(WD_FULL), 1.0) * exp(-age * drying / WD_DRY_SECONDS);
 }
 
-// A surface faces up when its normal is within 60 degrees of up: floors,
-// tops and ramps. Up-facing touches and the rest keep separate height bins,
-// so water landing on a box's top leaves the face under its edge dry.
-const WM_UP_FACING: f32 = 0.5;
-
-// The bit of height y's bin, bins `bin` metres tall wrapping every 16: the
-// low half of the word for touches on walls, the high half for touches on
-// up-facing surfaces.
-fn wm_height_bit(y: f32, bin: f32, up: bool) -> u32 {
-    return (1u << u32(i32(floor(y / bin)) & 15)) << select(0u, 16u, up);
-}
-
-// How much a texel speaks for height y on a surface facing up or not, 0 to 1,
-// fading over `margin` (the bin height) so no edge is a step: full between
-// its lowest and highest touched heights, fading to nothing `margin` past
-// them; and full within a bin of a touched bin of the surface's kind, read
-// linearly between bin centres.
-fn wm_height_weight(low: u32, high: u32, bins: u32, y: f32, margin: f32, up: bool) -> f32 {
-    let outside = max(wm_height(~low) - y, y - wm_height(high));
-    let band = clamp(1.0 - outside / margin, 0.0, 1.0);
-    let kind = (bins >> select(0u, 16u, up)) & 0xffffu;
-    let near = (kind | (kind << 1u) | (kind >> 15u) | (kind >> 1u) | (kind << 15u)) & 0xffffu;
-    let q = y / margin - 0.5;
-    let below = floor(q);
-    let i = u32(i32(below) & 15);
-    let lower = f32((near >> i) & 1u);
-    let upper = f32((near >> ((i + 1u) & 15u)) & 1u);
-    return band * mix(lower, upper, q - below);
-}
-
-// A touched texel's wetness, 0 to 1: exp(-age * drying / WM_DRY_SECONDS)
-// since the last touch.
-fn wm_wetness(touch: u32, now: f32, drying: f32) -> f32 {
-    let age = max(now - wm_touch_time(touch), 0.0);
-    return exp(-age * drying / WM_DRY_SECONDS);
+// A decal's soft edge: full out to half its radius, then a smoothstep to 0 at
+// its radius. Contacts leave decals at most about 0.7 merge distances from any
+// point of a wetted patch and the radius is 1.5 of them, so overlapping decals
+// read as one even film with a soft rim, not a lattice of dots.
+fn wd_falloff(distance: f32, radius: f32) -> f32 {
+    return 1.0 - smoothstep(0.5 * radius, radius, distance);
 }

@@ -1,33 +1,35 @@
-// The wet map: a top-down map over the water's object-space XZ of where and
-// when the water touched a surface (composed after the world-tile read side
-// and the map's layout, `manifold_node_engine::scene::wet_map::LAYOUT`).
+// The wet map: soft wet marks (decals) where the water touched a surface,
+// kept between frames (composed after the world-tile read side and the map's
+// layout, `manifold_node_engine::scene::wet_map::layout()`).
 //
 // Passes, a barrier between each:
-//   cs_place  one thread: places the map round the water's extent when the
-//             node starts over or the water leaves it, writes the header and
-//             the clear's group count (none when the map stays put)
-//   cs_clear  indirect, a thread a texel: every texel untouched
-//   cs_mark   a thread a particle: a particle within two radii of a solid
-//             stamps the texels round the surface point it touches with the
-//             display time, widens their touched heights and sets the
-//             height's bin for a wall or an up-facing surface
-// Drying is computed where the map is read, from the age of the last touch,
-// so nothing runs over the map while the water is still.
+//   cs_begin       one thread: the draw arguments, time, drying, radius and
+//                  merge distance into the header
+//   cs_clear_hash  a thread a hash slot, before a compaction: every slot empty
+//   cs_compact     a thread a decal: a decal touched within `keep` seconds
+//                  moves to the other half and back into the hash
+//   cs_finish      one thread: the other half becomes the one in use
+//   cs_mark        a thread a particle: a particle within two radii of a solid
+//                  finds the decal at the surface point it touches through the
+//                  hash and wets it again, or starts a new one
+// Drying is computed where a decal is drawn, from the age of its last touch,
+// so nothing runs over the decals while the water is still.
 
 struct Params {
     // The display time and the drying rate, copied into the header.
     now: f32,
     drying: f32,
-    // The texel size the cell asks for, metres.
-    base_texel: f32,
-    // 1 when the node starts over: the map is placed again and cleared.
-    restart: u32,
-    // Texels a side, and the particle slots.
-    side: u32,
+    // A decal's radius and the distance within which a contact wets an
+    // existing decal instead of starting one, metres.
+    radius: f32,
+    merge: f32,
+    // The particle slots.
     capacity: u32,
     // The display pool and cell size the solid is stored under.
     pool_tiles: u32,
     cell: f32,
+    // A compaction keeps the decals touched within this many seconds.
+    keep: f32,
 }
 
 struct WetParticle {
@@ -41,85 +43,83 @@ struct WetParticle {
 // The display solid's distance on the display tiles, negative inside.
 @group(0) @binding(2) var<storage, read> solid: array<f32>;
 @group(0) @binding(3) var<storage, read> tiles: array<u32>;
-// The held tiles' node bounds in object space: min xyz, 0, max xyz, 0.
-@group(0) @binding(4) var<storage, read> extent: array<f32>;
-@group(0) @binding(5) var<storage, read_write> map: array<atomic<u32>>;
-// The clear's threadgroups: x, y, z.
-@group(0) @binding(6) var<storage, read_write> clear_groups: array<u32>;
+@group(0) @binding(4) var<storage, read_write> map: array<atomic<u32>>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
 fn ts_table_entries() -> u32 { let n = 4u * max(params.pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
 fn ts_table_word(i: u32) -> u32 { return tiles[i]; }
 
-// The texel sizes a placed map takes, metres: 5 mm keeps a splash's edge
-// sharp at close range, 50 mm makes the map 51 m across.
-const WET_MIN_TEXEL: f32 = 0.005;
-const WET_MAX_TEXEL: f32 = 0.05;
 // A particle marks the surface it is within this many radii of.
 const WET_REACH_RADII: f32 = 2.0;
 // The solid reads 1e30 in a tile no slot holds; capped so a trilinear mix
 // stays finite.
 const WET_SOLID_FAR: f32 = 1.0e4;
-// The clear's threadgroup side (cs_clear is 8 x 8).
-const WET_CLEAR_GROUP: u32 = 8u;
+// Hash slots a contact or a compacted decal probes from its cell's slot.
+const WET_PROBES: u32 = 8u;
+// A contact wets a decal whose normal is within about 45 degrees of its own.
+const WET_MERGE_AGREE: f32 = 0.7;
 
-fn wet_header_f32(word: u32) -> f32 {
-    return bitcast<f32>(atomicLoad(&map[word]));
+@compute @workgroup_size(1)
+fn cs_begin() {
+    atomicStore(&map[WD_DRAW_VERTICES], 6u);
+    atomicStore(&map[WD_NOW], bitcast<u32>(params.now));
+    atomicStore(&map[WD_DRYING], bitcast<u32>(params.drying));
+    atomicStore(&map[WD_RADIUS], bitcast<u32>(params.radius));
+    atomicStore(&map[WD_MERGE], bitcast<u32>(params.merge));
 }
 
-// Whether the map at `origin` with sides `span` should move for an extent
-// from `lo` to `hi` (XZ). Per axis: an extent the map can hold must lie inside
-// it; a wider one keeps the map while its middle stays within a quarter map of
-// the map's middle, so a sea wider than the map does not move it every frame.
-fn wet_leaves(lo: vec2<f32>, hi: vec2<f32>, origin: vec2<f32>, span: f32) -> bool {
-    let fits = (hi - lo) <= vec2<f32>(span);
-    let inside = lo >= origin & hi <= origin + vec2<f32>(span);
-    let middle = 0.5 * (lo + hi);
-    let near = abs(middle - (origin + vec2<f32>(0.5 * span))) <= vec2<f32>(0.25 * span);
-    return any(select(!near, !inside, fits));
+@compute @workgroup_size(64)
+fn cs_clear_hash(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x >= WD_HASH_SLOTS {
+        return;
+    }
+    atomicStore(&map[wd_hash_word(gid.x)], 0u);
+}
+
+fn wet_position(word: u32) -> vec3<f32> {
+    return vec3<f32>(
+        bitcast<f32>(atomicLoad(&map[word + WD_POSITION])),
+        bitcast<f32>(atomicLoad(&map[word + WD_POSITION + 1u])),
+        bitcast<f32>(atomicLoad(&map[word + WD_POSITION + 2u])),
+    );
+}
+
+// The merge cell holding point x.
+fn wet_cell(x: vec3<f32>) -> vec3<i32> {
+    return vec3<i32>(floor(x / params.merge));
+}
+
+@compute @workgroup_size(64)
+fn cs_compact(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let half = atomicLoad(&map[WD_ACTIVE]);
+    let i = gid.x;
+    if i >= min(atomicLoad(&map[WD_COUNT]), WD_CAPACITY) {
+        return;
+    }
+    let source = wd_decal_word(half, i);
+    let touch = atomicLoad(&map[source + WD_TOUCH]);
+    if touch == 0u || params.now - wd_touch_time(touch) > params.keep {
+        return;
+    }
+    let j = atomicAdd(&map[WD_NEXT_COUNT], 1u);
+    let to = wd_decal_word(1u - half, j);
+    for (var k = 0u; k < WD_DECAL_WORDS; k = k + 1u) {
+        atomicStore(&map[to + k], atomicLoad(&map[source + k]));
+    }
+    let home = wd_cell_slot(wet_cell(wet_position(source)));
+    for (var probe = 0u; probe < WET_PROBES; probe = probe + 1u) {
+        let slot = wd_hash_word((home + probe) & (WD_HASH_SLOTS - 1u));
+        if atomicCompareExchangeWeak(&map[slot], 0u, j + 1u).exchanged {
+            return;
+        }
+    }
 }
 
 @compute @workgroup_size(1)
-fn cs_place() {
-    let lo = vec3<f32>(extent[0], extent[1], extent[2]);
-    let hi = vec3<f32>(extent[4], extent[5], extent[6]);
-    let held = all(lo <= hi);
-    let texel = wet_header_f32(WM_TEXEL);
-    let origin = vec2<f32>(wet_header_f32(WM_ORIGIN_X), wet_header_f32(WM_ORIGIN_Z));
-    let side = f32(params.side);
-    var place = params.restart != 0u || !(texel > 0.0);
-    if held && !place {
-        place = wet_leaves(lo.xz, hi.xz, origin, side * texel);
-    }
-    if place && held {
-        // The finest texel at which the map spans twice the water, centred on
-        // it: the water can spread half its size each way before it leaves.
-        let size = max(hi.x - lo.x, hi.z - lo.z);
-        let fit = clamp(max(params.base_texel, 2.0 * size / side), WET_MIN_TEXEL, WET_MAX_TEXEL);
-        let middle = 0.5 * (lo.xz + hi.xz);
-        let corner = floor((middle - vec2<f32>(0.5 * side * fit)) / fit) * fit;
-        atomicStore(&map[WM_ORIGIN_X], bitcast<u32>(corner.x));
-        atomicStore(&map[WM_ORIGIN_Z], bitcast<u32>(corner.y));
-        atomicStore(&map[WM_TEXEL], bitcast<u32>(fit));
-    }
-    atomicStore(&map[WM_SIDE], params.side);
-    atomicStore(&map[WM_NOW], bitcast<u32>(params.now));
-    atomicStore(&map[WM_DRYING], bitcast<u32>(params.drying));
-    let groups = select(0u, params.side / WET_CLEAR_GROUP, place);
-    clear_groups[0] = groups;
-    clear_groups[1] = groups;
-    clear_groups[2] = 1u;
-}
-
-@compute @workgroup_size(8, 8)
-fn cs_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x >= params.side || gid.y >= params.side {
-        return;
-    }
-    let word = wm_texel_word(gid.xy, params.side);
-    for (var k = 0u; k < WM_TEXEL_WORDS; k = k + 1u) {
-        atomicStore(&map[word + k], 0u);
-    }
+fn cs_finish() {
+    atomicStore(&map[WD_COUNT], atomicLoad(&map[WD_NEXT_COUNT]));
+    atomicStore(&map[WD_NEXT_COUNT], 0u);
+    atomicStore(&map[WD_ACTIVE], 1u - atomicLoad(&map[WD_ACTIVE]));
 }
 
 // The solid's distance at object-space point x, trilinear on the display
@@ -160,44 +160,61 @@ fn cs_mark(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !(p.w > 0.0) {
         return;
     }
-    let texel = wet_header_f32(WM_TEXEL);
-    if !(texel > 0.0) {
-        return;
-    }
     let near = wet_solid_at(p.xyz);
-    if near.distance > WET_REACH_RADII * p.w {
+    let steep = length(near.gradient);
+    if near.distance > WET_REACH_RADII * p.w || !(steep > 0.0) {
         return;
     }
     // The point of the surface the particle touches: back along the solid's
-    // normal by its distance. A wall's face is one line of texels seen from
-    // above, so the stamp lands on it, not a particle's width in front, and
-    // covers the texels either side of it.
-    let steep = length(near.gradient);
-    var contact = p.xyz;
-    var up = false;
-    if steep > 0.0 {
-        let normal = near.gradient / steep;
-        contact = p.xyz - near.distance * normal;
-        up = normal.y > WM_UP_FACING;
-    }
-    let origin = vec2<f32>(wet_header_f32(WM_ORIGIN_X), wet_header_f32(WM_ORIGIN_Z));
-    let home = vec2<i32>(floor((contact.xz - origin) / texel));
-    let touch = wm_touch_key(params.now);
-    let low = ~wm_height_key(contact.y);
-    let high = wm_height_key(contact.y);
-    let bit = wm_height_bit(contact.y, WM_HEIGHT_MARGIN_TEXELS * texel, up);
-    let side = i32(params.side);
-    for (var dz = 0; dz < WM_STAMP; dz = dz + 1) {
-        for (var dx = 0; dx < WM_STAMP; dx = dx + 1) {
-            let t = home + vec2<i32>(dx, dz) - vec2<i32>(WM_STAMP / 2);
-            if any(t < vec2<i32>(0)) || any(t >= vec2<i32>(side)) {
-                continue;
+    // normal by its distance.
+    let normal = near.gradient / steep;
+    let contact = p.xyz - near.distance * normal;
+    let touch = wd_touch_key(params.now);
+    let half = atomicLoad(&map[WD_ACTIVE]);
+    let home = wd_cell_slot(wet_cell(contact));
+    for (var probe = 0u; probe < WET_PROBES; probe = probe + 1u) {
+        let slot = wd_hash_word((home + probe) & (WD_HASH_SLOTS - 1u));
+        var held = atomicLoad(&map[slot]);
+        if held == 0u {
+            // Claim the empty slot, then start a decal behind it.
+            let claim = atomicCompareExchangeWeak(&map[slot], 0u, WD_CLAIMING);
+            if !claim.exchanged {
+                held = claim.old_value;
+            } else {
+                let index = atomicAdd(&map[WD_COUNT], 1u);
+                if index >= WD_CAPACITY {
+                    // Full: the count goes back to what the halves hold.
+                    atomicSub(&map[WD_COUNT], 1u);
+                    atomicAdd(&map[WD_REFUSED], 1u);
+                    atomicStore(&map[slot], 0u);
+                    return;
+                }
+                let word = wd_decal_word(half, index);
+                atomicStore(&map[word + WD_POSITION], bitcast<u32>(contact.x));
+                atomicStore(&map[word + WD_POSITION + 1u], bitcast<u32>(contact.y));
+                atomicStore(&map[word + WD_POSITION + 2u], bitcast<u32>(contact.z));
+                atomicStore(&map[word + WD_NORMAL], wd_normal_word(normal));
+                atomicStore(&map[word + WD_TOUCH], touch);
+                atomicStore(&map[word + WD_AMOUNT], WD_HIT);
+                atomicStore(&map[slot], index + 1u);
+                return;
             }
-            let word = wm_texel_word(vec2<u32>(t), params.side);
-            atomicMax(&map[word], touch);
-            atomicMax(&map[word + 1u], low);
-            atomicMax(&map[word + 2u], high);
-            atomicOr(&map[word + 3u], bit);
+        }
+        // Another contact is writing this slot's decal this frame: the next
+        // frame's contact wets it.
+        if held == WD_CLAIMING {
+            return;
+        }
+        if held != 0u {
+            let word = wd_decal_word(half, held - 1u);
+            let close = distance(wet_position(word), contact) < params.merge;
+            if close && dot(wd_normal(atomicLoad(&map[word + WD_NORMAL])), normal) > WET_MERGE_AGREE {
+                atomicMax(&map[word + WD_TOUCH], touch);
+                if atomicLoad(&map[word + WD_AMOUNT]) < WD_FULL {
+                    atomicAdd(&map[word + WD_AMOUNT], WD_HIT);
+                }
+                return;
+            }
         }
     }
 }

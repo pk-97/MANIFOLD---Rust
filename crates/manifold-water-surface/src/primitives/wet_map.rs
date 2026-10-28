@@ -1,10 +1,10 @@
-//! `node.wet_map` — where and when the water touched a surface, as one
-//! top-down map over the water's object-space XZ (the layout is
+//! `node.wet_map` — soft wet marks (decals) where the water touched a
+//! surface, kept between frames (the layout is
 //! `manifold_node_engine::scene::wet_map`). Each frame every liquid particle
-//! near a solid stamps its texel with the display time and the height it
-//! touched; the mesh shaders read the map and dry it by the age of the last
-//! touch, so the map costs one pass over the particles a frame and nothing
-//! while the water is gone.
+//! near a solid wets the decal at the surface point it touches, or starts
+//! one; the scene's wet pass draws the decals and dries them by the age of
+//! their last touch, so the marks cost one pass over the particles a frame,
+//! a compaction a second and nothing while the water is gone.
 
 use std::borrow::Cow;
 use std::sync::LazyLock;
@@ -15,7 +15,7 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::wet_map::{LAYOUT, SIDE, map_bytes};
+use manifold_node_engine::scene::wet_map::{CAPACITY, DRY_SECONDS, HASH_SLOTS, layout, map_words};
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::tile_pool::tile_pool;
@@ -23,17 +23,35 @@ use manifold_water_liquid::tile_pool::tile_pool;
 // The read side and the map's layout, then the kernels.
 static SHADER: LazyLock<String> = LazyLock::new(|| {
     format!(
-        "{READ_SIDE}\n{LAYOUT}\n{}",
+        "{READ_SIDE}\n{}\n{}",
+        layout(),
         include_str!("shaders/wet_map.wgsl")
     )
 });
-const MARK_THREADS: u32 = 64;
+const THREADS: u32 = 64;
 
-/// The texel a simulation cell asks for, metres: a quarter cell, so a splash
-/// edge is finer than the surface drawn over it, kept between 5 mm and 50 mm.
-/// The placed map may take a coarser texel to hold a wide spread.
-fn base_texel(sim_cell_size: f32) -> f32 {
-    (sim_cell_size / 4.0).clamp(0.005, 0.05)
+/// A decal's radius in water cells: wide enough that the decals a spread
+/// leaves a cell apart overlap into one film.
+const DECAL_RADIUS_CELLS: f32 = 1.5;
+
+/// A contact within this many water cells of a decal wets it again.
+const MERGE_CELLS: f32 = 1.0;
+
+/// Frames between compactions, which drop the decals that have dried.
+const COMPACT_FRAMES: u32 = 60;
+
+/// A compaction keeps a decal until it has dried this many times over (to
+/// e^-5, below what a pixel shows).
+const KEEP_DRY_TIMES: f32 = 5.0;
+
+/// How long a compaction keeps a decal after its last touch at `drying`; a
+/// surface that never dries keeps its decals.
+fn keep_seconds(drying: f32) -> f32 {
+    if drying > 0.0 {
+        KEEP_DRY_TIMES * DRY_SECONDS / drying
+    } else {
+        f32::MAX
+    }
 }
 
 /// Field order identical to the shader's `Params`; two 16-byte rows.
@@ -42,26 +60,26 @@ fn base_texel(sim_cell_size: f32) -> f32 {
 struct WetMapUniforms {
     now: f32,
     drying: f32,
-    base_texel: f32,
-    restart: u32,
-    side: u32,
+    radius: f32,
+    merge: f32,
     capacity: u32,
     pool_tiles: u32,
     cell: f32,
+    keep: f32,
 }
 
-/// What the last run saw: the map carries on from it only at the same epoch
-/// and texel, with time standing still or moving on.
+/// What the last run saw: the decals carry on from it only at the same epoch
+/// and water cell, with time standing still or moving on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct LastRun {
     time: f32,
     epoch: Option<f32>,
-    base_texel: f32,
+    sim_cell: f32,
 }
 
 fn restarts(last: Option<LastRun>, now: LastRun) -> bool {
     last.is_none_or(|last| {
-        last.epoch != now.epoch || last.base_texel != now.base_texel || now.time < last.time
+        last.epoch != now.epoch || last.sim_cell != now.sim_cell || now.time < last.time
     })
 }
 
@@ -76,12 +94,11 @@ fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
 manifold_node_engine::primitive! {
     name: WetMap,
     type_id: "node.wet_map",
-    purpose: "Where and when the water touched a surface, as one top-down map of 1024 x 1024 texels over the water's object-space XZ, kept between frames. Each run every liquid particle within two radii of the solid (its trilinear distance on the display tiles) stamps the 3 x 3 texels round the surface point it touches (back along the solid's normal by that distance) with the display time, widens their lowest and highest touched heights and sets the bit of that height's bin (bins two texels tall, wrapping every 32). The map is read by world position, bilinear between texels, so a wet patch fades out over a texel; a texel is fully wet within a bin of a height it was touched at and fades out over the next, so the underside of an overhang the water passed under, and a wall between a splash at its foot and one at its top, stay dry; its wetness is exp(-age * drying / 15 s) since the last touch, so it dries without any pass over the map. The texel is a quarter simulation cell (5 mm to 50 mm), or coarser when the water spreads wider than the map holds at that size. The map is placed centred on the water's extent at twice its size, and placed again, cleared, when the water leaves it. It starts over, cleared, on its first run, when epoch changes, when the texel changes and when time goes backwards.",
+    purpose: "Soft round wet marks (decals) where the water touched a surface, kept between frames. Each run every liquid particle within two radii of the solid (its trilinear distance on the display tiles) finds the surface point it touches (back along the solid's normal by that distance) and that surface's normal; a decal within a water cell of that point, facing within about 45 degrees, takes the touch (its time, and a quarter more water up to full), or else a new decal starts there. A decal is 1.5 water cells across in radius, with a soft edge, so the decals a spread leaves overlap into one film; the scene draws them over what it sees and a decal wets only the pixels facing its way, so a floor mark never wets the wall it meets. Its wetness is how much water hit it times exp(-age * drying / 15 s) since its last touch, so it dries without any pass over the decals. Once a second the decals dried to e^-5 are dropped. It holds 65536 decals; contacts beyond that are refused until some dry. It starts over, cleared, on its first run, when epoch changes, when the water's cell size changes and when time goes backwards.",
     inputs: {
         particles: Array(FluidParticle) required,
         solid: Array(f32) required,
         tiles: Array(u32) required,
-        extent: Array(f32) required,
         time: ScalarF32 required,
         epoch: ScalarF32 optional,
         drying: ScalarF32 optional,
@@ -100,26 +117,28 @@ manifold_node_engine::primitive! {
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire particles from the drawn liquid particles, solid from the display solid, tiles, pool_tiles and cell_size from node.surface_tiles with extent from its extent, sim_cell_size from the water's cell size, time from the domain's display_time and epoch from its epoch; its map feeds the water object's wet_map. The map persists between frames, so keep the node running while the water is shown.",
+    composition_notes: "Wire particles from the drawn liquid particles, solid from the display solid, tiles, pool_tiles and cell_size from node.surface_tiles, sim_cell_size from the water's cell size, time from the domain's display_time and epoch from its epoch; its map feeds the water object's wet_map. The decals persist between frames, so keep the node running while the water is shown.",
     examples: [],
     picker: { label: "Wet Map", category: Atom },
     summary: "Remembers where the water touched the ground and walls, so they look wet and dry off over time.",
     category: Particles3D,
     role: Filter,
-    aliases: ["wet map", "wetness", "wet surfaces"],
+    aliases: ["wet map", "wetness", "wet surfaces", "wet decals"],
     boundary_reason: CrossFrameState,
     extra_fields: {
         kernels: Option<Kernels> = None,
         map: Option<GpuBuffer> = None,
-        clear_groups: Option<GpuBuffer> = None,
         last: Option<LastRun> = None,
+        frames_since_compact: u32 = 0,
     },
 }
 
-/// The node's three passes, one pipeline each.
+/// The node's passes, one pipeline each.
 struct Kernels {
-    place: GpuComputePipeline,
-    clear: GpuComputePipeline,
+    begin: GpuComputePipeline,
+    clear_hash: GpuComputePipeline,
+    compact: GpuComputePipeline,
+    finish: GpuComputePipeline,
     mark: GpuComputePipeline,
 }
 
@@ -128,32 +147,30 @@ impl Kernels {
         let make =
             |entry: &str| device.create_compute_pipeline(SHADER.as_str(), entry, "node.wet_map");
         Self {
-            place: make("cs_place"),
-            clear: make("cs_clear"),
+            begin: make("cs_begin"),
+            clear_hash: make("cs_clear_hash"),
+            compact: make("cs_compact"),
+            finish: make("cs_finish"),
             mark: make("cs_mark"),
         }
     }
 }
 
 impl WetMap {
-    /// The map and the clear's group count, made once and zeroed: a zeroed
-    /// map is unplaced and dry.
+    /// The map, made once and zeroed: a zeroed map holds no decal.
     fn ensure_state(&mut self, device: &GpuDevice) -> Result<(), String> {
         if self.map.is_some() {
             return Ok(());
         }
-        let bytes = map_bytes(SIDE);
+        let bytes = map_words() * 4;
         manifold_node_engine::load::expand::admit_candidate_bytes(
             device.modifier_memory_snapshot(),
-            bytes + 16,
+            bytes,
         )
         .map_err(|error| error.to_string())?;
         let map = device.try_create_buffer_shared(bytes)?;
         map.zero_fill();
-        let groups = device.try_create_buffer_shared(16)?;
-        groups.zero_fill();
         self.map = Some(map);
-        self.clear_groups = Some(groups);
         Ok(())
     }
 }
@@ -192,13 +209,12 @@ impl Primitive for WetMap {
                 return;
             }
         };
-        let (Some(particles), Some(solid), Some(tiles), Some(extent)) = (
+        let (Some(particles), Some(solid), Some(tiles)) = (
             ctx.inputs.array("particles"),
             ctx.inputs.array("solid"),
             ctx.inputs.array("tiles"),
-            ctx.inputs.array("extent"),
         ) else {
-            ctx.error("Wet Map: particles, solid, tiles and extent must be wired");
+            ctx.error("Wet Map: particles, solid and tiles must be wired");
             return;
         };
         let Some(ParamValue::Float(time)) = ctx.inputs.scalar("time") else {
@@ -221,11 +237,10 @@ impl Primitive for WetMap {
             ));
             return;
         }
-        if solid.size < pool.elements() * 4 || extent.size < 32 {
+        if solid.size < pool.elements() * 4 {
             ctx.error(format!(
-                "Wet Map: solid holds {} values and extent {} for a pool of {} tiles; it needs {} and 8",
+                "Wet Map: solid holds {} values for a pool of {} tiles; it needs {}",
                 solid.size / 4,
-                extent.size / 4,
                 pool.pool_tiles,
                 pool.elements()
             ));
@@ -238,7 +253,7 @@ impl Primitive for WetMap {
         let run = LastRun {
             time,
             epoch,
-            base_texel: base_texel(sim_cell),
+            sim_cell,
         };
         let Ok(capacity) = u32::try_from(particles.size / size_of::<FluidParticle>() as u64) else {
             ctx.error("Wet Map: particles holds more records than a pass indexes");
@@ -247,12 +262,12 @@ impl Primitive for WetMap {
         let uniforms = WetMapUniforms {
             now: time,
             drying,
-            base_texel: run.base_texel,
-            restart: u32::from(restarts(self.last, run)),
-            side: SIDE,
+            radius: DECAL_RADIUS_CELLS * sim_cell,
+            merge: MERGE_CELLS * sim_cell,
             capacity,
             pool_tiles: pool.pool_tiles,
             cell: pool.cell_size,
+            keep: keep_seconds(drying),
         };
         let prepared = {
             let gpu = ctx.gpu_encoder();
@@ -261,17 +276,15 @@ impl Primitive for WetMap {
         };
         if let Err(error) = prepared {
             ctx.error(format!(
-                "Wet Map: the map needs storage the device cannot give: {error}"
+                "Wet Map: the decals need storage the device cannot give: {error}"
             ));
             return;
         }
-        let (Some(kernels), Some(map), Some(groups)) = (
-            self.kernels.as_ref(),
-            self.map.as_ref(),
-            self.clear_groups.as_ref(),
-        ) else {
+        let (Some(kernels), Some(map)) = (self.kernels.as_ref(), self.map.as_ref()) else {
             return;
         };
+        let restart = restarts(self.last, run);
+        let compact = !restart && self.frames_since_compact + 1 >= COMPACT_FRAMES;
         let bindings = [
             GpuBinding::Bytes {
                 binding: 0,
@@ -280,23 +293,45 @@ impl Primitive for WetMap {
             buffer(1, particles),
             buffer(2, solid),
             buffer(3, tiles),
-            buffer(4, extent),
-            buffer(5, map),
-            buffer(6, groups),
+            buffer(4, map),
         ];
         let enc = &mut *ctx.gpu_encoder().native_enc;
-        enc.dispatch_compute(&kernels.place, &bindings, [1, 1, 1], "node.wet_map.place");
+        if restart {
+            enc.clear_buffer(map);
+        }
+        enc.dispatch_compute(&kernels.begin, &bindings, [1, 1, 1], "node.wet_map.begin");
         enc.compute_memory_barrier_buffers();
-        enc.dispatch_compute_indirect(&kernels.clear, &bindings, groups, 0, "node.wet_map.clear");
-        enc.compute_memory_barrier_buffers();
+        if compact {
+            enc.dispatch_compute(
+                &kernels.clear_hash,
+                &bindings,
+                [(HASH_SLOTS as u32).div_ceil(THREADS), 1, 1],
+                "node.wet_map.clear_hash",
+            );
+            enc.compute_memory_barrier_buffers();
+            enc.dispatch_compute(
+                &kernels.compact,
+                &bindings,
+                [CAPACITY.div_ceil(THREADS), 1, 1],
+                "node.wet_map.compact",
+            );
+            enc.compute_memory_barrier_buffers();
+            enc.dispatch_compute(&kernels.finish, &bindings, [1, 1, 1], "node.wet_map.finish");
+            enc.compute_memory_barrier_buffers();
+        }
         if capacity > 0 {
             enc.dispatch_compute(
                 &kernels.mark,
                 &bindings,
-                [capacity.div_ceil(MARK_THREADS), 1, 1],
+                [capacity.div_ceil(THREADS), 1, 1],
                 "node.wet_map.mark",
             );
         }
+        self.frames_since_compact = if compact || restart {
+            0
+        } else {
+            self.frames_since_compact + 1
+        };
         self.last = Some(run);
     }
 }
@@ -314,7 +349,13 @@ mod tests {
         )
         .validate(&module)
         .expect("wet map shader validates");
-        for entry in ["cs_place", "cs_clear", "cs_mark"] {
+        for entry in [
+            "cs_begin",
+            "cs_clear_hash",
+            "cs_compact",
+            "cs_finish",
+            "cs_mark",
+        ] {
             assert!(
                 module.entry_points.iter().any(|point| point.name == entry),
                 "missing {entry}"
@@ -324,26 +365,26 @@ mod tests {
     }
 
     #[test]
-    fn the_texel_is_a_quarter_cell_within_its_bounds() {
-        assert_eq!(base_texel(0.0625), 0.015625);
-        assert_eq!(base_texel(0.004), 0.005);
-        assert_eq!(base_texel(0.9), 0.05);
+    fn a_compaction_keeps_a_decal_until_it_has_dried_five_times_over() {
+        assert_eq!(keep_seconds(1.0), 75.0);
+        assert_eq!(keep_seconds(3.0), 25.0);
+        assert_eq!(keep_seconds(0.0), f32::MAX);
     }
 
     #[test]
-    fn the_map_starts_over_on_a_new_epoch_texel_or_time_running_back() {
-        let at = |time, epoch, base_texel| LastRun {
+    fn the_decals_start_over_on_a_new_epoch_cell_or_time_running_back() {
+        let at = |time, epoch, sim_cell| LastRun {
             time,
             epoch,
-            base_texel,
+            sim_cell,
         };
-        let last = Some(at(4.0, Some(1.0), 0.01));
-        assert!(restarts(None, at(0.0, None, 0.01)));
-        assert!(!restarts(last, at(4.0, Some(1.0), 0.01)));
-        assert!(!restarts(last, at(9.0, Some(1.0), 0.01)));
-        assert!(restarts(last, at(3.9, Some(1.0), 0.01)));
-        assert!(restarts(last, at(9.0, Some(2.0), 0.01)));
-        assert!(restarts(last, at(9.0, Some(1.0), 0.02)));
+        let last = Some(at(4.0, Some(1.0), 0.04));
+        assert!(restarts(None, at(0.0, None, 0.04)));
+        assert!(!restarts(last, at(4.0, Some(1.0), 0.04)));
+        assert!(!restarts(last, at(9.0, Some(1.0), 0.04)));
+        assert!(restarts(last, at(3.9, Some(1.0), 0.04)));
+        assert!(restarts(last, at(9.0, Some(2.0), 0.04)));
+        assert!(restarts(last, at(9.0, Some(1.0), 0.05)));
     }
 }
 

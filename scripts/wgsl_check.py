@@ -27,6 +27,13 @@ SCENE = C / "manifold-nodes-scene/src/node_graph/primitives/shaders"
 
 WORLD_READ = C / "manifold-node-engine/src/scene/world_tiles_read.wgsl"
 WET_LAYOUT = C / "manifold-node-engine/src/scene/wet_map_layout.wgsl"
+# The constants `wet_map::layout()` writes ahead of the layout's helpers.
+WET_CONSTS = """const WD_HEADER_WORDS: u32 = 16u;
+const WD_HASH_SLOTS: u32 = 131072u;
+const WD_CAPACITY: u32 = 65536u;
+const WD_DECAL_WORDS: u32 = 8u;
+const WD_DRY_SECONDS: f32 = 15.0;
+"""
 # A second table's read side, as `surface_tiles.rs` and `interior_fill.rs`
 # compose it: the same text renamed sim_ts_ / SIM_WT_.
 SIM_READ = WORLD_READ.read_text().replace("ts_", "sim_ts_").replace("WT_", "SIM_WT_")
@@ -102,15 +109,6 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         params.body_count, params.rows, params.tick_seconds, params.pool_tiles);
 }
 """
-# The wet look's probe kernel, as `wetness_gpu_tests.rs` appends it.
-WET_PROBE_KERNEL = """@group(0) @binding(91) var<storage, read> probe_in: array<vec4<f32>>;
-@group(0) @binding(90) var<storage, read_write> probe_out: array<vec4<f32>>;
-@compute @workgroup_size(64)
-fn cs_probe(@builtin(global_invocation_id) id: vec3<u32>) {
-    let surface = look_wet_surface(probe_in[id.x].xyz, vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.2, 0.5, 0.8), 0.6);
-    probe_out[id.x] = vec4<f32>(surface.albedo, surface.roughness);
-}
-"""
 STEP_PARTS = [
     "common", "transfer", "extend", "forces", "solids", "pocket_bindings",
     "tile_bindings", "pockets", "divergence", "particle_distance",
@@ -165,7 +163,7 @@ STACKS = {
                                     LIQ / "world_tiles.wgsl"]),
     "surface_tiles": (False, [WORLD_READ, SIM_READ, SURF / "surface_tiles.wgsl"]),
     "interior_fill": (False, [WORLD_READ, SIM_READ, SURF / "interior_fill.wgsl"]),
-    "wet_map": (False, [WORLD_READ, WET_LAYOUT, SURF / "wet_map.wgsl"]),
+    "wet_map": (False, [WORLD_READ, WET_CONSTS, WET_LAYOUT, SURF / "wet_map.wgsl"]),
     "foam_cover": (False, [WORLD_READ, WW / "particle_splat.wgsl", WW / "foam_cover.wgsl"]),
     "spray_mist": (False, [WORLD_READ, WW / "particle_splat.wgsl", WW / "spray_mist.wgsl"]),
     "push_out_of_solid": (False, [PUSH_OUT_STUB, WORLD_READ, FLIP / "push_out_of_solid_body.wgsl",
@@ -185,16 +183,15 @@ STACKS = {
     "scene_water_shade": (False, [WORLD_READ, SCENE / "field_tiles.wgsl", SCENE / "scene_shading.wgsl",
                                   SCENE / "look_ripple_detail.wgsl", SCENE / "foam_field.wgsl",
                                   SCENE / "look_foam.wgsl", SCENE / "look_mist.wgsl",
-                                  SCENE / "look_thin_water_light.wgsl", WET_LAYOUT,
+                                  SCENE / "look_thin_water_light.wgsl",
                                   SCENE / "look_wet_surface.wgsl",
                                   SCENE / "water_field_common.wgsl", SCENE / "water_shade.wgsl"]),
     "scene_mesh": (False, [WORLD_READ, SCENE / "field_tiles.wgsl", SCENE / "instance_transform.wgsl",
                            SCENE / "scene_shading.wgsl", SCENE / "look_ripple_detail.wgsl",
                            SCENE / "foam_field.wgsl", SCENE / "look_foam.wgsl", SCENE / "look_mist.wgsl",
-                           SCENE / "look_thin_water_light.wgsl", WET_LAYOUT,
-                                  SCENE / "look_wet_surface.wgsl",
+                           SCENE / "look_thin_water_light.wgsl", SCENE / "look_wet_surface.wgsl",
                            SCENE / "render_scene.wgsl"]),
-    "scene_wet": (False, [WET_LAYOUT, SCENE / "look_wet_surface.wgsl", WET_PROBE_KERNEL]),
+    "scene_wet_pass": (False, [WET_CONSTS, WET_LAYOUT, SCENE / "wet_pass.wgsl"]),
 }
 
 

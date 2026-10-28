@@ -1705,7 +1705,6 @@ fn display_mist_and_wetness(b: &mut Builder, water: usize) {
     b.wire((spray, "out"), mist, "particles");
     b.wire((drawn, "out"), wet_map, "particles");
     b.wire((solid, "solid"), wet_map, "solid");
-    b.wire((tiles, "extent"), wet_map, "extent");
     b.wire((domain, "cell_size"), wet_map, "sim_cell_size");
     b.wire((domain, "display_time"), wet_map, "time");
     b.wire((domain, "epoch"), wet_map, "epoch");

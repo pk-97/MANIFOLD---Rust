@@ -106,6 +106,7 @@ impl RenderScene {
             opaque_scene_color_height: 0,
             opaque_scene_color_format: manifold_gpu::GpuTextureFormat::Rgba16Float,
             volume_optics: volume_optics::VolumeOptics::default(),
+            wet_pass: Default::default(),
             water_march: Default::default(),
             water_shade: Default::default(),
             ripple_detail: Default::default(),

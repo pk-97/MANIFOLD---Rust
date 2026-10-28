@@ -4357,12 +4357,6 @@
             "toPort": "solid"
           },
           {
-            "fromNode": 8,
-            "fromPort": "extent",
-            "toNode": 34,
-            "toPort": "extent"
-          },
-          {
             "fromNode": 0,
             "fromPort": "cell_size",
             "toNode": 34,

@@ -88,9 +88,6 @@ A list of the next ray tracing features, such as reflections on shiny surfaces, 
 
 ## Simulation
 
-### Wet surfaces that read as a film, not a grid
-The wet map (`node.wet_map`, `look_wet_surface.wgsl`) marks where water touched solids on a top-down grid with height bins, and on stage it still shows square texels, hard bands and blocks on walls and floors. It needs a fresh design: a surface-space record (per-mesh texture or splatted decals), water-driven spread and drying, and a soft read. Already built: the marking pass, drying and the read in every mesh shader. The look is still open.
-
 ### GPU sand, snow and goo solver
 A GPU material solver for sand, snow, goo and lava, so these can play as instruments. Already built: the early steps. The flagship materials and most stages are still open.
 

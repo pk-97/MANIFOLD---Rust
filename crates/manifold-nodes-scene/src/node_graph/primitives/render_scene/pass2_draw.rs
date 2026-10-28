@@ -1,7 +1,6 @@
 //! Pass 2, the main draw: per-draw binding sets, the opaque MSAA batch with its aux attachments, and the glass Pass B over the opaque scene copy.
 
 use super::water_shade::{LookBindings, RippleUniforms, ripple_uniforms};
-use super::wetness::wet_uniforms;
 use super::*;
 use manifold_node_engine::scene::camera::CameraMode;
 
@@ -308,23 +307,9 @@ impl RenderScene {
                 },
             ]
         };
-        // One wet map per scene: the first water that has one wets every mesh
-        // under it. A scene without it binds the one-record stand-in, which
-        // the shader never reads while the uniforms are off.
-        let wet_field = fields.iter().find(|f| f.wet_map.is_some());
-        let wet = match wet_uniforms(wet_field) {
-            Ok(wet) => wet,
-            Err(error) => {
-                Self::fail_frame(ctx, None, error);
-                return None;
-            }
-        };
-        let wet_map = wet_field
-            .and_then(|f| f.wet_map)
-            .unwrap_or(prev_positions_dummy);
         // Indexed by draw, so a draw wholly outside the camera's clip volume
         // keeps its place with no binding set built for it.
-        let binding_sets: Vec<Option<[GpuBinding; 56]>> = draws
+        let binding_sets: Vec<Option<[GpuBinding; 55]>> = draws
             .iter()
             .enumerate()
             .map(|(draw_index, draw)| {
@@ -590,14 +575,15 @@ impl RenderScene {
                         binding: 52,
                         texture: self.subsurface_pass.output.as_ref().unwrap_or(dummy),
                     },
-                    GpuBinding::Bytes {
+                    // The wet mask is about the opaque surfaces it was drawn
+                    // over: glass in front of a wet floor stays dry.
+                    GpuBinding::Texture {
                         binding: 68,
-                        data: bytemuck::bytes_of(&wet),
-                    },
-                    GpuBinding::Buffer {
-                        binding: 69,
-                        buffer: wet_map,
-                        offset: 0,
+                        texture: self
+                            .wet_pass
+                            .mask()
+                            .filter(|_| !draw.routes_to_transparent())
+                            .unwrap_or(dummy),
                     },
                 ])
             })

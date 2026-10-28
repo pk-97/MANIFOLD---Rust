@@ -22,7 +22,6 @@ pub(super) static WATER_SHADE_WGSL: LazyLock<String> = LazyLock::new(|| {
         include_str!("../shaders/look_foam.wgsl"),
         include_str!("../shaders/look_mist.wgsl"),
         include_str!("../shaders/look_thin_water_light.wgsl"),
-        manifold_node_engine::scene::wet_map::LAYOUT,
         include_str!("../shaders/look_wet_surface.wgsl"),
         include_str!("../shaders/water_field_common.wgsl"),
         include_str!("../shaders/water_shade.wgsl"),

@@ -712,11 +712,12 @@ pub(crate) fn clear_stylised_water(def: &mut EffectGraphDef) -> bool {
 
 /// Move a saved surface's wetness onto the wet map, after flattening: each
 /// `node.surface_wetness` becomes a `node.wet_map` reading the particles its
-/// display tiles' push-out draws, the solid on those tiles, their extent and
-/// the water's cell size; its map feeds the water object's `wet_map` (a
-/// switch between them becomes the u32 one). `node.surface_tiles` keeps no
-/// tiles, so the wires into its `time` and `epoch` and its `keep_seconds` go.
-/// Idempotent.
+/// display tiles' push-out draws, the solid on those tiles and the water's
+/// cell size; its map feeds the water object's `wet_map` (a switch between
+/// them becomes the u32 one). `node.surface_tiles` keeps no tiles, so the
+/// wires into its `time` and `epoch` and its `keep_seconds` go. The wet map
+/// keeps its marks as decals with no place on the ground, so a wire into its
+/// old `extent` goes too. Idempotent.
 pub(crate) fn wetness_onto_wet_map(def: &mut EffectGraphDef) -> bool {
     use manifold_core::effect_graph_def::EffectGraphWire;
     let tiles: Vec<u32> = def
@@ -725,9 +726,16 @@ pub(crate) fn wetness_onto_wet_map(def: &mut EffectGraphDef) -> bool {
         .filter(|n| n.type_id == "node.surface_tiles")
         .map(|n| n.id)
         .collect();
+    let maps: Vec<u32> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.wet_map")
+        .map(|n| n.id)
+        .collect();
     let before = def.wires.len();
     def.wires.retain(|w| {
-        !(tiles.contains(&w.to_node) && matches!(w.to_port.as_str(), "time" | "epoch"))
+        !(tiles.contains(&w.to_node) && matches!(w.to_port.as_str(), "time" | "epoch")
+            || maps.contains(&w.to_node) && w.to_port == "extent")
     });
     let mut changed = def.wires.len() != before;
     for node in def.nodes.iter_mut().filter(|n| tiles.contains(&n.id)) {
@@ -796,7 +804,6 @@ pub(crate) fn wetness_onto_wet_map(def: &mut EffectGraphDef) -> bool {
         if let Some(solid) = fed(def, "node.liquid_solid_distance") {
             new.push((solid, "solid".to_owned(), "solid"));
         }
-        new.push((table, "extent".to_owned(), "extent"));
         if let Some((cell, port)) = source(def, table, "sim_cell_size") {
             new.push((cell, port, "sim_cell_size"));
         }
@@ -1144,9 +1151,9 @@ mod tests {
     }
 
     /// A saved surface's wetness moves onto the wet map: retyped and rewired
-    /// from the tiles' push-out, solid, extent and cell size, its map through a
-    /// u32 switch into the water's `wet_map`; the tiles lose their clock wires.
-    /// A second run changes nothing.
+    /// from the tiles' push-out, solid and cell size, its map through a u32
+    /// switch into the water's `wet_map`; the tiles lose their clock wires and
+    /// a wet map its extent. A second run changes nothing.
     #[test]
     fn saved_wetness_moves_onto_the_wet_map() {
         use manifold_core::effect_graph_def::EffectGraphWire;
@@ -1171,6 +1178,7 @@ mod tests {
                 bare_node(6, "node.switch_array"),
                 bare_node(7, "node.scene_object"),
                 bare_node(8, "node.field_smooth_blend"),
+                bare_node(9, "node.wet_map"),
             ],
             wires: vec![
                 wire(1, "cell_size", 2, "sim_cell_size"),
@@ -1183,6 +1191,7 @@ mod tests {
                 wire(1, "display_time", 5, "time"),
                 wire(5, "wetness", 6, "in_0"),
                 wire(6, "out", 7, "field_wetness"),
+                wire(2, "extent", 9, "extent"),
             ],
         };
         assert!(wetness_onto_wet_map(&mut def));
@@ -1215,7 +1224,6 @@ mod tests {
                 (1, "cell_size", 2, "sim_cell_size"),
                 (1, "cell_size", 5, "sim_cell_size"),
                 (1, "display_time", 5, "time"),
-                (2, "extent", 5, "extent"),
                 (2, "tiles", 3, "tiles"),
                 (2, "tiles", 4, "tiles"),
                 (2, "tiles", 5, "tiles"),

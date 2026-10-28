@@ -5,7 +5,7 @@
 use super::*;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::scene::scene_object::FieldSurface;
-use manifold_node_engine::scene::wet_map::{SIDE, map_bytes};
+use manifold_node_engine::scene::wet_map::map_words;
 use manifold_node_engine::scene::world_tiles::{pool_len, table_words};
 
 /// One water field to march and shade this frame. Every array is a pooled
@@ -326,8 +326,7 @@ impl RenderScene {
         let foam = Self::optional_field_array(ctx, n, field.foam, "field_foam", elements).ok()?;
         let mist = Self::optional_field_array(ctx, n, field.mist, "field_mist", elements).ok()?;
         let wet_map =
-            Self::optional_field_array(ctx, n, field.wet_map, "wet_map", map_bytes(SIDE) / 4)
-                .ok()?;
+            Self::optional_field_array(ctx, n, field.wet_map, "wet_map", map_words()).ok()?;
         let tiles =
             Self::field_array(ctx, n, field.tiles, "field_tiles", table_words(pool_tiles)).ok()?;
         let extent = Self::field_array(ctx, n, field.extent, "field_extent", 8).ok()?;
