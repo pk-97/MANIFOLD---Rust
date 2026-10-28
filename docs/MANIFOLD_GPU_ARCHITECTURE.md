@@ -272,13 +272,12 @@ lifetime safety, and driver-internal traversal is not observable here.
 - **MetalFX Temporal:** Needs depth + motion vectors. MANIFOLD is 2D — only available when WireframeDepth effect is active (provides depth + flow). Spatial Scaler works unconditionally.
 - **Current performance:** 5-7ms GPU frame times (~140-200 FPS GPU throughput) after native Metal migration. Zero "(wgpu internal) Signal" overhead on content thread. Profile after each remaining phase to verify gains.
 
-## Windows / Linux Backend
+## Linux / Windows Backend
 
-Cross-platform (Mac, Windows, Linux) is a hard requirement as of 2026-07-02. The full
-design — policy decisions, API contract, hazard-tracking architecture, phasing, and
-platform-services inventory — lives in **`docs/VULKAN_BACKEND_DESIGN.md`**. Native `ash`
-Vulkan; there is no wgpu interim step. Phase 0 scaffolding (`vulkan/` module, cfg-gated backend selection, shared
-WGSL→SPIR-V pipeline) already ships in the crate.
+MANIFOLD runs on Mac, Linux and Windows; Linux comes first. The design (decisions,
+hazard tracking, backend-neutral seams, platform services, phases, testing on the Mac)
+lives in **`docs/VULKAN_BACKEND_DESIGN.md`**. Native `ash` Vulkan, no wgpu. The `vulkan/`
+module is a stub today; backend selection and the shared WGSL→SPIR-V pipeline already ship.
 
 
 

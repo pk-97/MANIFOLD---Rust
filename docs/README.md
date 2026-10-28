@@ -27,7 +27,7 @@
 - 3D scene: `SCENE_DOCUMENT_DESIGN.md`, `REALTIME_3D_DESIGN.md`, `RAYTRACING_DESIGN.md`
 - Audio detectors: `AUDIO_EVENT_CLASSIFIER_DESIGN.md`, `DETECTOR_LABEL_REVIEW_DESIGN.md`, `ROLL_DETECTOR_DESIGN.md`
 - Transport: `FRAME_EXACT_TRANSPORT_DESIGN.md`
-- GPU backend: `VULKAN_BACKEND_DESIGN.md`
+- Linux and Vulkan: `VULKAN_BACKEND_DESIGN.md` (rules and decisions), `LINUX_VULKAN_PORT_MAP.md` (inventory and work order)
 
 ## Ideas and business
 - `IDEAS.md`: features worth building that nobody is working on

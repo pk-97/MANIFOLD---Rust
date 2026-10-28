@@ -1,209 +1,172 @@
-# Vulkan Backend — Design & Implementation Contract
+# Vulkan Backend — Design (Linux first)
 
-**Status:** APPROVED design, not implemented (Phase 0 scaffold shipped in 0c5dde17).
-**Decided 2026-07-02:** cross-platform is 100% required — MANIFOLD is a Mac, Windows, Linux application.
-**Supersedes** the "Windows / Linux Backend" section of `MANIFOLD_GPU_ARCHITECTURE.md` — there is **no wgpu interim step**. The Vulkan backend is native `ash` from day one, same as Metal went native `objc2-metal`.
-
-This document is the implementation contract for a Sonnet-class agent. Every judgment call is already made — the tables below say what to build, in what order, and what the oracle is at each step. Where the doc says DECIDED, do not re-litigate; where it says VERIFY, the parity suite is the referee.
-
-**Prerequisites:** none (Phase 0 scaffold shipped). This is a background track and nothing else waits on it.
-The `manifold-gpu` inventory here is a snapshot and this is the deepest doc in the build order — re-derive the API-surface inventory at the start of every phase.
+**Status:** design approved, not built. The `vulkan/` module is a stub and `manifold-gpu` does not compile with `--features vulkan` (`shadow_caster.rs:87` calls `create_buffer_shared`, which the stub lacks).
+**Order:** Linux first (Wayland and X11), Windows later. The Linux machine (RTX 5080, Ryzen 9 9950X3D) is on order; until it arrives everything is built and tested on the Mac through a Vulkan driver that runs on Metal, and real NVIDIA performance comes last.
+**Who reads this:** the lead, who writes worker specs from it. This file holds the rules and decisions. The inventory (what breaks, file by file) and the work order live in `LINUX_VULKAN_PORT_MAP.md`; re-check it at the start of every phase, the Metal side keeps moving.
 
 ---
 
-## 1. Where the port actually starts (audit, 2026-07-02)
+## 1. What "done" means
 
-The port is further along than "add a Vulkan backend" suggests. Already true on `main`:
+MANIFOLD runs a full show on Linux with the Vulkan backend: generators, effects, scenes with ray tracing, water, video clips, export and recording, audio input, LED output. Every GPU proof that passes on Metal passes on Vulkan with the same values, under the Khronos synchronization validation layer with zero errors.
 
-| Piece | State | Where |
+---
+
+## 2. Where the port starts
+
+Backend selection and the shader front end are done: `lib.rs` picks `metal/` or `vulkan/`, and WGSL → naga → SPIR-V → spirv-opt is shared (`shader_common.rs`, `workgroup_zeroing.rs`), so only "SPIR-V → MSL" is Metal's. Everything else, the API surface, Metal-only callers, shaders, app and crate inventory, and the work order, is in `LINUX_VULKAN_PORT_MAP.md`.
+
+---
+
+## 3. Rules
+
+- **`ash` 0.38 only.** No wgpu, no vulkano. `gpu-allocator` 0.28 (built on ash 0.38) for memory, `ash-window` for surfaces. ash 0.38's headers are Vulkan 1.3.281: `VK_EXT_present_timing` needs a newer ash and waits until it ships.
+- **Backend differences live inside `manifold-gpu`.** Shared crates never check which backend is active. A Metal-only feature becomes a backend-neutral API with a capability query (`denoiser_available()` returns false on Vulkan until it is built). A feature that is off logs once at boot, by name.
+- **`target_os` gates only OS services:** text, video, audio, window chrome, paths. An OS service that touches raw GPU objects (`manifold-media`, `manifold-recording`) also forwards a `vulkan` feature to pick its implementation.
+- **Raw handles stay Metal-only.** `raw_device`, `raw_cmd_buf`, `raw_ptr`, `raw_device_ptr`, `mtl4_bridge` are not exported on Vulkan. Their callers are macOS-gated today; the compile error under `--features vulkan` enforces it.
+- **Metal is the oracle.** Never change `metal/`, shared WGSL or test tolerances to make Vulkan pass. A difference is a Vulkan bug until shown otherwise.
+- **During construction,** a Vulkan method not built yet panics with `todo!("vulkan P2")`. The phase that builds it deletes the `todo!`. None survive P3.
+- **Both builds stay green:** `cargo clippy -p manifold-gpu --tests -- -D warnings` with and without `--features vulkan`, and the same for each crate a phase touches.
+
+---
+
+## 4. Decisions
+
+| # | Decision | Choice and reason |
 |---|---|---|
-| Backend selection | DONE — cfg-gated, exactly one backend per build, `--features vulkan` | `crates/manifold-gpu/src/lib.rs` |
-| Shader pipeline | DONE — WGSL → naga → SPIR-V → spirv-opt is backend-neutral and always compiled; only the final "SPIR-V → X" step diverges | `src/shader_common.rs` |
-| Vulkan scaffold | DONE — `SlotMap`, `compile_wgsl_to_spirv_{compute,render}`, `build_slot_map`, type shells | `src/vulkan/` |
-| `ash` dependency | DONE — pinned 0.38, optional, feature-gated | `Cargo.toml` |
-| Barrier seam | API EXISTS — `GpuEncoder::pipeline_barrier(reads, writes)` is a documented no-op on Metal with Vulkan semantics spelled out in its doc comment. **No call sites exist yet** — see section 4 for why that's fine | `src/metal/encoder.rs:1516` |
-| Metal type leakage outside the crate | NONE — no `metal::`/`objc2` types escape `manifold-gpu` except the cfg(macos) escape hatches (`raw_device_ptr` for DNN FFI, IOSurface fns) which are already platform-gated at their call sites | verified by sweep |
-| Specialized pipelines | ALREADY PORTABLE — "specialization" is WGSL source string substitution before compile (`device.rs:504`), not Metal function constants. Works identically on Vulkan | `src/metal/device.rs:502-534` |
-| Headless testing | ALREADY TRUE — parity harness and gpu_tests call `GpuDevice::new()` with no window. The whole oracle runs headless | `tests/parity/harness.rs` |
-
-**What remains is exactly three files of real work** — `vulkan/device.rs`, `vulkan/encoder.rs`, `vulkan/types.rs` — plus presentation (Phase 3, mostly `manifold-app`) and the platform-services inventory (section 8, separate designs).
-
-**Platform-specific services** (post-T1 API audit, 2026-10-09):
-- The unused `metal/mps.rs` helper bank was removed. No primitive depended on it.
-- `metal/fft.rs` (`GpuFft`, MPSGraph) is live: `manifold-nodes-image` uses it in `node.inverse_fft_2d` for spectral ocean fields. Its eventual Vulkan implementation needs a separate design; the current backend remains Metal.
-- `metal/metalfx.rs` — `manifold-nodes/src/fsr1.rs` is the portable upscaler; MetalFX stays a macOS bonus
-- Xcode capture scopes (`install_device_capture_scope` etc.) — no-ops on Vulkan; RenderDoc attaches externally
+| D1 | Version floor | **Vulkan 1.3**, required at boot: `dynamicRendering`, `synchronization2`, `timelineSemaphore`. Missing = boot error naming the feature. NVIDIA, Mesa and both Mac drivers ship 1.3+ |
+| D2 | Descriptors | **One descriptor set per dispatch or draw, from a per-encoder pool, written with an update template built from the pipeline's `SlotMap`.** The pool resets and recycles with the encoder's command pool when its submit retires. Push descriptors were the old plan, but NVIDIA caps them at 32 per set and the scene renderer needs 53. One path for every pipeline, no cap |
+| D3 | `GpuBinding::Bytes` | Host-visible uniform ring per encoder: bump allocator, 256-byte aligned (`replay::BYTES_ALIGN` already uses 256), grows with a warning on overflow |
+| D4 | Ordering | **Automatic hazard and layout tracking inside `GpuEncoder`** (section 5). `pipeline_barrier` stays a no-op hint on both backends |
+| D5 | Queues | One graphics+compute queue family. Content, UI and the water sim's compute work each get a `VkQueue` when the family has enough; otherwise they share one behind a mutex. Submission is mutex-serialised per queue |
+| D6 | Command pools | Pool per encoder from a free list on the device, reset and reused when its timeline value retires. Encoders record on any thread |
+| D7 | `GpuEvent` | Timeline semaphore. `signal_event_value` → signal, `wait_event` → wait (attached at submit; a mid-encoder wait splits the submit), `current_value` → `vkGetSemaphoreCounterValue` |
+| D8 | Completion callbacks | One waiter thread per device. Every commit signals a device timeline value; the thread waits forward and runs `add_completed_handler` callbacks in order. `GpuFenceWaiter`, `FrameClock` and `RetireQueue` ride the same timeline |
+| D9 | Shaders | SPIR-V from `shader_common` goes to `vkCreateShaderModule` unchanged. `arrayLength` is native `OpArrayLength`; the naga sizes buffer is never emitted. `rebind_vertex_output_as_point_size` (`shader_common.rs:69`) is gated off on Vulkan today; lift the gate in P2, because point-list draws must write `PointSize` |
+| D10 | f16 | No shader uses `f16` and no pipeline compiles with `use_half` (`create_compute_pipeline_half` has no callers). Vulkan compiles f32 only. If half precision returns, it needs `shaderFloat16` and 16-bit storage, with an f32 fallback logged once |
+| D11 | Pipeline caching | Same three layers and keys as Metal: in-memory by `archive::pipeline_hash`, a `VkPipelineCache` blob on disk in place of `MTLBinaryArchive`, and a SPIR-V disk cache in place of `msl_cache.rs`. Same call sites (`load_pipeline_archive`, `save_pipeline_archive`, `load_msl_cache`) |
+| D12 | Render passes | Dynamic rendering only, no `VkRenderPass` objects. Matches `begin_render_pass`/`end_render_pass` |
+| D13 | Y-flip | Negative viewport height, so SPIR-V stays identical. Winding flips with it: `DepthMsaaDraw::cull_back_faces` must set the front face to match Metal. Wireframe fill mode needs `fillModeNonSolid` |
+| D14 | Storage modes | `Private` → device-local. `Shared` → host-visible, coherent, persistently mapped. `Memoryless` → `LAZILY_ALLOCATED` where it exists, device-local otherwise. `Managed` is not offered |
+| D15 | Presentation | `GpuSurface` → `VkSurfaceKHR` + swapchain via `ash-window` (Wayland, X11; `VK_EXT_metal_surface` on the Mac for testing). MAILBOX when offered, else FIFO, logged once. SDR first. `configure_edr`, window level, contents gravity and `presents_with_transaction` report "not supported" on Vulkan |
+| D16 | Cross-thread textures | One `VkInstance`/`VkDevice` per process, `Arc`-shared; each `GpuDevice::new()` clones it and takes its own queue. The IOSurface bridge becomes a backend-neutral shared texture (section 6.1). No external-memory extensions |
+| D17 | Profiling | `GpuTimestampSampler`, `GpuFrameProfile`, `GpuSpanTimer` → timestamp query pools scaled by `timestampPeriod` |
+| D18 | Memory admission | `modifier_memory_snapshot` feeds resource admission (`admit_candidate_bytes`, 39 call sites). Vulkan fills it from `VK_EXT_memory_budget` heap budget and usage. VERIFY in P1 that both Mac drivers expose it |
+| D19 | Faults | `VK_ERROR_DEVICE_LOST` maps to `gpu_fault` kinds; `VK_EXT_device_fault` adds detail where present. `firmware_reports` and residency sets have no Vulkan meaning and report empty |
+| D20 | Debugging | `VK_EXT_debug_utils` names and labels everything the Metal backend labels. Captures use RenderDoc; Xcode capture scopes are no-ops |
+| D21 | Mac drivers | **KosmicKrisp** (Mesa on Metal 4, Vulkan 1.4 conformant, macOS 26+, ships in the LunarG SDK 1.4.363) is the primary test driver; GPU-assisted validation works on it. **MoltenVK** 1.4.2 (Homebrew `molten-vk`) is the second. The instance enables portability enumeration so both are found. Pick one with `VK_DRIVER_FILES` |
 
 ---
 
-## 2. Policy decisions (all DECIDED)
+## 5. Hazard and layout tracking
 
-| # | Decision | Choice | Why |
+Metal runs commands on a queue in order; every caller in MANIFOLD relies on that. Vulkan orders nothing between commands without barriers and image layout changes. Adding barriers at the call sites is unverifiable, and a missed one corrupts frames on someone else's GPU. So the Vulkan `GpuEncoder` tracks resource state and emits barriers itself. It already sees every access: bindings name each buffer and texture (writability comes from the `SlotMap`), render passes name their attachments, copies name source and destination.
+
+- **Layout lives on the texture.** `GpuTexture` is `Arc`-backed and carries an `AtomicU32` holding its current `VkImageLayout`, because textures cross encoders and threads.
+- **Access state lives on the encoder:** a map from resource id to last `{stage, access}`, reset per encoder, pre-sized so warm frames allocate nothing.
+- **First touch is conservative:** a barrier from `ALL_COMMANDS / MEMORY_WRITE`. That is correct whatever an earlier submit on the same queue did. After first touch the tracked state gives exact masks.
+- **Before each command,** for each resource it touches: if the last access wrote, or the layout must change, add a barrier. All barriers for one command go into one `vkCmdPipelineBarrier2`. Read after read never barriers.
+- **Layout targets:** storage → `GENERAL`; sampled → `SHADER_READ_ONLY_OPTIMAL`; colour attachment → `COLOR_ATTACHMENT_OPTIMAL`; depth → `DEPTH_ATTACHMENT_OPTIMAL`; copies → `TRANSFER_{SRC,DST}_OPTIMAL`; present → `PRESENT_SRC_KHR`. Sampled and storage in one dispatch → `GENERAL`.
+- **Across queues** (content → UI through the shared-texture bridge, water compute → render), first-touch barriers are not enough. Each publication records the producer's timeline value; the consumer's submit waits on it. A wait that is already satisfied costs nothing.
+- **`compute_memory_barrier_buffers`** stays an explicit global compute→compute barrier, as on Metal.
+
+---
+
+## 6. Backend-neutral seams (shared code changes)
+
+These change Metal-side and app code too, so they come before the app can run on Vulkan. They don't depend on Vulkan internals and can run alongside P1 and P2.
+
+### 6.1 Shared textures (the IOSurface bridge)
+
+`SharedTextureBridge` (`manifold-app/src/shared_texture.rs`, 561 lines) keeps three surfaces, an atomic `front_index`, per-slot read leases retired by completion handlers, and a generation counter. That logic has nothing to do with Metal; only the surface storage and import do.
+
+- `manifold-gpu` gains a shared-texture type: create one on the content device, import it on the UI device. Metal implements it with IOSurface (the creation and import code moves out of `manifold-app`). Vulkan uses the same `VkImage`, because there is one device, plus the timeline-value handoff from section 5.
+- The bridge and every pane on it lose their `cfg(target_os = "macos")` gates: about 190 sites in `content_pipeline.rs`, `app.rs`, `frame/present.rs`, `editor_bridge.rs`, `scene_viewport_capture.rs`, `selection_outline.rs`, `perform_mode/render.rs` and the rest.
+
+### 6.2 Metal-only features become capabilities
+
+| Feature | Neutral API | Vulkan until built |
+|---|---|---|
+| Ray tracing | `raytrace` keeps its types and `ShadowRayTracer` trait on both backends | Tracer reports unavailable; scenes use raster shadow maps. Built in P7 |
+| Denoiser | `denoiser_available()` already exists | false. Built in P7 |
+| MetalFX spatial and temporal upscale | One upscaler capability in `manifold-gpu`; `manifold-compositor/src/fsr1.rs` stays the portable spatial path | Unavailable. DLSS or FSR in P7 |
+| GPU FFT | `GpuFft` | Unavailable; the two nodes report it. Built in P7 |
+| Residency sets, firmware reports, capture scopes | Existing calls | Empty or no-op |
+
+The compositor's and nodes-scene's MetalFX wrappers keep their `target_os` gates only until this table lands; then they call the neutral API.
+
+---
+
+## 7. Water: replay spans, gated segments, templates
+
+On Metal, GPU FLIP runs its pressure solve from indirect command buffers. One round is recorded once (`prepare_template`) and the GPU runs it in chunks whose lengths it writes itself (`execute_template`, up to the 900-round cap). The CPU never encodes a round per round. `begin_gated_segment` and `dispatch_compute_gated` do the same for GPU-decided dispatch counts, and node-engine replay spans (`begin_replay`) cache whole stretches.
+
+- **P1 (correct):** replay spans encode directly (`vulkan/replay.rs` already does). A gated dispatch is a plain indirect dispatch from its own `gate`/`gate_offset` arguments. `execute_template` encodes `copies` rounds of those indirect dispatches; the kernels already guard rounds past the stop. Same results, much more CPU encoding.
+- **P6 (fast):** one round recorded once into a secondary command buffer; each chunk runs under `VK_EXT_conditional_rendering`, reading the GPU-written range. VERIFY driver support first (NVIDIA has it; check both Mac drivers). Measure against P1 before keeping it.
+
+---
+
+## 8. Platform services on Linux
+
+| Service | Mac today | Linux | Work |
 |---|---|---|---|
-| D1 | Bindings | `ash` 0.38, raw Vulkan. No wgpu, no vulkano | Zero abstraction tax — the same reason Metal went `objc2-metal`. Already pinned |
-| D2 | Version floor | **Vulkan 1.3**, hard requirement. Features required at boot: `dynamicRendering`, `synchronization2`, `timelineSemaphore`, `VK_KHR_push_descriptor` | Every desktop driver since ~2022 (NVIDIA, AMD, Intel, Mesa) ships 1.3; MoltenVK is 1.3-conformant since 2024. Missing feature = loud boot error naming it — no fallback paths to maintain |
-| D3 | Memory | `gpu-allocator` crate (Rust VMA equivalent, MIT/Apache, production use in Bevy et al) | Sub-allocation, dedicated-allocation heuristics, and leak reporting for free; hand-rolling VkDeviceMemory management is the classic self-inflicted wound |
-| D4 | Descriptors | **Push descriptors** (`vkCmdPushDescriptorSetKHR`), single set 0 | Maps 1:1 onto the per-dispatch `&[GpuBinding]` model — no pools, no free-list lifetime bugs. naga already emits `(set=0, binding=N)` matching WGSL `@binding(N)` |
-| D5 | `GpuBinding::Bytes` | Host-visible **uniform ring buffer** per encoder (bump allocator, 256-byte aligned, ~4 MB, grow-with-warn on overflow) | Metal's `set_bytes` has no Vulkan twin; push constants would require shader changes (WGSL declares these as uniform buffers). Ring is the standard answer |
-| D6 | Synchronization | **Automatic hazard + layout tracking inside `GpuEncoder`** (section 4). `pipeline_barrier` stays a public no-op hint on both backends | The single most important decision in this doc — rationale in section 4 |
-| D7 | Queues | One graphics+compute queue family. Content and UI each get a `VkQueue` if the family has ≥2, else one queue behind a mutex. Submission always mutex-serialized | Metal's "async compute" (Phase 9) is parallel *recording*, single-queue submission — same shape. Multi-queue is a future optimization, not part of the port |
-| D8 | Command pools | Pool-per-encoder from a free-list on `GpuDevice`; pool is reset and recycled when its fence/timeline value retires | Vulkan pools aren't thread-safe and encoders record on arbitrary threads (compositor async compute, LED readback) |
-| D9 | `GpuEvent` | **Timeline semaphore** | 1:1 with `MTLSharedEvent`: `signal_event_value` → timeline signal, `wait_event` → timeline wait, CPU-side counter → `vkGetSemaphoreCounterValue` |
-| D10 | Completion callbacks | One waiter thread per device: every `commit` signals a device-global timeline value; the thread `vkWaitSemaphores`-es forward and dispatches `add_completed_handler` callbacks in order. `GpuFenceWaiter` rides the same thread | Vulkan has no completion callbacks. A single waiter thread is the standard pattern; callbacks already run off-thread on Metal so caller expectations don't change |
-| D11 | Shaders | SPIR-V from `shader_common` → `vkCreateShaderModule`, unmodified. `arrayLength()` uses SPIR-V's native `OpArrayLength` — **the naga sizes buffer is a Metal/MSL-only concept and is never emitted on Vulkan** (`needs_sizes_buffer` stays `false`; `SIZES_BUFFER_BINDING` stays as an inert constant for API parity) | The `buffer_size_buffer_index` pin was a SPIRV-Cross/MSL workaround; Vulkan doesn't have the problem |
-| D12 | f16 | `use_half` SPIR-V passes work as-is when the device reports `shaderFloat16`; otherwise compile the f32 variant of that pipeline and log once at boot | Capability adaptation, not a silent fallback — visuals identical, only ALU throughput differs |
-| D13 | Pipeline caching | In-memory cache keyed by the existing `archive::pipeline_hash`; on disk, **`VkPipelineCache` blob** (replaces `MTLBinaryArchive`) + a **SPIR-V disk cache** mirroring `msl_cache.rs` (skips naga + spirv-opt on warm boot) | Same three-layer structure as Metal, same cache keys, same load/save call sites (`load_pipeline_archive`/`save_pipeline_archive` map directly) |
-| D14 | Render passes | **Dynamic rendering only** (`vkCmdBeginRendering`). No `VkRenderPass` objects anywhere | Matches Metal's descriptor-per-pass model and the existing `begin_render_pass`/`end_render_pass` API exactly |
-| D15 | Viewport/scissor | Dynamic state (`VK_DYNAMIC_STATE_VIEWPORT`/`SCISSOR`); Y-flip via **negative viewport height** (`y = height, height = -height`) | Keeps SPIR-V byte-identical across backends (cache-friendly, no per-backend naga flags). Standard DXVK/vkd3d technique. WATCH: winding order flips with the viewport — MANIFOLD's 2D paths don't cull, but `render_3d_mesh` must set front-face to match Metal's behavior. Parity tests are the referee |
-| D16 | Storage modes | `Private` → device-local · `Shared` → host-visible + coherent, persistently mapped · `Managed` → not offered (macOS concept; no Vulkan callers) · `Memoryless` → `LAZILY_ALLOCATED` when the heap exists (mobile/TBDR), plain device-local otherwise — correctness identical, only bandwidth differs on desktop | |
-| D17 | Presentation | `GpuSurface` → `VkSurfaceKHR` + `VkSwapchainKHR` via `ash-window` + winit raw-window-handle. MAILBOX when available, FIFO otherwise (both are correct; MAILBOX matches the latest-frame triple-buffer semantics). EDR/HDR: **SDR first**; Windows HDR (`VK_EXT_swapchain_colorspace`) is a later, separate item. `presents_with_transaction`, `contents_gravity` → no-ops (CAMetalLayer concepts) | |
-| D18 | Cross-thread texture sharing | On Vulkan there is **one `VkInstance`/`VkPhysicalDevice`/`VkDevice` per process** (`Arc`-shared core; `GpuDevice::new()` on the second thread clones it and takes its own queue). The IOSurface triple-buffer bridges become plain `VkImage`s + timeline-semaphore handoff — same atomic `front_index`, explicit sync instead of IOSurface's implicit sync | IOSurface exists to share across two `MTLDevice`s; a shared `VkDevice` makes the whole cross-API machinery unnecessary. External-memory extensions NOT needed |
-| D19 | Profiling | `GpuTimestampSampler`/`GpuFrameProfile` → `VkQueryPool` timestamp queries scaled by `timestampPeriod`; `supports_dispatch_profiling` → `timestampComputeAndGraphics` | Direct mapping |
-| D20 | Dev iteration on macOS | MoltenVK (`brew install molten-vk`, or Vulkan SDK; point `VK_ICD_FILENAMES` at the MoltenVK ICD). Not a ship path — a way to run the Vulkan backend + full parity suite on the dev box before touching Windows/Linux hardware | Already stated in the scaffold's module docs |
+| UI text | CoreText atlas, `manifold-ui-paint/src/native_text.rs` (2,172 lines) behind `manifold_ui::text::TextMeasure` | cosmic-text 0.19 (harfrust shaping, fontdb, swash raster), embedded Inter | Medium. Without it the UI has no text |
+| Text generator | CoreText, `manifold-nodes-image/src/text_rasterizer.rs` (689 lines), system families by name | cosmic-text + fontdb system fonts | Small-medium |
+| Video decode | AVFoundation + VideoToolbox plugin (`MetalVideoDecoderPlugin.m` 765 lines), writes into a raw `MTLTexture` | FFmpeg via `ffmpeg-next` 9 with the Vulkan hwcontext on our own `VkDevice`: decoded frames arrive as `VkImage`s (zero copy). CPU decode + upload where the driver lacks Vulkan Video (the Mac drivers), logged once | Large. Needs a decoder trait below `ClipRenderer`; `DecoderPool`/`DecodeScheduler` are concrete today. ProRes decodes on Vulkan compute in FFmpeg 8.1+. HAP decodes on the CPU in FFmpeg |
+| Export | AVFoundation encoder plugin (670 lines) | FFmpeg encode: NVENC on NVIDIA, x264/x265 otherwise. `audio_muxer.rs` already shells out to ffmpeg | Medium |
+| Live recording | AVAssetWriter plugin (839 lines), ProRes Proxy or HEVC Main10 | FFmpeg encode on the recording thread | Medium |
+| System-audio capture | CoreAudio process tap (`process_tap.rs`), behind `CaptureBackend` | cpal 0.18's PipeWire host opens a sink as an input for monitor capture. Upgrade cpal 0.15 → 0.18 everywhere | Small |
+| Audio device list | CoreAudio directory | cpal fallback already exists (`fallback.rs`) | None |
+| Frame pacing | CVDisplayLink + `mach_wait_until` | Present-driven with `VK_KHR_present_wait`, `clock_nanosleep(TIMER_ABSTIME)` + short spin. The deadline fallback in `frame_timer.rs:266` already runs off-Mac | Small-medium |
+| Menus | muda, macOS only (`menu.rs:190`: Linux `init_for_gtk_window` not wired) | muda on GTK, or no menu bar on the show rig | Small |
+| Paths, process lock | `~/Library/...` (`main.rs:667`, `clip_thumb_cache.rs:180`), `$HOME/Desktop` (`manifold-recording/src/config.rs:28`) | XDG dirs | Small |
+| ML plugins | OpenCV `.bundle` Mach-O plugins via libloading (`manifold-native/src/ffi/mod.rs:12`) | Same plugins built as `.so` | Small |
+| Clipboard, dialogs, input | arboard, rfd, winit | Already portable (rfd needs GTK or the XDG portal) | None |
+| HDR output | EDR on CAMetalLayer | SDR first | Later |
+
+The Linux compile breaks, file by file, are in `LINUX_VULKAN_PORT_MAP.md` sections 2, 6 and 7.
 
 ---
 
-## 3. API contract
+## 9. Phases
 
-The Vulkan module must export **exactly** the backend-neutral surface of `metal/mod.rs:28-37` minus the Metal-only islands (section 1). Anything in shared code that touches a Metal-only API must fail to compile under `--features vulkan` — that compile error is the enforcement mechanism, and CI builds both features (section 7).
+Each phase compiles, passes its tests and commits. P3's seams and P4's text work can run alongside P1 and P2, because they touch different files.
 
-### 3.1 `GpuDevice` (from `metal/device.rs`)
-
-| Method | Vulkan implementation | Phase |
+| Phase | Builds | Done when |
 |---|---|---|
-| `new()` | Instance (portability enumeration flag for MoltenVK) → pick discrete-then-integrated physical device → device with D2's features → queue(s) → `gpu-allocator` → linear sampler. Process-global `Arc` core per D18 | P1 |
-| `device_name()` | `VkPhysicalDeviceProperties::deviceName` | P1 |
-| `create_texture(desc)` | `VkImage` + `VkImageView` via allocator; usage flags from `GpuTextureUsage` (RENDER_TARGET→COLOR_ATTACHMENT, SHADER_READ→SAMPLED, SHADER_WRITE→STORAGE, COPY_SRC/DST→TRANSFER_SRC/DST; CPU_UPLOAD→staging path per section 5). Initial layout UNDEFINED; tracker owns it from there | P1 |
-| `create_buffer(size)` / `create_buffer_shared(size)` | Device-local / host-visible+coherent persistently mapped (`mapped_ptr` already stubbed in `vulkan/types.rs`) | P1 |
-| `create_sampler(desc)` | `VkSampler`; `ClampToZero` → `CLAMP_TO_BORDER` with transparent-black border; `compare` → `compareEnable` + op | P1 |
-| `upload_texture(tex, data)` | Staging buffer → one-shot command buffer → copy → wait. (Metal's `replaceRegion` is synchronous; match that) | P1 |
-| `create_compute_pipeline[_half]` | `shader_common` SPIR-V → shader module → pipeline layout from `SlotMap` (push-descriptor set layout) → `VkComputePipeline`. Cache per D13. Workgroup size comes from naga reflection exactly as the scaffold's `compile_wgsl_to_spirv_compute` returns it | P1 |
-| `create_specialized_*` | Identical string-substitution wrappers as Metal (`device.rs:504`) — copy verbatim | P1 |
-| `create_render_pipeline{,_msaa,_with_vertex_layout,_depth}` | `VkGraphicsPipeline` with `VkPipelineRenderingCreateInfo` (dynamic rendering), blend/format/msaa/depth from args, dynamic viewport+scissor, vertex input from `GpuVertexLayout` | P2 |
-| `create_depth_stencil_state` | Fold into pipeline state (Vulkan has no separate DS object); `GpuDepthStencilState` becomes a plain config struct the pipeline ctor consumes | P2 |
-| `create_encoder(label)` | Command pool from free-list (D8) + primary command buffer, begin | P1 |
-| `create_event()` | Timeline semaphore (D9) | P1 |
-| `create_texture_pool(fif)` | `TexturePool` is backend-neutral bookkeeping over `create_texture` + frame stamps — port the ~290 lines essentially verbatim | P1 |
-| `create_texture_memoryless` / `_msaa_memoryless` | D16 | P2 |
-| `load_pipeline_archive`/`save_pipeline_archive`/`load_msl_cache`/`log_msl_cache_stats` | `VkPipelineCache` blob + SPIR-V disk cache (D13), same signatures | P1 |
-| `linear_sampler`, `create_timestamp_sampler`, `supports_dispatch_profiling` | D19 | P1/P2 |
-| `raw_device`, `raw_queue`, `clone_queue`, `raw_device_ptr`, capture scopes, `create_io_surface_bgra8`, `create_texture_from_io_surface` | **Not exported on Vulkan.** All existing call sites are already `#[cfg(target_os = "macos")]` or inside Metal-only files | — |
-
-### 3.2 `GpuEncoder` (from `metal/encoder.rs`)
-
-Metal's encoder juggles compute/render/blit sub-encoders (`end_current`/`ensure_compute`); Vulkan records everything into **one `VkCommandBuffer`** — the sub-encoder machinery disappears, replaced by the hazard tracker (section 4) at each command.
-
-| Method | Vulkan implementation | Phase |
-|---|---|---|
-| `dispatch_compute(pipeline, bindings, workgroups, label)` | Tracker barriers for `bindings` → bind pipeline → `vkCmdPushDescriptorSetKHR` (buffers/textures/samplers; `Bytes` via ring, D5) → `vkCmdDispatch`. Debug label via `VK_EXT_debug_utils` when present | P1 |
-| `compute_memory_barrier_buffers()` | Global `vkCmdPipelineBarrier2` (compute→compute, SHADER_WRITE→SHADER_READ) | P1 |
-| `clear_texture` / `clear_buffer` | Tracker → `vkCmdClearColorImage` / `vkCmdFillBuffer(0)` | P1 |
-| `copy_texture_to_texture` / `copy_buffer_to_buffer` / `copy_texture_to_buffer` / `copy_texture_3d_to_buffer` | Tracker → `vkCmdCopyImage` / `vkCmdCopyBuffer` / `vkCmdCopyImageToBuffer`. **Preserve exact crop semantics** — `copy_texture_to_texture` crops, it does not scale (see `copy-texture-crops-use-resize-sample` memory) | P1 |
-| `upload_texture` | Staging chunk from the encoder ring → `vkCmdCopyBufferToImage` | P1 |
-| `generate_mipmaps` | Successive `vkCmdBlitImage` per mip level with per-level barriers (the standard loop) | P2 |
-| `draw_fullscreen{,_viewport}`, `draw_instanced{,_msaa,_depth,_depth_ex}`, `draw_indexed` | Tracker transitions attachments → `vkCmdBeginRendering` → dynamic viewport (negative height, D15) + scissor → bind + push descriptors → draw → end. Mirror Metal's pass-per-call structure exactly | P2 |
-| `begin_render_pass` / `draw_in_render_pass` / `set_scissor_rect` / `end_render_pass` | Same, with the pass held open across `draw_in_render_pass` calls | P2 |
-| `signal_event[_value]` / `wait_event` | `VkTimelineSemaphoreSubmitInfo` on the *submit* (Vulkan signals/waits at submit boundaries, not mid-buffer). The encoder records pending signal/wait lists; `commit` attaches them. Mid-encoder `wait_event` splits the submission — matches Metal's `end_current` + encodeWait semantics | P1 |
-| `commit`, `commit_and_wait_scheduled`, `commit_and_wait_completed[_timed]` | End CB → mutex-guarded `vkQueueSubmit2` with device timeline signal (D10) → optional `vkWaitSemaphores`. `_timed` uses begin/end timestamp queries | P1 |
-| `add_completed_handler[_with_status]`, `add_gpu_time_handler` | Registered on the waiter thread against this submit's timeline value (D10) | P1 |
-| `enable_dispatch_profiling`, `set_profile_tag`, `commit_and_wait_profiled` | Timestamp query pool spans (D19) | P2 |
-| `pipeline_barrier(reads, writes)` | Keep as no-op hint (section 4). Optionally use it to pre-warm tracker state — never required for correctness | P1 |
-| `raw_cmd_buf` | Not exported on Vulkan | — |
+| **P1 Headless compute** | `vulkan/{device,encoder,types}.rs` and siblings: instance and device bring-up (D1, D21), allocator, buffers, textures, samplers, compute pipelines and caches (D11), descriptor sets (D2), uniform ring (D3), dispatch, indirect dispatch, copies, clears, uploads, readbacks, hazard tracker (section 5), timeline events and waiter thread (D7, D8), `TexturePool`, `RetireQueue`/`FrameClock`, `FrameFence`, memory snapshot (D18), the P1 water paths (section 7) | `manifold-gpu` tests and every compute GPU proof pass on KosmicKrisp and MoltenVK with sync validation clean |
+| **P2 Render and profiling** | Graphics pipelines (dynamic rendering, MSAA, depth, depth-only, points, wireframe, vertex layouts), the `draw_*` family, render passes and scissor, mipmaps, memoryless, Y-flip and winding (D13), point size (D9), timestamps (D17) | All GPU proofs pass; scene, UI and compositor proofs match Metal. `ui-snap` PNGs match the Metal build's |
+| **P3 Seams and app on Vulkan** | Section 6: shared textures, surface (D15), capabilities. Un-gate the app. The whole app runs on the Mac under `--features vulkan` | Headless subcommands (`ui-snap`, `bridge-probe`, `perf-soak`) run under Vulkan; bridge-probe shows no tears |
+| **P4 Linux bring-up** | The map's compile breaks, cosmic-text, frame pacing, paths, menus, cpal 0.18, plugins as `.so` | The app boots in a Linux VM on lavapipe and plays a generative project with audio input |
+| **P5 Video** | FFmpeg decode behind a decoder trait, export, live recording. The Mac keeps VideoToolbox | Video clips play, export and record on Linux; the Mac paths are unchanged |
+| **P6 Water speed** | Section 7 P6 | FLIP proofs unchanged; measured CPU encode time per solve drops |
+| **P7 Ray tracing and friends** | `VK_KHR_acceleration_structure` + `VK_KHR_ray_query` behind `ShadowRayTracer`; the RT kernels in the chosen language (section 11); denoiser; upscaler; GPU FFT | RT proofs and `rt-quality-matrix` match Metal within the RT tolerances Metal already uses |
+| **P8 On the 5080** | Perf and latency on real NVIDIA hardware: Wayland vs X11 vs direct display, `VK_EXT_present_timing`, readback costs | Measured frame pacing matches the Metal profile shape |
 
 ---
 
-## 4. Hazard & layout tracking (the one new piece of engineering)
+## 10. Testing
 
-**The problem.** Metal guarantees intra-queue ordering; every call site in MANIFOLD (chain runtime, compositor, readbacks) is written against that guarantee. Vulkan guarantees nothing between commands without explicit `vkCmdPipelineBarrier2` + image layout transitions. `pipeline_barrier` exists as an API but has **zero call sites** — and retrofitting explicit barriers into every caller would be unverifiable (a missed barrier is a heisenbug on someone else's GPU at a gig).
-
-**DECIDED: the Vulkan `GpuEncoder` tracks resource state internally and emits barriers automatically.** The encoder is the right place because it already sees every access: `GpuBinding` slices name every buffer/texture a dispatch touches (with `writable` known from the `SlotMap`), render passes name their attachments, copies name src/dst. This makes every existing call site correct with zero modification, and new call sites can't forget anything.
-
-Mechanics:
-
-- **Layout lives on the texture.** `GpuTexture` (Arc-backed, `Clone` = refcount, mirroring Metal's retain) carries an `AtomicU32` current `VkImageLayout`. Global, because textures cross encoders and threads (triple buffers, async compute); an encoder inheriting a texture must know the layout the last encoder left it in.
-- **Access state lives on the encoder.** An `AHashMap<resource-id, LastAccess { stage, access }>`, reset per encoder. Metal's encoder already keeps per-encoder bind caches — same pattern, same invalidation discipline (see `encoder-bind-cache-invalidation` memory).
-- **First touch is conservative.** First time an encoder sees a resource, barrier from `ALL_COMMANDS / MEMORY_WRITE` — correct regardless of what any earlier encoder did, because same-queue submission order lets a barrier in this command buffer cover commands in previously submitted ones. After first touch, tracked state gives precise stage/access masks.
-- **Before each command:** for every resource about to be accessed, if (previous access included a write) or (layout must change): record a `VkImageMemoryBarrier2`/`VkBufferMemoryBarrier2`; batch all of them into one `vkCmdPipelineBarrier2` per command. Read-after-read never barriers.
-- **Layout targets:** storage read/write → `GENERAL` · sampled → `SHADER_READ_ONLY_OPTIMAL` · color attachment → `COLOR_ATTACHMENT_OPTIMAL` · depth → `DEPTH_ATTACHMENT_OPTIMAL` · copy → `TRANSFER_{SRC,DST}_OPTIMAL` · present → `PRESENT_SRC_KHR`. If a resource is both sampled and storage in one dispatch, `GENERAL` wins.
-- **Cost:** one or two hash lookups per binding per dispatch — noise next to a dispatch. No allocation after warmup (pre-sized maps, per hot-path discipline).
-- **Threading:** parallel encoders (async compute) touch disjoint resources by contract — that contract is unchanged from Metal. The atomic layout on shared textures plus `GpuEvent` timeline waits (already in the compositor/LED paths) cover the sanctioned crossings.
-
-`pipeline_barrier` remains a no-op hint on both backends. Do not make correctness depend on callers.
+- **On the Mac:** KosmicKrisp first, MoltenVK second. Every Vulkan test run enables `VK_LAYER_KHRONOS_validation` with synchronization validation. Both drivers sit on Metal, whose own ordering can hide a missing barrier that would corrupt frames on NVIDIA. A green run without sync validation proves nothing about the tracker.
+- **Parity:** the existing GPU proofs run unchanged under `--features manifold-gpu/vulkan`. Visual checks compare `ui-snap` and `capture` PNGs from the two builds.
+- **Linux-only code** (window, PipeWire, FFmpeg, paths) runs in a Linux VM on the Mac (Lima or UTM) on lavapipe, Mesa's software Vulkan. It is slow; it checks correctness only.
+- **Ray tracing has no Mac driver.** MoltenVK's ray tracing is an unmerged experimental branch, and KosmicKrisp has none. Lavapipe supports ray queries, slowly. Real checks need NVIDIA hardware.
+- **Performance** is measured only on real NVIDIA hardware (P8). Never quote a predicted number.
 
 ---
 
-## 5. Buffer upload paths
+## 11. Open decisions (Peter)
 
-- `create_buffer_shared` + `mapped_ptr` writes — already the uniform hot path; on Vulkan this is persistent-mapped host-visible memory, identical usage. On desktop discrete GPUs this lands in BAR/system memory exactly like Metal's Shared on unified memory — no code change for callers.
-- `CPU_UPLOAD` textures (`replaceRegion` on Metal) — Vulkan textures are never host-mapped; route through the staging ring transparently. Callers keep the same API.
-- Readbacks (`copy_texture_to_buffer` + wait + read `mapped_ptr`) — unchanged; buffer must be host-visible, which `create_buffer_shared` already guarantees.
-
----
-
-## 6. Phasing (each phase compiles, tests green, commits)
-
-**P1 — headless compute core.** `vulkan/{device,encoder,types}.rs`: device bring-up, allocator, buffers/textures/samplers, compute pipelines + caches, dispatch + copies + clears + upload, hazard tracker, timeline events + waiter thread, `TexturePool` port.
-*Oracle:* per-primitive gpu_tests + compute-path parity tests, `cargo test -p manifold-nodes --features manifold-gpu/vulkan` under MoltenVK on the dev box. Every parity failure is a Vulkan-backend bug until proven otherwise — never adjust tolerances or shared WGSL to pass (per `shared-shader-topology`, `value-level-parity`).
-*Mandatory from P1 on:* the parity suite must also run with the **Khronos synchronization validation layer** enabled (`VK_LAYER_KHRONOS_validation` + sync-val setting), zero errors. MoltenVK sits on Metal, whose implicit ordering can visually mask a missing barrier that would corrupt frames on NVIDIA/AMD — sync-val catches those at the API level regardless of the hardware underneath. A green parity run without sync-val proves nothing about the hazard tracker.
-
-**P2 — render + profiling.** Graphics pipelines (dynamic rendering), the `draw_*` family, depth/MSAA/mipmaps/scissor, negative-viewport Y-flip, timestamp profiling.
-*Oracle:* full parity suite + `ui_color_swatches` + headless-PNG goldens (`reference_ui_headless_png_verification` memory). Explicitly check orientation (Y-flip) and winding on `render_3d_mesh`.
-
-**P3 — presentation + app bring-up (mostly `manifold-app`).** `GpuSurface` on swapchain (D17), shared-device restructure of the IOSurface triple-buffer bridges (D18), frame pacing port: `mach_wait_until` + 2 ms spin → `clock_nanosleep(TIMER_ABSTIME)` + spin on Linux, high-resolution waitable timers + spin on Windows; CVDisplayLink → swapchain-present-driven cadence (`VK_GOOGLE_display_timing`/`VK_EXT_present_timing` where exposed, plain FIFO pacing otherwise).
-*Oracle:* app boots, plays the canonical music video fixture (Right Where I Need You), frame-pacing telemetry matches the Metal profile shape.
-
-**P4 — platform services.** Each row of section 8 is its own design/implementation unit gated on P3. None block the GPU port.
-
-**CI matrix from P1 onward:** macOS-Metal (existing) · macOS-MoltenVK (parity on real Apple GPU) · Linux with lavapipe (Mesa software Vulkan 1.3 — CI-only; expect a small tolerance profile for software rasterization, kept separate from GPU tolerances) · Windows when hardware runners exist.
-
-**Perf-portability watch items** (correct on all hardware; these are about not losing frames on discrete GPUs):
-
-- **Readbacks cross PCIe on discrete GPUs.** Apple Silicon unified memory makes GPU→CPU readback ~free; on a discrete card `copy_texture_to_buffer` + wait is a PCIe round trip. The per-frame readback paths — LED/Art-Net sampling (`manifold-led`), audio-reactive analysis, thumbnails — must stay **async with a frame of latency** (the `GpuEvent` pattern the LED path already uses). Never "simplify" a readback into a synchronous commit-and-wait on the frame loop; that's a per-frame stall on every PC.
-- **Windows presentation must reach independent flip.** The DWM compositor adds a frame of latency and pacing jitter unless borderless-fullscreen presentation qualifies for independent flip (correct swapchain size/format/alpha, no occlusion). This is the Windows twin of the macOS Direct Display work (`direct-display-cadence`) and is show-critical — verify with PresentMon during P3, not by eyeball.
+1. **Text on the Mac.** Use cosmic-text everywhere (one text path, same look on both platforms) or keep CoreText on the Mac. Recommended: cosmic-text everywhere, after a side-by-side `ui-snap` comparison.
+2. **Ray tracing shader language.** Slang, compiled to both MSL and SPIR-V, replacing the hand-written MSL (one source for both backends), or a GLSL copy of the MSL for Vulkan (two sources that can drift). Recommended: Slang, decided at P7 start with a one-kernel trial.
+3. **Denoiser.** DLSS Ray Reconstruction (NVIDIA only; the DLSS SDK ships Linux libraries; NVIDIA RTX SDK licence, which forbids combining with copyleft code) or NRD (same licence, any vendor, needs view-Z, normals and roughness inputs).
+4. **GPU FFT.** One WGSL FFT for both backends, replacing MPSGraph on the Mac if it measures as fast, or a Vulkan-only FFT.
+5. **HAP.** If shows use HAP clips, decide whether to upload compressed blocks to the GPU ourselves; FFmpeg decodes HAP on the CPU.
 
 ---
 
-## 7. Guardrails for the implementing agent
+## 12. Performance watch items
 
-- **No wgpu. No vulkano.** `ash` only. This is a hard rule, same force as CLAUDE.md's "no wgpu."
-- **Never modify `metal/`, shared WGSL, or parity tolerances to make Vulkan pass.** Metal's output is the oracle. Divergence = Vulkan bug until root-caused otherwise.
-- **No silent fallbacks** (per `no-silent-fallbacks-or-interim-stopgaps`): a missing D2 requirement is a boot error naming the feature. The only sanctioned capability adaptations are the documented ones: Memoryless→device-local (D16), f16→f32 (D12), MAILBOX→FIFO (D17) — each logs once at boot.
-- **Public surface stays identical.** A change to any shared signature must compile under both features and be called out in the PR.
-- **cfg discipline:** the `vulkan` cargo feature is the only backend selector. No `#[cfg(target_os)]` backend forks in shared crates.
-- **Both-features build in CI:** `cargo clippy -p manifold-gpu` and `cargo clippy -p manifold-gpu --features vulkan` (plus dependents) both gate — the compile error when shared code touches a Metal-only API is the enforcement mechanism for section 3's "not exported" rows.
-- **Commit cadence:** per phase or finer; parity suite green before each push (workspace sweep rules per CLAUDE.md apply — this is infrastructure, so full sweeps are warranted at phase boundaries).
-
----
-
-## 8. Tier 2 — platform coupling beyond the GPU (inventory, one page)
-
-Each row is a separate future design; none block P1–P3.
-
-| Subsystem | macOS today (where) | Cross-platform answer | Effort |
-|---|---|---|---|
-| Video decode | AVFoundation/VideoToolbox (`manifold-media/src/decoder*.rs`, `decode_scheduler.rs`) | FFmpeg/libavcodec with hwaccel (D3D11VA on Windows, VAAPI on Linux, NVDEC where present) behind the existing decoder seam. Keep VideoToolbox on macOS — it's zero-copy into Metal and works | Large — own design doc |
-| Encode / export / recording | VideoToolbox (`manifold-media/src/metal_encoder.rs`, `manifold-recording`) | FFmpeg encode: NVENC/AMF/QSV hardware paths, x264 fallback | Large — same design doc as decode |
-| Text rendering | CoreText (`manifold-nodes/src/text_rasterizer.rs`, `native_text.rs`, `render_text` primitive; `manifold-ui/src/text.rs`) | **cosmic-text** (fontdb + rustybuzz + swash) — pure Rust, shaping + fallback + rasterization, the current SOTA Rust text stack | Medium |
-| Audio capture | cpal input devices (portable already) + CoreAudio process/system taps (`manifold-audio`, macOS 14.4+) | Taps: WASAPI loopback (Windows — easier than the macOS version was), PipeWire monitor sources (Linux). cpal input path needs nothing | Medium |
-| Frame pacing / display link | `mach_wait_until`, CVDisplayLink (`manifold-app/src/display_link.rs`, `frame_timer.rs`) | section 6 P3 | In P3 |
-| Screen capture source | ScreenCaptureKit (tv-led-mirror path) | Windows.Graphics.Capture / PipeWire screencast | Small-medium |
-| DNN plugins | Vision/CoreML via FFI (`manifold-native`, `raw_device_ptr` interop) | ONNX Runtime backend — **already designed**, ML nodes design P6 | Designed |
-| Camera | AVFoundation | Media Foundation (Windows) / V4L2 (Linux) — evaluate `nokhwa` first | Small-medium |
-| EDR / HDR output | `edr_surface.rs`, CAMetalLayer EDR | SDR first (D17); Windows HDR10 via swapchain colorspace later | Deferred |
-| MIDI / OSC / Art-Net | midir / UDP | Already portable | None |
-| Windowing / input | winit | Already portable; audit macOS-specific chrome (menus, dock) during P3 | In P3 |
-
----
-
-## 9. Decided items (do not reopen)
-
-1. Native `ash` Vulkan, no wgpu interim — supersedes the old `MANIFOLD_GPU_ARCHITECTURE.md` strategy section.
-2. Vulkan 1.3 hard floor with the D2 feature set; loud boot failure, no fallback matrix.
-3. Automatic hazard/layout tracking inside the Vulkan encoder; `pipeline_barrier` stays a no-op hint everywhere.
-4. One `VkDevice` per process shared across content/UI threads; IOSurface bridges become VkImages + timeline handoff; no external-memory extensions.
-5. Push descriptors + uniform ring for `Bytes`; no descriptor pools.
-6. Timeline semaphores for all GPU↔GPU and GPU↔CPU sync; one waiter thread for callbacks.
-7. Dynamic rendering only; negative-viewport Y-flip; SPIR-V byte-identical across backends.
-8. `arrayLength` via native `OpArrayLength` — no sizes buffer on Vulkan.
-9. MPS / MPSGraph FFT / MetalFX / capture scopes: not ported (no consumers or already-portable alternatives exist).
-10. Platform services (section 8) are separate designs gated behind P3, ONNX excepted (already designed).
+- **Readbacks cross PCIe on a discrete card.** On Apple Silicon a GPU→CPU readback is nearly free. Per-frame readbacks (LED sampling, audio-reactive analysis, thumbnails) must stay asynchronous with a frame of latency, as the LED path already is. Never turn one into a commit-and-wait on the frame loop.
+- **Present latency on Linux is unmeasured.** Compare Wayland, X11 and direct display (`VK_KHR_display`) on the 5080 before choosing the show setup.
+- **Windows** (later) must reach independent flip in borderless fullscreen; verify with PresentMon.
