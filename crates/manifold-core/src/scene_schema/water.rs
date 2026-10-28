@@ -61,16 +61,24 @@ impl WaterFamily {
 pub struct WaterTemplate {
     pub solver: WaterSolver,
     pub draw: WaterDraw,
+    /// GPU FLIP's Narrow Band variant; Matter registers only `false`.
+    pub narrow_band: bool,
     pub family: fn() -> Arc<WaterFamily>,
 }
 inventory::collect!(WaterTemplate);
 
-/// The registered water family for `solver` drawn as `draw`, or `None` when
-/// no water crate is linked.
-pub fn water_family(solver: WaterSolver, draw: WaterDraw) -> Option<Arc<WaterFamily>> {
+/// The registered water family for `fields`' solver and draw, with Narrow
+/// Band where the solver runs it (GPU FLIP), or `None` when no water crate is
+/// linked.
+pub fn water_family(fields: &WaterFields) -> Option<Arc<WaterFamily>> {
+    let narrow_band = fields.narrow_band && fields.solver == WaterSolver::Flip;
     inventory::iter::<WaterTemplate>
         .into_iter()
-        .find(|template| template.solver == solver && template.draw == draw)
+        .find(|template| {
+            template.solver == fields.solver
+                && template.draw == fields.draw
+                && template.narrow_band == narrow_band
+        })
         .map(|template| (template.family)())
 }
 
@@ -83,7 +91,7 @@ pub const WATER_OBJECT_ROLE: &str = "water_object";
 /// The water look the template draws with: its water material's values,
 /// which a new Water's own Material starts at.
 pub fn water_look() -> Vec<(String, f32)> {
-    let Some(family) = water_family(WaterSolver::Flip, WaterDraw::Surface) else {
+    let Some(family) = water_family(&WaterFields::default()) else {
         return Vec::new();
     };
     let Some(material) = family
@@ -503,7 +511,7 @@ pub fn choice_unavailable(item: &Item, field: &str, key: &str) -> Option<&'stati
     }
 }
 
-pub static WATER_FIELDS: [FieldRow; 4] = [
+pub static WATER_FIELDS: [FieldRow; 5] = [
     FieldRow {
         id: "bounds",
         label: "Bounds",
@@ -517,6 +525,23 @@ pub static WATER_FIELDS: [FieldRow; 4] = [
             match fields {
                 ItemFields::Water(w) => w.bounds = on,
                 _ => return Err(wrong_value("bounds", value)),
+            }
+            Ok(())
+        },
+    },
+    FieldRow {
+        id: "narrow_band",
+        label: "Narrow Band",
+        section: ControlGroup::Simulation,
+        control: on_off(),
+        applies: flip,
+        disabled: enabled,
+        read: |fields| is_on(matches!(fields, ItemFields::Water(w) if w.narrow_band)),
+        write: |fields, value| {
+            let on = parse_on("narrow_band", value)?;
+            match fields {
+                ItemFields::Water(w) => w.narrow_band = on,
+                _ => return Err(wrong_value("narrow_band", value)),
             }
             Ok(())
         },

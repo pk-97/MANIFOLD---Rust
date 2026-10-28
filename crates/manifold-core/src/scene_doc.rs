@@ -518,6 +518,9 @@ pub struct WaterFields {
     pub material: Option<ItemId>,
     /// The Bounds switch: the Water's own box and walls, instead of the world's.
     pub bounds: bool,
+    /// GPU FLIP Narrow Band: particles only near the surface and the solids,
+    /// the deep water held on the grid.
+    pub narrow_band: bool,
 }
 
 /// The liquid solver a Water runs: GPU FLIP, or MLS-MPM (Matter).

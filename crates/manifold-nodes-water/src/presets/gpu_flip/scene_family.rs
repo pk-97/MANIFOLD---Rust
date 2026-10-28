@@ -76,9 +76,10 @@ pub(super) fn particles_draw(b: &mut Builder) {
 
 /// The Dam Break family less its output and whitewater budget; its objects
 /// in output order.
-fn flip(draw: WaterDraw) -> WaterFamily {
+fn flip(draw: WaterDraw, narrow_band: bool) -> WaterFamily {
     let scene = WaterScene {
         column: [[0.0; 2]; 3],
+        narrow_band,
         ..WaterScene::dam_break(64)
     };
     let def = scene.family_def();
@@ -115,7 +116,7 @@ fn flip(draw: WaterDraw) -> WaterFamily {
 }
 
 /// Main's Matter solver with the shared display.
-fn mpm(draw: WaterDraw) -> WaterFamily {
+fn mpm(draw: WaterDraw, _narrow_band: bool) -> WaterFamily {
     let solver: EffectGraphDef =
         serde_json::from_str(include_str!("../../../assets/matter_solver.json"))
             .expect("the Matter solver parses");
@@ -143,21 +144,22 @@ fn family(b: Builder, objects: Vec<String>) -> WaterFamily {
 }
 
 macro_rules! template {
-    ($name:ident, $solver:expr, $draw:expr, $build:expr) => {
+    ($name:ident, $solver:expr, $draw:expr, $narrow_band:expr, $build:expr) => {
         fn $name() -> Arc<WaterFamily> {
             static FAMILY: OnceLock<Arc<WaterFamily>> = OnceLock::new();
-            FAMILY.get_or_init(|| Arc::new($build($draw))).clone()
+            FAMILY
+                .get_or_init(|| Arc::new($build($draw, $narrow_band)))
+                .clone()
         }
-        inventory::submit! { WaterTemplate { solver: $solver, draw: $draw, family: $name } }
+        inventory::submit! {
+            WaterTemplate { solver: $solver, draw: $draw, narrow_band: $narrow_band, family: $name }
+        }
     };
 }
 
-template!(flip_surface, WaterSolver::Flip, WaterDraw::Surface, flip);
-template!(
-    flip_particles,
-    WaterSolver::Flip,
-    WaterDraw::Particles,
-    flip
-);
-template!(mpm_surface, WaterSolver::Mpm, WaterDraw::Surface, mpm);
-template!(mpm_particles, WaterSolver::Mpm, WaterDraw::Particles, mpm);
+template!(flip_surface, WaterSolver::Flip, WaterDraw::Surface, false, flip);
+template!(flip_particles, WaterSolver::Flip, WaterDraw::Particles, false, flip);
+template!(flip_band_surface, WaterSolver::Flip, WaterDraw::Surface, true, flip);
+template!(flip_band_particles, WaterSolver::Flip, WaterDraw::Particles, true, flip);
+template!(mpm_surface, WaterSolver::Mpm, WaterDraw::Surface, false, mpm);
+template!(mpm_particles, WaterSolver::Mpm, WaterDraw::Particles, false, mpm);

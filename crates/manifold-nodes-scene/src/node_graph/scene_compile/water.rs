@@ -55,7 +55,7 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) {
         let ItemFields::Water(fields) = &item.fields else {
             continue;
         };
-        if let Some(family) = water_family(fields.solver, fields.draw) {
+        if let Some(family) = water_family(fields) {
             emit(b, &item, group.as_ref(), &family);
         }
     }
