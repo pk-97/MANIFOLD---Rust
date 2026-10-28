@@ -2645,7 +2645,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
                 .map(|p| p.settings.time_signature_numerator as f64)
                 .unwrap_or(4.0)
                 .max(1.0);
-            #[cfg(target_os = "macos")]
             let secs_per_beat = project
                 .map(|p| p.settings.seconds_per_beat() as f64)
                 .unwrap_or(0.5)
