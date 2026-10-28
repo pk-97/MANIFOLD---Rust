@@ -10,7 +10,6 @@
 //! Run: `SWATCH_OUT=/some/dir cargo test -p manifold-ui-paint --features gpu-proofs --test main contracts::ableton_picker_scroll_proof::`
 //! then open `$SWATCH_OUT/ableton_picker_top.png` / `ableton_picker_bottom.png`.
 
-#![cfg(target_os = "macos")]
 
 use manifold_gpu::BufferUse;
 use std::ffi::c_void;

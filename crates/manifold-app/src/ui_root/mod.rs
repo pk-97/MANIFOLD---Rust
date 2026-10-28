@@ -552,7 +552,6 @@ impl UIRoot {
             // it installs here at construction; both windows' UIRoots get it.
             tree: {
                 let mut tree = UITree::new();
-                #[cfg(target_os = "macos")]
                 tree.set_text_measure(Box::new(
                     manifold_ui_paint::native_text::CachedTextMeasure::new(),
                 ));
@@ -577,9 +576,7 @@ impl UIRoot {
             inspector: InspectorCompositePanel::new(),
             viewport: {
                 // Lane titles size with the same glyph widths the tree draws.
-                #[allow(unused_mut)]
                 let mut viewport = TimelineViewportPanel::new();
-                #[cfg(target_os = "macos")]
                 viewport.set_text_measure(Box::new(
                     manifold_ui_paint::native_text::CachedTextMeasure::new(),
                 ));

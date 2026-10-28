@@ -25,9 +25,16 @@ const INNER_Y1: u32 = 46;
 const INNER_WIDTH: usize = (INNER_X1 - INNER_X0) as usize;
 const INNER_HEIGHT: usize = (INNER_Y1 - INNER_Y0) as usize;
 
+/// A monospace family the OS ships: Menlo on the Mac, DejaVu Sans Mono on
+/// most Linux desktops (Inter where it is missing).
+#[cfg(target_os = "macos")]
+const TERMINAL_FONT: &str = "Menlo";
+#[cfg(not(target_os = "macos"))]
+const TERMINAL_FONT: &str = "DejaVu Sans Mono";
+
 fn rasterize_options() -> RasterizeOptions<'static> {
     RasterizeOptions {
-        font_family: Some("Menlo"),
+        font_family: Some(TERMINAL_FONT),
         h_align: HAlign::Left,
         letter_spacing: 0.0,
         line_spacing: 1.0,

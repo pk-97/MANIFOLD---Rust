@@ -7,7 +7,6 @@ pub mod automation_lane_draw;
 pub mod clip_content_gpu;
 pub mod clip_draw;
 pub mod clip_thumb_gpu;
-#[cfg(target_os = "macos")]
 pub mod native_text;
 pub mod panel_bitmap_gpu;
 pub mod timeline_grid_draw;

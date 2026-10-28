@@ -1,6 +1,6 @@
 //! Native rendering proof for automation strokes: coverage at subpixel edges
 //! and an uninterrupted centre at both desktop scale factors.
-#![cfg(all(target_os = "macos", feature = "gpu-proofs"))]
+#![cfg(feature = "gpu-proofs")]
 
 use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTextureFormat};

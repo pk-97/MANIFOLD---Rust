@@ -8,7 +8,6 @@ use manifold_gpu::{
     GpuVertexAttribute, GpuVertexFormat, GpuVertexLayout,
 };
 
-#[cfg(target_os = "macos")]
 use crate::native_text::NativeTextRenderer;
 
 use manifold_ui::node::*;
@@ -441,7 +440,6 @@ pub struct UIRenderer {
     pipeline: GpuRenderPipeline,
 
     // Text rendering — CoreText renderer.
-    #[cfg(target_os = "macos")]
     text_renderer: NativeTextRenderer,
 
     // Rect draw queue.
@@ -603,7 +601,6 @@ impl UIRenderer {
                 .vertex_layout(&layout),
         );
 
-        #[cfg(target_os = "macos")]
         let text_renderer = NativeTextRenderer::new(device, format);
 
         let vbuf_ring = (0..BUF_RING_SIZE).map(|_| None).collect();
@@ -666,7 +663,6 @@ impl UIRenderer {
 
         Self {
             pipeline,
-            #[cfg(target_os = "macos")]
             text_renderer,
             rect_commands: Vec::with_capacity(256),
             line_commands: Vec::with_capacity(64),
@@ -1096,7 +1092,6 @@ impl UIRenderer {
         color: impl Into<TextColor>,
         weight: FontWeight,
     ) {
-        #[cfg(target_os = "macos")]
         {
             let color = color.into().0;
             // Honour the immediate-mode clip so canvas labels stay in their lane
@@ -1363,7 +1358,6 @@ impl UIRenderer {
         // text, so a well-fitted label is untouched; only genuine overrun
         // clips. `draw_node` already skips zero-area nodes above, so this
         // never turns a real label into an empty clip.
-        #[cfg(target_os = "macos")]
         let node_clip: [f32; 4] = match self.clip_stack.last() {
             Some(c) => [
                 c.x.max(bounds.x),
@@ -1379,7 +1373,6 @@ impl UIRenderer {
         // Comfort inset for genuinely overrunning text — see the clip
         // computation in the non-icon branch below.
         const TEXT_CLIP_PAD_X: f32 = 3.0;
-        #[cfg(target_os = "macos")]
         if let Some(text) = &node.text
             && !text.is_empty()
         {
@@ -1530,7 +1523,6 @@ impl UIRenderer {
         // Dropdown caret (section M / mockup `.sel::after`): a dim ▼ pinned to the
         // node's right edge, drawn independent of the main text so a value chip
         // reads as a dropdown without baking the glyph into the value string.
-        #[cfg(target_os = "macos")]
         if style.dropdown_caret {
             const CARET: &str = "\u{25BC}";
             let clip_bounds = Some(node_clip);
@@ -1576,7 +1568,6 @@ impl UIRenderer {
         color: impl Into<TextColor>,
         clip_bounds: Option<[f32; 4]>,
     ) {
-        #[cfg(target_os = "macos")]
         {
             let depth = self.current_depth();
             let transform = self.current_transform();
@@ -1592,8 +1583,6 @@ impl UIRenderer {
                 transform,
             );
         }
-        #[cfg(not(target_os = "macos"))]
-        let _ = (icon_id, x, y, w, h, color, clip_bounds);
     }
 
     // ── Render pass ─────────────────────────────────────────────────
@@ -2057,7 +2046,6 @@ impl UIRenderer {
         }
 
         // Prepare text.
-        #[cfg(target_os = "macos")]
         let has_text = self.text_renderer.prepare(
             device,
             viewport_w,
@@ -2066,14 +2054,11 @@ impl UIRenderer {
             offset_y,
             scale_factor,
         );
-        #[cfg(not(target_os = "macos"))]
-        let has_text = false;
 
         // The render loop must visit every depth that has rects, lines, OR
         // text — a depth with text but no rect (e.g. an unfilled label) would
         // otherwise be skipped. Merge the text renderer's depths into the
         // rect/line set.
-        #[cfg(target_os = "macos")]
         {
             depths.extend_from_slice(self.text_renderer.depths());
             depths.sort_unstable();
@@ -2208,7 +2193,6 @@ impl UIRenderer {
                 }
             }
 
-            #[cfg(target_os = "macos")]
             self.text_renderer.render_depth_in_pass(encoder, depth);
         }
     }

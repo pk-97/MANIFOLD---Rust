@@ -1,0 +1,19 @@
+[package]
+name = "manifold-text"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# The text engine off the Mac: cosmic-text shaping over the embedded Inter and
+# the system's fonts, swash rasterization. The UI and the Text generator use
+# it on Linux; the Mac keeps CoreText. It builds everywhere so its tests run
+# on the Mac too.
+
+[dependencies]
+manifold-foundation = { path = "../manifold-foundation" }
+cosmic-text = "0.19"
+swash = "0.2"
+log = { workspace = true }
+
+[lints]
+workspace = true

@@ -144,8 +144,6 @@ About 525 `target_os` lines in 46 files. Grouped by what they gate:
 
 | Crate | What breaks or is missing on Linux | Phase |
 |---|---|---|
-| manifold-ui-paint | All UI text is CoreText (`native_text.rs`, 2,172 lines, gated at `lib.rs:10`). Off-Mac `ui_renderer.rs:1597,2071` sets `has_text = false`. Five text proofs in `tests/contracts/` are Mac-only | P4: cosmic-text |
-| manifold-nodes-image | `text_rasterizer/`: CoreText on macOS (`core_text.rs`, 689 lines); elsewhere every string rasterizes to nothing, and the terminal glyph atlas panics on it (`glyph_atlas.rs` expects a glyph per ASCII character). The Text generator's default is embedded Inter (the "Helvetica" strings are test pins). The terminal glyph atlas asks for "Menlo" (`glyph_atlas.rs:30`), which Linux lacks. The font list comes from CoreText (`available_font_families`) | P4: cosmic-text and fontdb, a monospace fallback |
 | manifold-media | Decode and export are Obj-C plugins on VideoToolbox and AVFoundation (`native/*.m`, 1,435 lines). `lib.rs:8-25` gates them. `DecoderPool`, `DecodeScheduler` and `MetalEncoder` are concrete types; the `ClipRenderer` trait (`manifold-playback/src/renderer.rs:10`) is the seam. `metadata.rs:19-29` returns `None` off-Mac. No FFmpeg crate in the graph today; only the `ffmpeg` CLI for audio muxing | P5 |
 | manifold-recording | AVAssetWriter plugin (`native/LiveRecordingPlugin.m`, 839 lines). Everything but `config` and `ffi` is gated (`lib.rs:24-39`). Default path is the Desktop (`config.rs:29-37`). `proofs.rs` expects `ffprobe` | P5 |
 | manifold-audio | System-audio capture is a CoreAudio process tap (`capture/process_tap.rs`, 792 lines); off-Mac `unsupported_tap.rs` returns an error. Off macOS, input asks for a 256-frame buffer within the device's range (`cpal_input.rs`). The device list already falls back to cpal. Mic permission returns Granted off-Mac | P4: PipeWire monitor capture, cpal 0.15 → 0.18 together with kira |
@@ -176,7 +174,7 @@ Out of scope: `plugins/` (the analyzer VST, its own workspace, uses IOSurface in
 - 304 files are gated on `gpu-proofs` across 17 crates. They test node math, which is the same WGSL on both backends, so they run once at the end of P1 and P2 and once after the buffer-use change, never per batch. The per-batch Vulkan check is the parity kit and stills (design section 10).
 - Metal-only on purpose: 22 ray-tracing proofs (11 in `manifold-nodes/tests/gpu_proofs/rt_*`, 11 in `manifold-nodes-scene/tests/gpu_proofs/rt_*`) and `rt_p4_metalfx_temporal.rs` wait for P7. `manifold-gpu/src/metal/{async_lane,pipeline_cache,replay,template,residency}_tests.rs` get Vulkan twins where the behaviour exists; residency does not.
 - `raw_ptr()` comparisons in `node-engine/exec/metal_backend.rs:1562-1640` and `manifold-app/tests/.../scene_viewport_frame_order.rs:97,107` compare `identity_key()` instead.
-- About 21 Mac-gated test files (app probes, the ui-paint text proofs) come back once cosmic-text lands.
+- The app probes stay Mac-gated until the headless harness cut; the ui-paint text and render proofs run on both backends.
 
 ---
 
@@ -210,13 +208,11 @@ Each P1 batch adds its parity-kit tests and runs them on KosmicKrisp with synchr
 **After P1:**
 - P2 done 29 Oct. Render: pipelines on dynamic rendering, one `VkPipeline` per topology and fill mode with depth and cull state dynamic, MSAA, mipmaps, the long UI pass and the depth copy (`vulkan/pipeline.rs`, `vulkan/encoder/render.rs`); `render_parity_tests.rs` runs on both backends. Vulkan stills against Metal: DigitalPlants, Lissajous, NestedCubes and Wireframe identical, Scene within 1/255, MetallicGlass's fine moiré differs (shader math precision). The per-dispatch profiler writes timestamp queries into one reused pool (`vulkan/profiling.rs`); Vulkan spans report no workgroup memory. The water still renders; its surface differs from Metal in detail (the narrow band difference in step 13). End-of-P2 proof run on KosmicKrisp: 6301 of 6494 pass. Left: ray tracing (P7); tests that pin Metal's replay and template counts; eight render-test helpers that leave a named binding out (production binds them); wireframe and anisotropy, which KosmicKrisp lacks; fused DigitalPlants within 1/255 of unfused on 31% of pixels; one device loss in the sheeting births test.
 - P3: shared textures, the surface, and un-gating the app's native render and headless harness.
-- P4: Linux services (text, pacing, output placement, shortcuts, menu-only actions, clipboard, audio buffer and capture, keep-awake, thread priority, plugins as `.so`).
+- P4: Linux services (pacing, output placement, shortcuts, menu-only actions, clipboard, audio buffer and capture, keep-awake, thread priority, plugins as `.so`). Text landed 29 Oct: `manifold-text` (cosmic-text over embedded Inter and the system fonts) draws the UI and the Text generator off the Mac; the terminal atlas asks for DejaVu Sans Mono there.
 - P5: video.
 - P6: water speed.
 - P7: ray tracing.
 - P8: on the 5080.
-
-P4's text work touches only `manifold-ui-paint` and `manifold-nodes-image`, so it can slot between GPU batches once step 8 lands.
 
 **What a first Linux show needs:** P1 to P4. That covers generators, effects, raster scenes, audio input, MIDI, Link, OSC, LED and the output window. Water is in if step 13's measurement says P1's encoding is fast enough; otherwise P6 comes first. Video clips need P5. Ray-traced scenes need P7.
 
@@ -252,6 +248,5 @@ Every API the Vulkan backend copies gets built twice and tested twice. So shrink
 
 **Bigger cuts**
 - **Headless harness.** `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `export-repro` boot through a Mac-only harness that duplicates app setup. After the bridge change they boot the normal content pipeline.
-- **One text engine.** The UI (2,172 lines) and the Text generator (689 lines) are two separate CoreText implementations. One cosmic-text module serves both.
 
 **Where the frame loop waits on the GPU:** only in coupled-liquid substeps (`commit_wait_and_continue`, `substep_region.rs:223`). The other production `commit_and_wait` calls (about 35) sit in warmup, bakes, thumbnails and tools.

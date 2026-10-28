@@ -3,18 +3,18 @@
 //! bitmap that gets uploaded to a GPU texture. Deliberately separate from
 //! `native_text.rs` (which is the UI-thread glyph atlas system).
 //!
-//! CoreText on macOS. Elsewhere nothing rasterizes until the cosmic-text
-//! engine lands: text renders empty and no fonts are listed.
+//! CoreText on macOS, `manifold-text` (cosmic-text) elsewhere. The cosmic
+//! rasterizer builds on the Mac too so its tests run there.
 
 #[cfg(target_os = "macos")]
 mod core_text;
 #[cfg(target_os = "macos")]
 pub use core_text::TextRasterizer;
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+mod cosmic;
 #[cfg(not(target_os = "macos"))]
-mod unavailable;
-#[cfg(not(target_os = "macos"))]
-pub use unavailable::TextRasterizer;
+pub use cosmic::TextRasterizer;
 
 /// Horizontal text alignment within the rasterized bitmap.
 #[derive(Debug, Clone, Copy, PartialEq)]

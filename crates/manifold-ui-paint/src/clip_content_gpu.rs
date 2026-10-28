@@ -614,7 +614,7 @@ mod tests {
         assert_ne!(a, b, "subpixel geometry edits must repaint");
     }
 
-    #[cfg(all(target_os = "macos", feature = "gpu-proofs"))]
+    #[cfg(feature = "gpu-proofs")]
     mod gpu {
         use super::super::ClipContentGpu;
         use half::f16;

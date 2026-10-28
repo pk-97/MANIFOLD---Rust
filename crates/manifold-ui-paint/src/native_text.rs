@@ -1,27 +1,11 @@
-//! Native macOS CoreText/CoreGraphics text renderer.
-//!
-//! Uses CoreText for text shaping and measurement, CoreGraphics for glyph
-//! rasterization into a shelf-packed atlas texture, and manifold-gpu for
-//! the GPU atlas upload and draw_indexed.
+//! The UI's text renderer. A font backend shapes, measures and rasterizes
+//! glyphs: CoreText on the Mac (`core_text.rs`), `manifold-text`
+//! (cosmic-text) elsewhere (`cosmic.rs`). Everything after the glyph bitmap
+//! is shared: the shelf-packed atlas, the icons, and the manifold-gpu upload
+//! and draw.
 
 use ahash::AHashMap;
 use bytemuck::{Pod, Zeroable};
-use core_foundation::{
-    attributed_string::CFMutableAttributedString,
-    base::{CFRange, TCFType},
-    string::CFString,
-};
-use core_graphics::{
-    color_space::CGColorSpace,
-    context::CGContext,
-    data_provider::CGDataProvider,
-    font::CGFont,
-    geometry::{CGPoint, CGSize},
-};
-use core_text::{
-    font::CTFont, font_descriptor::kCTFontOrientationDefault, line::CTLine,
-    string_attributes::kCTFontAttributeName,
-};
 use manifold_gpu::BufferUse;
 use manifold_gpu::{
     Draw, DrawCount, DrawPass, GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer,
@@ -35,9 +19,18 @@ use manifold_ui::{
     transform2d::Affine2,
 };
 use std::cell::RefCell;
-use std::sync::Arc;
 
 use crate::ui_renderer::Depth;
+
+#[cfg(target_os = "macos")]
+mod core_text;
+#[cfg(target_os = "macos")]
+use core_text::FontManager;
+
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+mod cosmic;
+#[cfg(not(target_os = "macos"))]
+use cosmic::FontManager;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -94,14 +87,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 // ─── GlyphKey ────────────────────────────────────────────────────────────────
 
 /// Which font a glyph id resolves against. `Base` is the common case — one
-/// of the three embedded Inter weights. `Fallback` is CoreText's own
-/// substitute font for a character outside Inter's coverage (BUG-107): a
-/// fallback run's glyph ids index THAT font's glyph table, not Inter's, so
-/// rasterizing them with a `Base` font draws an arbitrary wrong glyph
-/// (mojibake). Identified by a hash of the font's PostScript name — stable
-/// across shape calls, unlike a `CTFont` pointer — with the actual `CTFont`
-/// held in `FontManager::fallback_fonts` so `rasterize_glyph` can find it
-/// again.
+/// of the three embedded Inter weights. `Fallback` is any other font: an
+/// installed family drawn by name, or the backend's substitute for a
+/// character outside Inter's coverage (BUG-107). A fallback run's glyph ids
+/// index THAT font's glyph table, not Inter's, so rasterizing them with a
+/// `Base` font draws an arbitrary wrong glyph (mojibake). The `u64` is a
+/// stable hash the backend interned the font under at shape time, so
+/// `FontManager::rasterize` finds the same font again.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum GlyphFont {
     Base(FontWeight),
@@ -135,97 +127,26 @@ struct GlyphInfo {
     bearing_y: f32,
 }
 
-// ─── FontManager ─────────────────────────────────────────────────────────────
+// ─── Backend output ──────────────────────────────────────────────────────────
 
-/// Loads the three Inter weights and creates CTFont instances on demand.
-struct FontManager {
-    regular: CGFont,
-    medium: CGFont,
-    bold: CGFont,
-    /// (size_x10_physical, weight) → CTFont cache.
-    cache: AHashMap<(u16, FontWeight), CTFont>,
-    /// CoreText fallback fonts encountered during shaping (BUG-107), keyed
-    /// by the hash `shape_line` computed from the font's PostScript name.
-    /// Interned by `intern_fallback` at shape time so `rasterize_glyph` can
-    /// look the exact font back up when it later rasterizes that run's
-    /// glyph ids.
-    fallback_fonts: AHashMap<u64, CTFont>,
-    /// Installed fonts drawn by name (font-picker previews), keyed by
-    /// (family id from `NativeTextRenderer::families`, size_x10 physical).
-    family_fonts: AHashMap<(u16, u16), CTFont>,
+/// One run of shaped glyphs that resolved to one font, with each glyph's
+/// pen x in physical pixels from the line's start.
+struct ShapedRun {
+    font: GlyphFont,
+    glyphs: Vec<u16>,
+    x: Vec<f32>,
 }
 
-impl FontManager {
-    fn new() -> Self {
-        let regular = Self::load(manifold_foundation::fonts::INTER_REGULAR);
-        let medium = Self::load(manifold_foundation::fonts::INTER_MEDIUM);
-        let bold = Self::load(manifold_foundation::fonts::INTER_BOLD);
-        Self {
-            regular,
-            medium,
-            bold,
-            cache: AHashMap::new(),
-            fallback_fonts: AHashMap::new(),
-            family_fonts: AHashMap::new(),
-        }
-    }
-
-    /// An installed font by family name, resolved the same way the Text
-    /// generator resolves it (`new_from_name`), so a preview shows what the
-    /// generator will draw. An unknown name, or a symbol font (Wingdings,
-    /// Zapf Dingbats, Emoji — its name would draw as pictures), falls back
-    /// to Inter Regular so the name stays readable.
-    fn get_family_font(&mut self, family_id: u16, name: &str, physical_size: f32) -> CTFont {
-        use core_text::font_descriptor::{kCTFontClassMaskTrait, kCTFontSymbolicClass};
-        let size_x10 = (physical_size * 10.0).round() as u16;
-        if let Some(f) = self.family_fonts.get(&(family_id, size_x10)) {
-            return f.clone();
-        }
-        let font = core_text::font::new_from_name(name, physical_size as f64)
-            .ok()
-            .filter(|f| f.symbolic_traits() & kCTFontClassMaskTrait != kCTFontSymbolicClass)
-            .unwrap_or_else(|| {
-                core_text::font::new_from_CGFont(&self.regular, physical_size as f64)
-            });
-        self.family_fonts
-            .insert((family_id, size_x10), font.clone());
-        font
-    }
-
-    /// Register a CoreText-resolved fallback font (a run's font that isn't
-    /// one of the three embedded Inter weights) under a stable hash of its
-    /// PostScript name, so `rasterize_glyph` can recover the same `CTFont`
-    /// later. Idempotent — re-interning the same font is a cheap hash + a
-    /// map lookup that already hits.
-    fn intern_fallback(&mut self, font: &CTFont) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = ahash::AHasher::default();
-        font.postscript_name().hash(&mut hasher);
-        let key = hasher.finish();
-        self.fallback_fonts
-            .entry(key)
-            .or_insert_with(|| font.clone());
-        key
-    }
-
-    fn load(ttf_bytes: &'static [u8]) -> CGFont {
-        let data: Vec<u8> = ttf_bytes.to_vec();
-        let provider = CGDataProvider::from_buffer(Arc::new(data));
-        CGFont::from_data_provider(provider).expect("Failed to create CGFont from Inter TTF")
-    }
-
-    /// Get or create a CTFont at the given physical size and weight.
-    fn get_ct_font(&mut self, physical_size: f32, weight: FontWeight) -> &CTFont {
-        let size_x10 = (physical_size * 10.0).round() as u16;
-        self.cache.entry((size_x10, weight)).or_insert_with(|| {
-            let cg_font = match weight {
-                FontWeight::Regular => &self.regular,
-                FontWeight::Medium => &self.medium,
-                FontWeight::Bold => &self.bold,
-            };
-            core_text::font::new_from_CGFont(cg_font, physical_size as f64)
-        })
-    }
+/// One rasterized glyph, `GLYPH_PADDING` included, and where it sits: from
+/// the pen x to its left edge (`bearing_x`) and from the baseline up to its
+/// top edge (`bearing_y`), in physical pixels.
+struct GlyphBitmap {
+    /// R8 coverage, `width × height`, rows top first.
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+    bearing_x: f32,
+    bearing_y: f32,
 }
 
 // ─── GlyphAtlas ──────────────────────────────────────────────────────────────
@@ -289,56 +210,18 @@ impl GlyphAtlas {
         }
     }
 
-    /// Ensure glyph is in the atlas, rasterizing if needed. Returns its GlyphInfo.
-    fn rasterize_glyph(&mut self, font_mgr: &mut FontManager, key: GlyphKey) -> Option<&GlyphInfo> {
-        if self.glyphs.contains_key(&key) {
-            return self.glyphs.get(&key);
+    /// The glyph's atlas entry, rasterizing it with `fonts` on a miss.
+    fn rasterize_glyph(&mut self, fonts: &mut FontManager, key: GlyphKey) -> &GlyphInfo {
+        if !self.glyphs.contains_key(&key) {
+            let bitmap = fonts.rasterize(key);
+            self.insert(key, bitmap);
         }
+        &self.glyphs[&key]
+    }
 
-        let physical_size = key.size_x10 as f32 / 10.0;
-        // BUG-107: rasterize with the SAME font this glyph id was shaped
-        // against — `Base` is the fast common path (an embedded Inter
-        // weight); `Fallback` looks up the exact CoreText-resolved font
-        // `shape_line` interned, so a fallback run's glyph ids land on their
-        // own glyph table instead of an arbitrary glyph in Inter's.
-        let ct_font: CTFont = match key.font {
-            GlyphFont::Base(weight) => font_mgr.get_ct_font(physical_size, weight).clone(),
-            // Interned at whatever size first shaped it; the key's size wins.
-            GlyphFont::Fallback(hash) => match font_mgr.fallback_fonts.get(&hash) {
-                Some(f) => f.clone_with_font_size(physical_size as f64),
-                None => {
-                    // Shaping always interns a fallback font before any of
-                    // its glyphs reach the atlas this same frame, so this
-                    // is unreached in practice. Degrade to the base weight
-                    // rather than panic — one glyph mis-renders instead of
-                    // the renderer crashing.
-                    font_mgr
-                        .get_ct_font(physical_size, FontWeight::Regular)
-                        .clone()
-                }
-            },
-        };
-        let ct_font = &ct_font;
-        let ascent = ct_font.ascent() as f32;
-        let descent = ct_font.descent().abs() as f32;
-
-        // Get advance width for this glyph.
-        let glyph_id = key.glyph_id;
-        let mut advance_size = CGSize::new(0.0, 0.0);
-        let advance_w = unsafe {
-            ct_font.get_advances_for_glyphs(
-                kCTFontOrientationDefault,
-                &glyph_id,
-                &mut advance_size,
-                1,
-            )
-        } as f32;
-
-        // Bitmap dimensions in physical pixels.
-        // Width = advance + horizontal padding; height = full line height + vertical padding.
-        let bitmap_w = (advance_w.ceil() as u32).max(1) + 2 * GLYPH_PADDING;
-        let bitmap_h = (ascent + descent).ceil() as u32 + 2 * GLYPH_PADDING;
-
+    /// Pack `bitmap` into the atlas under `key`.
+    fn insert(&mut self, key: GlyphKey, bitmap: GlyphBitmap) {
+        let (bitmap_w, bitmap_h) = (bitmap.width, bitmap.height);
         // Shelf packing: advance to next row if this glyph doesn't fit.
         if self.shelf_x + bitmap_w > ATLAS_SIZE {
             self.shelf_y += self.shelf_height + GLYPH_PADDING;
@@ -358,18 +241,12 @@ impl GlyphAtlas {
 
         let atlas_x = self.shelf_x;
         let atlas_y = self.shelf_y;
-
-        // Rasterize into a caller-owned pixel buffer, copy into atlas.
-        if let Some(glyph_pixels) =
-            rasterize_glyph_bitmap(ct_font, glyph_id, bitmap_w, bitmap_h, descent)
-        {
-            for row in 0..bitmap_h {
-                let src_start = (row * bitmap_w) as usize;
-                let dst_start = ((atlas_y + row) * ATLAS_SIZE + atlas_x) as usize;
-                let count = bitmap_w as usize;
-                self.pixels[dst_start..dst_start + count]
-                    .copy_from_slice(&glyph_pixels[src_start..src_start + count]);
-            }
+        for row in 0..bitmap_h {
+            let src_start = (row * bitmap_w) as usize;
+            let dst_start = ((atlas_y + row) * ATLAS_SIZE + atlas_x) as usize;
+            let count = bitmap_w as usize;
+            self.pixels[dst_start..dst_start + count]
+                .copy_from_slice(&bitmap.pixels[src_start..src_start + count]);
         }
 
         self.shelf_x += bitmap_w + GLYPH_PADDING;
@@ -377,31 +254,17 @@ impl GlyphAtlas {
         self.dirty = true;
 
         // UV coordinates normalised to 0..1.
-        let uv_x = atlas_x as f32 / ATLAS_SIZE as f32;
-        let uv_y = atlas_y as f32 / ATLAS_SIZE as f32;
-        let uv_w = bitmap_w as f32 / ATLAS_SIZE as f32;
-        let uv_h = bitmap_h as f32 / ATLAS_SIZE as f32;
-
-        // bearing_x: left padding offset from glyph origin to bitmap left.
-        let bearing_x = -(GLYPH_PADDING as f32);
-        // bearing_y: distance from baseline (y-down) to the bitmap's TOP edge.
-        // In y-down screen space: baseline = line_top + ascent.
-        // Bitmap top = baseline - (ascent + GLYPH_PADDING).
-        // So bearing_y = ascent + GLYPH_PADDING (subtract from baseline to get bitmap top).
-        let bearing_y = ascent + GLYPH_PADDING as f32;
-
         let info = GlyphInfo {
-            uv_x,
-            uv_y,
-            uv_w,
-            uv_h,
+            uv_x: atlas_x as f32 / ATLAS_SIZE as f32,
+            uv_y: atlas_y as f32 / ATLAS_SIZE as f32,
+            uv_w: bitmap_w as f32 / ATLAS_SIZE as f32,
+            uv_h: bitmap_h as f32 / ATLAS_SIZE as f32,
             pixel_w: bitmap_w,
             pixel_h: bitmap_h,
-            bearing_x,
-            bearing_y,
+            bearing_x: bitmap.bearing_x,
+            bearing_y: bitmap.bearing_y,
         };
         self.glyphs.insert(key, info);
-        self.glyphs.get(&key)
     }
 
     /// Upload atlas to GPU if any new glyphs were rasterized this frame.
@@ -414,55 +277,6 @@ impl GlyphAtlas {
         }
         self.dirty = false;
     }
-}
-
-/// Rasterize a single glyph into a caller-owned grayscale buffer (R8).
-///
-/// Uses CG's native y-up coordinate system (NO Y-flip). The bitmap memory
-/// is laid out top-row-first, and CG y=0 is at the bottom. So ascenders
-/// (high CG y) end up in the top rows of memory — right-side-up glyphs.
-///
-/// `descent` is the font's descent (positive value, distance below baseline).
-fn rasterize_glyph_bitmap(
-    ct_font: &CTFont,
-    glyph_id: u16,
-    bitmap_w: u32,
-    bitmap_h: u32,
-    descent: f32,
-) -> Option<Vec<u8>> {
-    let w = bitmap_w as usize;
-    let h = bitmap_h as usize;
-
-    let mut pixels = vec![0u8; w * h];
-
-    let color_space = CGColorSpace::create_device_gray();
-    let ctx = CGContext::create_bitmap_context(
-        Some(pixels.as_mut_ptr() as *mut std::ffi::c_void),
-        w,
-        h,
-        8, // bits per component
-        w, // bytes per row (1 byte per pixel)
-        &color_space,
-        0u32, // kCGImageAlphaNone
-    );
-
-    // NO Y-flip. CG native y-up: y=0 at bottom, y=h at top.
-    // Bitmap memory: row 0 = top of image = CG y=h.
-    //
-    // Place baseline at y = descent + GLYPH_PADDING (from bottom).
-    // Ascent extends upward, descent extends downward — both fit in the bitmap.
-
-    ctx.set_rgb_fill_color(1.0, 1.0, 1.0, 1.0);
-    ctx.set_allows_font_smoothing(false);
-    ctx.set_should_smooth_fonts(false);
-
-    let baseline_y = (descent + GLYPH_PADDING as f32) as f64;
-    let origin_x = GLYPH_PADDING as f64;
-    let position = CGPoint::new(origin_x, baseline_y);
-
-    ct_font.draw_glyphs(&[glyph_id], &[position], ctx);
-
-    Some(pixels)
 }
 
 // ─── Icon Atlas Support ──────────────────────────────────────────────────────
@@ -1015,9 +829,8 @@ fn text_vertex_layout() -> GpuVertexLayout {
 
 // ─── NativeTextRenderer ──────────────────────────────────────────────────────
 
-/// Standalone CoreText-based text renderer.
-///
-/// API mirrors UIRenderer's text methods.
+/// Queues text and icon draws, packs their glyphs into the atlas, and draws
+/// them per depth. API mirrors UIRenderer's text methods.
 pub struct NativeTextRenderer {
     font_manager: FontManager,
     atlas: GlyphAtlas,
@@ -1318,28 +1131,12 @@ impl NativeTextRenderer {
             let physical_size = cmd.font_size * scale;
             let size_x10 = (physical_size * 10.0).round() as u16;
 
-            // Clone (a cheap CF retain bump) so the borrow of `font_manager`
-            // ends here — `shape_line` below needs its own `&mut` borrow to
-            // intern any fallback fonts it discovers (BUG-107).
-            let (ct_font, base_weight): (CTFont, Option<FontWeight>) = match cmd.family {
-                Some(id) => (
-                    self.font_manager.get_family_font(
-                        id,
-                        &self.families[id as usize],
-                        physical_size,
-                    ),
-                    None,
-                ),
-                None => (
-                    self.font_manager
-                        .get_ct_font(physical_size, cmd.font_weight)
-                        .clone(),
-                    Some(cmd.font_weight),
-                ),
-            };
-            let Some(runs) = shape_line(&mut self.font_manager, base_weight, &ct_font, text) else {
-                continue;
-            };
+            let family = cmd
+                .family
+                .map(|id| (id, self.families[id as usize].as_str()));
+            let runs = self
+                .font_manager
+                .shape(text, family, cmd.font_weight, physical_size);
 
             // cmd.y is the top of the text bounding box (vertically centered by
             // UIRenderer). The measurement height = font_size (logical px).
@@ -1367,9 +1164,7 @@ impl NativeTextRenderer {
                         size_x10,
                         font: run.font,
                     };
-                    let Some(info) = self.atlas.rasterize_glyph(&mut self.font_manager, key) else {
-                        continue;
-                    };
+                    let info = self.atlas.rasterize_glyph(&mut self.font_manager, key);
 
                     // Quad dimensions in logical (screen) pixels.
                     let bw = info.pixel_w as f32 / scale;
@@ -1377,8 +1172,8 @@ impl NativeTextRenderer {
                     let bearing_x = info.bearing_x / scale;
                     let bearing_y = info.bearing_y / scale;
 
-                    // Glyph origin x from the CTRun position (in logical px).
-                    let glyph_origin_x = cmd.x + run.positions[i].x as f32 / scale;
+                    // Glyph origin x from the shaped pen position (in logical px).
+                    let glyph_origin_x = cmd.x + run.x[i] / scale;
 
                     // Quad top-left, SNAPPED to the physical pixel grid. The atlas
                     // glyph is rasterized at an integer physical size; placing its quad
@@ -1769,8 +1564,8 @@ impl NativeTextRenderer {
 /// ever-changing strings (timecodes, readouts).
 const MAX_MEASURE_CACHE: usize = 2048;
 
-/// The one text measurer: CoreText CTLine
-/// widths behind a bounded cache. Each `UITree` owns one; the renderer
+/// The one text measurer: the font backend's line widths behind a bounded
+/// cache. Each `UITree` owns one; the renderer
 /// measures through the tree it draws, so build-time layout and paint agree.
 /// GPU-free. The `RefCell` makes `&self` measurement possible; it lives on the
 /// UI thread and is never shared between windows.
@@ -1825,7 +1620,14 @@ impl TextMeasure for CachedTextMeasure {
         manifold_foundation::work_count::record_work(
             manifold_foundation::work_count::WorkKind::TextMeasureMiss,
         );
-        let size = measure_text_ct(&mut cache.fonts, text, font_size as f32, font_weight);
+        // Height is the font size: the line's ascent + descent includes
+        // inflated hhea line metrics, too tall for UI centering.
+        let size = Vec2::new(
+            cache
+                .fonts
+                .measure_width(text, font_size as f32, font_weight),
+            font_size as f32,
+        );
         if cache.entries.len() >= MAX_MEASURE_CACHE {
             cache.entries.clear();
         }
@@ -1836,107 +1638,6 @@ impl TextMeasure for CachedTextMeasure {
     }
 }
 
-// ─── CoreText helpers ────────────────────────────────────────────────────────
-
-/// Measure text using CoreText CTLine typographic bounds. Called only from
-/// `CachedTextMeasure`'s miss path (INV-7).
-fn measure_text_ct(
-    font_mgr: &mut FontManager,
-    text: &str,
-    font_size: f32,
-    weight: FontWeight,
-) -> Vec2 {
-    if text.is_empty() {
-        return Vec2::new(0.0, font_size);
-    }
-    let ct_font = font_mgr.get_ct_font(font_size, weight);
-    let line = make_ct_line(ct_font, text);
-    let bounds = line.get_typographic_bounds();
-    let w = bounds.width as f32;
-    // Use font_size as height (matches glyphon behavior). CTLine's ascent+descent
-    // includes inflated hhea line metrics which are too tall for UI centering.
-    Vec2::new(w, font_size)
-}
-
-/// Create a CTLine from a text string and a CTFont.
-fn make_ct_line(ct_font: &CTFont, text: &str) -> CTLine {
-    let cf_text = CFString::new(text);
-    let mut attr_str = CFMutableAttributedString::new();
-    attr_str.replace_str(&cf_text, CFRange::init(0, 0));
-    let range = CFRange::init(0, cf_text.char_len());
-    // Safety: kCTFontAttributeName is a valid CoreText attribute key (a static CFStringRef).
-    unsafe {
-        attr_str.set_attribute(range, kCTFontAttributeName, ct_font);
-    }
-    CTLine::new_with_attributed_string(attr_str.as_concrete_TypeRef())
-}
-
-/// One CoreText glyph run's shaped glyphs/positions plus which font resolved
-/// them. BUG-107: kept as separate runs rather than flattened into one
-/// glyph-id list, because CoreText splits a run whenever it falls back from
-/// `ct_font` to cover a character `ct_font` doesn't have — that run's glyph
-/// ids only resolve correctly against ITS OWN font.
-struct ShapedRun {
-    font: GlyphFont,
-    glyphs: Vec<u16>,
-    positions: Vec<CGPoint>,
-}
-
-/// Shape text into its CoreText glyph runs. A run whose resolved font
-/// differs from `ct_font` is interned into `font_mgr` (`intern_fallback`) so
-/// the glyph atlas can rasterize it with the right font later — `base_weight`
-/// is `ct_font`'s own Inter weight, carried through for the common
-/// non-fallback case so the atlas key stays the cheap `GlyphFont::Base`
-/// variant. `None` means `ct_font` is not Inter (an installed font drawn by
-/// name), so every run is interned.
-fn shape_line(
-    font_mgr: &mut FontManager,
-    base_weight: Option<FontWeight>,
-    ct_font: &CTFont,
-    text: &str,
-) -> Option<Vec<ShapedRun>> {
-    let line = make_ct_line(ct_font, text);
-    let runs = line.glyph_runs();
-    let base_ps_name = ct_font.postscript_name();
-
-    let mut result: Vec<ShapedRun> = Vec::new();
-    for run in runs.iter() {
-        let count = run.glyph_count() as usize;
-        if count == 0 {
-            continue;
-        }
-        // The font CoreText actually shaped this run with — differs from
-        // `ct_font` exactly when this run is a fallback split. Falls back
-        // to `Base` if the attribute is somehow absent, matching the
-        // pre-fix behavior for that one (unreached in practice) case.
-        let run_font = run.attributes().and_then(|attrs| {
-            // Safety: kCTFontAttributeName is a valid CoreText dictionary
-            // key (a static CFStringRef); `find` only reads it.
-            let key = unsafe { kCTFontAttributeName };
-            attrs.find(key).and_then(|v| v.downcast::<CTFont>())
-        });
-        let font = match (run_font, base_weight) {
-            (Some(f), Some(w)) if f.postscript_name() == base_ps_name => GlyphFont::Base(w),
-            (Some(f), _) => GlyphFont::Fallback(font_mgr.intern_fallback(&f)),
-            (None, Some(w)) => GlyphFont::Base(w),
-            (None, None) => GlyphFont::Fallback(font_mgr.intern_fallback(ct_font)),
-        };
-        let run_glyphs = run.glyphs().into_owned();
-        let run_positions = run.positions().into_owned();
-        result.push(ShapedRun {
-            font,
-            glyphs: run_glyphs,
-            positions: run_positions,
-        });
-    }
-
-    if result.is_empty() {
-        None
-    } else {
-        Some(result)
-    }
-}
-
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1944,78 +1645,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn text_measurement() {
-        let mut fm = FontManager::new();
-        let ct_font = fm.get_ct_font(12.0, FontWeight::Regular);
-        let line = make_ct_line(ct_font, "Hello");
-        let bounds = line.get_typographic_bounds();
-        assert!(
-            bounds.width > 0.0,
-            "text width should be positive, got {}",
-            bounds.width
-        );
-        assert!(
-            bounds.ascent > 0.0,
-            "ascent should be positive, got {}",
-            bounds.ascent
-        );
-        assert!(
-            bounds.descent >= 0.0,
-            "descent should be non-negative, got {}",
-            bounds.descent
-        );
-        let height = bounds.ascent + bounds.descent;
-        assert!(
-            height >= 8.0,
-            "line height should be at least 8px, got {height}"
-        );
-    }
-
-    #[test]
     fn glyph_atlas_packing() {
         let mut fm = FontManager::new();
         let mut atlas = GlyphAtlas::new_cpu_only();
 
         // Rasterize glyphs A-E at 12px physical.
-        let size_x10 = 120u16;
-        let glyph_chars = ['A', 'B', 'C', 'D', 'E'];
-        let ct_font = fm.get_ct_font(12.0, FontWeight::Regular);
-        let glyph_ids: Vec<u16> = glyph_chars
-            .iter()
-            .map(|c| ct_font.get_glyph_with_name(&c.to_string()))
-            .collect();
-        // (`ct_font` is a &CTFont; the borrow on `fm` ends at its
-        // last use above — no explicit drop needed.)
+        let runs = fm.shape("ABCDE", None, FontWeight::Regular, 12.0);
+        let glyph_ids: Vec<u16> = runs.iter().flat_map(|r| r.glyphs.clone()).collect();
+        assert_eq!(glyph_ids.len(), 5);
+        assert!(
+            runs.iter()
+                .all(|r| r.font == GlyphFont::Base(FontWeight::Regular))
+        );
 
-        let mut rects: Vec<(f32, f32, f32, f32, u32, u32)> = Vec::new();
-        for &gid in &glyph_ids {
-            let key = GlyphKey {
-                glyph_id: gid,
-                size_x10,
-                font: GlyphFont::Base(FontWeight::Regular),
-            };
-            if let Some(info) = atlas.rasterize_glyph(&mut fm, key) {
-                rects.push((
+        let rects: Vec<(f32, f32, f32, f32, u32, u32)> = glyph_ids
+            .iter()
+            .map(|&glyph_id| {
+                let info = atlas.rasterize_glyph(
+                    &mut fm,
+                    GlyphKey {
+                        glyph_id,
+                        size_x10: 120,
+                        font: GlyphFont::Base(FontWeight::Regular),
+                    },
+                );
+                (
                     info.uv_x,
                     info.uv_y,
                     info.uv_w,
                     info.uv_h,
                     info.pixel_w,
                     info.pixel_h,
-                ));
-            }
-        }
-
-        assert_eq!(
-            rects.len(),
-            glyph_chars.len(),
-            "all glyphs should be in atlas"
-        );
+                )
+            })
+            .collect();
 
         // Non-zero pixel dimensions.
         for &(_, _, _, _, pw, ph) in &rects {
-            assert!(pw > 0, "pixel_w should be positive");
-            assert!(ph > 0, "pixel_h should be positive");
+            assert!(pw > 2 * GLYPH_PADDING, "pixel_w should exceed the padding");
+            assert!(ph > 2 * GLYPH_PADDING, "pixel_h should exceed the padding");
         }
 
         // Non-overlapping UV rects.
@@ -2033,80 +1701,23 @@ mod tests {
         }
     }
 
-    /// The font picker draws a name in its own installed font: shaping
-    /// against that font must key every run to it (not Inter), and each
-    /// atlas size must rasterize at its own size.
+    /// A cache hit returns exactly what the backend returned on the miss,
+    /// for every key part (text, size, weight).
     #[test]
-    fn installed_font_shapes_as_its_own_font_at_each_size() {
-        let mut fm = FontManager::new();
-        let georgia = fm.get_family_font(0, "Georgia", 24.0);
-        assert_eq!(georgia.family_name(), "Georgia", "Georgia ships with macOS");
-        let runs = shape_line(&mut fm, None, &georgia, "Hg").expect("shapes");
-        assert!(
-            runs.iter()
-                .all(|r| matches!(r.font, GlyphFont::Fallback(_)))
-        );
-
-        let mut atlas = GlyphAtlas::new_cpu_only();
-        let font = runs[0].font;
-        let glyph_id = runs[0].glyphs[0];
-        let small = atlas
-            .rasterize_glyph(
-                &mut fm,
-                GlyphKey {
-                    glyph_id,
-                    size_x10: 120,
-                    font,
-                },
-            )
-            .map(|g| g.pixel_h)
-            .expect("small");
-        let large = atlas
-            .rasterize_glyph(
-                &mut fm,
-                GlyphKey {
-                    glyph_id,
-                    size_x10: 480,
-                    font,
-                },
-            )
-            .map(|g| g.pixel_h)
-            .expect("large");
-        assert!(
-            large > small * 3,
-            "48px glyph ({large}) must be ~4x the 12px one ({small})"
-        );
-    }
-
-    /// A symbol font's name would draw as pictures, so the picker shows it
-    /// in Inter instead. Wingdings and Zapf Dingbats ship with macOS.
-    #[test]
-    fn symbol_fonts_preview_their_name_in_the_ui_font() {
-        let mut fm = FontManager::new();
-        for (id, name) in ["Wingdings", "Zapf Dingbats"].into_iter().enumerate() {
-            let f = fm.get_family_font(id as u16, name, 24.0);
-            assert!(
-                f.family_name().starts_with("Inter"),
-                "{name} resolved to {}",
-                f.family_name()
-            );
-        }
-        assert_eq!(
-            fm.get_family_font(9, "Georgia", 24.0).family_name(),
-            "Georgia"
-        );
-    }
-
-    /// A cache hit returns exactly what CoreText returned on the miss, for
-    /// every key part (text, size, weight).
-    #[test]
-    fn cached_measure_equals_coretext() {
+    fn cached_measure_equals_the_backend() {
         let m = CachedTextMeasure::new();
         let mut fm = FontManager::new();
         for text in ["", "MIDI", "CHANNEL", "Layer 1", "日本語", "→ 0.500"] {
             for size in [9_u16, 11, 13, 24] {
                 for weight in [FontWeight::Regular, FontWeight::Medium, FontWeight::Bold] {
-                    let direct = measure_text_ct(&mut fm, text, size as f32, weight);
+                    let direct = Vec2::new(
+                        if text.is_empty() {
+                            0.0
+                        } else {
+                            fm.measure_width(text, size as f32, weight)
+                        },
+                        size as f32,
+                    );
                     assert_eq!(
                         m.measure_text(text, size, weight),
                         direct,
@@ -2123,9 +1734,10 @@ mod tests {
     }
 
     /// Binary-search truncation equals the old one-measure-per-byte trim on
-    /// real CoreText widths (kerning included), not just a test measurer.
+    /// the backend's real widths (kerning included), not just a test
+    /// measurer.
     #[test]
-    fn truncate_matches_linear_on_coretext() {
+    fn truncate_matches_linear_on_real_widths() {
         fn linear(m: &dyn TextMeasure, text: &str, size: u16, w: FontWeight, max: f32) -> String {
             if text.is_empty() {
                 return String::new();

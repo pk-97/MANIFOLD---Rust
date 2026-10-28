@@ -9,7 +9,6 @@
 //! → `render_tree` → readback → pixel assertions. Also writes a PNG for
 //! eyeballing (`SWATCH_OUT=/some/dir` to choose where).
 
-#![cfg(target_os = "macos")]
 
 use manifold_gpu::BufferUse;
 use std::ffi::c_void;

@@ -14,7 +14,6 @@
 //! Run: `CELL_OUT=/some/dir cargo test -p manifold-ui-paint --features gpu-proofs --test main contracts::ui_cell_arc_repro::`
 //! then open `$CELL_OUT/cell_radius6.png` / `cell_radius0.png`.
 
-#![cfg(target_os = "macos")]
 
 use manifold_gpu::BufferUse;
 use std::ffi::c_void;

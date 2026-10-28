@@ -12,7 +12,6 @@
 //! Run: `SWATCH_OUT=/some/dir cargo test -p manifold-ui-paint --features gpu-proofs --test main contracts::dropdown_clip_proof::`
 //! then open `$SWATCH_OUT/dropdown_fit.png` / `dropdown_overflow.png`.
 
-#![cfg(target_os = "macos")]
 
 use manifold_gpu::BufferUse;
 use std::ffi::c_void;
