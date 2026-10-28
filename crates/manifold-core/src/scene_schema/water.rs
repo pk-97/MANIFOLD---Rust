@@ -351,7 +351,7 @@ pub static WATER_ROWS: [PropertyRow; 41] = [
         .default(1.0)
         .range(0.0, 4.0)
         .when(flip_surface),
-    // Times still-air evaporation: 1 dries a soaked floor in about half an hour, 100 in about 17 s, 0 never.
+    // Times the stage drying rate: at 1 a splash fades to a third in 15 s, 0 never dries.
     row("surface_drying", WETNESS, Surface, setup())
         .param("drying")
         .name("Drying")

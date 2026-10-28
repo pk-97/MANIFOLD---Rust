@@ -142,6 +142,7 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
             LOOK_FOAM,
             LOOK_MIST,
             LOOK_THIN_WATER_LIGHT,
+            manifold_node_engine::scene::wet_map::LAYOUT,
             LOOK_WET_SURFACE,
         ]
         .join("\n"),
@@ -176,6 +177,7 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
             LOOK_FOAM,
             LOOK_MIST,
             LOOK_THIN_WATER_LIGHT,
+            manifold_node_engine::scene::wet_map::LAYOUT,
             LOOK_WET_SURFACE,
             WATER_FIELD_COMMON,
         ]

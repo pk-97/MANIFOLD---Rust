@@ -1727,7 +1727,7 @@
           "value": 1.0
         }
       },
-      "typeId": "node.surface_wetness"
+      "typeId": "node.wet_map"
     },
     {
       "id": 529,
@@ -3574,12 +3574,6 @@
       "toPort": "particles"
     },
     {
-      "fromNode": 12,
-      "fromPort": "level_set",
-      "toNode": 528,
-      "toPort": "field"
-    },
-    {
       "fromNode": 0,
       "fromPort": "display_time",
       "toNode": 528,
@@ -3599,9 +3593,9 @@
     },
     {
       "fromNode": 528,
-      "fromPort": "wetness",
+      "fromPort": "map",
       "toNode": 442,
-      "toPort": "field_wetness"
+      "toPort": "wet_map"
     },
     {
       "fromNode": 0,
@@ -3872,18 +3866,6 @@
       "fromPort": "cell_size",
       "toNode": 529,
       "toPort": "sim_cell_size"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "display_time",
-      "toNode": 529,
-      "toPort": "time"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "epoch",
-      "toNode": 529,
-      "toPort": "epoch"
     },
     {
       "fromNode": 0,
@@ -4172,6 +4154,30 @@
       "fromPort": "vertices",
       "toNode": 442,
       "toPort": "vertices"
+    },
+    {
+      "fromNode": 508,
+      "fromPort": "out",
+      "toNode": 528,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 530,
+      "fromPort": "solid",
+      "toNode": 528,
+      "toPort": "solid"
+    },
+    {
+      "fromNode": 529,
+      "fromPort": "extent",
+      "toNode": 528,
+      "toPort": "extent"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "cell_size",
+      "toNode": 528,
+      "toPort": "sim_cell_size"
     }
   ]
 }

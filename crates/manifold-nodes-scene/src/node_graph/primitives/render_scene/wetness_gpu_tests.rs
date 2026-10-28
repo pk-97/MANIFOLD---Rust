@@ -1,16 +1,22 @@
 //! GPU proofs for the wet-surface look: the blend of albedo and roughness
-//! against the closed form of Lekner and Dorf, read from a wetness field on
-//! world tiles with one tile unheld, and that a point outside the field's
-//! extent, over an unheld tile, or in a scene without the field is left alone.
+//! against the closed form of Lekner and Dorf, read from a wet map; the
+//! drying by the age of the last touch, the touched heights, an edge read
+//! from the touched texels only, and that a point off the map, under an unplaced map or in a scene
+//! without one is left alone.
 use super::water_march_gpu_tests::shared_buffer;
 use super::wetness::{WetUniforms, wet_uniforms};
-use super::{FIELD_TILES_WGSL, FieldObject, model_matrix};
-use crate::testkit::field_tiles::FieldTable;
+use super::{FieldObject, model_matrix};
 use manifold_gpu::*;
-use manifold_node_engine::scene::world_tiles::READ_SIDE;
+use manifold_node_engine::scene::wet_map::{
+    HEADER_WORDS, LAYOUT, TEXEL_WORDS, height_bit, height_key, touch_key,
+};
 
-/// The display cell in metres: a tile is 0.5 m.
-const CELL: f32 = 0.0625;
+/// The test map: 8 texels a side of 10 mm, texel 4 starting at local x 0.
+const TEXEL: f32 = 0.01;
+const SIDE: u32 = 8;
+const ORIGIN: [f32; 2] = [-0.04, 0.0];
+/// `WM_DRY_SECONDS` in `wet_map_layout.wgsl`.
+const DRY_SECONDS: f64 = 15.0;
 
 /// The albedo the probe kernel passes in, one per channel, and its roughness.
 const ALBEDO: [f32; 3] = [0.2, 0.5, 0.8];
@@ -28,39 +34,82 @@ fn cs_probe(@builtin(global_invocation_id) id: vec3<u32>) {\n\
     probe_out[i] = vec4<f32>(surface.albedo, surface.roughness);\n\
 }\n";
 
-/// Tiles -1 and 1 along x are held, tile 0 between them is not; y and z stay
-/// in tile 0.
-fn table() -> FieldTable {
-    FieldTable::new(CELL, 2, &[[-1, 0, 0], [1, 0, 0]])
+/// One touched texel: when, and the heights touched.
+struct Touch {
+    texel: [u32; 2],
+    at: f32,
+    heights: &'static [f32],
 }
 
-/// The wetness of the held nodes: linear in local y, `0.2 + 1.5 y`.
-fn wetness_at(y: f64) -> f64 {
-    0.2 + 1.5 * y
+/// A map's words as `node.wet_map` writes them, placed at `ORIGIN` with
+/// `texel`, at display time `now`.
+fn map_words(texel: f32, now: f32, drying: f32, touches: &[Touch]) -> Vec<u32> {
+    let texels = u64::from(SIDE * SIDE);
+    let mut words = vec![0; (HEADER_WORDS + TEXEL_WORDS * texels) as usize];
+    words[..6].copy_from_slice(&[
+        ORIGIN[0].to_bits(),
+        ORIGIN[1].to_bits(),
+        texel.to_bits(),
+        SIDE,
+        now.to_bits(),
+        drying.to_bits(),
+    ]);
+    for touch in touches {
+        let at = HEADER_WORDS + TEXEL_WORDS * u64::from(touch.texel[1] * SIDE + touch.texel[0]);
+        let at = at as usize;
+        let low = touch.heights.iter().copied().fold(f32::INFINITY, f32::min);
+        let high = touch
+            .heights
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
+        words[at] = touch_key(touch.at);
+        words[at + 1] = !height_key(low);
+        words[at + 2] = height_key(high);
+        words[at + 3] = touch
+            .heights
+            .iter()
+            .fold(0, |bins, &y| bins | height_bit(y, 2.0 * texel));
+    }
+    words
 }
+
+/// Water ran down a wall at local x 0 from 0.3 m to 0.1 m at time 10.
+const DOWN_THE_WALL: Touch = Touch {
+    texel: [4, 2],
+    at: 10.0,
+    heights: &[0.1, 0.13, 0.16, 0.19, 0.22, 0.25, 0.28, 0.3],
+};
+
+/// A splash at a wall's foot and one at its top, nothing between.
+const FOOT_AND_TOP: Touch = Touch {
+    texel: [2, 5],
+    at: 10.0,
+    heights: &[0.1, 0.4],
+};
 
 /// The model of the test water: moved by (2, 0, -1).
 fn water_model() -> [[f32; 4]; 4] {
     model_matrix([2.0, 0.0, -1.0], [0.0; 3], [1.0; 3])
 }
 
-/// A world point at `local` in the water's space.
-fn world_point(local: [f32; 3]) -> [f32; 4] {
-    [2.0 + local[0], local[1], -1.0 + local[2], 0.0]
+/// The world point at height `y` over texel coordinate (`u`, `v`) of the test
+/// map, in texels from its low corner.
+fn over(u: f32, v: f32, y: f32) -> [f32; 4] {
+    let x = ORIGIN[0] + u * TEXEL;
+    let z = ORIGIN[1] + v * TEXEL;
+    [2.0 + x, y, -1.0 + z, 0.0]
 }
 
-/// The look at `points` with `uniforms`, reading the field's wetness
-/// `wetness` under `tiles` and `extent`.
+/// The look at `points` with `uniforms`, reading the wet map `map`.
 fn probe(
     device: &GpuDevice,
     uniforms: &WetUniforms,
-    wetness: &GpuBuffer,
-    tiles: &GpuBuffer,
-    extent: &GpuBuffer,
+    map: &GpuBuffer,
     points: &[[f32; 4]],
 ) -> Vec<[f32; 4]> {
     let wgsl = format!(
-        "{READ_SIDE}{FIELD_TILES_WGSL}{}{WET_KERNEL}",
+        "{LAYOUT}{}{WET_KERNEL}",
         include_str!("../shaders/look_wet_surface.wgsl")
     );
     let pipeline = device.create_compute_pipeline(&wgsl, "cs_probe", "wet probe");
@@ -77,17 +126,7 @@ fn probe(
             },
             GpuBinding::Buffer {
                 binding: 69,
-                buffer: wetness,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 70,
-                buffer: tiles,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
-                binding: 71,
-                buffer: extent,
+                buffer: map,
                 offset: 0,
             },
             GpuBinding::Buffer {
@@ -124,91 +163,122 @@ fn soaked(albedo: f64) -> f64 {
     (1.0 - r_e) * (1.0 - r_i) * albedo / (1.0 - r_i * albedo)
 }
 
-#[test]
-fn wetness_blends_albedo_and_smooths_roughness() {
-    let device = manifold_gpu::testkit::test_device();
-    let table = table();
-    // Dry is the canonical wetness.
-    let wetness_pool = table.pool(0.0, |p| wetness_at(f64::from(table.position(p)[1])) as f32);
-    let wetness = shared_buffer(&device, &wetness_pool);
-    let tiles = shared_buffer(&device, &table.words);
-    let extent = shared_buffer(&device, &table.extent());
-    let levelset = device.create_buffer_shared(16);
+/// The look's albedo and roughness at wetness `w`.
+fn look_at(w: f64) -> [f64; 4] {
+    let blend = |a: f32| {
+        let a = f64::from(a);
+        a + w * (soaked(a) - a)
+    };
+    [
+        blend(ALBEDO[0]),
+        blend(ALBEDO[1]),
+        blend(ALBEDO[2]),
+        (f64::from(ROUGHNESS) * (1.0 - w)).max(0.01),
+    ]
+}
+
+fn assert_wetness(point: [f32; 4], w: f64, what: &str) {
+    for (channel, want) in look_at(w).into_iter().enumerate() {
+        assert!(
+            (f64::from(point[channel]) - want).abs() < 1e-5,
+            "{what}: wetness {w}, channel {channel} is {} against {want}",
+            point[channel]
+        );
+    }
+}
+
+/// The uniforms of a scene whose water carries `map`.
+fn bound(device: &GpuDevice, map: &GpuBuffer) -> WetUniforms {
+    let stand_in = device.create_buffer_shared(16);
     let object = FieldObject {
         slot: 0,
-        levelset: &levelset,
+        levelset: &stand_in,
         velocity: None,
         foam: None,
         mist: None,
-        wetness: Some(&wetness),
-        tiles: &tiles,
-        extent: &extent,
-        pool_tiles: table.pool_tiles,
-        cell_size: CELL,
+        wet_map: Some(map),
+        tiles: &stand_in,
+        extent: &stand_in,
+        pool_tiles: 1,
+        cell_size: 0.0625,
         model: water_model(),
         prev_model: water_model(),
         ripple_detail: 1.0,
         uniforms: bytemuck::Zeroable::zeroed(),
         mesh: None,
     };
-    let on = wet_uniforms(Some(&object)).expect("a real model inverts");
+    wet_uniforms(Some(&object)).expect("a real model inverts")
+}
+
+#[test]
+fn a_touched_texel_is_wet_between_its_heights_and_dry_elsewhere() {
+    let device = manifold_gpu::testkit::test_device();
+    let map = shared_buffer(
+        &device,
+        &map_words(TEXEL, 15.0, 1.0, &[DOWN_THE_WALL, FOOT_AND_TOP]),
+    );
+    let on = bound(&device, &map);
     let off = wet_uniforms(None).expect("off is not an error");
-
-    // Over the two held tiles, nodes on both sides of the points.
-    let inside = [
-        [0.6, 0.1, 0.2],
-        [0.85, 0.35, 0.3],
-        [0.55, 0.25, 0.1],
-        [-0.3, 0.15, 0.2],
-        [-0.5, 0.3, 0.3],
+    let five_seconds = (-5.0 / DRY_SECONDS).exp();
+    let wet = [
+        // The texel's centre, halfway up the run, and just inside the two
+        // texels of margin above and below it.
+        over(4.5, 2.5, 0.2),
+        over(4.5, 2.5, 0.3 + 1.5 * TEXEL),
+        over(4.5, 2.5, 0.1 - 1.5 * TEXEL),
+        // The foot and the top of a wall splashed at both.
+        over(2.5, 5.5, 0.1),
+        over(2.5, 5.5, 0.4),
     ];
-    let mut points: Vec<[f32; 4]> = inside.iter().map(|&p| world_point(p)).collect();
-    // In the unheld tile between them, inside the extent: the canonical
-    // wetness is dry.
-    let unheld = [[0.2, 0.2, 0.2], [0.0, 0.3, 0.1]];
-    points.extend(unheld.iter().map(|&p| world_point(p)));
-    // Outside the extent on three different sides.
-    let outside = [
-        world_point([1.2, 0.2, 0.2]),
-        world_point([0.6, -0.2, 0.2]),
-        world_point([0.6, 0.2, 0.6]),
+    // Halfway to the untouched texel beside it: only the touched one counts,
+    // as on a wall's face.
+    let edge = over(5.0, 2.5, 0.2);
+    let dry = [
+        // Above and below the run.
+        over(4.5, 2.5, 0.6),
+        over(4.5, 2.5, 0.1 - 2.5 * TEXEL),
+        // Halfway up the wall splashed only at its foot and top.
+        over(2.5, 5.5, 0.25),
+        // An untouched texel, and off the map.
+        over(6.5, 2.5, 0.2),
+        over(-2.0, 2.5, 0.2),
+        over(4.5, 9.5, 0.2),
     ];
-    points.extend(outside);
-
-    let wet = probe(&device, &on, &wetness, &tiles, &extent, &points);
-    for (point, local) in wet.iter().zip(&inside) {
-        let w = wetness_at(f64::from(local[1]));
-        for channel in 0..3 {
-            let a = f64::from(ALBEDO[channel]);
-            let want = a + w * (soaked(a) - a);
-            assert!(
-                (f64::from(point[channel]) - want).abs() < 1e-5,
-                "wetness {w}, channel {channel}: albedo {} against {want}",
-                point[channel]
-            );
-        }
-        let want = (f64::from(ROUGHNESS) * (1.0 - w)).max(0.01);
-        assert!(
-            (f64::from(point[3]) - want).abs() < 1e-5,
-            "wetness {w}: roughness {} against {want}",
-            point[3]
-        );
+    let points: Vec<[f32; 4]> = wet.into_iter().chain([edge]).chain(dry).collect();
+    let looks = probe(&device, &on, &map, &points);
+    for (i, &point) in looks.iter().take(wet.len()).enumerate() {
+        assert_wetness(point, five_seconds, &format!("wet point {i}"));
     }
-    // Wet enough to see: the higher point is darker and smoother than the lower.
-    assert!(wet[1][0] < wet[0][0] && wet[1][3] < wet[0][3]);
-
-    // A mesh over an unheld tile or outside the extent is dry, bit for bit.
+    assert_wetness(looks[wet.len()], five_seconds, "the edge");
     let unchanged = [ALBEDO[0], ALBEDO[1], ALBEDO[2], ROUGHNESS].map(f32::to_bits);
-    for (i, point) in wet.iter().enumerate().skip(inside.len()) {
+    for (i, point) in looks.iter().enumerate().skip(wet.len() + 1) {
         assert_eq!(point.map(f32::to_bits), unchanged, "dry point {i}");
     }
-    // And so is every point when the scene has no wetness field.
-    let dry = probe(&device, &off, &wetness, &tiles, &extent, &points);
-    for (i, point) in dry.iter().enumerate() {
+    // A scene without the map leaves every point alone.
+    for (i, point) in probe(&device, &off, &map, &points).iter().enumerate() {
         assert_eq!(
             point.map(f32::to_bits),
             unchanged,
             "point {i} with the look off"
         );
     }
+}
+
+#[test]
+fn a_touch_dries_by_its_age_and_the_drying_rate() {
+    let device = manifold_gpu::testkit::test_device();
+    let centre = [over(4.5, 2.5, 0.2)];
+    for (now, drying) in [(70.0, 1.0), (15.0, 2.0), (10.0, 1.0)] {
+        let map = shared_buffer(&device, &map_words(TEXEL, now, drying, &[DOWN_THE_WALL]));
+        let look = probe(&device, &bound(&device, &map), &map, &centre)[0];
+        let w = (-f64::from(now - 10.0) * f64::from(drying) / DRY_SECONDS).exp();
+        assert_wetness(look, w, &format!("{} s at drying {drying}", now - 10.0));
+    }
+    // A minute on at Drying 1 is nearly dry.
+    assert!((-60.0 / DRY_SECONDS).exp() < 0.02);
+    // A map not yet placed is dry everywhere.
+    let unplaced = shared_buffer(&device, &map_words(0.0, 15.0, 1.0, &[DOWN_THE_WALL]));
+    let look = probe(&device, &bound(&device, &unplaced), &unplaced, &centre)[0];
+    let unchanged = [ALBEDO[0], ALBEDO[1], ALBEDO[2], ROUGHNESS].map(f32::to_bits);
+    assert_eq!(look.map(f32::to_bits), unchanged);
 }

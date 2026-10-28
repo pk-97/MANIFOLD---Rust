@@ -7,7 +7,7 @@ use manifold_node_engine::scene::camera::CameraMode;
 
 impl RenderScene {
     /// BUG-trh7 stage 2, pass 8: the draw — target/resolve-target selection,
-    /// the 58-binding sets, opaque/blend split, aux attachments, Pass A,
+    /// the 56-binding sets, opaque/blend split, aux attachments, Pass A,
     /// the depth resolve copy, and the E2a seam (snapshot blit + Pass B).
     /// Returns the targets the shafts/firefly/tails pass through
     /// (resolve_target is where everything above landed; target is the
@@ -308,10 +308,10 @@ impl RenderScene {
                 },
             ]
         };
-        // One wetness field per scene: the first water that has one wets every
-        // mesh inside its extent. A scene without it binds the one-record
-        // stand-in, which the shader never reads while the uniforms are off.
-        let wet_field = fields.iter().find(|f| f.wetness.is_some());
+        // One wet map per scene: the first water that has one wets every mesh
+        // under it. A scene without it binds the one-record stand-in, which
+        // the shader never reads while the uniforms are off.
+        let wet_field = fields.iter().find(|f| f.wet_map.is_some());
         let wet = match wet_uniforms(wet_field) {
             Ok(wet) => wet,
             Err(error) => {
@@ -319,14 +319,12 @@ impl RenderScene {
                 return None;
             }
         };
-        let wet_buffer = wet_field
-            .and_then(|f| f.wetness)
+        let wet_map = wet_field
+            .and_then(|f| f.wet_map)
             .unwrap_or(prev_positions_dummy);
-        let wet_tiles = wet_field.map_or(prev_positions_dummy, |f| f.tiles);
-        let wet_extent = wet_field.map_or(prev_positions_dummy, |f| f.extent);
         // Indexed by draw, so a draw wholly outside the camera's clip volume
         // keeps its place with no binding set built for it.
-        let binding_sets: Vec<Option<[GpuBinding; 58]>> = draws
+        let binding_sets: Vec<Option<[GpuBinding; 56]>> = draws
             .iter()
             .enumerate()
             .map(|(draw_index, draw)| {
@@ -598,17 +596,7 @@ impl RenderScene {
                     },
                     GpuBinding::Buffer {
                         binding: 69,
-                        buffer: wet_buffer,
-                        offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 70,
-                        buffer: wet_tiles,
-                        offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 71,
-                        buffer: wet_extent,
+                        buffer: wet_map,
                         offset: 0,
                     },
                 ])

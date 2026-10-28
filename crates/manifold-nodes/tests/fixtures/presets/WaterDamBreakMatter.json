@@ -2251,18 +2251,6 @@
           },
           {
             "fromNode": 1,
-            "fromPort": "display_time",
-            "toNode": 16,
-            "toPort": "time"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "epoch",
-            "toNode": 16,
-            "toPort": "epoch"
-          },
-          {
-            "fromNode": 1,
             "fromPort": "bodies",
             "toNode": 17,
             "toPort": "bodies"

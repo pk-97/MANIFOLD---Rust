@@ -26,6 +26,7 @@ SURFACE = C / "manifold-water-surface/src/primitives/shaders"
 SCENE = C / "manifold-nodes-scene/src/node_graph/primitives/shaders"
 
 WORLD_READ = C / "manifold-node-engine/src/scene/world_tiles_read.wgsl"
+WET_LAYOUT = C / "manifold-node-engine/src/scene/wet_map_layout.wgsl"
 # A second table's read side, as `surface_tiles.rs` and `interior_fill.rs`
 # compose it: the same text renamed sim_ts_ / SIM_WT_.
 SIM_READ = WORLD_READ.read_text().replace("ts_", "sim_ts_").replace("WT_", "SIM_WT_")
@@ -164,7 +165,7 @@ STACKS = {
                                     LIQ / "world_tiles.wgsl"]),
     "surface_tiles": (False, [WORLD_READ, SIM_READ, SURF / "surface_tiles.wgsl"]),
     "interior_fill": (False, [WORLD_READ, SIM_READ, SURF / "interior_fill.wgsl"]),
-    "surface_wetness": (False, [WORLD_READ, SURF / "surface_wetness.wgsl"]),
+    "wet_map": (False, [WORLD_READ, WET_LAYOUT, SURF / "wet_map.wgsl"]),
     "foam_cover": (False, [WORLD_READ, WW / "particle_splat.wgsl", WW / "foam_cover.wgsl"]),
     "spray_mist": (False, [WORLD_READ, WW / "particle_splat.wgsl", WW / "spray_mist.wgsl"]),
     "push_out_of_solid": (False, [PUSH_OUT_STUB, WORLD_READ, FLIP / "push_out_of_solid_body.wgsl",
@@ -184,15 +185,16 @@ STACKS = {
     "scene_water_shade": (False, [WORLD_READ, SCENE / "field_tiles.wgsl", SCENE / "scene_shading.wgsl",
                                   SCENE / "look_ripple_detail.wgsl", SCENE / "foam_field.wgsl",
                                   SCENE / "look_foam.wgsl", SCENE / "look_mist.wgsl",
-                                  SCENE / "look_thin_water_light.wgsl", SCENE / "look_wet_surface.wgsl",
+                                  SCENE / "look_thin_water_light.wgsl", WET_LAYOUT,
+                                  SCENE / "look_wet_surface.wgsl",
                                   SCENE / "water_field_common.wgsl", SCENE / "water_shade.wgsl"]),
     "scene_mesh": (False, [WORLD_READ, SCENE / "field_tiles.wgsl", SCENE / "instance_transform.wgsl",
                            SCENE / "scene_shading.wgsl", SCENE / "look_ripple_detail.wgsl",
                            SCENE / "foam_field.wgsl", SCENE / "look_foam.wgsl", SCENE / "look_mist.wgsl",
-                           SCENE / "look_thin_water_light.wgsl", SCENE / "look_wet_surface.wgsl",
+                           SCENE / "look_thin_water_light.wgsl", WET_LAYOUT,
+                                  SCENE / "look_wet_surface.wgsl",
                            SCENE / "render_scene.wgsl"]),
-    "scene_wet": (False, [WORLD_READ, SCENE / "field_tiles.wgsl", SCENE / "look_wet_surface.wgsl",
-                          WET_PROBE_KERNEL]),
+    "scene_wet": (False, [WET_LAYOUT, SCENE / "look_wet_surface.wgsl", WET_PROBE_KERNEL]),
 }
 
 

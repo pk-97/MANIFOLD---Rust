@@ -3,49 +3,31 @@
 // (`manifold_node_engine::scene::world_tiles::READ_SIDE`) and the water's
 // (the same read side renamed sim_ts_ / SIM_WT_).
 //
-// The build bins one buffer of liquid particle records: this frame's
-// particles, foam and spray (copied in, `head` records), then one keep record
-// per slot of the pool, then GPU FLIP Narrow Band's interior records. A keep
-// record is a point at the middle of a tile the liquid touched within
-// `keep_seconds` (0 by default: this frame), so the next build still holds
-// that tile and its slot (wetness lives in slots, and a wet tile keeps its
-// own while it is held). Foam and spray
-// hold their tiles only while they are there: their fields are made fresh
-// each frame and leave nothing to keep. An interior record holds the display
-// tiles over grid water no particle marks.
+// The build bins one buffer of records: this frame's particles, foam and
+// spray (copied in, `interior_at` records), then GPU FLIP Narrow Band's
+// interior records. A tile is held while one of them touches it or the ring
+// round it, and let go the frame none does. An interior record holds the
+// display tiles over grid water no particle marks.
 //
-// Passes, a barrier between each; `st_reset` runs only on a fresh start and
-// `st_interior` only with an interior:
-//   st_reset   every slot untouched, every keep record empty
-//   st_interior one record an octant of each water slot
+// Passes, a barrier between each; `st_interior` runs only with an interior:
+//   st_interior     one record an octant of each water slot
 //   (the build)
-//   st_carry   a slot that holds another tile than last frame, or was free,
-//              forgets when water last touched it; the extent starts empty
-//   st_touch   every live liquid particle of this frame stamps the display
-//              time on the slot of its tile (all stamps equal, so order
-//              never matters)
-//   st_keep    every slot writes its keep record for the next build, and the
-//              held tiles widen the extent
-//   st_extent  the extent in metres
+//   st_clear_bounds the held tiles' bounds start empty
+//   st_bounds       every held slot widens the bounds by its tile
+//   st_extent       the extent in metres
 
 struct Params {
-    // The lattice origin (−h/2 on every axis) and 1 / h, as the build bins.
+    // The lattice origin (-h/2 on every axis) and 1 / h, as the build bins.
     origin: vec3<f32>,
     inv_cell: f32,
-    // P, and the records before the keep records.
+    // P, and h, the display cell size.
     pool_tiles: u32,
-    head: u32,
-    // The display time, and how long a touched tile stays held.
-    time: f32,
-    keep_seconds: f32,
-    // h, the display cell size.
     cell: f32,
-    // The water's pool and cell size, and the first interior record.
+    // The water's pool and cell size.
     sim_pool_tiles: u32,
     sim_cell: f32,
+    // The first interior record: the records before it are the frame's points.
     interior_at: u32,
-    // The liquid particles' records, the first of the head.
-    liquid: u32,
     _pad0: u32,
     _pad1: u32,
     _pad2: u32,
@@ -59,12 +41,8 @@ struct Point {
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> tiles: array<u32>;
-// The records the build bins: the frame's points, then P keep records.
+// The records the build bins: the frame's points, then the interior's.
 @group(0) @binding(2) var<storage, read_write> points: array<Point>;
-// Per slot, the display time (f32 bits) water last touched its tile.
-@group(0) @binding(3) var<storage, read_write> touched: array<atomic<u32>>;
-// Last frame's slot rows of the table: a tile (x, y, z) and an entry per slot.
-@group(0) @binding(4) var<storage, read> last_rows: array<u32>;
 // The held tiles' lowest and highest tile coordinates.
 @group(0) @binding(5) var<storage, read_write> bounds: array<atomic<i32>>;
 // min xyz, 0, max xyz, 0, in metres.
@@ -82,8 +60,6 @@ fn sim_ts_pool_tiles() -> u32 { return params.sim_pool_tiles; }
 fn sim_ts_table_entries() -> u32 { let n = 4u * max(params.sim_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
 fn sim_ts_table_word(i: u32) -> u32 { return interior_tiles[i]; }
 
-// No stamp: a slot water has not touched since it took its tile.
-const ST_NEVER: u32 = 0xffffffffu;
 // Past every tile coordinate.
 const ST_FAR: i32 = 1073741823;
 
@@ -91,67 +67,20 @@ fn st_empty_record() -> Point {
     return Point(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
 }
 
-@compute @workgroup_size(256)
-fn st_reset(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let s = gid.x;
-    if s >= params.pool_tiles {
-        return;
-    }
-    atomicStore(&touched[s], ST_NEVER);
-    points[params.head + s] = st_empty_record();
-}
-
-@compute @workgroup_size(256)
-fn st_carry(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let s = gid.x;
-    if s == 0u {
-        for (var k = 0u; k < 3u; k = k + 1u) {
-            atomicStore(&bounds[k], ST_FAR);
-            atomicStore(&bounds[3u + k], -ST_FAR);
-        }
-    }
-    if s >= params.pool_tiles {
-        return;
-    }
-    let now = 2u * ts_table_entries() + WT_SLOT_WORDS * s;
-    if tiles[now + 3u] == WT_NONE {
-        atomicStore(&touched[s], ST_NEVER);
-        return;
-    }
-    let before = WT_SLOT_WORDS * s;
-    let same = last_rows[before + 3u] != WT_NONE
-        && last_rows[before] == tiles[now]
-        && last_rows[before + 1u] == tiles[now + 1u]
-        && last_rows[before + 2u] == tiles[now + 2u];
-    if !same {
-        atomicStore(&touched[s], ST_NEVER);
+@compute @workgroup_size(1)
+fn st_clear_bounds() {
+    for (var k = 0u; k < 3u; k = k + 1u) {
+        atomicStore(&bounds[k], ST_FAR);
+        atomicStore(&bounds[3u + k], -ST_FAR);
     }
 }
 
 @compute @workgroup_size(256)
-fn st_touch(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
-    if i >= params.liquid {
-        return;
-    }
-    let p = points[i].position_radius;
-    if !(p.w > 0.0) {
-        return;
-    }
-    let cell = ts_world_cell(p.xyz, params.origin, params.inv_cell);
-    let slot = ts_hash_slot(cell >> vec3<u32>(3u));
-    if slot != WT_NONE {
-        atomicStore(&touched[slot], bitcast<u32>(params.time));
-    }
-}
-
-@compute @workgroup_size(256)
-fn st_keep(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn st_bounds(@builtin(global_invocation_id) gid: vec3<u32>) {
     let s = gid.x;
     if s >= params.pool_tiles {
         return;
     }
-    var record = st_empty_record();
     if ts_slot_entry(s) != WT_NONE {
         let tile = ts_slot_tile(s);
         atomicMin(&bounds[0], tile.x);
@@ -160,14 +89,7 @@ fn st_keep(@builtin(global_invocation_id) gid: vec3<u32>) {
         atomicMax(&bounds[3], tile.x);
         atomicMax(&bounds[4], tile.y);
         atomicMax(&bounds[5], tile.z);
-        let at = atomicLoad(&touched[s]);
-        if at != ST_NEVER && params.time - bitcast<f32>(at) <= params.keep_seconds {
-            // The middle of tile t is cell 8t + 3.5, centred on (8t + 3.5)·h.
-            let middle = (vec3<f32>(tile) * 8.0 + vec3<f32>(3.5)) * params.cell;
-            record.position_radius = vec4<f32>(middle, params.cell);
-        }
     }
-    points[params.head + s] = record;
 }
 
 // Node p sits at (p − ½)·h, so the held tiles' nodes run from the low corner

@@ -921,7 +921,7 @@ impl WaterScene {
         }
         display_foam(&mut b, frame, water);
         let level_set = drawn_level_set(&b, self, surface);
-        display_mist_and_wetness(&mut b, level_set, water);
+        display_mist_and_wetness(&mut b, water);
         let dots = display_dots(&mut b, frame, (surface, level_set), water);
         b.wire((dots, "object"), output, DOTS_OUTPUT);
         // Resolve durations inside the domain-owning scope before it is wrapped.
@@ -1413,8 +1413,6 @@ fn surface(b: &mut Builder, scene: WaterScene, frame: usize) -> Port {
     );
     b.wire((frame, "particles_b"), tiles, "particles");
     b.wire((domain, "cell_size"), tiles, "sim_cell_size");
-    b.wire((domain, "display_time"), tiles, "time");
-    b.wire((domain, "epoch"), tiles, "epoch");
     let solid = b.node(DISPLAY_SOLID, "node.liquid_solid_distance", json!({}));
     solid_wires(b, domain, solid);
     on_display_tiles(b, tiles, solid);
@@ -1676,37 +1674,47 @@ fn display_foam(b: &mut Builder, frame: usize, water: usize) {
     b.wire((switch, "out"), water, "field_foam");
 }
 
-/// The water's mist and wetness: the spray's extinction (the spray's tiles
-/// held in the display table) and the surface's remembered wetness on that
-/// table, each behind the switch that feeds it to the water object (off in
-/// Physics View, which hides the water).
-fn display_mist_and_wetness(b: &mut Builder, level_set: Port, water: usize) {
+/// The water's mist and wet map: the spray's extinction (the spray's tiles
+/// held in the display table) and the map of where the drawn water touched
+/// the solids, each behind the switch that feeds it to the water object (off
+/// in Physics View, which hides the water).
+fn display_mist_and_wetness(b: &mut Builder, water: usize) {
     let tiles = b.id(DISPLAY_TILES);
-    let spray = b.id("spray_blend");
-    let domain = b.id("domain");
+    let [spray, domain, solid, drawn] =
+        ["spray_blend", "domain", DISPLAY_SOLID, "particle_push_out"].map(|name| b.id(name));
     let mist = b.node(
         "water_mist",
         "node.spray_mist",
         json!({"strength": float(1.0)}),
     );
-    let wetness = b.node(
+    let wet_map = b.node(
         "water_wetness",
-        "node.surface_wetness",
+        "node.wet_map",
         json!({"drying": float(1.0)}),
     );
     b.wire((spray, "out"), tiles, "spray");
     b.wire((spray, "out"), mist, "particles");
-    b.wire(level_set, wetness, "field");
-    b.wire((domain, "display_time"), wetness, "time");
-    b.wire((domain, "epoch"), wetness, "epoch");
-    for node in [mist, wetness] {
+    b.wire((drawn, "out"), wet_map, "particles");
+    b.wire((solid, "solid"), wet_map, "solid");
+    b.wire((tiles, "extent"), wet_map, "extent");
+    b.wire((domain, "cell_size"), wet_map, "sim_cell_size");
+    b.wire((domain, "display_time"), wet_map, "time");
+    b.wire((domain, "epoch"), wet_map, "epoch");
+    for node in [mist, wet_map] {
         on_display_tiles(b, tiles, node);
     }
-    for (name, from, port, to) in [
-        (MIST_SWITCH, mist, "mist", "field_mist"),
-        (WETNESS_SWITCH, wetness, "wetness", "field_wetness"),
+    // The map is u32 words, so its switch is the u32 one.
+    for (name, kind, from, port, to) in [
+        (MIST_SWITCH, "node.switch_array", mist, "mist", "field_mist"),
+        (
+            WETNESS_SWITCH,
+            "node.switch_indices",
+            wet_map,
+            "map",
+            "wet_map",
+        ),
     ] {
-        let switch = b.node(name, "node.switch_array", json!({"selector": float(0.0)}));
+        let switch = b.node(name, kind, json!({"selector": float(0.0)}));
         b.wire((from, port), switch, "in_0");
         b.wire((switch, "out"), water, to);
     }

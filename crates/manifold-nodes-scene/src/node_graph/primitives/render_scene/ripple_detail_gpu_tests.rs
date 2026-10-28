@@ -119,7 +119,7 @@ pub(super) fn field(lattices: &Lattices) -> FieldObject<'_> {
         velocity: Some(&lattices.velocity),
         foam: None,
         mist: None,
-        wetness: None,
+        wet_map: None,
         tiles: &lattices.tiles,
         extent: &lattices.extent,
         pool_tiles: lattices.table.pool_tiles,

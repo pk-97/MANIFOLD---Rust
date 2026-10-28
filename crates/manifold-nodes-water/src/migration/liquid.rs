@@ -710,6 +710,121 @@ pub(crate) fn clear_stylised_water(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Move a saved surface's wetness onto the wet map, after flattening: each
+/// `node.surface_wetness` becomes a `node.wet_map` reading the particles its
+/// display tiles' push-out draws, the solid on those tiles, their extent and
+/// the water's cell size; its map feeds the water object's `wet_map` (a
+/// switch between them becomes the u32 one). `node.surface_tiles` keeps no
+/// tiles, so the wires into its `time` and `epoch` and its `keep_seconds` go.
+/// Idempotent.
+pub(crate) fn wetness_onto_wet_map(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    let tiles: Vec<u32> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.surface_tiles")
+        .map(|n| n.id)
+        .collect();
+    let before = def.wires.len();
+    def.wires.retain(|w| {
+        !(tiles.contains(&w.to_node) && matches!(w.to_port.as_str(), "time" | "epoch"))
+    });
+    let mut changed = def.wires.len() != before;
+    for node in def.nodes.iter_mut().filter(|n| tiles.contains(&n.id)) {
+        changed |= node.params.remove("keep_seconds").is_some();
+    }
+    let wetness: Vec<u32> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.surface_wetness")
+        .map(|n| n.id)
+        .collect();
+    let source = |def: &EffectGraphDef, to: u32, port: &str| {
+        def.wires
+            .iter()
+            .find(|w| w.to_node == to && w.to_port == port)
+            .map(|w| (w.from_node, w.from_port.clone()))
+    };
+    let type_of = |def: &EffectGraphDef, id: u32| {
+        def.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.type_id.clone())
+    };
+    for &id in &wetness {
+        def.wires
+            .retain(|w| !(w.to_node == id && w.to_port == "field"));
+        let mut switches = Vec::new();
+        for w in def.wires.iter_mut().filter(|w| w.from_node == id) {
+            w.from_port = "map".into();
+            if w.to_port == "field_wetness" {
+                w.to_port = "wet_map".into();
+            } else {
+                switches.push(w.to_node);
+            }
+        }
+        for &switch in &switches {
+            if type_of(def, switch).as_deref() != Some("node.switch_array") {
+                continue;
+            }
+            if let Some(node) = def.nodes.iter_mut().find(|n| n.id == switch) {
+                node.type_id = "node.switch_indices".into();
+            }
+            for w in def
+                .wires
+                .iter_mut()
+                .filter(|w| w.from_node == switch && w.to_port == "field_wetness")
+            {
+                w.to_port = "wet_map".into();
+            }
+        }
+        // The display tiles this wetness was stored on, and the nodes they feed.
+        let Some((table, _)) = source(def, id, "tiles") else {
+            continue;
+        };
+        let fed = |def: &EffectGraphDef, type_id: &str| {
+            def.wires
+                .iter()
+                .filter(|w| w.from_node == table && w.to_port == "tiles")
+                .map(|w| w.to_node)
+                .find(|&to| type_of(def, to).as_deref() == Some(type_id))
+        };
+        let mut new = Vec::new();
+        if let Some(push_out) = fed(def, "node.push_out_of_solid") {
+            new.push((push_out, "out".to_owned(), "particles"));
+        }
+        if let Some(solid) = fed(def, "node.liquid_solid_distance") {
+            new.push((solid, "solid".to_owned(), "solid"));
+        }
+        new.push((table, "extent".to_owned(), "extent"));
+        if let Some((cell, port)) = source(def, table, "sim_cell_size") {
+            new.push((cell, port, "sim_cell_size"));
+        }
+        for (from_node, from_port, to_port) in new {
+            def.wires.push(EffectGraphWire {
+                from_node,
+                from_port,
+                to_node: id,
+                to_port: to_port.into(),
+            });
+        }
+        if let Some(node) = def.nodes.iter_mut().find(|n| n.id == id) {
+            node.type_id = "node.wet_map".into();
+        }
+        changed = true;
+    }
+    changed
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "wetness_onto_wet_map",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 400,
+        apply: wetness_onto_wet_map,
+    }
+}
+
 inventory::submit! {
     manifold_node_engine::load::migration::GraphMigration {
         name: "clear_stylised_water",
@@ -993,6 +1108,91 @@ mod tests {
         let migrated = def.clone();
         assert!(!clear_stylised_water(&mut def));
         assert_eq!(def, migrated);
+    }
+
+    /// A saved surface's wetness moves onto the wet map: retyped and rewired
+    /// from the tiles' push-out, solid, extent and cell size, its map through a
+    /// u32 switch into the water's `wet_map`; the tiles lose their clock wires.
+    /// A second run changes nothing.
+    #[test]
+    fn saved_wetness_moves_onto_the_wet_map() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from,
+            from_port: output.into(),
+            to_node: to,
+            to_port: input.into(),
+        };
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None,
+            description: None,
+            preset_metadata: None,
+            scene_modifiers: Vec::new(),
+            nodes: vec![
+                bare_node(1, "node.gpu_flip_domain"),
+                bare_node(2, "node.surface_tiles"),
+                bare_node(3, "node.liquid_solid_distance"),
+                bare_node(4, "node.push_out_of_solid"),
+                bare_node(5, "node.surface_wetness"),
+                bare_node(6, "node.switch_array"),
+                bare_node(7, "node.scene_object"),
+                bare_node(8, "node.field_smooth_blend"),
+            ],
+            wires: vec![
+                wire(1, "cell_size", 2, "sim_cell_size"),
+                wire(1, "display_time", 2, "time"),
+                wire(1, "epoch", 2, "epoch"),
+                wire(2, "tiles", 3, "tiles"),
+                wire(2, "tiles", 4, "tiles"),
+                wire(2, "tiles", 5, "tiles"),
+                wire(8, "out", 5, "field"),
+                wire(1, "display_time", 5, "time"),
+                wire(5, "wetness", 6, "in_0"),
+                wire(6, "out", 7, "field_wetness"),
+            ],
+        };
+        assert!(wetness_onto_wet_map(&mut def));
+        let type_of = |id: u32| {
+            def.nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap()
+                .type_id
+                .clone()
+        };
+        assert_eq!(type_of(5), "node.wet_map");
+        assert_eq!(type_of(6), "node.switch_indices");
+        let mut wires: Vec<_> = def
+            .wires
+            .iter()
+            .map(|w| {
+                (
+                    w.from_node,
+                    w.from_port.as_str(),
+                    w.to_node,
+                    w.to_port.as_str(),
+                )
+            })
+            .collect();
+        wires.sort();
+        assert_eq!(
+            wires,
+            vec![
+                (1, "cell_size", 2, "sim_cell_size"),
+                (1, "cell_size", 5, "sim_cell_size"),
+                (1, "display_time", 5, "time"),
+                (2, "extent", 5, "extent"),
+                (2, "tiles", 3, "tiles"),
+                (2, "tiles", 4, "tiles"),
+                (2, "tiles", 5, "tiles"),
+                (3, "solid", 5, "solid"),
+                (4, "out", 5, "particles"),
+                (5, "map", 6, "in_0"),
+                (6, "out", 7, "wet_map"),
+            ]
+        );
+        assert!(!wetness_onto_wet_map(&mut def));
     }
 
     fn bare_node(id: u32, type_id: &str) -> EffectGraphNode {

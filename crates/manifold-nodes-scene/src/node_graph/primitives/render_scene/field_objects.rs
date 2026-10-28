@@ -5,6 +5,7 @@
 use super::*;
 use manifold_node_engine::bindings::Slot;
 use manifold_node_engine::scene::scene_object::FieldSurface;
+use manifold_node_engine::scene::wet_map::{SIDE, map_bytes};
 use manifold_node_engine::scene::world_tiles::{pool_len, table_words};
 
 /// One water field to march and shade this frame. Every array is a pooled
@@ -19,8 +20,8 @@ pub(super) struct FieldObject<'ctx> {
     pub foam: Option<&'ctx manifold_gpu::GpuBuffer>,
     /// Mist extinction per node, per metre.
     pub mist: Option<&'ctx manifold_gpu::GpuBuffer>,
-    /// Wetness per node, 0 to 1.
-    pub wetness: Option<&'ctx manifold_gpu::GpuBuffer>,
+    /// The water's wet map (`wet_map` layout), not a pooled field.
+    pub wet_map: Option<&'ctx manifold_gpu::GpuBuffer>,
     /// The world-tile table (`world_tiles` layout) the arrays are read through.
     pub tiles: &'ctx manifold_gpu::GpuBuffer,
     /// Eight floats: the held tiles' node bounds in object space.
@@ -285,7 +286,7 @@ impl RenderScene {
         if [field.levelset, field.tiles, field.extent]
             .into_iter()
             .chain(
-                [field.velocity, field.foam, field.mist, field.wetness]
+                [field.velocity, field.foam, field.mist, field.wet_map]
                     .into_iter()
                     .flatten(),
             )
@@ -324,8 +325,9 @@ impl RenderScene {
                 .ok()?;
         let foam = Self::optional_field_array(ctx, n, field.foam, "field_foam", elements).ok()?;
         let mist = Self::optional_field_array(ctx, n, field.mist, "field_mist", elements).ok()?;
-        let wetness =
-            Self::optional_field_array(ctx, n, field.wetness, "field_wetness", elements).ok()?;
+        let wet_map =
+            Self::optional_field_array(ctx, n, field.wet_map, "wet_map", map_bytes(SIDE) / 4)
+                .ok()?;
         let tiles =
             Self::field_array(ctx, n, field.tiles, "field_tiles", table_words(pool_tiles)).ok()?;
         let extent = Self::field_array(ctx, n, field.extent, "field_extent", 8).ok()?;
@@ -375,7 +377,7 @@ impl RenderScene {
             velocity,
             foam,
             mist,
-            wetness,
+            wet_map,
             tiles,
             extent,
             pool_tiles,

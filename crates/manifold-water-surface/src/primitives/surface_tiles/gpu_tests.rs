@@ -1,11 +1,11 @@
 //! GPU proofs for `node.surface_tiles`: the tiles the build holds round the
-//! displayed points, and how long a tile the water touched stays held in its
-//! slot.
+//! displayed points, and that a tile is let go the frame they leave it.
 
 use super::*;
 use manifold_node_engine::bindings::Slot;
-use manifold_node_engine::exec::backend::Backend;
-use manifold_node_engine::scene::world_tiles::{NONE, table_words, tile_of_cell};
+use manifold_node_engine::scene::world_tiles::{
+    NONE, slot_row_word, table_entries, table_words, tile_of_cell,
+};
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, BTreeSet};
 const H: f32 = 0.25;
 /// The display's first pool.
 const POOL: u32 = START_POOL_TILES;
-const KEEP: f32 = 300.0;
 /// Particle records the rig's array holds, live or not.
 const CAPACITY: usize = 4;
 
@@ -65,8 +64,6 @@ impl Built {
 struct Rig {
     harness: Harness,
     node: SurfaceTiles,
-    time: Slot,
-    epoch: Slot,
     tiles: Slot,
     extent: Slot,
     pool: Slot,
@@ -76,8 +73,6 @@ struct Rig {
 impl Rig {
     fn new() -> Self {
         let mut harness = Harness::new();
-        let time = harness.scalar_input(0.0);
-        let epoch = harness.scalar_input(0.0);
         let (tiles, _) = harness.array::<u32>(&[], 1);
         let (extent, _) = harness.array::<f32>(&[], 1);
         let pool = harness.scalar();
@@ -85,8 +80,6 @@ impl Rig {
         Self {
             harness,
             node: SurfaceTiles::new(),
-            time,
-            epoch,
             tiles,
             extent,
             pool,
@@ -94,9 +87,9 @@ impl Rig {
         }
     }
 
-    /// One frame at display `time` and `epoch` over `points`.
-    fn run(&mut self, points: &[[f32; 3]], time: f32, epoch: f32) -> Built {
-        self.run_with(points, &[], time, epoch, H, None)
+    /// One frame over `points`.
+    fn run(&mut self, points: &[[f32; 3]]) -> Built {
+        self.run_with(points, &[], H, None)
     }
 
     /// [`Self::run`] with `spray`, for water of `sim_cell` metres at the
@@ -106,8 +99,6 @@ impl Rig {
         &mut self,
         points: &[[f32; 3]],
         spray: &[[f32; 3]],
-        time: f32,
-        epoch: f32,
         sim_cell: f32,
         interior: Option<(&[f32], &[u32])>,
     ) -> Built {
@@ -121,23 +112,11 @@ impl Rig {
                 self.harness.array(words, words.len()).0,
             )
         });
-        self.harness
-            .backend
-            .set_scalar(self.time, ParamValue::Float(time));
-        self.harness
-            .backend
-            .set_scalar(self.epoch, ParamValue::Float(epoch));
         let run_params = params(&[
             ("sim_cell_size", sim_cell),
             ("resolution_scale", (sim_cell / H).round()),
-            ("keep_seconds", KEEP),
         ]);
-        let mut inputs = vec![
-            ("particles", particles),
-            ("spray", spray),
-            ("time", self.time),
-            ("epoch", self.epoch),
-        ];
+        let mut inputs = vec![("particles", particles), ("spray", spray)];
         if let Some((values, words)) = interior {
             inputs.extend([("interior", values), ("interior_tiles", words)]);
         }
@@ -188,7 +167,7 @@ fn the_tiles_of_points_either_side_of_the_origin_and_their_ring_are_held() {
     let tiles: Vec<_> = points.iter().map(|&p| tile_of(p)).collect();
     assert_eq!(tiles, [[-1, 0, 0], [0, 0, 0]]);
     let mut rig = Rig::new();
-    let built = rig.run(&points, 10.0, 0.0);
+    let built = rig.run(&points);
     assert_eq!(built.pool_tiles, POOL as f32);
     assert_eq!(built.cell_size, H);
     assert_eq!(built.tiles(), ring(&tiles));
@@ -241,7 +220,7 @@ fn the_grid_interior_holds_the_display_tiles_over_its_water() {
         .collect();
     let values = water.to_pool(&dense, 3.0 * sim_cell);
     let mut rig = Rig::new();
-    let built = rig.run_with(&[], &[], 10.0, 0.0, sim_cell, Some((&values, &water.words)));
+    let built = rig.run_with(&[], &[], sim_cell, Some((&values, &water.words)));
     let middle = [-2.5, 1.5, 1.5].map(|c: f32| c * sim_cell);
     assert_eq!(built.tiles(), ring(&[tile_of(middle)]));
     // Water cell c spans (c ± 1/2)·h_water; every display cell centred in the
@@ -267,100 +246,55 @@ fn the_grid_interior_holds_the_display_tiles_over_its_water() {
 #[test]
 fn no_points_hold_no_tiles_and_an_empty_extent() {
     let mut rig = Rig::new();
-    let built = rig.run(&[], 10.0, 0.0);
+    let built = rig.run(&[]);
     assert!(built.held.is_empty());
     assert!(built.extent[..3].iter().all(|&v| v > 0.0));
     assert!(built.extent[4..7].iter().all(|&v| v < 0.0));
     assert!((0..3).all(|a| built.extent[a] > built.extent[4 + a]));
 }
 
-#[test]
-fn a_touched_tile_keeps_its_slot_for_the_keep_window_then_frees() {
-    let (here, there) = ([0.1, 0.1, 0.1], [10.1, 0.1, 0.1]);
-    assert_eq!(tile_of(there), [5, 0, 0]);
-    let mut rig = Rig::new();
-    let first = rig.run(&[here], 10.0, 0.0);
-    assert_eq!(first.tiles(), ring(&[tile_of(here)]));
-
-    // The water moves on: its old tiles stay held, each in its own slot,
-    // beside the tiles of the new water.
-    let moved = rig.run(&[there], 200.0, 0.0);
-    assert_eq!(moved.tiles(), ring(&[tile_of(here), tile_of(there)]));
-    for (tile, slot) in &first.held {
-        assert_eq!(moved.held[tile], *slot, "tile {tile:?} keeps its slot");
-    }
-
-    // Still inside the window at 300: the record written at the end of the
-    // frame at 300 keeps the old tiles for the next one.
-    let later = rig.run(&[there], 300.0, 0.0);
-    for (tile, slot) in &first.held {
-        assert_eq!(later.held[tile], *slot);
-    }
-    // 311 s after the first touch is past the window, but the frame at 311
-    // still builds from the record written at 300; the next frame does not.
-    let past = rig.run(&[there], 311.0, 0.0);
-    assert!(past.held.contains_key(&tile_of(here)));
-    let gone = rig.run(&[there], 312.0, 0.0);
-    assert_eq!(gone.tiles(), ring(&[tile_of(there)]));
-    // The water's own tiles never left their slots.
-    for (tile, slot) in &moved.held {
-        if !first.held.contains_key(tile) {
-            assert_eq!(gone.held[tile], *slot, "tile {tile:?}");
-        }
-    }
-}
-
-/// Spray holds its tiles while it is there and keeps none: only the liquid
-/// leaves wetness behind.
+/// Spray holds its tiles while it is there; the frame after, with no spray and
+/// no water there, holds none of them.
 #[test]
 fn spray_holds_its_tiles_only_while_it_is_there() {
     let (water, spray) = ([0.1, 0.1, 0.1], [10.1, 0.1, 0.1]);
     let mut rig = Rig::new();
-    let first = rig.run_with(&[water], &[spray], 10.0, 0.0, H, None);
+    let first = rig.run_with(&[water], &[spray], H, None);
     assert_eq!(first.tiles(), ring(&[tile_of(water), tile_of(spray)]));
-    // Both gone: the frame at 20 builds from the keep records written at 10.
-    let later = rig.run(&[], 20.0, 0.0);
+    let later = rig.run(&[water]);
     assert_eq!(later.tiles(), ring(&[tile_of(water)]));
+    for tile in ring(&[tile_of(spray)]).difference(&ring(&[tile_of(water)])) {
+        assert!(!later.held.contains_key(tile), "tile {tile:?} is held");
+    }
 }
 
+/// Water that moves on leaves nothing behind: the next frame holds its own
+/// tiles and their ring, and the extent covers only those.
 #[test]
-fn touching_a_tile_again_starts_its_window_over() {
-    let here = [0.1, 0.1, 0.1];
+fn a_tile_the_water_leaves_is_let_go_the_next_frame() {
+    let (here, there) = ([0.1, 0.1, 0.1], [10.1, 0.1, 0.1]);
+    assert_eq!(tile_of(there), [5, 0, 0]);
     let mut rig = Rig::new();
-    let first = rig.run(&[here], 10.0, 0.0);
-    rig.run(&[here], 200.0, 0.0);
-    // 250 s after the second touch, 440 s after the first.
-    let kept = rig.run(&[], 450.0, 0.0);
-    assert_eq!(kept.held, first.held);
-    let kept = rig.run(&[], 460.0, 0.0);
-    assert_eq!(kept.held, first.held);
-    let kept = rig.run(&[], 500.0, 0.0);
-    assert_eq!(kept.held, first.held);
-    // The frame at 520 is 320 s past the touch and writes no record.
-    rig.run(&[], 520.0, 0.0);
-    let gone = rig.run(&[], 521.0, 0.0);
-    assert!(gone.held.is_empty());
-}
-
-#[test]
-fn a_new_epoch_or_time_running_back_past_the_window_drops_the_kept_tiles() {
-    let here = [0.1, 0.1, 0.1];
-    // The same epoch keeps them across an empty frame.
-    let mut rig = Rig::new();
-    rig.run(&[here], 1000.0, 3.0);
-    assert_eq!(rig.run(&[], 1001.0, 3.0).held.len(), 27);
-    // A new epoch starts over, though time moved on by a second.
-    let mut rig = Rig::new();
-    rig.run(&[here], 1000.0, 3.0);
-    assert!(rig.run(&[], 1001.0, 4.0).held.is_empty());
-    // Time back by less than the window keeps them.
-    let mut rig = Rig::new();
-    rig.run(&[here], 1000.0, 3.0);
-    assert_eq!(rig.run(&[], 900.0, 3.0).held.len(), 27);
-    // Time back by more than the window drops them.
-    let mut rig = Rig::new();
-    rig.run(&[here], 1000.0, 3.0);
-    assert!(rig.run(&[], 600.0, 3.0).held.is_empty());
+    let first = rig.run(&[here]);
+    assert_eq!(first.tiles(), ring(&[tile_of(here)]));
+    let moved = rig.run(&[there]);
+    assert_eq!(moved.tiles(), ring(&[tile_of(there)]));
+    assert_eq!(moved.held.len(), 27);
+    let low = |tile: i32| (8 * tile) as f32 * H - 0.5 * H;
+    let high = |tile: i32| (8 * (tile + 1)) as f32 * H - 0.5 * H;
+    assert_eq!(
+        moved.extent,
+        [
+            low(4),
+            low(-1),
+            low(-1),
+            0.0,
+            high(6),
+            high(1),
+            high(1),
+            0.0
+        ]
+    );
 }
 
 #[test]
@@ -371,11 +305,11 @@ fn a_pool_short_of_slots_grows_and_holds_every_tile() {
     let wanted = ring(&tiles);
     assert!(wanted.len() > POOL as usize);
     let mut rig = Rig::new();
-    let first = rig.run(&points, 10.0, 0.0);
+    let first = rig.run(&points);
     assert_eq!(first.pool_tiles, POOL as f32);
     assert_eq!(first.held.len(), POOL as usize, "the first pool fills");
     // The next frame reads the short bit: twice the pool, every tile held.
-    let grown = rig.run(&points, 10.1, 0.0);
+    let grown = rig.run(&points);
     assert_eq!(grown.pool_tiles, 2.0 * POOL as f32);
     assert_eq!(grown.tiles(), wanted);
 }

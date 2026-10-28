@@ -47,7 +47,7 @@ manifold_node_engine::primitive! {
         field_velocity: Array(f32) optional,
         field_foam: Array(f32) optional,
         field_mist: Array(f32) optional,
-        field_wetness: Array(f32) optional,
+        wet_map: Array(u32) optional,
         field_tiles: Array(u32) optional,
         field_extent: Array(f32) optional,
         field_pool_tiles: ScalarF32 optional,
@@ -153,7 +153,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Optional indices are u32 triangle indices into vertices; their live extent controls indexed draws. An unindexed draw stops at the vertices' live extent, which a fragment cut publishes and the steps after it forward. Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel. Optional `field` is a level set (signed distance per node, negative inside) on the water's display world tiles: `field_tiles` is the world-tile table every field array is laid out under, `field_extent` its eight-float extent (min xyz, 0, max xyz, 0, object space), `field_pool_tiles` the tile slots in the pool and `field_cell_size` the lattice cell in metres, with node p at (p - 1/2) cells; plus optional `field_velocity` (three f32 per node), `field_foam`, `field_mist` and `field_wetness` (one f32 per node), all pooled the same way: the object then draws the field instead of a mesh. A field has no box of its own, only its extent. With `field` wired, `vertices` is the field's own surface mesh (node.tile_surface_mesh over the same level set): the renderer draws its depth over the opaque scene and marches each ray only round it, so a pixel with no mesh in front draws no water. With `field` wired the tiles, extent, pool and cell size are required; a missing one, a pool under one tile or a cell size at or below zero is a node error and the object carries no field.",
+    composition_notes: "Optional indices are u32 triangle indices into vertices; their live extent controls indexed draws. An unindexed draw stops at the vertices' live extent, which a fragment cut publishes and the steps after it forward. Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel. Optional `field` is a level set (signed distance per node, negative inside) on the water's display world tiles: `field_tiles` is the world-tile table every field array is laid out under, `field_extent` its eight-float extent (min xyz, 0, max xyz, 0, object space), `field_pool_tiles` the tile slots in the pool and `field_cell_size` the lattice cell in metres, with node p at (p - 1/2) cells; plus optional `field_velocity` (three f32 per node), `field_foam` and `field_mist` (one f32 per node), all pooled the same way, and `wet_map`, node.wet_map's map, which every mesh in the scene reads to look wet: the object then draws the field instead of a mesh. A field has no box of its own, only its extent. With `field` wired, `vertices` is the field's own surface mesh (node.tile_surface_mesh over the same level set): the renderer draws its depth over the opaque scene and marches each ray only round it, so a pixel with no mesh in front draws no water. With `field` wired the tiles, extent, pool and cell size are required; a missing one, a pool under one tile or a cell size at or below zero is a node error and the object carries no field.",
     examples: [],
     picker: { label: "Scene Object", category: Driver },
     summary: "Binds one object's mesh, transform, material, maps, instances, and optional live count into a single wire. Wire it into a render_scene object slot.",
@@ -317,7 +317,7 @@ fn field_surface(ctx: &mut EffectNodeContext<'_, '_>, levelset: Slot) -> Option<
         velocity: ctx.inputs.slot_of("field_velocity"),
         foam: ctx.inputs.slot_of("field_foam"),
         mist: ctx.inputs.slot_of("field_mist"),
-        wetness: ctx.inputs.slot_of("field_wetness"),
+        wet_map: ctx.inputs.slot_of("wet_map"),
         tiles,
         extent,
         pool_tiles: pool_tiles.round() as u32,
@@ -609,7 +609,7 @@ mod tests {
         let mut backend = MockBackend::new();
         let out_slot = backend.acquire(ResourceId(0), PortType::Object, None, (0, 0));
         let levelset = levelset_slot(&mut backend);
-        let [velocity, foam, mist, wetness] = [2, 3, 4, 5].map(|id| {
+        let [velocity, foam, mist, wet_map] = [2, 3, 4, 5].map(|id| {
             backend.acquire(
                 ResourceId(id),
                 PortType::Array(ArrayType::of_known::<f32>()),
@@ -622,7 +622,7 @@ mod tests {
             ("field_velocity", velocity),
             ("field_foam", foam),
             ("field_mist", mist),
-            ("field_wetness", wetness),
+            ("wet_map", wet_map),
         ];
         let (table, tiles, extent) = wire_table(&mut backend, 6, 37.0, 0.045);
         bindings.extend(table);
@@ -643,7 +643,7 @@ mod tests {
                 velocity: Some(velocity),
                 foam: Some(foam),
                 mist: Some(mist),
-                wetness: Some(wetness),
+                wet_map: Some(wet_map),
                 tiles,
                 extent,
                 pool_tiles: 37,

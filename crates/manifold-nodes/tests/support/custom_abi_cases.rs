@@ -516,9 +516,9 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "surface_wetness.rs",
-        rust_struct: "WetnessUniforms",
-        shader: "shaders/surface_wetness.wgsl",
+        source: "wet_map.rs",
+        rust_struct: "WetMapUniforms",
+        shader: "shaders/wet_map.wgsl",
         shader_struct: "Params",
         aliases: &[],
     },

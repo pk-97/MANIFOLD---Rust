@@ -485,6 +485,7 @@ fn scene_shading_validates_without_the_mesh_shader() {
         include_str!("../shaders/look_foam.wgsl"),
         include_str!("../shaders/look_mist.wgsl"),
         include_str!("../shaders/look_thin_water_light.wgsl"),
+        manifold_node_engine::scene::wet_map::LAYOUT,
         include_str!("../shaders/look_wet_surface.wgsl"),
     ]
     .concat();

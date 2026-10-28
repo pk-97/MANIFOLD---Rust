@@ -7,8 +7,8 @@ pub mod light;
 pub mod live_extent;
 pub mod material;
 pub mod mesh_asset_source;
-pub mod mesh_bounds;
 mod mesh_boundary;
+pub mod mesh_bounds;
 pub mod mesh_change;
 pub mod mesh_selection;
 pub mod mesh_source;
@@ -19,6 +19,7 @@ pub mod scene_viewport;
 pub mod source_asset;
 pub mod transform;
 pub mod viewport_camera;
+pub mod wet_map;
 pub mod world_tiles;
 
 pub mod viewport_outputs;

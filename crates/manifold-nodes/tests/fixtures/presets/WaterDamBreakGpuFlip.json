@@ -2406,7 +2406,7 @@
           {
             "id": 34,
             "nodeId": "water_wetness",
-            "typeId": "node.surface_wetness",
+            "typeId": "node.wet_map",
             "handle": "Wetness",
             "params": {
               "drying": {
@@ -2429,7 +2429,7 @@
           {
             "id": 36,
             "nodeId": "water_wet_switch",
-            "typeId": "node.switch_array",
+            "typeId": "node.switch_indices",
             "params": {
               "selector": {
                 "type": "Float",
@@ -3215,18 +3215,6 @@
             "fromPort": "cell_size",
             "toNode": 8,
             "toPort": "sim_cell_size"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "display_time",
-            "toNode": 8,
-            "toPort": "time"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "epoch",
-            "toNode": 8,
-            "toPort": "epoch"
           },
           {
             "fromNode": 0,
@@ -4039,12 +4027,6 @@
             "toPort": "particles"
           },
           {
-            "fromNode": 10,
-            "fromPort": "level_set",
-            "toNode": 34,
-            "toPort": "field"
-          },
-          {
             "fromNode": 0,
             "fromPort": "display_time",
             "toNode": 34,
@@ -4106,7 +4088,7 @@
           },
           {
             "fromNode": 34,
-            "fromPort": "wetness",
+            "fromPort": "map",
             "toNode": 36,
             "toPort": "in_0"
           },
@@ -4114,7 +4096,7 @@
             "fromNode": 36,
             "fromPort": "out",
             "toNode": 17,
-            "toPort": "field_wetness"
+            "toPort": "wet_map"
           },
           {
             "fromNode": 10,
@@ -4361,6 +4343,30 @@
             "fromPort": "out",
             "toNode": 17,
             "toPort": "vertices"
+          },
+          {
+            "fromNode": 15,
+            "fromPort": "out",
+            "toNode": 34,
+            "toPort": "particles"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "solid",
+            "toNode": 34,
+            "toPort": "solid"
+          },
+          {
+            "fromNode": 8,
+            "fromPort": "extent",
+            "toNode": 34,
+            "toPort": "extent"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "cell_size",
+            "toNode": 34,
+            "toPort": "sim_cell_size"
           }
         ]
       }
