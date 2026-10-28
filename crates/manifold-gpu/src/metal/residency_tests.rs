@@ -65,7 +65,7 @@ fn fence_retirement_holds_lease_until_completion() {
 
     let mut encoder = device.create_encoder("residency-retirement-proof");
     encoder.signal_event(&event);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     retire_queue.drain();
     manager.drain();
     assert_eq!(retire_queue.pending_count(), 0);
@@ -116,7 +116,7 @@ fn budget_transition_ends_and_restores_residency() {
     assert!(manager.stats().requested);
     device
         .create_encoder("residency-attached")
-        .try_commit_and_wait_completed()
+        .commit_and_wait()
         .unwrap();
     manager.budget_bytes = manager.stats().allocated_bytes;
 
@@ -126,7 +126,7 @@ fn budget_transition_ends_and_restores_residency() {
     assert!(!manager.stats().requested);
     device
         .create_encoder("residency-over-budget-detached")
-        .try_commit_and_wait_completed()
+        .commit_and_wait()
         .unwrap();
 
     drop(extra);
@@ -135,7 +135,7 @@ fn budget_transition_ends_and_restores_residency() {
     assert!(manager.stats().requested);
     device
         .create_encoder("residency-reattached")
-        .try_commit_and_wait_completed()
+        .commit_and_wait()
         .unwrap();
     drop(retained);
     manager.drain();
@@ -160,7 +160,7 @@ fn manager_drop_clears_native_set() {
     assert_eq!(set.allocationCount(), 0);
     device
         .create_encoder("residency-manager-dropped")
-        .try_commit_and_wait_completed()
+        .commit_and_wait()
         .unwrap();
     drop(buffer);
 }

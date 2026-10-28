@@ -391,7 +391,7 @@ mod tests {
     fn commit_one_signal(device: &GpuDevice, event: &GpuEvent) {
         let mut enc = device.create_encoder("pool fence test");
         enc.signal_event(event);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     #[test]

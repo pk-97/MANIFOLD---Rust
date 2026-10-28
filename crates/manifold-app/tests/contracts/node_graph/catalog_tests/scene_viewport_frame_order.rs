@@ -83,7 +83,7 @@ fn navigated_frame_warms_up_under_the_pipeline_frame_order() {
                 None,
             );
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         let status = renderer
             .scene_viewport_status(&layer_id)

@@ -139,7 +139,7 @@ fn prepare_scene(
             device, &mut enc, &mut accel, objects, &changes, materials, true, true,
         )
         .expect("encode accel update");
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     accel
 }
 
@@ -169,7 +169,7 @@ fn refresh_frame(
             emissive_changed,
         )
         .expect("encode accel update");
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 }
 
 fn read_stats(accel: &RtAccel) -> EmissiveTableStats {
@@ -216,7 +216,7 @@ fn rt_dynamic_emissive_queued_frames_keep_metadata_snapshots() {
     }
     // All metadata writes have happened before any of these commands commit.
     for (index, emission, encoder, result) in queued {
-        encoder.try_commit_and_wait_completed().unwrap();
+        encoder.commit_and_wait().unwrap();
         let stats = unsafe {
             result
                 .mapped_ptr()
@@ -454,7 +454,7 @@ fn rt_dynamic_emissive_gpu_geometry() {
                     device, &mut enc, &mut accel, &objects, &changes, &materials, false, true,
                 )
                 .expect("encode accel update");
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let after = read_triangles(&accel, 1);
         assert_eq!(
@@ -523,7 +523,7 @@ fn rt_dynamic_emissive_gpu_geometry() {
                     device, &mut enc, &mut accel, &objects, &changes, &lit, false, true,
                 )
                 .expect("encode accel update");
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let stats = read_stats(&accel);
         assert_eq!(stats.entry_count, 0, "zero-area candidates are rejected");
@@ -536,7 +536,7 @@ fn rt_dynamic_emissive_gpu_geometry() {
                     device, &mut enc, &mut accel, &objects, &changes, &lit, false, true,
                 )
                 .expect("encode accel update");
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let stats = read_stats(&accel);
         assert_eq!(stats.entry_count, 1, "revival restores the entry");
@@ -804,7 +804,7 @@ fn prepare_query_scene<'a>(
             device, &mut enc, &mut accel, objects, &changes, &materials, true, true,
         )
         .expect("encode accel update");
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     (accel, ns_slot, textures)
 }
 
@@ -841,7 +841,7 @@ fn run_ray_query(
         0,
         seed_base,
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = hits_buf
         .mapped_ptr()
         .expect("hit buffer must be CPU-mapped");
@@ -1548,7 +1548,7 @@ fn rt_dynamic_coverage_and_attributes() {
             false,
             label,
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let row_bytes = width as usize * 4 * 4;
         let irr_buf = device.create_buffer(row_bytes as u64, BufferUse::Upload);
@@ -1556,7 +1556,7 @@ fn rt_dynamic_coverage_and_attributes() {
         let mut enc2 = device.create_encoder("rt-p4b-readback");
         enc2.copy_texture_to_buffer(&out_irr, &irr_buf, width, 1, row_bytes as u32);
         enc2.copy_texture_to_buffer(&out_refl, &refl_buf, width, 1, row_bytes as u32);
-        enc2.commit_and_wait_completed();
+        enc2.commit_and_wait().expect("GPU work completes");
         let read = |buf: &GpuBuffer| -> Vec<f32> {
             let ptr = buf
                 .mapped_ptr()

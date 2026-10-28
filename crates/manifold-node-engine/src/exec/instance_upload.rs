@@ -180,7 +180,7 @@ mod gpu_tests {
             let mut gpu = GpuEncoder::new(&mut native, device);
             upload.upload(&mut gpu, dst, source, version, retained)
         };
-        native.commit_and_wait_completed();
+        native.commit_and_wait().expect("GPU work completes");
         result
     }
 
@@ -300,7 +300,7 @@ mod gpu_tests {
                 Ok(true)
             );
         }
-        native.commit_and_wait_completed();
+        native.commit_and_wait().expect("GPU work completes");
         assert_instances_equal(&read_instances(&first, 3), &first_source);
         assert_instances_equal(&read_instances(&second, 3), &second_source);
     }

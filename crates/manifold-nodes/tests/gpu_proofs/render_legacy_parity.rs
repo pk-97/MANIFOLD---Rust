@@ -139,7 +139,7 @@ fn render_readback(json: &str) -> Vec<u8> {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     h.readback(&target.texture)
 }

@@ -116,7 +116,7 @@ fn async_lane_waits_for_the_main_work_before_it() {
     );
     enc.wait_async_lane(&handoff);
     enc.copy_buffer_to_buffer(&b, &c, BYTES);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     assert_eq!(words(&c), pattern(11));
     assert_eq!(counters(), (lanes + 1, handoffs + 1));
@@ -194,7 +194,7 @@ fn returning_to_the_async_lane_hands_off_again() {
         "the async lane never finished"
     );
     enc.wait_async_lane(&handoff);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     assert_eq!(words(&b1), pattern(3));
     assert_eq!(words(&b2), pattern(5));
@@ -234,7 +234,7 @@ fn async_lane_continues_on_its_own_queue() {
     assert_eq!(queue_of(&enc), main_queue);
     enc.finish_async_lane(&handoff);
     enc.wait_async_lane(&handoff);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 }
 
 /// A profiled frame keeps one timeline: the lane is refused, nothing is
@@ -286,5 +286,5 @@ fn async_lane_buffers_join_the_open_span() {
     enc.wait_async_lane(&handoff);
     timer.end(&mut enc);
     assert!(enc.span_buffers.is_none(), "the span closed");
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 }

@@ -469,12 +469,12 @@ fn run_probes_with_inners(
         false,
         "trace_shadow_rays-instancing-probe",
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
 
     let readback = device.create_buffer(W as u64 * 4 * 4, BufferUse::Upload);
     let mut enc2 = device.create_encoder("rt-instancing-readback");
     enc2.copy_texture_to_buffer(&out_n, &readback, W, 1, W * 4 * 4);
-    enc2.commit_and_wait_completed();
+    enc2.commit_and_wait().expect("GPU work completes");
     let ptr = readback
         .mapped_ptr()
         .expect("readback buffer must be mapped");
@@ -844,7 +844,7 @@ fn probe_worker_static_frames() {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 }
 

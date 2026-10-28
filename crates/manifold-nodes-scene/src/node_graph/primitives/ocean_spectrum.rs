@@ -540,7 +540,7 @@ mod gpu_tests {
             [len.div_ceil(256), 1, 1],
             "ocean-spectrum-test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         out
     }
 
@@ -633,7 +633,7 @@ mod gpu_tests {
         let field = device.create_buffer(fft.output_len_bytes(), manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder("ocean-ifft-test");
         fft.encode(&mut enc, &spectrum, &field);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let got = read(&field, (6 * N * N) as usize);
         for f in 0..OCEAN_FIELDS {
             let mut peak = 0.0f64;

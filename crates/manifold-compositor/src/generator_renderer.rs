@@ -1962,7 +1962,7 @@ impl ClipRenderer for GeneratorRenderer {
                 // wrapper's status gates quiescence below.
                 warmup_frame_status = gpu.frame_status();
             }
-            if let Err(err) = native_enc.try_commit_and_wait_completed() {
+            if let Err(err) = native_enc.commit_and_wait() {
                 log::error!("Generator warmup failed for layer {layer_id}: {err}");
                 return manifold_core::WarmupOutcome::GpuFailed;
             }

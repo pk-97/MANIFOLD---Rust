@@ -59,7 +59,7 @@ pub(super) fn read_staged<T: bytemuck::Pod>(
     let staged = device.create_buffer(buffer.size, BufferUse::Upload);
     let mut enc = device.create_encoder("step proof readback");
     enc.copy_buffer_to_buffer(buffer, &staged, buffer.size);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     read(&staged, count)
 }
 

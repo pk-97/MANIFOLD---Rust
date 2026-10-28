@@ -671,7 +671,7 @@ mod tests {
         ) {
             let mut clear = device.create_encoder("clip-waveform-proof-clear");
             clear.clear_texture(target, 0.0, 0.0, 0.0, 0.0);
-            clear.commit_and_wait_completed();
+            clear.commit_and_wait().expect("GPU work completes");
             let mut encoder = device.create_encoder("clip-waveform-proof-render");
             content.render(
                 device,
@@ -683,7 +683,7 @@ mod tests {
                 tracks,
                 std::slice::from_ref(clip),
             );
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
         }
 
         fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
@@ -692,7 +692,7 @@ mod tests {
             let buffer = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
             let mut encoder = device.create_encoder("clip-waveform-proof-readback");
             encoder.copy_texture_to_buffer(texture, &buffer, WIDTH, HEIGHT, bytes_per_row);
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
             let ptr = buffer.mapped_ptr().expect("shared readback buffer");
             unsafe { slice::from_raw_parts(ptr.cast::<c_void>().cast::<u8>(), total as usize) }
                 .to_vec()

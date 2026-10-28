@@ -165,7 +165,7 @@ fn pump_warmup_frames(
     frames: u32,
     audio_visuals: Option<&manifold_core::audio_visual::AudioVisualRegistry>,
     mut render_frame: impl for<'e> FnMut(u32, &mut RendererGpuEncoder<'e>),
-) {
+) -> Result<(), String> {
     for frame in 0..frames {
         let mut enc = device.create_encoder("preset-thumb-warmup");
         {
@@ -173,8 +173,9 @@ fn pump_warmup_frames(
             gpu.audio_visuals = audio_visuals;
             render_frame(frame, &mut gpu);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait()?;
     }
+    Ok(())
 }
 
 /// Factory audio previews use deterministic sample data. Build it for any
@@ -300,7 +301,7 @@ fn render_generator(
                 &ParamManifest::default(),
             );
         },
-    );
+    )?;
 
     // The fixed 60-frame warm-up is enough to trigger background initialization
     // (GLB mesh parse, texture decode, HDRI upload, etc.), but a heavy decode can
@@ -334,7 +335,7 @@ fn render_generator(
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
             runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default());
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait()?;
         io_wait_frame += 1;
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -345,14 +346,14 @@ fn render_generator(
             &target.texture,
             width,
             height,
-        )
+        )?
     } else {
         manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8(
             device,
             &target.texture,
             width,
             height,
-        )
+        )?
     };
     flatten_over_black(&mut rgba);
     Ok(manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, width, height))
@@ -578,7 +579,7 @@ fn render_effect(
             };
             exec.execute_frame_with_state(&mut graph, &plan, frame_time, gpu, &mut state_store, 0);
         },
-    );
+    )?;
 
     let tex = exec
         .backend()
@@ -587,11 +588,11 @@ fn render_effect(
     let mut rgba = if linear {
         manifold_node_engine::gpu::headless_readback::readback_srgb_rgba8(
             device, tex, width, height,
-        )
+        )?
     } else {
         manifold_node_engine::gpu::headless_readback::readback_tonemapped_rgba8(
             device, tex, width, height,
-        )
+        )?
     };
     flatten_over_black(&mut rgba);
     Ok(manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, width, height))

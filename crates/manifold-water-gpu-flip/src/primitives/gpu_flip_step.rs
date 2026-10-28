@@ -370,7 +370,7 @@ pub fn dispatch_pass(
     }
     let mut enc = device.create_encoder("gpu_flip.step.pass");
     enc.dispatch_compute(&pipeline, &bindings, groups(threads), "gpu_flip.step.pass");
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 }
 
 manifold_core::testkit_visible! {

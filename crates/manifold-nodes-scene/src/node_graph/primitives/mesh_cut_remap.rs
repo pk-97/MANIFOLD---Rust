@@ -232,7 +232,7 @@ mod gpu_tests {
             [(maps.len() as u32).div_ceil(256), 1, 1],
             "cut-remap-test",
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let ptr = output_buf.mapped_ptr().expect("shared remap output");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, maps.len()) }.to_vec()
     }
@@ -289,7 +289,7 @@ mod gpu_tests {
             [(maps.len() as u32).div_ceil(256), 1, 1],
             "cut-weight-remap-test",
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let ptr = output_buf.mapped_ptr().expect("shared weight output");
         unsafe { std::slice::from_raw_parts(ptr as *const f32, maps.len()) }.to_vec()
     }
@@ -600,7 +600,7 @@ mod gpu_tests {
             [1, 1, 1],
             "fused-cut-remap-test",
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let ptr = output_buf.mapped_ptr().expect("fused output");
         let out = unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, maps.len()) };
         for (i, (v, remapped)) in out.iter().zip(&standalone).enumerate() {
@@ -676,7 +676,7 @@ mod gpu_tests {
             Primitive::run(prim, &mut ctx);
             (ctx.outputs_unchanged, ctx.outputs_pending)
         };
-        native.commit_and_wait_completed();
+        native.commit_and_wait().expect("GPU work completes");
         (unchanged, pending)
     }
 

@@ -130,7 +130,7 @@ fn render_center(json: &str) -> f64 {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     center_luma(&h.readback(&target.texture), h.width, h.height)
 }

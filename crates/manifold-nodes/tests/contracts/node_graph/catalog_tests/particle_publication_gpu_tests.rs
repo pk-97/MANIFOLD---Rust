@@ -101,7 +101,7 @@ fn particle_publication_reorder_death_birth_empty_and_retired_tails() {
                 },
             )
             .unwrap();
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let (expected, count) = reference(&state, capacity);
         assert_eq!(read::<FluidParticle>(&frame, capacity), expected);
         assert_eq!(
@@ -138,7 +138,7 @@ fn particle_identity_birth_ranges_rollover_and_exact_epoch_exhaustion() {
     let plan = shared(&device, &[0u32; 12]);
     let mut encoder = device.create_encoder("particle-identity-seed");
     allocator.seed(&mut encoder, &particles, &identity, 4, 0);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     assert_eq!(
         read::<u32>(&identity, 4),
         [13, 0, 0, 0],
@@ -169,7 +169,7 @@ fn particle_identity_birth_ranges_rollover_and_exact_epoch_exhaustion() {
                 params: [4, 1, 2, 1],
             },
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         assert_eq!(read::<u32>(&identity, 4), expected);
         let mut expected_particles = original;
         if renumber {
@@ -182,11 +182,11 @@ fn particle_identity_birth_ranges_rollover_and_exact_epoch_exhaustion() {
     // only operation allowed to clear the request and restart epoch zero.
     let mut encoder = device.create_encoder("particle-identity-recovery-exhaustion");
     allocator.seed(&mut encoder, &particles, &identity, 4, u32::MAX);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     assert_eq!(read::<u32>(&identity, 4), [0, 16_777_216, 0, 1]);
     let mut encoder = device.create_encoder("particle-identity-domain-reset");
     allocator.seed(&mut encoder, &particles, &identity, 4, 0);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     assert_eq!(read::<u32>(&identity, 4), [13, 0, 0, 0]);
     // Death of the entire pool does not rewind the next birth identity.
     unsafe {
@@ -208,7 +208,7 @@ fn particle_identity_birth_ranges_rollover_and_exact_epoch_exhaustion() {
             params: [4, 1, 2, 1],
         },
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     assert_eq!(read::<u32>(&identity, 4), [15, 0, 13, 0]);
 }
 
@@ -292,7 +292,7 @@ fn particle_identity_multiple_substeps_keep_birth_ids() {
             },
         )
         .unwrap();
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     assert_eq!(read::<u32>(&identity, 4), [4, 7, 0, 0]);
     assert_eq!(
         read::<FluidParticle>(&particles, 3),
@@ -523,7 +523,7 @@ fn publish_case(
             },
         )
         .map_err(|error| format!("{}: encode refused: {error}", case.label))?;
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     if read::<u32>(&source, case.records.len() * 8) != words(&case.records) {
         return Err(format!("{}: the source was written", case.label));
     }
@@ -712,7 +712,7 @@ fn republish(
             },
         )
         .unwrap();
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
 }
 
 /// A slot holding 1000 live records, republished with 300 slots in use of

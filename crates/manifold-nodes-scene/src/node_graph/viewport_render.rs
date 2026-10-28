@@ -213,7 +213,7 @@ pub fn render_viewport_frame(
     );
 
     // Two committed frames, same convention `render_scene_shadows.rs` uses:
-    // the first frame pays pipeline warm-up, `commit_and_wait_completed`
+    // the first frame pays pipeline warm-up, `commit_and_wait`
     // hard-checks for GPU errors so a bad splice surfaces here, not as a
     // silently wrong frame.
     for frame in 0..2 {
@@ -229,10 +229,11 @@ pub fn render_viewport_frame(
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
-    let rgba8 = readback_tonemapped_rgba8(&device, &target.texture, width, height);
+    let rgba8 = readback_tonemapped_rgba8(&device, &target.texture, width, height)
+        .expect("GPU readback completes");
     Ok((rgba8, width, height))
 }
 

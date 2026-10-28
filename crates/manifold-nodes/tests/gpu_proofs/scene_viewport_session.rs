@@ -102,9 +102,10 @@ fn shared_scene_viewport_preserves_rt_and_temporal_show_history() {
             );
             (gpu.frame_status(), gpu.rt_dispatches)
         };
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         (
-            readback_raw_halves(&h.device, &target.texture, 320, 200),
+            readback_raw_halves(&h.device, &target.texture, 320, 200)
+                .expect("GPU readback completes"),
             status,
             dispatches,
         )
@@ -232,10 +233,11 @@ fn preview_navigation_starts_at_the_show_camera_and_leaves_the_show_untouched() 
             frame_ctx,
             &ParamManifest::default(),
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         (
-            readback_raw_halves(&h.device, &target.texture, W, H),
-            readback_tonemapped_rgba8(&h.device, &target.texture, W, H),
+            readback_raw_halves(&h.device, &target.texture, W, H).expect("GPU readback completes"),
+            readback_tonemapped_rgba8(&h.device, &target.texture, W, H)
+                .expect("GPU readback completes"),
         )
     };
     let viewport = |runtime: &PresetRuntime| {
@@ -243,8 +245,8 @@ fn preview_navigation_starts_at_the_show_camera_and_leaves_the_show_untouched() 
             .scene_viewport_texture()
             .expect("the viewport renders");
         (
-            readback_raw_halves(&h.device, texture, W, H),
-            readback_tonemapped_rgba8(&h.device, texture, W, H),
+            readback_raw_halves(&h.device, texture, W, H).expect("GPU readback completes"),
+            readback_tonemapped_rgba8(&h.device, texture, W, H).expect("GPU readback completes"),
         )
     };
 

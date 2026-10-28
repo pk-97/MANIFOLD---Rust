@@ -165,7 +165,7 @@ fn run(
     let cpu_ms = start.elapsed().as_secs_f64() * 1000.0;
     let profile = enc.commit_and_wait_profiled(device);
     (
-        readback_raw_halves(device, &out, SIZE, SIZE),
+        readback_raw_halves(device, &out, SIZE, SIZE).expect("GPU readback completes"),
         cpu_ms,
         profile.total_ms,
     )

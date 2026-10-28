@@ -142,7 +142,7 @@ fn render_one(
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
             runtime.render(&mut gpu, &target.texture, &c, manifest);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     });
     h.readback(&target.texture)
 }

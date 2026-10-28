@@ -3661,7 +3661,7 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
             exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         let out_tex = exec
             .backend()
@@ -3671,7 +3671,7 @@ mod gpu_tests {
         let readback = device.create_buffer(u64::from(h * bytes_per_row), manifold_gpu::BufferUse::Upload);
         let mut readback_enc = device.create_encoder("wgsl-compute-readback");
         readback_enc.copy_texture_to_buffer(out_tex, &readback, w, h, bytes_per_row);
-        readback_enc.commit_and_wait_completed();
+        readback_enc.commit_and_wait().expect("GPU work completes");
 
         let ptr = readback.mapped_ptr().expect("shared buffer pointer");
         let halves: &[u16] =

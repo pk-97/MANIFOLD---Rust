@@ -275,14 +275,15 @@ fn main() {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
             runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         // Convergence tracking only kicks in once the requested warm-up has
         // run — the caller asked for at least that many frames regardless
         // (e.g. to reach a specific animation beat), and a preset can
         // legitimately still be settling its warm-up transient this early.
         if frame + 1 >= warmup_frames {
-            let raw = readback_raw_halves(&device, &target.texture, args.width, args.height);
+            let raw = readback_raw_halves(&device, &target.texture, args.width, args.height)
+                .expect("GPU readback completes");
             if prev_raw.as_deref() == Some(raw.as_slice()) {
                 stable_count += 1;
             } else {
@@ -310,7 +311,8 @@ fn main() {
 
     // D2: the ONE shared tonemap/encode (`headless_readback::readback_to_srgb_png`)
     // — never a local Reinhard implementation here.
-    let png = readback_to_srgb_png(&device, &target.texture, args.width, args.height);
+    let png = readback_to_srgb_png(&device, &target.texture, args.width, args.height)
+        .expect("GPU readback completes");
     std::fs::write(&args.out, &png).unwrap_or_else(|e| panic!("write {}: {e}", args.out.display()));
     println!(
         "OK {} ({}x{}, {} frames)",

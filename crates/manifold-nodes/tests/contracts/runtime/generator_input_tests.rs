@@ -510,5 +510,5 @@ fn colorgrade_chain_renders_via_fused_node() {
             "fused ColorGrade chain produced an output texture"
         );
     }
-    native_enc.commit_and_wait_completed();
+    native_enc.commit_and_wait().expect("GPU work completes");
 }

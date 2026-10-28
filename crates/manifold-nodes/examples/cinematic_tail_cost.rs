@@ -115,12 +115,13 @@ fn measure_tail(
                 let mut gpu = GpuEncoder::new(&mut enc, &h.device);
                 runtime.render(&mut gpu, &target.texture, &c, &manifest);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         });
         // An empty commit waits every earlier buffer on the single queue, so wall time is the frame's cost.
         h.device
             .create_encoder("cinematic-tail-cost-drain")
-            .commit_and_wait_completed();
+            .commit_and_wait()
+            .expect("GPU work completes");
         let ms = t.elapsed().as_secs_f64() * 1000.0;
         if frame >= WARMUP {
             max_steady_ms = max_steady_ms.max(ms);

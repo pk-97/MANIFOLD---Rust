@@ -61,7 +61,7 @@ mod tests {
             let mut gpu = GpuEncoder::new(&mut enc, &device);
             gpu.clear_texture(&target.texture, 0.25, 0.5, 0.75, 1.0);
             request.submit(&mut gpu, &target.texture, 5, 3);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             if frame == 0 {
                 gpu_ptr = request.native_shared_ptr;
             }

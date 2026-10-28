@@ -141,7 +141,7 @@ impl Run {
             &context,
             params,
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
     }
 
     fn type_of(&self, node: NodeInstanceId) -> String {
@@ -179,7 +179,7 @@ impl Run {
         let shared = self.device.create_buffer(bytes, BufferUse::Upload);
         let mut encoder = self.device.create_encoder("copy-blend-readback");
         encoder.copy_buffer_to_buffer(buffer, &shared, bytes);
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let ptr = shared.mapped_ptr().expect("shared readback");
         unsafe { std::slice::from_raw_parts(ptr as *const InstanceTransform, COUNT) }.to_vec()
     }
@@ -232,7 +232,8 @@ fn copy_blend_sends_copy_i_to_slot_i_of_the_copies_own_layout() {
         );
     }
 
-    let png = readback_to_srgb_png(&run.device, &run.target.texture, WIDTH, HEIGHT);
+    let png = readback_to_srgb_png(&run.device, &run.target.texture, WIDTH, HEIGHT)
+        .expect("GPU readback completes");
     if let Ok(dir) = std::env::var("COPY_BLEND_PNG_DIR") {
         std::fs::write(std::path::Path::new(&dir).join("copy_blend_mid.png"), png).unwrap();
     }

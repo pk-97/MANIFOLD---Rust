@@ -696,7 +696,7 @@ mod gpu_tests {
         let readback = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder("bake-env-readback");
         enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback.mapped_ptr().expect("shared readback buffer");
         let halves: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
@@ -779,7 +779,7 @@ mod gpu_tests {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "bake-env-dispatch",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         readback_rgba16f(device, &out.texture, w, h)
     }
 
@@ -933,7 +933,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "bake-env-legacy-dispatch",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let legacy_px = readback_rgba16f(&device, &legacy_out.texture, w, h);
 
         for (i, (got, expected)) in new_px.iter().zip(legacy_px.iter()).enumerate() {
@@ -1267,7 +1267,7 @@ mod gate_gpu_tests {
             prim.run(&mut ctx);
             unchanged = ctx.outputs_unchanged;
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
         unchanged
     }
 
@@ -1284,7 +1284,7 @@ mod gate_gpu_tests {
         let readback_buf = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder("bake-env-gate-readback");
         enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback_buf.mapped_ptr().expect("shared readback");
         unsafe { std::slice::from_raw_parts(ptr, total as usize) }.to_vec()
     }
@@ -1488,12 +1488,12 @@ mod hdri_gpu_tests {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "bake-env-hdri",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let readback = device.create_buffer(u64::from(w * h * 8), manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder("bake-env-hdri-readback");
         enc.copy_texture_to_buffer(&out.texture, &readback, w, h, w * 8);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback.mapped_ptr().expect("shared readback");
         let halves: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };

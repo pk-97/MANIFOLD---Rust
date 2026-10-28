@@ -236,7 +236,7 @@ fn run_frame(device: &GpuDevice, k: &Kernels, rig: &mut Rig, frame: u32, shape: 
     if enc.replay.is_some() {
         rig.cache = Some(enc.end_replay());
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 }
 
 fn bytemuck_u32(v: &[u32]) -> &[u8] {
@@ -413,7 +413,8 @@ fn replay_never_writes_an_entry_in_flight() {
     // Queue order: once this completes, every gated frame has too.
     device
         .create_encoder("replay-proof drain")
-        .commit_and_wait_completed();
+        .commit_and_wait()
+        .expect("GPU work completes");
     run_frame(&device, &k, &mut replay, 4, Shape::default());
     assert_eq!(
         replay.stats().replayed,
@@ -475,7 +476,7 @@ fn replay_cache_dropped_in_flight_is_safe() {
     unsafe { gate.raw().setSignaledValue(1) };
     let mut tail = device.create_encoder("replay-proof tail");
     tail.signal_event(&frame_event);
-    tail.commit_and_wait_completed();
+    tail.commit_and_wait().expect("GPU work completes");
     retire_queue.drain();
     assert_eq!(direct.contents(), replay.contents());
 }
@@ -537,7 +538,7 @@ fn replay_copy_matches_blit() {
                 stats.push(done.stats());
                 cache = Some(done);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         (buffers.iter().map(read_u32s).collect::<Vec<_>>(), stats)
     };

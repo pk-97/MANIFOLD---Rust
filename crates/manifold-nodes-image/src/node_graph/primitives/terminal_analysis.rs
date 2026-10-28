@@ -272,7 +272,7 @@ mod gpu_tests {
                 .first()
                 .expect("fixed sample grid")
         };
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         sample
     }
 
@@ -347,7 +347,7 @@ mod gpu_tests {
             let mut gpu = GpuEncoder::new(&mut encoder, &device);
             analysis.sample(&mut gpu, &texture)[32]
         };
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
 
         assert!(
             split_sample[3] > 0.1,
@@ -458,7 +458,7 @@ mod gpu_tests {
                 .all(|sample| *sample == [0.0; 4]),
             "detail snapshot was not cleared"
         );
-        pending.commit_and_wait_completed();
+        pending.commit_and_wait().expect("GPU work completes");
 
         let discarded = sample_and_wait(
             &mut analysis,

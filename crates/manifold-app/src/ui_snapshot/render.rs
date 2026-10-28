@@ -292,7 +292,7 @@ pub fn render_graph_to_png(
     {
         let mut enc = device.create_encoder("ui-snap-graph-clear");
         enc.clear_texture(&target.texture, 0.10, 0.10, 0.12, 1.0);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     // Canvas: nodes, ports, wires, and the black thumbnail placeholders.
@@ -302,7 +302,7 @@ pub fn render_graph_to_png(
     {
         let mut enc = device.create_encoder("ui-snap-graph");
         renderer.render(&mut enc, &target.texture, GpuLoadAction::Load);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     assert!(drew, "graph canvas produced no draws (empty snapshot?)");
 
@@ -789,7 +789,7 @@ pub fn render_transform_proof_to_png(path: &str) {
     {
         let mut enc = device.create_encoder("ui-snap-transform");
         renderer.render(&mut enc, &target.texture, GpuLoadAction::Clear);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     assert!(drew, "transform proof produced no draws");
 
@@ -914,7 +914,7 @@ fn render_graph_node_textures(
             true,
             "Source Fixture Gradient",
         );
-        fenc.commit_and_wait_completed();
+        fenc.commit_and_wait().expect("GPU work completes");
         backend.pre_bind_texture_2d(res, fixture);
     }
 
@@ -934,7 +934,7 @@ fn render_graph_node_textures(
         let mut gpu = RendererGpuEncoder::new(&mut enc, device);
         exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     Some(GraphNodeTextures { graph, exec })
 }
@@ -1004,7 +1004,7 @@ pub(super) fn readback(device: &GpuDevice, texture: &GpuTexture, w: u32, h: u32)
 
     let mut enc = device.create_encoder("ui-snap-readback");
     enc.copy_texture_to_buffer(texture, &buf, w, h, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let ptr = buf.mapped_ptr().expect("shared readback buffer is mapped");
     let bytes: &[u8] =

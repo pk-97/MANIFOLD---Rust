@@ -448,7 +448,7 @@ fn sort_and_check(
             &LABELS,
         )
         .expect("the sort encodes");
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
 
     let untouched_words = |buffer: &GpuBuffer| -> Vec<u32> {
         (0..(buffer.size / 4) as usize).map(untouched).collect()
@@ -764,7 +764,7 @@ fn sort_particles_into_cells_through_a_count_record_ignores_the_slots_past_it() 
             &LABELS,
         )
         .expect("the sort encodes");
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
 
     assert_words(
         "cell ranges",
@@ -862,7 +862,7 @@ fn sort_particles_into_cells_pooled_keys_world_cells_through_the_table() {
                 &LABELS,
             )
             .expect("the pooled sort encodes");
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
 
         // The CPU sort: the key of each live particle, ranges by key, members
         // in input order.

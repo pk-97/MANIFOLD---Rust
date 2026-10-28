@@ -764,7 +764,7 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
         [(SLOTS as u32).div_ceil(256), 1, 1],
         "whitewater-emitter-fused",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let fused_out: Vec<u32> = read(&dst.1, SLOTS);
 
     let emission = Emission {
@@ -1285,7 +1285,7 @@ fn whitewater_spawn_chain_fused_matches_unfused() {
         [capacity.div_ceil(256), 1, 1],
         "whitewater-spawn-fused",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let fused_out: Vec<WhitewaterSpawn> = read(&dst.1, capacity as usize);
 
     let mut typed = [0; 3];

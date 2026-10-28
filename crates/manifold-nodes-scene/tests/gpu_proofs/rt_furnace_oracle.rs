@@ -98,7 +98,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     (h.readback(&target.texture), h.width, h.height)
 }
@@ -158,7 +158,7 @@ fn render_frame(runtime: &mut PresetRuntime, target: &RenderTarget, frame_count:
             &manifold_core::params::ParamManifest::default(),
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 }
 
 /// Build, settle `RT_WARMUP_FRAMES`, read back, then CONFIRM the RT kernel

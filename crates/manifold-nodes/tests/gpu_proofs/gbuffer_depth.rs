@@ -188,7 +188,7 @@ fn render_and_dump_depth(json: &str) -> (Vec<u8>, u32, u32) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     let dumped = runtime.dump_textures_all();
@@ -225,7 +225,7 @@ fn readback_r32float(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) -> 
 
     let mut enc = device.create_encoder("gbuffer-depth-readback");
     enc.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let ptr = buf
         .mapped_ptr()
@@ -367,7 +367,7 @@ fn render_color_readback(json: &str) -> Vec<u8> {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     h.readback(&target.texture)
 }
@@ -568,7 +568,7 @@ fn gbuffer_depth_unwired_scene_bundled_smoke_stays_finite() {
             &manifold_core::params::ParamManifest::default(),
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let bytes = h.readback(&target.texture);
     for (i, px) in bytes.chunks_exact(8).enumerate() {

@@ -702,7 +702,7 @@ fn capture_and_remap(
         &staged.1,
         (rows * len * 16) as u64,
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     (
         read(&staged.1, rows * len * 4),
         read(history.schedule.as_ref().unwrap(), rows * 4),
@@ -995,7 +995,7 @@ fn whitewater_engine_seam_skips_inactive_rows_and_resumes_capture() {
         &final_grids.1,
         (2 * len * 16) as u64,
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     assert_eq!(
         read::<u32>(&held_schedule.1, 8),
         [0, 0.01f32.to_bits(), 0x80000002, 0].repeat(2),
@@ -1034,7 +1034,7 @@ fn surface_on_gpu(
     .clone();
     let staged = h.array::<f32>(&[], n);
     enc.copy_buffer_to_buffer(&output, &staged.1, (n * 4) as u64);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     read(&staged.1, n)
 }
 
@@ -1061,7 +1061,7 @@ fn scratch_words(h: &mut Harness, stage: &SurfaceDistance) -> Vec<Vec<u32>> {
             (s.1, words)
         })
         .collect();
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     staged.iter().map(|(b, w)| read(b, *w)).collect()
 }
 
@@ -1137,7 +1137,7 @@ fn whitewater_surface_distance_clock_gate() {
     let mut enc = h.device.create_encoder("whitewater-surface-distance-args");
     let args = h.array::<u32>(&[], 3);
     enc.copy_buffer_to_buffer(&stage.scratch()[5], &args.1, 12);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     assert_eq!(
         read::<u32>(&args.1, 3),
         vec![0, 1, 1],
@@ -1197,7 +1197,7 @@ fn whitewater_surface_distance_replay_matches_direct() {
                 (s, (b.size() / 4) as usize)
             })
             .collect();
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         staged.iter().map(|(s, n)| read::<u32>(s, *n)).collect()
     };
     for (slot, &(step_dt, input)) in slots.iter().enumerate() {
@@ -1223,7 +1223,7 @@ fn whitewater_surface_distance_replay_matches_direct() {
             0.25,
             &direct_plan,
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let mut enc = device.create_encoder("surface replay");
         enc.begin_replay(&device, cache.take().expect("cache"));
         replayed.encode_gated(
@@ -1235,7 +1235,7 @@ fn whitewater_surface_distance_replay_matches_direct() {
             &replay_plan,
         );
         cache = Some(enc.end_replay());
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         assert!(
             words(&direct) == words(&replayed),
             "slot {slot} (step {step_dt}, input {input}): replay differs from direct"

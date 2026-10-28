@@ -58,7 +58,7 @@ impl RtProbeScene {
         for texture in &self.history_textures {
             encoder.clear_texture(texture, value, value, value, value);
         }
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
     }
 }
 

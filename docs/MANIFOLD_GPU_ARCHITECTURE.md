@@ -202,7 +202,7 @@ encoder, so an RT-A3a trace can be distinguished from a later stage. This
 changes encoder boundaries, not submission order, and the labels identify
 completed, affected, or pending encoders rather than guaranteeing the exact shader fault or its earlier
 resource/synchronization cause. Blocking production warmup uses
-`try_commit_and_wait_completed` and propagates GPU failure instead of treating
+`commit_and_wait`'s Result and propagates GPU failure instead of treating
 a logged error as successful work.
 
 ### RT trace bounds

@@ -457,7 +457,7 @@ fn readback_rgba_f32(texture: &GpuTexture) -> Vec<f32> {
     let buf = h.device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = h.device.create_encoder("p2-irradiance-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
@@ -632,7 +632,7 @@ fn run_accumulate_with_sv(
             label,
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     history.advance();
 }
 
@@ -726,7 +726,7 @@ fn run_accumulate_with_svt(
             label,
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     history.advance();
 }
 
@@ -1239,7 +1239,7 @@ fn refl_channel_blends_history_and_current() {
             &svt_sink,
             "bisect-blend",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     let blend = readback_rgba_f32(&refl_output);
     let blend_r = blend[0];
@@ -1367,7 +1367,7 @@ fn refl_channel_blends_history_and_current() {
             &svt_sink,
             "bisect-reset",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     let reset = readback_rgba_f32(&refl_output_reset);
     let reset_r = reset[0];

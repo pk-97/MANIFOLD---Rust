@@ -146,7 +146,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         if frame >= RT_WARMUP_FRAMES {
             last = h.readback(&target.texture);
             let lit = last.chunks(8).filter(|px| {

@@ -1153,7 +1153,7 @@ impl LayerCompositor {
                 // wrapper's status gates quiescence below.
                 warmup_frame_status = gpu.frame_status();
             }
-            if let Err(err) = native_enc.try_commit_and_wait_completed() {
+            if let Err(err) = native_enc.commit_and_wait() {
                 log::error!("Effect-chain warmup GPU failure: {err}");
                 return WarmupOutcome::GpuFailed;
             }
@@ -1461,7 +1461,7 @@ impl LayerCompositor {
                 // wrapper's status gates quiescence below.
                 warmup_frame_status = gpu.frame_status();
             }
-            if let Err(err) = native_enc.try_commit_and_wait_completed() {
+            if let Err(err) = native_enc.commit_and_wait() {
                 log::error!("Effect-chain warmup GPU failure: {err}");
                 return WarmupOutcome::GpuFailed;
             }
@@ -4077,7 +4077,7 @@ mod led_composite_pixel_tests {
             let mut gpu = GpuEncoder::new(&mut enc, device);
             gpu.clear_texture(&tex, color.0 as f64, color.1 as f64, color.2 as f64, 1.0);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         tex
     }
 
@@ -4176,11 +4176,12 @@ mod led_composite_pixel_tests {
             let mut gpu = GpuEncoder::new(&mut enc, device);
             comp.render(&mut gpu, &frame);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let led = comp
             .led_composite_texture()
-            .map(|t| readback_raw_halves(device, t, LED_W, LED_H));
-        let screen = readback_raw_halves(device, comp.output_texture(), COMP_W, COMP_H);
+            .map(|t| readback_raw_halves(device, t, LED_W, LED_H).expect("GPU readback completes"));
+        let screen = readback_raw_halves(device, comp.output_texture(), COMP_W, COMP_H)
+            .expect("GPU readback completes");
         (led, screen)
     }
 
@@ -4304,7 +4305,8 @@ mod led_composite_pixel_tests {
         for id in [&parent, &child] {
             let texture = comp.layer_skin_registry.get(id);
             assert_eq!(texture.width, COMP_W, "{id}: source lost during folding");
-            let pixels = readback_raw_halves(&device, texture, COMP_W, COMP_H);
+            let pixels = readback_raw_halves(&device, texture, COMP_W, COMP_H)
+                .expect("GPU readback completes");
             assert_solid(&decode_halves(&pixels), "published source");
         }
         render_layers(&mut comp, &device, &[], &[]);
@@ -4604,7 +4606,7 @@ mod blend_bypass_tests {
         });
         let mut enc = device.create_encoder("blend-bypass-upload");
         enc.upload_texture(&texture, W, H, 1, &bytes);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         Layer {
             texture,
             blend_mode,
@@ -4623,7 +4625,7 @@ mod blend_bypass_tests {
         tonemap: TonemapSettings,
     ) -> Vec<u8> {
         draw(comp, device, layers, occluded, tonemap);
-        readback_raw_halves(device, comp.output_texture(), W, H)
+        readback_raw_halves(device, comp.output_texture(), W, H).expect("GPU readback completes")
     }
 
     fn draw(
@@ -4701,7 +4703,7 @@ mod blend_bypass_tests {
             let mut gpu = GpuEncoder::new(&mut enc, device);
             comp.render(&mut gpu, &frame);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     /// The sequence the fast paths replace, built from the same pipelines.
@@ -4738,8 +4740,9 @@ mod blend_bypass_tests {
             comp.tonemap
                 .apply(&mut gpu, comp.main.source_texture(), tonemap);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         readback_raw_halves(device, &comp.tonemap.output.texture, W, H)
+            .expect("GPU readback completes")
     }
 
     fn assert_same_bytes(fast: &[u8], expected: &[u8], what: &str) {
@@ -4891,7 +4894,7 @@ mod blend_bypass_tests {
             let bytes = render(&mut comp, &device, &layers, &[], identity);
             assert_eq!(
                 bytes,
-                readback_raw_halves(&device, &handle, W, H),
+                readback_raw_halves(&device, &handle, W, H).expect("GPU readback completes"),
                 "the handle taken before rendering must hold the final image",
             );
         }

@@ -85,7 +85,7 @@ fn render_frames_with_registry(
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         };
         if frames > 2 && frame == frames - 1 {
             harness::assert_rt_dispatched(&mut draw, "glass above opaque geometry");

@@ -244,7 +244,7 @@ fn parity_dispatch_chains_storage_and_uniform_bytes() {
     affine(&mut enc, &pipeline, &mid, &out, 3.0, -1.0, n);
     enc.copy_buffer_range(&mid, 0, &readback, 0, u64::from(n) * 4);
     enc.copy_buffer_range(&out, 0, &readback, u64::from(n) * 4, u64::from(n) * 4);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let values: Vec<f32> = read(&readback, 2 * n as usize);
     for i in 0..n as usize {
         assert_eq!(values[i], 2.0 * i as f32 + 1.0, "mid[{i}]");
@@ -255,7 +255,7 @@ fn parity_dispatch_chains_storage_and_uniform_bytes() {
     assert_eq!(device.compute_pipeline_cache_len(), 1);
     let mut enc = device.create_encoder("parity dispatch 2");
     affine(&mut enc, &again, &src, &readback, -1.0, 0.0, n);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     assert_eq!(read::<f32>(&readback, 3)[..], [0.0, -1.0, -2.0]);
     assert_no_validation_errors();
 }
@@ -325,7 +325,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         16,
         "fill",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let values: Vec<u32> = read(&out, n as usize);
     assert!(
         values
@@ -377,7 +377,7 @@ fn parity_uploads_copies_and_clears_land_in_order() {
     enc.copy_texture_to_buffer(&uint, &uints, 7, 5, 7 * 4);
     enc.clear_buffer(&words);
     enc.copy_buffer_range(&ramp, 8, &moved, 40, 16);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let rows: Vec<u8> = read(&rows, 32 * 5);
     for y in 0..5 {
@@ -422,7 +422,7 @@ fn parity_hazards_order_raw_waw_and_war() {
     enc.copy_buffer_to_buffer(&zeros, &a, u64::from(n) * 4);
     enc.copy_buffer_range(&a, 0, &readback, 0, u64::from(n) * 4);
     enc.copy_buffer_range(&b, 0, &readback, u64::from(n) * 4, u64::from(n) * 4);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let values: Vec<f32> = read(&readback, 2 * n as usize);
     assert!(values[..n as usize].iter().all(|&v| v == 0.0));
     assert!(values[n as usize..].iter().all(|&v| v == 13.0));
@@ -503,7 +503,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     for (layer, buffer) in layers.iter().enumerate() {
         enc.copy_texture_to_buffer(&layered.layer_view(layer as u32), buffer, 4, 4, 16);
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let expect_row = |base: f32, size: usize| -> Vec<f32> {
         (0..size * size).map(|i| base + (i % size) as f32).collect()
     };
@@ -554,7 +554,7 @@ fn main() { dst[params.index] = params.value; }
                 "poke",
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let values: Vec<u32> = read(&out, n as usize);
         assert!(
             values
@@ -600,7 +600,7 @@ fn parity_events_order_encoders_and_wake_the_host() {
     assert!(read::<f32>(&out, n as usize).iter().all(|&v| v == 7.0));
     affine(&mut consumer, &pipeline, &out, &out, 2.0, 0.0, n);
     consumer.signal_event_value(&event, 5);
-    consumer.commit_and_wait_completed();
+    consumer.commit_and_wait().expect("GPU work completes");
 
     assert!(read::<f32>(&out, n as usize).iter().all(|&v| v == 14.0));
     assert!(event.is_done(5) && other.signaled_value() == 5);
@@ -642,7 +642,7 @@ fn parity_timed_waits_retirement_and_dropped_encoders() {
     device.retire_after_queue(held.clone(), "parity retire");
     let mut enc = device.create_encoder("parity try");
     affine(&mut enc, &pipeline, &a, &b, 1.0, 0.0, n);
-    enc.try_commit_and_wait_completed().expect("completes");
+    enc.commit_and_wait().expect("completes");
     // The waiter drops retired objects in order, before later waits return.
     assert_eq!(Arc::strong_count(&held), 1);
     assert_no_validation_errors();

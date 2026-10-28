@@ -211,7 +211,7 @@ mod tests {
             Some(3),
             "the span's buffers are still pending"
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
 
         let each: Vec<f64> = committed
             .iter()

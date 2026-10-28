@@ -270,7 +270,7 @@ mod gpu_tests {
             texture.height,
             bytes_per_row,
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let ptr = buffer.mapped_ptr().expect("resize-limit readback buffer");
         let halves: &[u16] = unsafe {
             std::slice::from_raw_parts(
@@ -338,7 +338,7 @@ mod gpu_tests {
             [1, 1, 1],
             "node.resize_limit.blob-v2-gpu-test",
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
 
         let pixels = readback(&device, &output.texture);
         assert_eq!(pixels.len(), 2);

@@ -50,7 +50,7 @@ fn solid_source(device: &manifold_gpu::testkit::TestDevice, rgb: [f32; 3]) -> Gp
         let mut gpu = GpuEncoder::new(&mut encoder, device);
         gpu.clear_texture(&texture, rgb[0] as f64, rgb[1] as f64, rgb[2] as f64, 1.0);
     }
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     texture
 }
 
@@ -161,13 +161,11 @@ fn render_sample(
         let mut gpu = GpuEncoder::new(&mut encoder, &device);
         compositor.render(&mut gpu, &frame);
     }
-    encoder.commit_and_wait_completed();
-    let hdr = first_pixel(&readback_raw_halves(
-        &device,
-        compositor.output_texture(),
-        WIDTH,
-        HEIGHT,
-    ));
+    encoder.commit_and_wait().expect("GPU work completes");
+    let hdr = first_pixel(
+        &readback_raw_halves(&device, compositor.output_texture(), WIDTH, HEIGHT)
+            .expect("GPU readback completes"),
+    );
 
     let target = RenderTarget::new(
         &device,
@@ -187,13 +185,11 @@ fn render_sample(
         (0.0, 0.0, WIDTH as f32, HEIGHT as f32),
         GpuLoadAction::Clear,
     );
-    encoder.commit_and_wait_completed();
-    let mapped = first_pixel(&readback_raw_halves(
-        &device,
-        &target.texture,
-        WIDTH,
-        HEIGHT,
-    ));
+    encoder.commit_and_wait().expect("GPU work completes");
+    let mapped = first_pixel(
+        &readback_raw_halves(&device, &target.texture, WIDTH, HEIGHT)
+            .expect("GPU readback completes"),
+    );
     RenderSample { hdr, mapped }
 }
 

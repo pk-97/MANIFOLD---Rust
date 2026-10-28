@@ -583,7 +583,7 @@ mod tests {
                         &mut chain, &plan, frame_time, &mut gpu, &mut state, 0,
                     );
                 }
-                native_enc.commit_and_wait_completed();
+                native_enc.commit_and_wait().expect("GPU work completes");
             }));
 
             if let Err(panic) = result {
@@ -880,7 +880,7 @@ mod tests {
                     0,
                 );
             }
-            native_enc.commit_and_wait_completed();
+            native_enc.commit_and_wait().expect("GPU work completes");
         }
 
         let value = seen.lock().unwrap().expect("captured");

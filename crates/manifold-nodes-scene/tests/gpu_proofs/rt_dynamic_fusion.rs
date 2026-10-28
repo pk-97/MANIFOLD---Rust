@@ -226,7 +226,7 @@ fn render_and_readback(
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
             exec.execute_frame_with_gpu(&mut graph, &plan, frame(i), &mut gpu);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     let buf = exec
@@ -240,7 +240,7 @@ fn render_and_readback(
     let staging = device.create_buffer(buf.size, BufferUse::Upload);
     let mut read_enc = device.create_encoder("rt-dynamic-fusion-readback");
     read_enc.copy_buffer_to_buffer(buf, &staging, buf.size);
-    read_enc.commit_and_wait_completed();
+    read_enc.commit_and_wait().expect("GPU work completes");
     let ptr = staging
         .mapped_ptr()
         .expect("staging buffer must be CPU-mapped") as *const f32;

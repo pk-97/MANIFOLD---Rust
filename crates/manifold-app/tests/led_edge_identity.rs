@@ -60,13 +60,13 @@ fn edge_extend_half_widths_is_identity_mapping() {
     let mut enc = device.create_encoder("edge-identity-test");
     // The exact controller call: identity widths, no blur, unity gain.
     blit.blit(&mut enc, &source, 0.5, 0.5, 0.0, 1.0);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let bytes_per_row = STRIPS * 4;
     let buf = device.create_buffer(u64::from(LEDS * bytes_per_row), BufferUse::Upload);
     let mut read_enc = device.create_encoder("edge-identity-readback");
     read_enc.copy_texture_to_buffer(blit.output_texture(), &buf, STRIPS, LEDS, bytes_per_row);
-    read_enc.commit_and_wait_completed();
+    read_enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");

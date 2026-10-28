@@ -161,7 +161,7 @@ fn run(mut graph: Graph) -> Run {
             let mut gpu = GpuEncoder::new(&mut enc, device);
             exec.execute_frame_with_state(&mut graph, &plan, time, &mut gpu, &mut state, 0);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     let out = exec
@@ -353,7 +353,7 @@ fn run_with_storage(mut graph: Graph, frames: u32, storage: Storage) -> StorageR
             let mut gpu = GpuEncoder::new(&mut enc, device);
             exec.execute_frame_with_state(&mut graph, &plan, time, &mut gpu, &mut state, 0);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     let read = |res: ResourceId| {
         let buffer = exec
@@ -536,7 +536,7 @@ fn post_frame_readers_never_see_reused_storage() {
         let mut gpu = GpuEncoder::new(&mut enc, device);
         exec.execute_frame_with_state(&mut graph, &plan, time, &mut gpu, &mut StateStore::new(), 0);
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let particles = |buffer: &manifold_gpu::GpuBuffer| {
         let ptr = buffer.mapped_ptr().expect("shared array buffer");
@@ -705,7 +705,7 @@ fn run_lanes(profiled: bool) -> LaneRun {
                 "frame {frame} failed on the GPU"
             );
         } else {
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         for (res, frames) in [(state_res, &mut run.states), (sink_res, &mut run.sinks)] {
             let buffer = exec

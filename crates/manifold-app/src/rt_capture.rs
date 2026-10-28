@@ -79,7 +79,7 @@ pub(crate) fn decode_capture_pixels(
     let buf = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("rt-capture-readback");
     enc.copy_texture_to_buffer(&cap.tex, &buf, cap.w, cap.h, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");

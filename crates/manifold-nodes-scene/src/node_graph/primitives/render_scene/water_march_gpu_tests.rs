@@ -385,7 +385,7 @@ fn run(fields: &[TestField], wants_velocity: bool, frame_seconds: f32) -> Run {
         enc.copy_texture_to_buffer(t, &b, W, H, W * 4);
         b
     });
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let words: &[u32] = unsafe {
         std::slice::from_raw_parts(
             hits_read.mapped_ptr().expect("shared").cast::<u32>(),
@@ -739,7 +739,7 @@ fn a_ray_steps_over_an_unheld_tile_in_one_step() {
         [rays.len() as u32, 1, 1],
         "march probe",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let out: &[[f32; 4]] = unsafe {
         std::slice::from_raw_parts(
             probe_out.mapped_ptr().expect("shared").cast::<[f32; 4]>(),
@@ -834,7 +834,7 @@ fn tile_flags_cover_the_far_faces_of_a_tiles_cells() {
     let bytes = u64::from(table.pool_tiles) * 4;
     let read = device.create_buffer(bytes, BufferUse::Upload);
     enc.copy_buffer_to_buffer(march.tile_flags(0).expect("marched"), &read, bytes);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let flags: &[u32] = unsafe {
         std::slice::from_raw_parts(
             read.mapped_ptr().expect("shared").cast::<u32>(),

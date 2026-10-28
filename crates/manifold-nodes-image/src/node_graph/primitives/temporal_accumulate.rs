@@ -438,7 +438,7 @@ mod gpu_tests {
         );
         let mut enc = device.create_encoder("temporal-accumulate-readback");
         enc.copy_texture_to_buffer(tex, &readback, W, H, bytes_per_row);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback.mapped_ptr().expect("shared readback buffer");
         let halves: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (W * H * 4) as usize) };
@@ -544,7 +544,7 @@ mod gpu_tests {
                 [W.div_ceil(8), H.div_ceil(8), 1],
                 "temporal-accumulate",
             );
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             self.frame += 1;
             read_red(&self.device, &self.out.texture)
         }

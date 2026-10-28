@@ -308,7 +308,7 @@ mod gpu_tests {
             texture.height,
             bytes_per_row,
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let ptr = buffer.mapped_ptr().expect("region mask readback");
         let values: &[u16] = unsafe {
             std::slice::from_raw_parts(
@@ -377,7 +377,7 @@ mod gpu_tests {
             [labels.width.div_ceil(16), labels.height.div_ceil(16), 1],
             label,
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         readback(device, &output.texture)
     }
 

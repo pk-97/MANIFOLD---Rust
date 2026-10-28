@@ -179,7 +179,7 @@ mod gpu_tests {
             [capacity.div_ceil(256), 1, 1],
             "plane-mesh-oracle",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = out_buf.mapped_ptr().expect("shared out buffer");
         let slice =
             unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, capacity as usize) };

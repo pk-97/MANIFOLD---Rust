@@ -444,7 +444,7 @@ fn pressure_module_lentine_flux_conserves_blocks() {
             ],
             "gpu-flip-pressure-lentine-flux",
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let actual: Vec<[f32; 8]> = read(&output, output_n[0] * output_n[1] * output_n[2]);
         let blocks = c[0] * c[1] * c[2];
         let mut internal_solid_activity = 0.0;
@@ -743,7 +743,7 @@ impl FineTiles {
                 kept: None,
             },
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let words: Vec<u32> = read(built.table(), table_words(count) as usize);
         let entries = table_entries(count);
         let tile_of: Vec<[i32; 3]> = (0..count)
@@ -1011,7 +1011,7 @@ impl Rig {
             enc.copy_buffer_to_buffer(from, &into, pool * 4);
             into
         });
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         (
             read(&copies[0], pool as usize),
             read(&copies[1], pool as usize),
@@ -1104,7 +1104,7 @@ fn pressure_module_parallel_classification_matches_serial_boolean_oracle() {
             set_all_tiles(all_tiles);
             let mut enc = rig.device.create_encoder("pressure classifier proof");
             rig.prepare(&mut enc);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             set_all_tiles(false);
             if !inactive {
                 let flags = slot_flags(&rig, &water, all_tiles);
@@ -1214,7 +1214,7 @@ fn rz(rig: &mut Rig, p: &Problem, iterations: u32) -> Vec<(f32, f32)> {
     rig.prepare(&mut enc);
     rig.solve_on(&mut enc, Stop::Fixed(iterations));
     rig.solver.copy_scalars(&mut enc, &scalars);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let all: Vec<f32> = read(&scalars, 2 * MAX_ITERATIONS as usize);
     (0..iterations as usize)
         .map(|k| (all[2 * k], all[2 * k + 1]))
@@ -1347,7 +1347,7 @@ fn converge(rig: &mut Rig, p: &Problem, cap: u32) -> Converged {
     rig.solve_on(&mut enc, Stop::Converged(cap));
     let progress = rig.solver.progress().expect("prepared");
     enc.copy_buffer_to_buffer(progress, &record, record.size);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let all: Vec<f32> = read(&record, floats);
     let iterations = all[1] as u32;
     Converged {
@@ -1401,7 +1401,7 @@ fn solve_bits_under(
     }
     let progress = rig.solver.progress().expect("prepared");
     enc.copy_buffer_to_buffer(progress, &record, record.size);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     (
         bytemuck::cast_slice(&rig.pressure()).to_vec(),
         read(&record, floats),
@@ -1597,7 +1597,7 @@ fn rearm_frame(
     if spanned {
         *cache = Some(enc.end_replay());
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     (0..2)
         .map(|s| {
             (
@@ -2024,7 +2024,7 @@ fn pressure_module_rows_match_the_stencil() {
                 .create_buffer((pooled * ROW_FLOATS * 4) as u64, BufferUse::Upload);
             let mut enc = rig.device.create_encoder("gpu-flip-pressure-rows");
             rig.solver.copy_rows(&mut enc, &copy);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let rows = rig.dense_of(&read::<[f32; ROW_FLOATS]>(&copy, pooled));
             let (flags, _, _) = rig.slot_words();
             let mut wrong = 0;
@@ -2418,7 +2418,7 @@ fn chunk_solve(
         &record,
         record_bytes,
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let words = |b: &GpuBuffer| read::<u32>(b, (b.size / 4) as usize);
     ChunkSolve {
         ranges: words(&ranges),
@@ -2474,7 +2474,7 @@ fn pressure_levels_mirror_the_parent_build() {
                 into
             })
             .collect();
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let mut below = fine.tile_of.clone();
         let mut below_slot = fine.slot_of.clone();
         for level in 1..pools.len() {
@@ -2621,7 +2621,7 @@ fn pressure_vcycle_is_symmetric() {
             let z = rig.solver.work_vectors().expect("prepared")[1];
             let into = rig.device.create_buffer(z.size, BufferUse::Upload);
             enc.copy_buffer_to_buffer(z, &into, z.size);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             rig.dense_of(&read::<f32>(&into, rig.pool_floats()))
         };
         let (mx, my) = (precondition(&x), precondition(&y));

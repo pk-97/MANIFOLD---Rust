@@ -241,6 +241,7 @@ fn gpu_flip_dam_break_paused_live_frames_hold() {
             WIDTH,
             HEIGHT,
         )
+        .expect("GPU readback completes")
     };
     let differing = |a: &[u8], b: &[u8]| {
         a.chunks_exact(8)

@@ -6550,7 +6550,7 @@ mod alias_gpu_tests {
             let mut enc = device.create_encoder("bypass-proof");
             let mut gpu = GpuEncoder::new(&mut enc, &device);
             exec.execute_frame_with_gpu(&mut graph, &plan, frame_time(), &mut gpu);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let compatible = size == 4 && format == GpuTextureFormat::Rgba16Float;
         assert_eq!(
@@ -6611,7 +6611,7 @@ mod alias_gpu_tests {
             // A target the producer never reaches stays at this value.
             gpu.clear_texture(&host.texture, 0.9, 0.0, 0.0, 1.0);
             exec.execute_frame_with_gpu(&mut graph, &plan, frame_time(), &mut gpu);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         assert_eq!(
             evals.load(Ordering::Relaxed),
@@ -6704,7 +6704,7 @@ mod alias_gpu_tests {
         let buffer = device.create_buffer(4 * 4 * 8, BufferUse::Upload);
         let mut enc = device.create_encoder("held-terminal-readback");
         enc.copy_texture_to_buffer(texture, &buffer, 4, 4, 32);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let bits = unsafe { *buffer.mapped_ptr().unwrap().cast::<u16>() };
         half::f16::from_bits(bits).to_f32()
     }
@@ -6759,7 +6759,7 @@ mod alias_gpu_tests {
             let mut enc = device.create_encoder("held-terminal");
             let mut gpu = GpuEncoder::new(&mut enc, &device);
             exec.execute_frame_with_gpu(graph, &plan, frame_time(), &mut gpu);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         };
 
         frame(&mut exec, &mut graph);
@@ -6768,7 +6768,7 @@ mod alias_gpu_tests {
         *pending.lock().unwrap() = true;
         let mut enc = device.create_encoder("other-tenant");
         GpuEncoder::new(&mut enc, &device).clear_texture(&src_texture, 0.9, 0.0, 0.0, 1.0);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         frame(&mut exec, &mut graph);
         assert_eq!(
             first_red(&device, &host.texture),

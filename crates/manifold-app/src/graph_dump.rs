@@ -69,7 +69,7 @@ fn readback_rgba(device: &GpuDevice, tex: &GpuTexture) -> Option<Vec<[f32; 4]>> 
     );
     let mut enc = device.create_encoder("Graph Dump Readback");
     enc.copy_texture_to_buffer(tex, &buf, tex.width, tex.height, aligned);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let ptr = buf
         .mapped_ptr()
@@ -224,7 +224,7 @@ fn dump_one_array(
     let staging = device.create_buffer(size, BufferUse::Upload);
     let mut enc = device.create_encoder("Array Dump Readback");
     enc.copy_buffer_to_buffer(a.buffer, &staging, size);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = staging
         .mapped_ptr()
         .expect("array dump readback must be CPU-visible");
@@ -442,7 +442,7 @@ mod tests {
                     &params,
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
 
         // Final frame with dump mode on, then read every node output back.
@@ -453,7 +453,7 @@ mod tests {
                 let mut gpu = RGpuEncoder::new(&mut enc, &device);
                 generator.render(&mut gpu, &target.texture, &mk_ctx(90.0 / 60.0), &params);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
 
         let textures: Vec<DumpTexture> = generator
@@ -586,7 +586,7 @@ mod tests {
                     let mut gpu = RGpuEncoder::new(&mut enc, &device);
                     generator.render(&mut gpu, &target.texture, &mk(f64::from(i) / 60.0), &params);
                 }
-                enc.commit_and_wait_completed();
+                enc.commit_and_wait().expect("GPU work completes");
             }
             // The render target holds the final display composite.
             let tex = [DumpTexture {

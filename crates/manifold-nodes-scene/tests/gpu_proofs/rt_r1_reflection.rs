@@ -196,7 +196,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     (h.readback(&target.texture), h.width, h.height)
 }
@@ -452,7 +452,7 @@ fn rt_reflections_dispatch_never_stalls_past_20ms() {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let elapsed = start.elapsed();
         eprintln!("frame {frame}: {:.2}ms", elapsed.as_secs_f64() * 1000.0);
         frame_ms.push(elapsed.as_secs_f64() * 1000.0);

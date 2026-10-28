@@ -49,7 +49,7 @@ fn copy_out(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
     let staged = device.create_buffer(buffer.size, BufferUse::Upload);
     let mut enc = device.create_encoder("sheeting step proof readback");
     enc.copy_buffer_to_buffer(buffer, &staged, buffer.size);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     read(&staged, (buffer.size / 4) as usize)
 }
 
@@ -562,7 +562,7 @@ fn step_passes_with_room(room: usize) {
         );
         enc.compute_memory_barrier_buffers();
         stage.encode_write(&mut enc, &inputs, plan, &births, &world.tiles);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     };
     let plan = |step_dt: f32| {
         let mut words = [0u32; 12];

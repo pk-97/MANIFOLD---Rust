@@ -627,13 +627,13 @@ mod gpu {
                     0,
                 );
             }
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
             let texture = self
                 .executor
                 .backend()
                 .texture_2d(self.output_slot)
                 .expect("CodeTerminal output texture");
-            readback_raw_halves(&self.device, texture, W, H)
+            readback_raw_halves(&self.device, texture, W, H).expect("GPU readback completes")
         }
 
         fn render_with_source(
@@ -656,12 +656,14 @@ mod gpu {
                 .backend()
                 .texture_2d(self.output_slot)
                 .expect("CodeTerminal output texture");
-            let rgba = readback_srgb_rgba8(&self.device, texture, W, H);
+            let rgba =
+                readback_srgb_rgba8(&self.device, texture, W, H).expect("GPU readback completes");
             std::fs::write(path, encode_rgba8_png(&rgba, W, H)).expect("write terminal artifact");
         }
 
         fn write_source_png(&self, path: &std::path::Path) {
-            let rgba = readback_srgb_rgba8(&self.device, &self.input, W, H);
+            let rgba = readback_srgb_rgba8(&self.device, &self.input, W, H)
+                .expect("GPU readback completes");
             std::fs::write(path, encode_rgba8_png(&rgba, W, H)).expect("write source artifact");
         }
     }
@@ -1145,7 +1147,12 @@ mod gpu {
                         std::fs::create_dir_all(&dir).expect("create whole-glyph artifact dir");
                         std::fs::write(
                             dir.join("code-terminal-whole-glyph-source.png"),
-                            encode_rgba8_png(&readback_srgb_rgba8(&device, &input, W, H), W, H),
+                            encode_rgba8_png(
+                                &readback_srgb_rgba8(&device, &input, W, H)
+                                    .expect("GPU readback completes"),
+                                W,
+                                H,
+                            ),
                         )
                         .expect("write whole-glyph source artifact");
                         harness.write_png(&dir.join("code-terminal-whole-glyph-output.png"));

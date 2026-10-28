@@ -136,7 +136,7 @@ fn readback_rg16float(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) ->
 
     let mut enc = device.create_encoder("gbuffer-velocity-readback");
     enc.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let ptr = buf
         .mapped_ptr()
@@ -207,7 +207,7 @@ fn gbuffer_velocity_two_frame_conformance() {
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
 
             let dumped = runtime.dump_textures_all();
             let (_, _, _, vel_tex): &(String, String, String, &GpuTexture) = dumped
@@ -375,7 +375,7 @@ fn gbuffer_velocity_unwired_scene_bundled_smoke_stays_finite() {
             &manifold_core::params::ParamManifest::default(),
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let bytes = h.readback(&target.texture);
     for (i, px) in bytes.chunks_exact(8).enumerate() {

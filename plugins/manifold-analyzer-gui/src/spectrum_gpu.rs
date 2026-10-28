@@ -11,7 +11,7 @@
 //!    buffers, maps each pixel (x → log-freq → bin), and produces either a
 //!    curve+fill composite (top) or a colourmapped history sample (bottom).
 //! 2. `device.draw_fullscreen` renders into the IOSurface-backed `GpuTexture`.
-//! 3. `commit_and_wait_completed` syncs; egui's PaintCallback samples the same
+//! 3. `commit_and_wait` syncs; egui's PaintCallback samples the same
 //!    IOSurface via GL_TEXTURE_RECTANGLE (see `gl_paint.rs`).
 //!
 //! CQT spectrogram columns are produced off-thread by `spectrum_worker.rs`;
@@ -534,7 +534,7 @@ impl SpectrumGpuRenderer {
             true, // store
             "spectrum_line",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 }
 

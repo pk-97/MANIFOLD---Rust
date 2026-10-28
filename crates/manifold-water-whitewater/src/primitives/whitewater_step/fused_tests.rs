@@ -367,7 +367,7 @@ pub mod gpu {
                     .unwrap();
                 captured.push(snapshots(&device, &mut encoder, stage));
             }
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
             for (i, name) in PORTS[..if dust { 6 } else { 4 }].iter().enumerate() {
                 if !dust && i == 1 {
                     continue;
@@ -526,7 +526,7 @@ pub mod gpu {
                                 [usize::from(dust)],
                         ));
                     }
-                    enc.commit_and_wait_completed();
+                    enc.commit_and_wait().expect("GPU work completes");
                     compare_buffers(&captures[0], &captures[1], case, "proof_typed");
                     let typed = read::<WhitewaterSpawn>(&captures[0], 256);
                     let live = if overflow == 0 { 7 } else { 256 };
@@ -604,7 +604,7 @@ pub mod gpu {
                 }),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         for (i, name) in ["proof_typed", "proof_dust_typed", "state_out"]
             .into_iter()
             .enumerate()
@@ -738,7 +738,7 @@ pub mod gpu {
                     ]);
                 }
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             for start in [0, 2] {
                 for (i, name) in ["proof_lifecycle", "pool_out", "state_out"]
                     .into_iter()
@@ -850,7 +850,7 @@ pub mod gpu {
                     .iter()
                     .map(|port| copy_shared(&device, &mut enc, stage.tick_output(port).unwrap()))
                     .collect();
-                enc.commit_and_wait_completed();
+                enc.commit_and_wait().expect("GPU work completes");
                 rows.push(row);
             }
             for (i, port) in ports.into_iter().enumerate() {

@@ -182,15 +182,16 @@ fn render_effect_raw(
             0,
         );
     }
-    native_enc.commit_and_wait_completed();
+    native_enc.commit_and_wait().expect("GPU work completes");
 
     let tex = exec
         .backend()
         .texture_2d(output_slot)
         .ok_or_else(|| "output texture missing after execute".to_string())?;
-    Ok(headless_readback::readback_raw_halves(
-        device, tex, SIZE, SIZE,
-    ))
+    Ok(
+        headless_readback::readback_raw_halves(device, tex, SIZE, SIZE)
+            .expect("GPU readback completes"),
+    )
 }
 
 #[test]

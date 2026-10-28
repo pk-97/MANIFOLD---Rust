@@ -349,7 +349,7 @@ mod gpu_tests {
             [(src_vertices.len() as u32).div_ceil(256), 1, 1],
             label,
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let ptr = dst.mapped_ptr().expect("shared output");
         unsafe { std::slice::from_raw_parts(ptr as *const f32, src_vertices.len()) }.to_vec()
     }

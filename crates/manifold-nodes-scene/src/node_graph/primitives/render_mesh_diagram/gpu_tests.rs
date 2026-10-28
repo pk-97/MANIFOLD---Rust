@@ -155,7 +155,7 @@ fn math_view_instance_history_records_per_copy_motion() {
             [1, 1, 1],
             "instance-history-proof",
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
     }
 
     let ring_ptr = ring
@@ -363,7 +363,7 @@ fn math_view_trails_render_recorded_copy_motion() {
             [1, 1, 1],
             "copy-trails-proof",
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
     }
 
     let camera = Camera::look_at(
@@ -453,8 +453,8 @@ fn math_view_trails_render_recorded_copy_motion() {
             GpuLoadAction::Clear,
             "copy-trails-proof",
         );
-        encoder.commit_and_wait_completed();
-        readback_raw_halves(&device, &target.texture, W, H)
+        encoder.commit_and_wait().expect("GPU work completes");
+        readback_raw_halves(&device, &target.texture, W, H).expect("GPU readback completes")
     };
     let max_alpha_around = |image: &[u8], point: [f32; 3]| {
         let pixel = camera.project_to_pixel(point, W, H).unwrap();
@@ -485,7 +485,8 @@ fn math_view_trails_render_recorded_copy_motion() {
             &target.texture,
             W,
             H,
-        );
+        )
+        .expect("GPU readback completes");
         std::fs::write(
             path,
             manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, W, H),
@@ -668,8 +669,8 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
                 GpuLoadAction::Clear,
                 "instance-copies-proof",
             );
-            encoder.commit_and_wait_completed();
-            readback_raw_halves(&device, &target.texture, W, H)
+            encoder.commit_and_wait().expect("GPU work completes");
+            readback_raw_halves(&device, &target.texture, W, H).expect("GPU readback completes")
         };
     let render = |instances: &manifold_gpu::GpuBuffer, copy_count: u32, wired: u32| {
         render_scaled(instances, copy_count, wired, [1.0; 3])
@@ -726,7 +727,8 @@ fn math_view_instance_copies_draw_per_copy_marks_and_skip_inactive_holes() {
             &target.texture,
             W,
             H,
-        );
+        )
+        .expect("GPU readback completes");
         std::fs::write(
             path,
             manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, W, H),
@@ -825,8 +827,8 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
             GpuLoadAction::Clear,
             "world-grid-proof",
         );
-        encoder.commit_and_wait_completed();
-        readback_raw_halves(&device, &target.texture, W, H)
+        encoder.commit_and_wait().expect("GPU work completes");
+        readback_raw_halves(&device, &target.texture, W, H).expect("GPU readback completes")
     };
     // MANIFOLD_MATH_GRID_PREVIEW=<dir> writes one PNG per view for a look,
     // before any assertion can stop the test.
@@ -907,7 +909,8 @@ fn math_view_world_grid_matches_camera_and_ignores_object_transform() {
                 &target.texture,
                 W,
                 H,
-            );
+            )
+            .expect("GPU readback completes");
             let png = manifold_node_engine::gpu::headless_readback::encode_rgba8_png(&rgba, W, H);
             std::fs::write(format!("{dir}/grid-{name}.png"), png).unwrap();
         }

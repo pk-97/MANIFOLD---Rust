@@ -79,13 +79,13 @@ fn fragment_reads_storage_buffer_via_bytes_binding() {
         true,
         "fsp-draw",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let bytes_per_row = w * 8;
     let buf = device.create_buffer(u64::from(hgt * bytes_per_row), BufferUse::Upload);
     let mut rb = device.create_encoder("fsp-readback");
     rb.copy_texture_to_buffer(&target.texture, &buf, w, hgt, bytes_per_row);
-    rb.commit_and_wait_completed();
+    rb.commit_and_wait().expect("GPU work completes");
 
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
     let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * 4) as usize) };

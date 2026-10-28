@@ -833,7 +833,7 @@ mod tests {
             [block_count.max(1), 1, 1],
             "cut-map-test-emit",
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let map_ptr = map.mapped_ptr().expect("shared map");
         let output = unsafe {
             std::slice::from_raw_parts(

@@ -109,7 +109,7 @@ fn scene_json(light_specs: &[(f32, f32, f32, f32)]) -> String {
 
 /// Render a scene-graph JSON to `WxH` `Rgba16Float`, returning the readback
 /// bytes. Two committed frames so any first-frame pipeline/target warm-up is
-/// past before we read. `commit_and_wait_completed` inside the executor hard-
+/// past before we read. `commit_and_wait` inside the executor hard-
 /// checks for Metal GPU errors, so a broken binding-8 bind surfaces as a
 /// panic here, not a silently wrong frame.
 fn render_scene_readback(json: &str) -> (Vec<u8>, u32, u32) {
@@ -153,7 +153,7 @@ fn render_scene_readback(json: &str) -> (Vec<u8>, u32, u32) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     (h.readback(&target.texture), h.width, h.height)
 }
@@ -329,7 +329,7 @@ fn render_light_contract_scene(json: &str, rt_enabled: bool, assert_dispatch: bo
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     };
     for frame in 0..frames {
         render_frame(&mut runtime, frame);

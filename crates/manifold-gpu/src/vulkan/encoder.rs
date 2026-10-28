@@ -1107,21 +1107,18 @@ impl GpuEncoder {
         verify(result);
     }
 
-    /// Commit and block until the GPU has fully completed the work.
-    pub fn commit_and_wait_completed(mut self) {
-        verify(self.submit_and_wait("commit_and_wait_completed"));
-    }
-
-    /// Commit, wait for completion, and return a failure instead of panicking.
-    pub fn try_commit_and_wait_completed(mut self) -> Result<(), String> {
-        self.submit_and_wait("try_commit_and_wait_completed")
+    /// Commit and block until the GPU has completed the work and every
+    /// completion handler ran. `Err` on a lost device (D19): the caller skips
+    /// whatever needed the result.
+    pub fn commit_and_wait(mut self) -> Result<(), String> {
+        self.submit_and_wait("commit_and_wait")
     }
 
     /// Commit, block until completion, and return the **true GPU execution
     /// time** of this command buffer in seconds (`GPUEndTime - GPUStartTime`).
     pub fn commit_and_wait_completed_timed(mut self) -> f64 {
         let Some((tick_ns, mask)) = self.core.timestamps else {
-            self.commit_and_wait_completed();
+            verify(self.commit_and_wait());
             return 0.0;
         };
         let res = self.res.as_mut().expect(OPEN);

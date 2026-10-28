@@ -712,7 +712,7 @@ mod gpu_tests {
             texture.height,
             bytes_per_row,
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = buffer
             .mapped_ptr()
             .expect("feedback readback buffer should be mapped");
@@ -763,7 +763,7 @@ mod gpu_tests {
                 /* owner_key = */ 7,
             );
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         // Second frame exercises the read path (first frame allocates
         // + seeds the prev buffer).
@@ -772,7 +772,7 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
             exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 7);
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
     }
 
     /// `node.feedback`'s format override propagates from the
@@ -904,7 +904,7 @@ mod gpu_tests {
                 /* owner_key = */ 11,
             );
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         // Second frame would fault inside `copy_texture_to_texture`
         // if state.prev and out_tex disagreed on format. Surviving the
@@ -914,7 +914,7 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
             exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 11);
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
     }
 
     /// The seed-bootstrap contract: when `seed` is wired, frame 1's
@@ -989,7 +989,7 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
             exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 17);
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         let out_tex = exec
             .backend()
@@ -1000,7 +1000,7 @@ mod gpu_tests {
         let readback_buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Upload);
         let mut readback_enc = device.create_encoder("seed-readback");
         readback_enc.copy_texture_to_buffer(out_tex, &readback_buf, w, h, bytes_per_row);
-        readback_enc.commit_and_wait_completed();
+        readback_enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback_buf.mapped_ptr().expect("shared buffer pointer");
         let halves: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
@@ -1059,7 +1059,7 @@ mod gpu_tests {
             gpu.clear_texture(&in_target.texture, 0.0, 0.0, 0.0, 1.0);
             gpu.clear_texture(&seed_target.texture, 0.7, 0.3, 0.1, 1.0);
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         let mut backend = MetalBackend::new(device.arc(), w, h, format);
         backend.pre_bind_texture_2d(in_res, in_target);
@@ -1076,7 +1076,7 @@ mod gpu_tests {
             let mut enc = device.create_encoder("seed-reset-frame-0");
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
             exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 31);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
 
         // Advance reset_trigger: the current seed must be visible on this edge.
@@ -1086,7 +1086,7 @@ mod gpu_tests {
             let mut enc = device.create_encoder("seed-reset-frame-1");
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
             exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 31);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let fb_slot = exec
             .backend()
@@ -1103,14 +1103,14 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut seed_update, &device);
             gpu.clear_texture(&seed_texture, 0.1, 0.6, 0.9, 1.0);
         }
-        seed_update.commit_and_wait_completed();
+        seed_update.commit_and_wait().expect("GPU work completes");
         g.set_param(trigger, "value", ParamValue::Float(2.0))
             .unwrap();
         {
             let mut enc = device.create_encoder("seed-reset-frame-2");
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
             exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 31);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let fb_slot = exec
             .backend()
@@ -1131,12 +1131,12 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut seed_update, &device);
             gpu.clear_texture(&seed_texture, 0.9, 0.2, 0.4, 1.0);
         }
-        seed_update.commit_and_wait_completed();
+        seed_update.commit_and_wait().expect("GPU work completes");
         {
             let mut enc = device.create_encoder("seed-reset-frame-after-clear");
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
             exec.execute_frame_with_state(&mut g, &plan, frame_time(), &mut gpu, &mut store, 31);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let fb_slot = exec
             .backend()

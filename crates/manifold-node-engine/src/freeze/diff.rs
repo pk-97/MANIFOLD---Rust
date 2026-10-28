@@ -163,7 +163,7 @@ impl TextureDiff {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "freeze.diff",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         // SAFETY: same shared buffer, now holding the reduced result.
         let raw: [u32; 4] = unsafe {

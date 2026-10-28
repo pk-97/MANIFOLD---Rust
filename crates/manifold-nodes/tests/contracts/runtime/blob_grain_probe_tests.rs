@@ -115,7 +115,8 @@ fn assert_solid_red(
     h: u32,
     what: &str,
 ) {
-    let raw = manifold_node_engine::testkit::gpu::readback_raw_halves(device, tex, w, h);
+    let raw = manifold_node_engine::testkit::gpu::readback_raw_halves(device, tex, w, h)
+        .expect("GPU readback completes");
     let (m, s) = channel_stats(&raw);
     assert!(
         (m[0] - 1.0).abs() < 0.02
@@ -161,7 +162,7 @@ fn blob_grain_empty_detections_passes_video_through() {
             let mut gpu = GpuEncoder::new(&mut enc, &device);
             cg.run(&mut gpu, &input, &effects, &[], &ctx(w, h, frame));
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     };
 
     // Warm up to steady state (blob detection worker + two-frame empty guard).

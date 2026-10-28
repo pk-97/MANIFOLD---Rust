@@ -41,7 +41,8 @@ fn write_png(device: &GpuDevice, texture: &GpuTexture, name: &str) -> PathBuf {
     let path = dir.join(format!("{name}.png"));
     fs::write(
         &path,
-        readback_to_srgb_png_linear(device, texture, WIDTH, HEIGHT),
+        readback_to_srgb_png_linear(device, texture, WIDTH, HEIGHT)
+            .expect("GPU readback completes"),
     )
     .unwrap_or_else(|error| panic!("write {path:?}: {error}"));
     path
@@ -167,8 +168,9 @@ fn render_capture(
             .expect("blob-v2 runtime output")
             .clone()
     };
-    encoder.commit_and_wait_completed();
-    let bytes = readback_raw_halves(device, &output, WIDTH, HEIGHT);
+    encoder.commit_and_wait().expect("GPU work completes");
+    let bytes =
+        readback_raw_halves(device, &output, WIDTH, HEIGHT).expect("GPU readback completes");
     (bytes, output)
 }
 
@@ -377,8 +379,8 @@ fn render_group_fixture(
             .expect("Blob Mask group output")
             .clone()
     };
-    encoder.commit_and_wait_completed();
-    readback_raw_halves(device, &output, WIDTH, HEIGHT)
+    encoder.commit_and_wait().expect("GPU work completes");
+    readback_raw_halves(device, &output, WIDTH, HEIGHT).expect("GPU readback completes")
 }
 
 #[derive(Clone, Copy)]

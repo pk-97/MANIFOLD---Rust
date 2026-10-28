@@ -214,7 +214,7 @@ fn timed_commit(encoder: manifold_gpu::GpuEncoder) -> Option<f64> {
     encoder.add_gpu_time_handler(move |seconds| {
         let _ = sender.send(seconds * 1000.0);
     });
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     receiver
         .recv_timeout(Duration::from_secs(1))
         .ok()

@@ -348,12 +348,12 @@ fn run_tl_fixture(
         true,
         "trace_shadow_rays-tlb-proof",
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
 
     let readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Upload);
     let mut enc2 = device.create_encoder("rt-tlb-readback");
     enc2.copy_texture_to_buffer(&out_sv, &readback_buf, 2, 1, 2 * 4 * 4);
-    enc2.commit_and_wait_completed();
+    enc2.commit_and_wait().expect("GPU work completes");
     let ptr = readback_buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");

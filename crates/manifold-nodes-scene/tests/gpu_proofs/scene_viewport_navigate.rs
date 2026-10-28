@@ -117,7 +117,7 @@ fn render_show_frame(
             &manifold_core::params::ParamManifest::default(),
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     h.readback(&target.texture)
 }
 

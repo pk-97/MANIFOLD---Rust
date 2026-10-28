@@ -463,7 +463,7 @@ mod gpu_tests {
         }
         let place = device.create_compute_pipeline(wgsl, "place_main", "scatter-place-test");
         enc.dispatch_compute(&place, &bindings, [capacity.div_ceil(256), 1, 1], "place");
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let ptr = ibuf.mapped_ptr().expect("shared instance buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const InstanceTransform, capacity as usize) }

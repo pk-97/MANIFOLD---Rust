@@ -871,7 +871,7 @@ mod gpu_tests {
         let buffer = device.create_buffer(u64::from(row_bytes) * u64::from(texture.height), manifold_gpu::BufferUse::Upload);
         let mut encoder = device.create_encoder("blur-smooth-proof-readback");
         encoder.copy_texture_to_buffer(texture, &buffer, texture.width, texture.height, row_bytes);
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let ptr = buffer.mapped_ptr().expect("blur proof readback buffer");
         let values: &[u16] = unsafe {
             std::slice::from_raw_parts(
@@ -950,7 +950,7 @@ mod gpu_tests {
                 &mut gpu,
             );
         }
-        native.commit_and_wait_completed();
+        native.commit_and_wait().expect("GPU work completes");
         let output_texture = executor
             .backend()
             .texture_2d(output_slot)

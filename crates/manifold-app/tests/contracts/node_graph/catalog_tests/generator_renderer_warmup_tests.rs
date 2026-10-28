@@ -262,7 +262,7 @@ fn thumbnail_capture_survives_owner_drop_before_gpu_submission() {
     assert!(renderer.thumb_gens.is_empty());
     encoder.copy_texture_to_buffer(&atlas.texture, &readback, THUMB_W, THUMB_H, bytes_per_row);
     encoder.signal_event(&event);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     retirement.drain();
     assert_eq!(retirement.pending_count(), 0);
     // SAFETY: the completed command buffer owns the only GPU writes;
@@ -321,7 +321,7 @@ fn render_frames(renderer: &mut GeneratorRenderer, layers: &[Layer], frames: usi
         let mut gpu = GpuEncoder::new(&mut native_enc, &device);
         let time = f as f64 * DT as f64;
         renderer.render_all(&mut gpu, time, 0.0, DT, layers, 1, &[], None);
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
     }
 }
 

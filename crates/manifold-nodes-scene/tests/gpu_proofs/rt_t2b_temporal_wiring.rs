@@ -158,7 +158,7 @@ fn render_frame(
             &manifold_core::params::ParamManifest::default(),
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 }
 
 fn mean_abs_diff_rgb(a: &[f32], b: &[f32]) -> f32 {

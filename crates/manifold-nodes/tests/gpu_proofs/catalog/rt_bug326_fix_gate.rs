@@ -63,7 +63,7 @@ fn frame(
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
             runtime.render(&mut gpu, target, &c, manifest);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     });
 }
 
@@ -93,7 +93,7 @@ fn readback_rgba_f32(
     let buf = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("bug326-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");

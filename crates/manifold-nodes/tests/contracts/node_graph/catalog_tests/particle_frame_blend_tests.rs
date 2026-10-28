@@ -499,7 +499,7 @@ mod gpu_tests {
             [1, 1, 1],
             "particle-blend-fused",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let fused: Vec<InstanceTransform> = read(&output, b.len());
         // At t=1/2 with zero endpoint velocities Hermite is the midpoint.
         // Births have zero velocity and full radius; the plane clamps y to 0.

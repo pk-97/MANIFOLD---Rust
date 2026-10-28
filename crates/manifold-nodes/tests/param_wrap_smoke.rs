@@ -93,14 +93,14 @@ fn render_generator_at(preset_id: &'static str, param_id: &str, value: f32) -> V
         let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
         runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let bytes_per_row = W * 8;
     let total = u64::from(H * bytes_per_row);
     let buf = device.create_buffer(total, BufferUse::Upload);
     let mut readback = device.create_encoder("wrap-smoke-readback");
     readback.copy_texture_to_buffer(&target.texture, &buf, W, H, bytes_per_row);
-    readback.commit_and_wait_completed();
+    readback.commit_and_wait().expect("GPU work completes");
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
     let halves: &[u16] =
         unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (W * H * 4) as usize) };

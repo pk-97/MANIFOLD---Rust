@@ -328,7 +328,7 @@ fn encode_source(
         job,
         "whitewater-source-reference",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let elements = job.pool.elements() as usize;
     (read(job.source, elements), read(job.distance, elements))
 }
@@ -777,7 +777,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
                 destination.size,
             );
         }
-        native.commit_and_wait_completed();
+        native.commit_and_wait().expect("GPU work completes");
         let counts: Vec<u32> = read(&counts_out.1, 9);
         assert!(counts[1] > 0, "inside bubbles must emit: {counts:?}");
         assert_eq!(

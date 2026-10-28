@@ -216,7 +216,7 @@ fn render_frame_with_enabled_values(
                         .map_or(&empty_manifest, |manifests| &manifests[frame_index]),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         });
     }
     let bytes = manifold_node_engine::testkit::gpu_harness::retry_on_gpu_commit_error(|| {

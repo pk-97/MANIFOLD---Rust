@@ -1056,7 +1056,8 @@ fn write_png(ct: &mut crate::content_thread::ContentThread, path: &str) {
         texture,
         texture.width,
         texture.height,
-    );
+    )
+    .expect("GPU readback completes");
     match std::fs::write(path, png) {
         Ok(()) => eprintln!("frame-time: wrote {path}"),
         Err(e) => eprintln!("frame-time: write {path}: {e}"),

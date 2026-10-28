@@ -224,7 +224,7 @@ fn empty_frame_master_effects_drop_master_chain_before_early_return() {
     let mut enc = device.create_encoder("empty-frame-obsolete-chain");
     let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &device);
     let _ = comp.render(&mut gpu, &frame);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     assert!(comp.master_effect_chain.is_none());
     assert!(comp.led_master_ec.is_none());
@@ -585,7 +585,7 @@ fn warmup_builds_layer_post_fx_chain_and_zero_cold_touches_on_play() {
     let mut enc = device.create_encoder("warmup play");
     let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &device);
     let _ = comp.render(&mut gpu, &frame);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     reset_cold_touch_counts();
     set_transport_playing(true);
@@ -593,7 +593,7 @@ fn warmup_builds_layer_post_fx_chain_and_zero_cold_touches_on_play() {
         let mut enc = device.create_encoder("warmup play");
         let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut enc, &device);
         let _ = comp.render(&mut gpu, &frame);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         // Silence unused warning in release builds.
         let _ = f;
     }

@@ -294,7 +294,7 @@ fn whitewater_live_stage_follows_pool_changes() {
             capture(device, &mut enc, &fresh),
         ));
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     for (i, (got, want)) in rows.iter().enumerate() {
         assert_rows(got, want, &format!("transition {i}"));
     }
@@ -405,7 +405,7 @@ fn whitewater_influence_swap_lifecycle() {
         enc.copy_buffer_to_buffer(live.tick_output("pool_out").unwrap(), &pool, pool.size);
         enc.copy_buffer_to_buffer(live.tick_output("state_out").unwrap(), &state, state.size);
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     for (i, (got, want)) in rows.iter().enumerate() {
         assert_rows(got, want, &format!("tick {i}"));
     }
@@ -502,7 +502,7 @@ fn whitewater_influence_restarts_where_a_slot_changes_tile() {
         seen.push(capture_influence(device, &mut enc, &step));
         tables.push(tiles);
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     drop(tables);
     for (tick, ((_, _, slots), buffer)) in ticks.iter().zip(&seen).enumerate() {
         let values = read::<f32>(buffer, buffer.size as usize / 4);

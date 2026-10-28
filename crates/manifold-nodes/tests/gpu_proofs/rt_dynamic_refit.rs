@@ -223,7 +223,7 @@ fn fresh_build_hit(
         0,
         0,
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     read_hit(&hit)
 }
 
@@ -270,7 +270,7 @@ fn rt_dynamic_selective_refit_matches_fresh_build_and_instances() {
                 0,
                 0,
             );
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
             (update, read_hit(&hit))
         };
 
@@ -397,7 +397,7 @@ fn rt_dynamic_selective_refit_matches_fresh_build_and_instances() {
         ),
         (1, 0, 1, 0)
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
 
     write_instance(&instances, 4.0);
     let mut encoder = device.create_encoder("rt-refit-instance");
@@ -432,7 +432,7 @@ fn rt_dynamic_selective_refit_matches_fresh_build_and_instances() {
         0,
         0,
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     assert_numerical_parity(
         &read_hit(&hit),
         &fresh_build_hit(device, &triangle_at(0.0), 4.0, Some(4.0)),
@@ -502,7 +502,7 @@ fn rt_dynamic_refit_atomic_validation_and_retained_lifetime() {
     );
     drop(accel);
     drop(vertices);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     assert_eq!(
         read_hit(&hit).hit,
         1,

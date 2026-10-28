@@ -235,7 +235,7 @@ fn build<'a>(
             device, &mut enc, &mut accel, objects, &changes, &rows, true, true,
         )
         .expect("encode accel update");
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     Scene {
         accel,
         normal_sources: ns_slot.expect("ensure_normal_sources must allocate"),
@@ -262,7 +262,7 @@ fn query(
         0,
         5,
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = hits.mapped_ptr().expect("hit buffer must be CPU-mapped");
     unsafe { slice::from_raw_parts(ptr as *const DebugRayQueryHit, rays.len()).to_vec() }
 }
@@ -358,7 +358,7 @@ fn trace(
         false,
         "trace_shadow_rays-alpha-walk-bound",
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     harness::readback_rgba_f32(device, &out_sv)
 }
 

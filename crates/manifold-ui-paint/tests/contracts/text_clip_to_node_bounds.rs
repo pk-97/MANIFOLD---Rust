@@ -87,7 +87,7 @@ fn overlong_label_stays_inside_button() {
     {
         let mut enc = device.create_encoder("text-clip-render");
         ui.render(&mut enc, &target, GpuLoadAction::Clear);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     let bytes = readback(&device, &target);
 
@@ -233,7 +233,7 @@ fn flush_fit_label_keeps_edge_glyphs() {
     {
         let mut enc = device.create_encoder("flush-fit-render");
         ui.render(&mut enc, &target, GpuLoadAction::Clear);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     let bytes = readback(&device, &target);
 
@@ -282,7 +282,7 @@ fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
 
     let mut enc = device.create_encoder("text-clip-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let ptr = buf.mapped_ptr().expect("shared readback buffer is mapped");
     let bytes: &[u8] =

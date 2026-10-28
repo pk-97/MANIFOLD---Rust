@@ -179,7 +179,7 @@ mod gpu_tests {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "resolve-oracle",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         // Read back the density texture (Rgba16Float = 8 bytes/pixel).
         let bytes_per_row = w * 8;
@@ -187,7 +187,7 @@ mod gpu_tests {
         let readback = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
         let mut rb = device.create_encoder("resolve-readback");
         rb.copy_texture_to_buffer(&out_target.texture, &readback, w, h, bytes_per_row);
-        rb.commit_and_wait_completed();
+        rb.commit_and_wait().expect("GPU work completes");
         let ptr = readback.mapped_ptr().expect("shared readback");
         let px: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), cells * 4) };
         for i in 0..cells {

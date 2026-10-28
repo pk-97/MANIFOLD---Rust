@@ -26,7 +26,7 @@ fn words_of(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
     let staged = device.create_buffer(buffer.size, BufferUse::Upload);
     let mut enc = device.create_encoder("world tiles proof readback");
     enc.copy_buffer_to_buffer(buffer, &staged, buffer.size);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     read(&staged, (buffer.size / 4) as usize)
 }
 

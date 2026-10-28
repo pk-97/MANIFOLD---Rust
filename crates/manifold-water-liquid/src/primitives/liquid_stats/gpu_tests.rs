@@ -90,7 +90,7 @@ fn reduce(device: &GpuDevice, particles: &[u32], n: u32) -> Vec<u32> {
             particle_mass: 0.5,
         },
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     read(&stats)
 }
 

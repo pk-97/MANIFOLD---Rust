@@ -407,7 +407,7 @@ fn generated_atomic_side_output_matches_cpu_reference() {
         [(N as u32).div_ceil(256), 1, 1],
         "agfh-multi-output-atomic",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let got_points: Vec<Particle> = unsafe {
         std::slice::from_raw_parts(points_buf.mapped_ptr().unwrap().cast::<Particle>(), N)

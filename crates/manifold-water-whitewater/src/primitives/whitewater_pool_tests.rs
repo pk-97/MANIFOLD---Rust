@@ -782,7 +782,7 @@ fn sort_into_world<T: KnownItem + bytemuck::Pod>(
             &LABELS,
         )
         .expect("the pooled sort encodes");
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let len = pool_len(pool_tiles) as usize;
     let ranges: Vec<CellRange> = read(sorter.ranges().expect("the cell ranges"), len);
     let ranges = harness.array(&ranges, len);

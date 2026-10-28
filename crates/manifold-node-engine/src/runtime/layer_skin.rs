@@ -256,7 +256,7 @@ mod tests {
             registry.publish_snapshot(&mut gpu, &layer_id, &published);
             registry.finish_snapshots();
         }
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         assert_eq!(registry.len(), 1);
         let looked_up = registry.get(&layer_id);
         assert_eq!(looked_up.width, 64);
@@ -290,7 +290,7 @@ mod tests {
             registry.publish_snapshot(&mut gpu, &layer_id, &published);
             registry.finish_snapshots();
         }
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         registry.clear();
         assert_eq!(registry.len(), 0);
         assert_eq!(registry.get(&layer_id).width, 1);
@@ -316,8 +316,9 @@ mod tests {
             registry.finish_snapshots();
             gpu.clear_texture(&target.texture, 0.75, 0.0, 0.0, 1.0);
         }
-        encoder.commit_and_wait_completed();
-        let raw = crate::testkit::gpu::readback_raw_halves(&device, registry.get(&id), 4, 4);
+        encoder.commit_and_wait().expect("GPU work completes");
+        let raw = crate::testkit::gpu::readback_raw_halves(&device, registry.get(&id), 4, 4)
+            .expect("GPU readback completes");
         let red = half::f16::from_bits(u16::from_le_bytes([raw[0], raw[1]])).to_f32();
         assert!(
             (red - 0.25).abs() < 0.001,
@@ -345,7 +346,7 @@ mod tests {
             registry.begin_snapshots();
             registry.finish_snapshots();
         }
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         assert_eq!(
             registry.get(&id).width,
             1,
@@ -362,7 +363,7 @@ mod tests {
             registry.publish_snapshot(&mut gpu, &id, &source.texture);
             registry.finish_snapshots();
         }
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         assert_eq!(registry.get(&id).width, 4, "referenced layer must snapshot");
 
         // A cycle with no reads clears the set and drops the stale entry.

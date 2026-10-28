@@ -203,7 +203,7 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
             exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         let tex = exec
             .backend()
@@ -214,7 +214,7 @@ mod gpu_tests {
         let readback = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
         let mut readback_enc = device.create_encoder("gain-readback");
         readback_enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
-        readback_enc.commit_and_wait_completed();
+        readback_enc.commit_and_wait().expect("GPU work completes");
 
         let ptr = readback.mapped_ptr().expect("shared readback");
         let pixels: &[u16] =
@@ -318,7 +318,7 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
             exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         let tex = exec.backend().texture_2d(out_slot).expect("retained");
         let bytes_per_row = w * 8;
@@ -326,7 +326,7 @@ mod gpu_tests {
         let readback = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
         let mut readback_enc = device.create_encoder("gain-wired-readback");
         readback_enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
-        readback_enc.commit_and_wait_completed();
+        readback_enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback.mapped_ptr().expect("shared");
         let pixels: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };

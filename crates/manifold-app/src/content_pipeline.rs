@@ -1328,7 +1328,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             let mut encoder = device.create_encoder("Warmup retirement checkpoint");
             encoder.signal_event(event);
             self.native_signal_value = event.encoded_value();
-            if let Err(error) = encoder.try_commit_and_wait_completed() {
+            if let Err(error) = encoder.commit_and_wait() {
                 log::error!("Warmup retirement checkpoint failed: {error}");
                 crate::abort_gpu_work("GPU failure during warmup retirement checkpoint");
             }

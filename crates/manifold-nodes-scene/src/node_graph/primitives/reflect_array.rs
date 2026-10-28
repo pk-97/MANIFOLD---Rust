@@ -658,7 +658,7 @@ mod gpu_tests {
             [out_cap.div_ceil(256), 1, 1],
             "reflect_array_test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     fn assert_matches_cpu(
@@ -1205,7 +1205,7 @@ mod gpu_tests {
             [out_cap.div_ceil(256), 1, 1],
             "reflect_fused_test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let gpu_data = read_back(&out_buf, out_cap);
         assert_matches_cpu(

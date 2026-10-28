@@ -352,7 +352,7 @@ mod gpu_tests {
             [(vertices.len() as u32).div_ceil(256), 1, 1],
             "mesh-ramp-test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let ptr = dst.mapped_ptr().expect("shared weights buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const f32, vertices.len()) }.to_vec()

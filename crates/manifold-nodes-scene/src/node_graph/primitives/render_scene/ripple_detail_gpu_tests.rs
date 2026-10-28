@@ -24,7 +24,7 @@ fn read_slopes(device: &GpuDevice, texture: &GpuTexture) -> Vec<[f32; 2]> {
     let out = device.create_buffer((N * N * 4) as u64, BufferUse::Upload);
     let mut enc = device.create_encoder("ripple slopes readback");
     enc.copy_texture_to_buffer(texture, &out, N as u32, N as u32, N as u32 * 4);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let halves: &[u16] = unsafe {
         std::slice::from_raw_parts(out.mapped_ptr().expect("shared").cast::<u16>(), N * N * 2)
     };
@@ -65,7 +65,7 @@ fn slopes_of_a_sine_are_its_derivative() {
     let pipeline = device.create_compute_pipeline(SLOPES_WGSL, "cs_slopes", "ripple slopes test");
     let mut enc = device.create_encoder("ripple slopes test");
     encode_slopes(&mut enc, &pipeline, &buffer, &texture, length);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let slopes = read_slopes(&device, &texture);
     let peak = amplitude * k;
@@ -140,7 +140,7 @@ pub(super) fn made_tile(device: &GpuDevice, field: &FieldObject) -> RippleDetail
     let mut ripples = RippleDetail::default();
     let mut enc = device.create_encoder("ripple tile");
     ripples.encode(device, &mut enc, std::slice::from_ref(field), 2.0);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     ripples
 }
 
@@ -272,7 +272,7 @@ pub(super) fn probe_normals(
             "ripple probe",
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     outs.iter()
         .map(|out| {
             read_f32(out, PROBES * 4)

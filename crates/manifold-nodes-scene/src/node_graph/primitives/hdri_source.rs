@@ -797,7 +797,7 @@ mod gpu_tests {
             manifold_gpu::BufferUse::Upload,
         );
         enc.copy_texture_to_buffer(&out, &readback, dw, dh, bytes_per_row);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback.mapped_ptr().expect("shared readback buffer");
         let halves: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (dw * dh * 4) as usize) };
@@ -921,7 +921,7 @@ mod gate_gpu_tests {
             prim.run(&mut ctx);
             unchanged = ctx.outputs_unchanged;
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
         unchanged
     }
 
@@ -938,7 +938,7 @@ mod gate_gpu_tests {
         let readback_buf = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder("hdri-gate-readback");
         enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback_buf.mapped_ptr().expect("shared readback");
         unsafe { std::slice::from_raw_parts(ptr, total as usize) }.to_vec()
     }

@@ -140,13 +140,13 @@ fn cymatics_survives_live_resize() {
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let bytes_per_row = w * 8;
         let buf = device.create_buffer(u64::from(h * bytes_per_row), BufferUse::Upload);
         let mut rb = device.create_encoder("cymatics-resize-readback");
         rb.copy_texture_to_buffer(&target.texture, &buf, w, h, bytes_per_row);
-        rb.commit_and_wait_completed();
+        rb.commit_and_wait().expect("GPU work completes");
         let ptr = buf.mapped_ptr().expect("shared buffer mapped");
         let px: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };

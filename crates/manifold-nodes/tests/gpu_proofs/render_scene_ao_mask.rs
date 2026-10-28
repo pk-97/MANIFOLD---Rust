@@ -177,7 +177,7 @@ fn readback_r8unorm(
 
     let mut enc = device.create_encoder("ao-mask-readback");
     enc.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let ptr = buf
         .mapped_ptr()
@@ -260,7 +260,7 @@ fn render_and_read(json: &str, frames: i64) -> (Vec<u8>, u32, u32, Vec<u8>) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     let color_bytes = h.readback(&target.texture);
@@ -393,7 +393,7 @@ fn rt_enabled_and_ready_forces_zero_everywhere_drawn() {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     let dumped = runtime.dump_textures_all();
@@ -739,7 +739,7 @@ fn render_ao_group(json: &str, frames: i64) -> (Vec<u8>, Vec<u8>, u32, u32) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     let dumped = runtime.dump_textures_all();
@@ -865,7 +865,7 @@ fn rt_ready_makes_ao_group_identity_on_color() {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     let dumped = runtime.dump_textures_all();

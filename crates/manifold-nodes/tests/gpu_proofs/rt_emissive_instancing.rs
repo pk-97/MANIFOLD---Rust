@@ -300,7 +300,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
                 true,
             )
             .expect("encode accel update");
-        enc_build.commit_and_wait_completed();
+        enc_build.commit_and_wait().expect("GPU work completes");
     }
     let table = accel
         .emissive_table
@@ -451,12 +451,12 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
         false,
         "trace_shadow_rays-emissive-instancing",
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
 
     let readback = device.create_buffer(8 * 4 * 4, BufferUse::Upload);
     let mut enc2 = device.create_encoder("rt-emissive-inst-readback");
     enc2.copy_texture_to_buffer(&out_irr, &readback, 8, 1, 8 * 4 * 4);
-    enc2.commit_and_wait_completed();
+    enc2.commit_and_wait().expect("GPU work completes");
     let ptr = readback.mapped_ptr().expect("readback must be mapped");
     let floats: &[f32] = unsafe { slice::from_raw_parts(ptr.cast::<c_void>().cast::<f32>(), 32) };
     let got = &floats[4 * 4..4 * 4 + 3];
@@ -469,7 +469,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     let rb_n = device.create_buffer(8 * 4 * 4, BufferUse::Upload);
     let mut enc3 = device.create_encoder("rt-emissive-inst-rb-n");
     enc3.copy_texture_to_buffer(&out_n, &rb_n, 8, 1, 8 * 4 * 4);
-    enc3.commit_and_wait_completed();
+    enc3.commit_and_wait().expect("GPU work completes");
     let n_ptr = rb_n.mapped_ptr().expect("readback must be mapped");
     let n_floats: &[f32] =
         unsafe { slice::from_raw_parts(n_ptr.cast::<c_void>().cast::<f32>(), 32) };

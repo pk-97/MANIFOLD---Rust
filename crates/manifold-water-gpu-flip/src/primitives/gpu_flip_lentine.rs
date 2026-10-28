@@ -461,7 +461,7 @@ mod gpu_tests {
                 &velocity,
             )
             .unwrap();
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         // Bit comparison includes intentionally invalid NaNs in rejection cases.
         for (buffer, expected) in [
             (
@@ -779,7 +779,7 @@ mod gpu_tests {
                         },
                     )
                     .unwrap();
-                encoder.commit_and_wait_completed();
+                encoder.commit_and_wait().expect("GPU work completes");
                 let progress = read::<u32>(&solver.progress, 16);
                 assert_eq!(
                     progress[0], fixture.status,

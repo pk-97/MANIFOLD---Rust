@@ -666,6 +666,7 @@ impl Show {
     pub fn readback(&self) -> Vec<u8> {
         manifold_gpu::autorelease_scope(|| {
             readback_srgb_rgba8(&self.device, &self.target.texture, self.size.0, self.size.1)
+                .expect("GPU readback completes")
         })
     }
 
@@ -709,7 +710,7 @@ impl Show {
             .device
             .create_encoder("whitewater-scene provided readback");
         encoder.copy_buffer_to_buffer(buffer, &staged, bytes);
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let ptr = staged.mapped_ptr().expect("shared readback");
         // SAFETY: shared storage of `bytes`, the copy completed above.
         unsafe { std::slice::from_raw_parts(ptr.cast::<u8>().cast_const(), bytes as usize) }
@@ -766,7 +767,7 @@ impl Show {
             .device
             .create_encoder("whitewater-scene provided readback");
         encoder.copy_buffer_to_buffer(buffer, &staged, bytes);
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let ptr = staged.mapped_ptr().expect("shared readback");
         // SAFETY: shared storage of `bytes`, the copy completed above.
         unsafe { std::slice::from_raw_parts(ptr.cast::<T>().cast_const(), len) }.to_vec()

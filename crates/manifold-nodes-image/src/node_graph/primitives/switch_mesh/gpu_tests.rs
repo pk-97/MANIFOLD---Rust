@@ -319,7 +319,7 @@ fn run<T: KnownItem>(
             };
             executor.execute_frame_with_gpu(&mut graph, &plan, time, &mut gpu);
         }
-        native.commit_and_wait_completed();
+        native.commit_and_wait().expect("GPU work completes");
         let (buffer, extent) = seen.lock().unwrap().take().expect("sink ran");
         let read = |buffer: &GpuBuffer, offset: u64, len: usize| {
             let ptr = buffer.mapped_ptr().expect("shared buffer");

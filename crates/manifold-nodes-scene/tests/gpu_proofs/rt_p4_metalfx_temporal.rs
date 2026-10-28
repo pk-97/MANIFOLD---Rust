@@ -113,7 +113,7 @@ fn readback_rgba_f32(texture: &GpuTexture, w: u32, h: u32) -> Vec<f32> {
         .create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = h_harness.device.create_encoder("p4-temporal-readback");
     enc.copy_texture_to_buffer(texture, &buf, w, h, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
@@ -201,7 +201,7 @@ fn upscaled_output_approximates_native_within_coarse_epsilon() {
             true,
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let upscaled = readback_rgba_f32(&upscaler.output.texture, DST_W, DST_H);
     let native = gradient_rgba_f16(DST_W, DST_H)
@@ -262,7 +262,7 @@ fn cut_plus_one_matches_cold_start_within_epsilon() {
                 reset,
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     // Cut: scene B replaces scene A on the SAME node (owner_key changes
@@ -293,7 +293,7 @@ fn cut_plus_one_matches_cold_start_within_epsilon() {
             reset_at_cut,
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let cut_plus_one = readback_rgba_f32(&warmed.output.texture, DST_W, DST_H);
 
     // Cold start: a FRESH scaler's very first frame, same scene B content.
@@ -310,7 +310,7 @@ fn cut_plus_one_matches_cold_start_within_epsilon() {
             true,
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let cold_start = readback_rgba_f32(&cold.output.texture, DST_W, DST_H);
 
     let diff = mean_abs_diff_rgb(&cut_plus_one, &cold_start);

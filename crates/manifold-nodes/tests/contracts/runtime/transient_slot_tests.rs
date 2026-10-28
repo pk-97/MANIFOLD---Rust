@@ -213,7 +213,7 @@ fn held_terminal_publishes_no_chain_output() {
             )
             .is_some()
     };
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     assert!(!published, "a held terminal publishes nothing");
     assert!(runtime.output_texture().is_none());
 }

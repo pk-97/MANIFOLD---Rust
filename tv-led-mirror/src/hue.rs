@@ -598,6 +598,8 @@ fn try_stream(
     // close in weight). Lives across ticks even when single-color mode
     // is active, so toggling back to dual doesn't pop.
     let mut dual_reducer = DualReducer::new();
+    // A failed GPU readback logs once and skips that tick's colours.
+    let mut readback_failure_logged = false;
 
     loop {
         // Cancellable sleep until next tick. Any incoming command preempts.
@@ -629,7 +631,13 @@ fn try_stream(
         let mut enc = state.device.create_encoder("tv-led-mirror.hue.readback");
         let out = state.slicer.output();
         enc.copy_texture_to_buffer(out, &readback, w, h, bytes_per_row);
-        enc.commit_and_wait_completed();
+        if let Err(e) = enc.commit_and_wait() {
+            if !readback_failure_logged {
+                log::error!("hue: GPU readback failed, skipping ticks until it recovers ({e})");
+                readback_failure_logged = true;
+            }
+            continue;
+        }
 
         // Snapshot dyn knobs + the slicer's gamma in one lock so we can
         // undo the gamma curve when reducing (see `reduce_dominant`).

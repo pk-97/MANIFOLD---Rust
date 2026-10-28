@@ -112,7 +112,7 @@ pub fn run_atom<P: Primitive>(
             step_params,
         );
     }
-    native.commit_and_wait_completed();
+    native.commit_and_wait().expect("GPU work completes");
     assert!(errors.is_empty(), "{errors:?}");
     read(&output.1, output_len)
 }
@@ -278,7 +278,7 @@ impl Chain {
                 0,
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let buffer = exec
             .host_array_buffer(&graph, &plan, input)
             .expect("the sink's input keeps its own storage");

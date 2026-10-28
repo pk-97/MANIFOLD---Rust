@@ -38,7 +38,7 @@ pub(super) fn copy_out(device: &GpuDevice, buffer: &GpuBuffer) -> Vec<u32> {
     let staged = device.create_buffer(buffer.size, BufferUse::Upload);
     let mut enc = device.create_encoder("sheeting proof readback");
     enc.copy_buffer_to_buffer(buffer, &staged, buffer.size);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     read(&staged, (buffer.size / 4) as usize)
 }
 
@@ -102,7 +102,7 @@ impl World {
                 kept: None,
             },
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let words: Vec<u32> = read(tiles.table(), table_words(count) as usize);
         let entries = table_entries(count);
         let slot_of = (0..count)
@@ -351,7 +351,7 @@ fn run(
         Some(plan) => stage.encode_gated(&mut enc, &inputs, plan, &world.tiles),
         None => stage.encode(&mut enc, &inputs, &world.tiles),
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let (births, count) = stage.births();
     let words = copy_out(device, count);
     let births: Vec<u32> = copy_out(device, births);
@@ -609,7 +609,7 @@ fn matches_port(
         enc.add_gpu_time_handler(move |seconds| {
             let _ = tx.send(seconds);
         });
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         times.push(rx.recv().expect("GPU time"));
     }
     times.sort_by(f64::total_cmp);
@@ -795,7 +795,7 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
             threshold: FILL_THRESHOLD,
         };
         stage.encode_index_probe(&device, &mut enc, &inputs, &world.tiles);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let words = copy_out(&device, stage.births().0);
         // In contract: finite with both floors inside +-2^30, the engine's floor.
         // Policy: the clamp for everything else, deliberately not native's.
@@ -951,7 +951,7 @@ fn gpu_flip_sheeting_depth_walk_below_the_box_matches_the_port() {
                 },
                 &world.tiles,
             );
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let flags = world.dense_of(&copy_out(&device, &stage.scratch()[0]));
             (0..flags.len()).filter(|&c| flags[c] != 0).collect()
         };
@@ -1024,7 +1024,7 @@ fn gpu_flip_sheeting_bucket_rows_match_cpu_merge() {
             enc.copy_buffer_to_buffer(&counts, &stage.scratch()[3], counts.size);
             enc.copy_buffer_to_buffer(&segments, &stage.scratch()[4], segments.size);
             stage.encode_buckets(&mut enc, &inputs, &world.tiles);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let lengths = copy_out(&device, &stage.scratch()[1]);
             let rows = copy_out(&device, &stage.scratch()[4]);
             for (r, want) in fixture.merged.iter().enumerate() {
@@ -1211,7 +1211,7 @@ fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_cell: bool) {
             if replay {
                 *cache = Some(enc.end_replay());
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let mut count = copy_out(&device, stage.births().1);
             count.truncate(2); // Only these words are defined by the stage.
             assert_eq!(count[1], 0, "recomputed claimant failed");

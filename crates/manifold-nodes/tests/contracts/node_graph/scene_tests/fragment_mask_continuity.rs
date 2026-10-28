@@ -163,7 +163,7 @@ fn dispatch_mask(
         [(source.len() as u32).div_ceil(256), 1, 1],
         label,
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let ptr = output_buf.mapped_ptr().expect("mask output");
     unsafe { std::slice::from_raw_parts(ptr as *const f32, source.len()) }.to_vec()
 }
@@ -212,7 +212,7 @@ fn dispatch_stagger(
         [(source.len() as u32).div_ceil(256), 1, 1],
         label,
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let ptr = output_buf.mapped_ptr().expect("stagger output");
     unsafe { std::slice::from_raw_parts(ptr as *const f32, source.len()) }.to_vec()
 }
@@ -260,7 +260,7 @@ fn dispatch_remap_weights(
         [(maps.len() as u32).div_ceil(256), 1, 1],
         label,
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let ptr = output_buf.mapped_ptr().expect("remapped weights");
     unsafe { std::slice::from_raw_parts(ptr as *const f32, maps.len()) }.to_vec()
 }
@@ -311,7 +311,7 @@ fn dispatch_remap_mesh(
         [(maps.len() as u32).div_ceil(256), 1, 1],
         label,
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let ptr = output_buf.mapped_ptr().expect("remapped mesh");
     unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, maps.len()) }.to_vec()
 }
@@ -368,7 +368,7 @@ fn dispatch_morph(
         [(input.len() as u32).div_ceil(256), 1, 1],
         label,
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let ptr = output_buf.mapped_ptr().expect("morph output");
     unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, input.len()) }.to_vec()
 }

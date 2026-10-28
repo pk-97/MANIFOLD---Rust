@@ -637,7 +637,7 @@ mod gpu_tests {
             [capacity.div_ceil(256), 1, 1],
             "scene_array_test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let ptr = out_buf.mapped_ptr().expect("shared out buffer");
         let gpu_data = unsafe {

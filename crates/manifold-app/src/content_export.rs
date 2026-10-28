@@ -1506,7 +1506,8 @@ impl ContentThread {
                         texture,
                         texture.width,
                         texture.height,
-                    ),
+                    )
+                    .expect("GPU readback completes"),
                 );
             }
             #[cfg(all(test, feature = "journey-proofs", target_os = "macos"))]
@@ -1523,7 +1524,8 @@ impl ContentThread {
                         texture,
                         texture.width,
                         texture.height,
-                    ),
+                    )
+                    .expect("GPU readback completes"),
                 );
             }
             if let Err(failure) = completion {

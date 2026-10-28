@@ -533,7 +533,7 @@ pub(super) fn gpu_flip_inflow_into_a_pool_with_no_room_writes_nothing_and_refuse
             params: [live_end, ranges.len() as u32, site_count as u32, 5],
         },
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let granted: Vec<u32> = read_staged(&device, &identity, 8);
     assert_eq!(granted[7], live_end, "no room: n stays the live end");
     assert_eq!(granted[3], 0, "no reset is requested");

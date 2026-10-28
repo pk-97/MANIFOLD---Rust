@@ -1909,7 +1909,7 @@ mod overlay_fidelity_proof {
             if renderer.prepare(&device, w, h, 1.0) {
                 let mut enc = device.create_encoder("bug097-overlay-range");
                 renderer.render(&mut enc, &res.offscreen, GpuLoadAction::Load);
-                enc.commit_and_wait_completed();
+                enc.commit_and_wait().expect("GPU work completes");
             }
             let after = readback(&device, &res.offscreen, w, h);
             (before, after)

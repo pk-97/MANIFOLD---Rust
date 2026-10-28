@@ -208,7 +208,7 @@ mod tests {
             registry.publish_snapshot(&mut gpu, &LayerId::new("layer-a"), &published);
             registry.finish_snapshots();
         }
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         // Unknown id → fallback (1×1), never a panic, param id untouched.
         let missing = registry.get(&LayerId::new("deleted-layer"));
         assert_eq!(missing.width, 1);

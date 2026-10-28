@@ -920,7 +920,7 @@ fn generated_remap_matches_original() {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "remap-hand",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     // Generated layout: uniform(0), source(1), uv_field(2), sampler(3), dst(4).
     let gen_out = RenderTarget::new(&device, w, h, FMT, "remap-gen");
@@ -954,7 +954,7 @@ fn generated_remap_matches_original() {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "remap-gen",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     let differ = TextureDiff::new(&device);
@@ -1483,7 +1483,7 @@ fn generated_downsample_matches_original() {
             [64u32.div_ceil(16), 64u32.div_ceil(16), 1],
             "codegen-downsample",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         out
     };
 
@@ -1583,7 +1583,7 @@ fn generated_gaussian_blur_variable_width_matches_original() {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "vbw-test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         out
     };
 
@@ -1674,7 +1674,7 @@ textureStore(vol, vec3<i32>(id), vec4<f32>(f.x, f.y, f.z, 0.5 + 0.5 * f.x));\n\
             [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
             "blur3d-fill",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     let run = |wgsl: &str, entry: &str, param_bytes: &[u8]| -> Vec<u16> {
@@ -1710,13 +1710,13 @@ textureStore(vol, vec3<i32>(id), vec4<f32>(f.x, f.y, f.z, 0.5 + 0.5 * f.x));\n\
             [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
             "blur3d",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let bytes_per_row = n * 8; // rgba16float
         let total = u64::from(bytes_per_row) * u64::from(n) * u64::from(n);
         let buf = device.create_buffer(total, BufferUse::Upload);
         let mut renc = device.create_encoder("blur3d-readback");
         renc.copy_texture_3d_to_buffer(&out, &buf, n, n, n, bytes_per_row);
-        renc.commit_and_wait_completed();
+        renc.commit_and_wait().expect("GPU work completes");
         let ptr = buf.mapped_ptr().expect("shared buffer pointer");
         let halves: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (n * n * n * 4) as usize) };
@@ -1832,7 +1832,7 @@ fn generated_gradient_central_diff_3d_matches_original() {
             [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
             "grad3d",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         readback_volume(&device, &out, n)
     };
 
@@ -1946,7 +1946,7 @@ fn generated_curl_slope_force_3d_matches_original() {
             [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
             "curl3d",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         readback_volume(&device, &out, n)
     };
 
@@ -2118,7 +2118,7 @@ fn generated_hash_field_by_seed_matches_original() {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "hashseed",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         out
     };
 
@@ -2298,7 +2298,7 @@ fn generated_trig_texture_matches_original() {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "trig-hand",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         out
     };
     let r = differ.compare(
@@ -2509,7 +2509,7 @@ fn generated_sample_volume_2d_matches_original() {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "svol",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         out
     };
 

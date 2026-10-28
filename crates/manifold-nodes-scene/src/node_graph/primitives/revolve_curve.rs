@@ -249,7 +249,7 @@ mod gpu_tests {
             [dst_cap.div_ceil(256), 1, 1],
             "revolve-curve-test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let ptr = dst_buf.mapped_ptr().expect("shared dst buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, dst_cap as usize) }.to_vec()
@@ -363,7 +363,7 @@ mod gpu_tests {
             [tri_dst_cap.div_ceil(256), 1, 1],
             "revolve-chain-tri",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         // Every emitted vertex must have a finite, non-degenerate normal
         // (the grid is triangulate_grid-compatible — the D5 claim under

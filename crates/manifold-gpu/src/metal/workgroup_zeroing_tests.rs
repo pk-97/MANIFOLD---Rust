@@ -148,7 +148,7 @@ fn workgroup_memory_reads_zero_after_a_dirty_kernel() {
             }];
             enc.dispatch_compute(&pipelines[0].1, &bindings, [GROUPS, 1, 1], "dirty");
             enc.dispatch_compute(pipeline, &bindings, [GROUPS, 1, 1], entry);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let words = unsafe {
                 std::slice::from_raw_parts(
                     out.mapped_ptr().expect("shared").cast::<u32>(),

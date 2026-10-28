@@ -241,7 +241,7 @@ mod gpu_tests {
             [dispatch_count.div_ceil(256), 1, 1],
             "facet-normals-test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let ptr = dbuf.mapped_ptr().expect("shared dst buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, src.len()) }.to_vec()

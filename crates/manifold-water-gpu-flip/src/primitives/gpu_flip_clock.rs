@@ -1114,14 +1114,14 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
             enc.clear_buffer(&clock.marker_outliers);
         }
         clock.marker_args(&mut enc, record, ReductionPhase::Cleanup, false);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let mut enc = device.create_encoder("marker-classify-proof-dispatch");
         clock.classify_marker(&mut enc, markers, p);
         let timing = enc.commit_and_wait_profiled(device);
         let mut enc = device.create_encoder("marker-classify-proof-readback");
         enc.copy_buffer_to_buffer(&clock.marker_histogram, histogram, 256);
         enc.copy_buffer_to_buffer(&clock.marker_outliers, outliers, 16);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let mut words = read_words(histogram, 64);
         words.extend(read_words(outliers, 4));
         (words, timing.total_ms)
@@ -1310,7 +1310,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                     enc.copy_buffer_to_buffer(&clock.plan, &plans[i], 48);
                     enc.copy_buffer_to_buffer(&clock.marker_histogram, &buffers[2], 256);
                     enc.copy_buffer_to_buffer(&clock.marker_outliers, &buffers[3], 16);
-                    enc.commit_and_wait_completed();
+                    enc.commit_and_wait().expect("GPU work completes");
                     outputs.push((
                         read_words(&markers[i], count as usize * 8),
                         read_words(&plans[i], 12),
@@ -1413,7 +1413,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         enc.copy_buffer_to_buffer(&clock.plan, &plan_readback, 48);
         enc.copy_buffer_range(&clock.obstacle_result, 0, &aggregate_readback, 16, 16);
         enc.copy_buffer_range(&clock.source_result, 0, &aggregate_readback, 32, 16);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         assert_eq!(read_plan(&plan_readback).maximum_speed, 1024.0);
         let aggregates = read_words(&aggregate_readback, 12);
         assert_eq!(f32::from_bits(aggregates[4]), 4.0);
@@ -1438,7 +1438,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
             enc.copy_buffer_range(aggregate, 0, &aggregate_readback, index as u64 * 16, 16);
         }
         enc.copy_buffer_to_buffer(&clock.plan, &plan_readback, 48);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         // The poisoned scratch is stale data an empty marker reduction must
         // not read: every aggregate is zero.
         assert_eq!(read_words(&aggregate_readback, 12), vec![0; 12]);
@@ -1468,7 +1468,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         clock.remove_extreme(&mut enc, &markers, &full, &p);
         copy_scratch(&mut enc);
         enc.copy_buffer_to_buffer(&clock.plan, &plan_readback, 48);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         assert_poison();
         assert_eq!(read_plan(&plan_readback).dt, 0.0);
         let unchanged = read_words(&markers, COUNT as usize * 8);
@@ -1484,7 +1484,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         clock.remove_extreme(&mut enc, &markers, &full, &p);
         enc.copy_buffer_to_buffer(&clock.marker_result, &aggregate_readback, 16);
         enc.copy_buffer_to_buffer(&clock.plan, &plan_readback, 48);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         assert_eq!(
             f32::from_bits(read_words(&aggregate_readback, 4)[0]),
             1024.0
@@ -1571,7 +1571,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
             );
             clock.remove_extreme(&mut enc, &markers, &record, &p);
             enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let result = read_plan(&readback);
             let expected_speed = if count == 0 { 0.0 } else { speed };
             assert!((f64::from(result.maximum_speed) - expected_speed).abs() < 1e-5);
@@ -1657,7 +1657,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
             );
             clock.remove_extreme(&mut enc, &markers, &record, &p);
             enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let result = read_plan(&readback);
             assert!((result.maximum_speed - 11.0).abs() < 1e-5);
             let speeds: Vec<f64> = particles.iter().map(|m| f64::from(m.velocity[0])).collect();
@@ -1759,7 +1759,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 &p,
             );
             enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             assert!((read_plan(&readback).maximum_speed - expected_speed).abs() < 1e-5);
         }
     }
@@ -1831,7 +1831,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 &p,
             );
             enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             read_plan(&readback)
         };
         let without_reaction = dispatch("flip-clock coupled body zero reaction proof");
@@ -1896,7 +1896,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         clock.begin_frame(&mut enc, &initial);
         let plan = clock.dispatch(&mut enc, inputs(SOURCES), &initial);
         enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         assert_eq!(read_plan(&readback).maximum_speed, 3.0);
 
         let untouched = vec![0x12345678u32; (clock.scratch_a.size / 4) as usize];
@@ -1910,7 +1910,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         let plan = clock.dispatch(&mut enc, inputs(SOURCES), &later);
         enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
         enc.copy_buffer_to_buffer(&clock.scratch_a, &scratch, scratch.size);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let result = read_plan(&readback);
         assert_eq!(
             (result.maximum_speed, result.dt, result.nonfinite),
@@ -1928,7 +1928,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         clock.begin_frame(&mut enc, &later);
         let plan = clock.dispatch(&mut enc, inputs(0), &later);
         enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         assert_eq!(
             bytemuck::bytes_of(&result),
             bytemuck::bytes_of(&read_plan(&readback))
@@ -1990,7 +1990,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 &p,
             );
             enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let result = read_plan(&readback);
             assert_eq!(result.maximum_speed, 5.0); // |source| + |force| * frame
             assert!((result.dt - expected_dt(&p, 5.0, limits)).abs() < 1e-6);
@@ -2018,7 +2018,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 &p,
             );
             enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             assert_eq!(read_plan(&readback).maximum_speed, 10.0);
         }
     }
@@ -2072,7 +2072,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 );
                 enc.copy_buffer_to_buffer(plan.buffer(), out, 48);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             (p, read_plan(&plans[0]), read_plan(&plans[1]))
         };
         let (p, first, second) = run(2);
@@ -2132,7 +2132,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
                 enc.copy_buffer_to_buffer(plan.buffer(), &before_cap, 48);
             }
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let result = read_plan(&readback);
         let before = read_plan(&before_cap);
         assert_eq!(before.step_index, 5);
@@ -2175,7 +2175,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
             &p,
         );
         enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let result = read_plan(&readback);
         assert_eq!(result.dt, 1.0);
         assert_eq!(result.elapsed, 1.0);
@@ -2255,7 +2255,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
             );
             enc.copy_buffer_to_buffer(plan.buffer(), readback, 48);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let plans: Vec<_> = readbacks.iter().map(read_plan).collect();
         assert_eq!(plans[0].elapsed, 0.02);
         assert_eq!(plans[0].step_index, 0);
@@ -2298,7 +2298,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         enc.copy_buffer_to_buffer(&plan_seed, &clock.plan, 48);
         clock.marker_args(&mut enc, record, phase, false);
         enc.copy_buffer_to_buffer(&clock.marker_triple, &readback, 16);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         read_words(&readback, 4)
     }
 
@@ -2407,7 +2407,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
             &p,
         );
         enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         read_plan(&readback)
     }
 
@@ -2490,7 +2490,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         let mut enc = device.create_encoder("flip-clock removal past the count");
         enc.copy_buffer_to_buffer(&plan_seed, &clock.plan, 48);
         clock.remove_extreme(&mut enc, &markers, &record, &params());
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         // SAFETY: the encoder completed and the buffer holds CAPACITY records.
         let got = unsafe {
             std::slice::from_raw_parts(

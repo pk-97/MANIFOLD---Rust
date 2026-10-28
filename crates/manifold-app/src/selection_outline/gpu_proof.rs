@@ -62,7 +62,7 @@ fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<[f32; 4]> {
     let buf = device.create_buffer(u64::from(W * H * 8), BufferUse::Upload);
     let mut enc = device.create_encoder("d102 readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, W * 8);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
     let bytes = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (W * H * 8) as usize) };
     bytes
@@ -97,7 +97,7 @@ fn render(device: &GpuDevice, runtime: &mut PresetRuntime, picture: &GpuTexture,
             &manifold_core::params::ParamManifest::default(),
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 }
 
 /// One byte per texel of an R8 `texture`.
@@ -106,7 +106,7 @@ fn readback_r8(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
     let buf = device.create_buffer(u64::from(w * h), BufferUse::Upload);
     let mut enc = device.create_encoder("d102 mask readback");
     enc.copy_texture_to_buffer(texture, &buf, w, h, w);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
     unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (w * h) as usize) }.to_vec()
 }
@@ -158,7 +158,7 @@ fn the_mask_crosses_the_bridge_under_its_generation_stamp() {
     let stamp = masks
         .write(&content, &mut enc, slot, Some(&mask))
         .expect("a mask writes a stamp");
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     assert_eq!(
         (bridge.width(), bridge.height()),
         (mask.width, mask.height),
@@ -493,6 +493,7 @@ fn an_export_draws_the_scene_chrome_in_the_set_draw_mode() {
             SIZE.0,
             SIZE.1,
         )
+        .expect("GPU readback completes")
     };
     let changed = |a: &[u8], b: &[u8]| {
         a.chunks_exact(8)

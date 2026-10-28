@@ -236,7 +236,7 @@ fn render_sequence(
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
             runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default());
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     // Motion frames up to and including BASELINE_FRAME (time 0.2, emission 10).
@@ -262,7 +262,7 @@ fn render_sequence(
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
             runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default());
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     let baseline_bytes = h.readback(&target.texture);
@@ -292,7 +292,7 @@ fn render_sequence(
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
             runtime.render(&mut gpu, &target.texture, &ctx, &ParamManifest::default());
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     let step_bytes = h.readback(&target.texture);

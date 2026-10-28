@@ -168,7 +168,7 @@ impl Harness {
                         .with_errors(&mut errors);
                 prim.evaluate(&mut ctx);
             }
-            native.commit_and_wait_completed();
+            native.commit_and_wait().expect("GPU work completes");
         }
         // Storage a node provides replaces its slot's, as the executor installs it.
         for &(port, slot) in outputs {

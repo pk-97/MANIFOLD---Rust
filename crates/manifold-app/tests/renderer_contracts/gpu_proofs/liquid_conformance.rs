@@ -589,7 +589,7 @@ impl LiquidRun {
         if let Some(clock) = &self.clock {
             encoder.signal_event(&clock.event);
         }
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         if let Some(clock) = &mut self.clock {
             clock.retired.drain();
         }
@@ -654,7 +654,7 @@ impl LiquidRun {
         let staging = self.device.create_buffer(bytes, BufferUse::Upload);
         let mut encoder = self.device.create_encoder("liquid-conformance-readback");
         encoder.copy_buffer_to_buffer(dump.buffer, &staging, bytes);
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let ptr = staging.mapped_ptr().expect("shared staging buffer");
         // SAFETY: the copy has completed and nothing else writes the staging buffer.
         let raw = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), bytes as usize) };

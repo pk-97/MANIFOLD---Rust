@@ -231,7 +231,7 @@ fn body(tex_in: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
         let readback = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder("surface-bumps-readback");
         enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback.mapped_ptr().expect("shared readback buffer");
         let halves: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
@@ -277,7 +277,7 @@ fn body(tex_in: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, 
             [w.div_ceil(16), h.div_ceil(16), 1],
             "test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     fn assert_pixels_close(a: &[[f32; 4]], b: &[[f32; 4]], tol: f32, label: &str) {

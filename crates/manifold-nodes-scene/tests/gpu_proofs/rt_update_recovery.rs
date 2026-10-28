@@ -59,7 +59,7 @@ fn render(
             traced: gpu.rt_dispatches > 0,
         }
     };
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     result
 }
 

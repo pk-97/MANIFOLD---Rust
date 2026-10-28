@@ -77,7 +77,7 @@ fn dispatch_production_morph(source: MeshVertex, target: MeshVertex) -> MeshVert
     ];
     let mut encoder = h.device.create_encoder("uv1-preservation-morph");
     encoder.dispatch_compute(&pipeline, &bindings, [1, 1, 1], "uv1-preservation-morph");
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
 
     let ptr = output_buf
         .mapped_ptr()

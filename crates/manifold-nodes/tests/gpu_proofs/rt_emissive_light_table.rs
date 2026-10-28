@@ -105,7 +105,7 @@ fn gpu_prepare_emissive_table(
             true,
         )
         .expect("encode acceleration and emissive table");
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let table = accel
         .emissive_table
         .as_ref()

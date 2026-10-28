@@ -230,7 +230,7 @@ mod gpu_tests {
             texture.height,
             bytes_per_row,
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let ptr = buffer.mapped_ptr().expect("mask-extrema readback buffer");
         let halves: &[u16] = unsafe {
             std::slice::from_raw_parts(
@@ -317,7 +317,7 @@ mod gpu_tests {
             [input.width.div_ceil(16), input.height.div_ceil(16), 1],
             "node.mask_extrema.blob-v2-gpu-test",
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         readback(device, &output.texture)
     }
 

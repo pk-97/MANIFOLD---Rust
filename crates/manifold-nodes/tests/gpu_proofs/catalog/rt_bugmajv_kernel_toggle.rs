@@ -93,7 +93,7 @@ fn frame(
         let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
         runtime.render(&mut gpu, target, &c, manifest);
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 }
 
 /// Card write by id suffix — the same resolution `import_rt_manifest` uses.

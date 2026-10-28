@@ -96,7 +96,7 @@ fn render(tree: &UITree, h: u32) -> Vec<u8> {
     {
         let mut enc = device.create_encoder("dropdown-render");
         ui.render(&mut enc, &target, GpuLoadAction::Clear);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     readback(&device, &target, h)
 }
@@ -261,7 +261,7 @@ fn readback(device: &GpuDevice, texture: &GpuTexture, h: u32) -> Vec<u8> {
 
     let mut enc = device.create_encoder("dropdown-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, h, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let ptr = buf.mapped_ptr().expect("shared readback buffer is mapped");
     let bytes: &[u8] =

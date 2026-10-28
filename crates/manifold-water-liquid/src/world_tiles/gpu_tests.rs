@@ -102,7 +102,7 @@ fn build_kept(
             kept,
         },
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 }
 
 /// Every cell of the box from `min`, `size` cells a side.
@@ -323,7 +323,7 @@ fn a_moving_set_matches_the_mirror_over_three_steps() {
     parents.prepare(&device);
     let mut enc = device.create_encoder("world tiles parents proof");
     parents.encode_parents(&mut enc, &tiles, &run);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let cells: Vec<[i32; 3]> = child
         .slot_tile
         .iter()
@@ -703,7 +703,7 @@ fn cell_lookup_paths_agree_over_a_block_of_tiles() {
         groups(u64::from(params.homes * n)),
         "world tiles probe",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let got = read(&out, 2 * homes.len() * n as usize);
     for (k, &home) in homes.iter().enumerate() {
         for i in 0..n {

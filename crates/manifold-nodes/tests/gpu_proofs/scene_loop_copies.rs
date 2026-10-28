@@ -149,9 +149,9 @@ fn still(doc: SceneDoc, values: &[(&str, f32)], beat: f64) -> Vec<u8> {
             &context,
             &fx.params,
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
     }
-    readback_to_srgb_png(device, &target.texture, WIDTH, HEIGHT)
+    readback_to_srgb_png(device, &target.texture, WIDTH, HEIGHT).expect("GPU readback completes")
 }
 
 /// The flyer rides above the grid and the swarm.
@@ -265,7 +265,7 @@ fn vortex_fragments_draw_only_the_cuts_live_vertices() {
             &context,
             &fx.params,
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
     }
     let dumps = runtime.dump_arrays_all();
     let counts: Vec<u32> = dumps

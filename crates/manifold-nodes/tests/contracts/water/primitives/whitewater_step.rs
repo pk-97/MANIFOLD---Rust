@@ -193,7 +193,7 @@ mod fused_tests {
                     }
                     captures.push(row);
                 }
-                enc.commit_and_wait_completed();
+                enc.commit_and_wait().expect("GPU work completes");
                 let names = [
                     "proof_sampled",
                     "proof_unscaled",

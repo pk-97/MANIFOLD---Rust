@@ -368,13 +368,13 @@ fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
         false,
         "trace_shadow_rays-t2c-proof",
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
 
     let row_bytes = WIDTH * 4 * 4;
     let readback_buf = device.create_buffer(u64::from(row_bytes), BufferUse::Upload);
     let mut enc2 = device.create_encoder("rt-t2c-readback");
     enc2.copy_texture_to_buffer(&out_sv, &readback_buf, WIDTH, 1, row_bytes);
-    enc2.commit_and_wait_completed();
+    enc2.commit_and_wait().expect("GPU work completes");
     let ptr = readback_buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");

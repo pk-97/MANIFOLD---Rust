@@ -127,7 +127,7 @@ fn rt_dynamic_current_frame_first_frame_dispatches() {
             );
             status = Some(gpu.frame_status());
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     });
 
     assert_eq!(
@@ -218,7 +218,7 @@ fn rt_dynamic_current_frame_stock_modifier_combo_accepts_rt_and_dispatches() {
                 rt_history_resets = gpu.rt_history_resets;
                 rt_dispatches = gpu.rt_dispatches;
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         });
         assert_eq!(
             status,
@@ -368,7 +368,7 @@ fn rt_dynamic_current_frame_warmup_toggle_deform_and_idle() {
                 gpu.rt_dispatches,
             )
         };
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         assert_eq!(status, FrameRenderStatus::Complete, "frame {frame}");
         assert_eq!(dispatches, u32::from(enabled), "frame {frame}");
         match frame {
@@ -479,7 +479,7 @@ fn rt_dynamic_history_reset_and_resume() {
                 status = Some(gpu.frame_status());
                 resets = gpu.rt_history_resets;
             }
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
         });
         (status, resets, captures)
     };
@@ -584,7 +584,7 @@ fn read_rgba32_channel(
     let buffer = device.create_buffer(total, BufferUse::Upload);
     let mut encoder = device.create_encoder("rt-history-proof-readback");
     encoder.copy_texture_to_buffer(&capture.tex, &buffer, capture.w, capture.h, bytes_per_row);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let ptr = buffer
         .mapped_ptr()
         .expect("history proof readback buffer must be mapped");

@@ -195,7 +195,7 @@ fn provider_prewarm_first_generator_frame_compiles_nothing(device: Arc<GpuDevice
         &ctx,
         &ParamManifest::default(),
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     assert!(
         generator.errors().is_empty(),
         "first frame must render: {:?}",

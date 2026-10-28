@@ -71,7 +71,7 @@ fn ibl_scene_json(roughness: f32) -> String {
 
 /// Render a scene-graph JSON to `Rgba16Float`, returning readback bytes.
 /// Two committed frames so pipeline warm-up (and this phase's per-frame IBL
-/// convolution) is past; `commit_and_wait_completed` hard-checks for Metal
+/// convolution) is past; `commit_and_wait` hard-checks for Metal
 /// GPU errors.
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
@@ -114,7 +114,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     (h.readback(&target.texture), h.width, h.height)
 }
@@ -207,7 +207,7 @@ mod gating_gpu_tests {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         h.readback(&target.texture)
     }
 
@@ -485,7 +485,7 @@ fn prefilter_and_irradiance_cost_is_measured_and_reported() {
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let start = std::time::Instant::now();
         for frame in 0..frames {
@@ -503,7 +503,7 @@ fn prefilter_and_irradiance_cost_is_measured_and_reported() {
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         start.elapsed()
     }
@@ -587,7 +587,7 @@ fn hdri_source_default_resolution_prefilter_cost_at_4096x2048_is_measured_and_re
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let start = std::time::Instant::now();
         for frame in 0..frames {
@@ -605,7 +605,7 @@ fn hdri_source_default_resolution_prefilter_cost_at_4096x2048_is_measured_and_re
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         start.elapsed()
     }
@@ -686,7 +686,7 @@ fn hdri_source_default_resolution_prefilter_cost_at_2048x1024_is_measured_and_re
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let start = std::time::Instant::now();
         for frame in 0..frames {
@@ -704,7 +704,7 @@ fn hdri_source_default_resolution_prefilter_cost_at_2048x1024_is_measured_and_re
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         start.elapsed()
     }

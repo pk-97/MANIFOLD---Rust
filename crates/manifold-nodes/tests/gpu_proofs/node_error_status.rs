@@ -89,7 +89,7 @@ fn first_frame_status(json: &str) -> FrameRenderStatus {
         );
         gpu.frame_status()
     };
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     status
 }
 

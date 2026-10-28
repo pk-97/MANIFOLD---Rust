@@ -75,7 +75,7 @@ fn a_click_returns_the_drawn_item_a_part_in_a_group_included() {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
             runtime.render(&mut gpu, &target.texture, &ctx, &fx.params);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     };
     render(&mut runtime);
     let (_, camera) = runtime

@@ -273,9 +273,11 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
         GpuLoadAction::Clear,
         "mesh-diagram-xray-proof",
     );
-    encoder.commit_and_wait_completed();
-    let depth_raw = readback_raw_halves(&device, &target.texture, W, H);
-    let xray_raw = readback_raw_halves(&device, &xray_target.texture, W, H);
+    encoder.commit_and_wait().expect("GPU work completes");
+    let depth_raw =
+        readback_raw_halves(&device, &target.texture, W, H).expect("GPU readback completes");
+    let xray_raw =
+        readback_raw_halves(&device, &xray_target.texture, W, H).expect("GPU readback completes");
     let front = camera
         .project_to_pixel(
             [
@@ -325,8 +327,10 @@ fn sloping_depth_line_keeps_front_and_rejects_back_xray_is_unchanged() {
         "X-ray path changed to depth rejection"
     );
     if let Ok(path) = std::env::var("MANIFOLD_MATH_DEPTH_DETAIL_PREVIEW") {
-        let left = readback_srgb_rgba8(&device, &target.texture, W, H);
-        let right = readback_srgb_rgba8(&device, &xray_target.texture, W, H);
+        let left =
+            readback_srgb_rgba8(&device, &target.texture, W, H).expect("GPU readback completes");
+        let right = readback_srgb_rgba8(&device, &xray_target.texture, W, H)
+            .expect("GPU readback completes");
         let mut side_by_side = vec![0u8; (W * 2 * H * 4) as usize];
         for y in 0..H as usize {
             let row = y * W as usize * 4;
@@ -414,8 +418,9 @@ fn math_view_axes_follow_representative_faces_and_toggle_without_hiding_outlines
                     GpuLoadAction::Clear,
                     "math-axes-proof",
                 );
-                encoder.commit_and_wait_completed();
-                let pixels = readback_srgb_rgba8(&device, &target.texture, W, H);
+                encoder.commit_and_wait().expect("GPU work completes");
+                let pixels = readback_srgb_rgba8(&device, &target.texture, W, H)
+                    .expect("GPU readback completes");
                 let red_near = |position| {
                     let p = camera.project_to_pixel(position, W, H).unwrap();
                     let (x, y) = (p.px.round() as i32, p.py.round() as i32);
@@ -521,8 +526,8 @@ fn math_view_marks_grow_small_faces_and_keep_big_ones() {
             GpuLoadAction::Clear,
             "math-mark-size",
         );
-        encoder.commit_and_wait_completed();
-        readback_srgb_rgba8(&device, &target.texture, W, H)
+        encoder.commit_and_wait().expect("GPU work completes");
+        readback_srgb_rgba8(&device, &target.texture, W, H).expect("GPU readback completes")
     };
     let lit = |pixels: &[u8], point: [f32; 3]| {
         let p = camera.project_to_pixel(point, W, H).unwrap();

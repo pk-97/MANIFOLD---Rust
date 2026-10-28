@@ -113,7 +113,7 @@ fn pcss_scene_json(occluder_y: f32, softness: u32, light_size: f32) -> String {
 }
 
 /// Render a scene-graph JSON to `Rgba16Float`, returning readback bytes.
-/// Two committed frames so pipeline warm-up is past; `commit_and_wait_completed`
+/// Two committed frames so pipeline warm-up is past; `commit_and_wait`
 /// hard-checks for Metal GPU errors, so a bad shader compile surfaces as a
 /// panic here, not a silently wrong frame.
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
@@ -157,7 +157,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     (h.readback(&target.texture), h.width, h.height)
 }
@@ -410,7 +410,7 @@ fn render_rt_toggle_readback(json: &str) -> (Vec<u8>, u32, u32) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     (h.readback(&target.texture), h.width, h.height)
 }

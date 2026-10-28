@@ -99,7 +99,7 @@ mod gpu_tests {
             let state = shared(&device, &before);
             let mut enc = device.create_encoder("liquid state record copy proof");
             copy.encode(&mut enc, &identity, &source_buffer, &state);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let words = read(&state);
             let used = n as usize * 8;
             assert_eq!(words[..used], source[..used], "n {n}: the records copy");
@@ -122,7 +122,7 @@ mod gpu_tests {
         let source_buffer = shared(&device, &source);
         let mut enc = device.create_encoder("liquid state record copy clamp proof");
         copy.encode(&mut enc, &identity, &source_buffer, &state);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         assert_eq!(read(&state), source[..300 * 8]);
     }
 }

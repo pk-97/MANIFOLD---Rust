@@ -93,7 +93,7 @@ fn run_once(
         let mut gpu = GpuEncoder::new(&mut enc, device);
         cg.run(&mut gpu, input, effects, &[], pc);
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 }
 
 /// Copy a runtime's current output into a standalone target so a later
@@ -114,7 +114,7 @@ fn snapshot_output(
     );
     let mut enc = device.create_encoder("chain-fusion-snap");
     enc.copy_texture_to_texture(out, &rt.texture, w, h, 1);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     rt
 }
 

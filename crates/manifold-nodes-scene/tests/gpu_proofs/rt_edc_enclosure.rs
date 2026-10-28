@@ -193,7 +193,7 @@ fn render_frame(runtime: &mut PresetRuntime, target: &RenderTarget, frame_count:
             &manifold_core::params::ParamManifest::default(),
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 }
 
 /// Same region-average-luma probe the furnace oracle uses.

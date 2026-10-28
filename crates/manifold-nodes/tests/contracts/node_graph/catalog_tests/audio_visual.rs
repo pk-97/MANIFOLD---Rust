@@ -54,7 +54,7 @@ impl AudioGraph {
         let source_target = RenderTarget::new(device, width, height, FMT, "audio-proof-input");
         let mut encoder = device.create_encoder("audio-proof-copy-input");
         encoder.copy_texture_to_texture(input, &source_target.texture, width, height, 1);
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let mut backend = MetalBackend::new(device.clone(), width, height, FMT);
         manifold_node_engine::load::graph_loader::pre_allocate_resources(
             &mut graph,
@@ -88,7 +88,7 @@ impl AudioGraph {
             self.executor
                 .execute_frame_with_gpu(&mut self.graph, &self.plan, time, &mut gpu);
         }
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let texture = self
             .executor
             .backend()
@@ -100,6 +100,7 @@ impl AudioGraph {
             self.width,
             self.height,
         )
+        .expect("GPU readback completes")
         .chunks_exact(2)
         .map(|v| f16::from_bits(u16::from_le_bytes([v[0], v[1]])).to_f32())
         .collect()
@@ -224,13 +225,14 @@ fn render_generator(
             &ParamManifest::default(),
         );
     }
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     manifold_node_engine::testkit::gpu::readback_raw_halves(
         device,
         target,
         target.width,
         target.height,
     )
+    .expect("GPU readback completes")
     .chunks_exact(2)
     .map(|v| f16::from_bits(u16::from_le_bytes([v[0], v[1]])).to_f32())
     .collect()
@@ -433,11 +435,12 @@ fn audio_visual_spectrum_chain_keeps_fixed_source_size_on_portrait_canvas() {
             )
             .unwrap();
     }
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let output = runtime.output_texture().unwrap();
     assert_eq!((output.width, output.height), (width, height));
     let pixels =
-        manifold_node_engine::testkit::gpu::readback_raw_halves(&device, output, width, height);
+        manifold_node_engine::testkit::gpu::readback_raw_halves(&device, output, width, height)
+            .expect("GPU readback completes");
     assert!(
         pixels
             .chunks_exact(8)

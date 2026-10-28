@@ -27,9 +27,9 @@ pub fn readback_to_srgb_png(
     texture: &GpuTexture,
     width: u32,
     height: u32,
-) -> Vec<u8> {
-    let rgba = readback_tonemapped_rgba8(device, texture, width, height);
-    encode_rgba8_png(&rgba, width, height)
+) -> Result<Vec<u8>, String> {
+    let rgba = readback_tonemapped_rgba8(device, texture, width, height)?;
+    Ok(encode_rgba8_png(&rgba, width, height))
 }
 
 /// BUG-327 sibling of [`readback_to_srgb_png`]: skips the Reinhard tonemap and
@@ -40,9 +40,9 @@ pub fn readback_to_srgb_png_linear(
     texture: &GpuTexture,
     width: u32,
     height: u32,
-) -> Vec<u8> {
-    let rgba = readback_srgb_rgba8(device, texture, width, height);
-    encode_rgba8_png(&rgba, width, height)
+) -> Result<Vec<u8>, String> {
+    let rgba = readback_srgb_rgba8(device, texture, width, height)?;
+    Ok(encode_rgba8_png(&rgba, width, height))
 }
 
 /// Read back an `Rgba16Float` target and Reinhard-tonemap to raw RGBA8 bytes
@@ -53,13 +53,18 @@ pub fn readback_to_srgb_png_linear(
 /// before encoding (e.g. `render_import`'s convergence check, which measures
 /// non-black fraction on the same frame it will eventually write, without a
 /// second GPU readback or a PNG decode-and-re-check) reach it through here.
-pub fn readback_tonemapped_rgba8(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
+pub fn readback_tonemapped_rgba8(
+    device: &GpuDevice,
+    tex: &GpuTexture,
+    w: u32,
+    h: u32,
+) -> Result<Vec<u8>, String> {
     let bytes_per_row = w * 8; // Rgba16Float = 8 bytes/pixel
     let total = u64::from(h * bytes_per_row);
     let buf = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("headless-readback");
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait()?;
 
     let ptr = buf
         .mapped_ptr()
@@ -86,7 +91,7 @@ pub fn readback_tonemapped_rgba8(device: &GpuDevice, tex: &GpuTexture, w: u32, h
         out.push(tonemap(b * a));
         out.push(255);
     }
-    out
+    Ok(out)
 }
 
 /// Linear→sRGB8 display encode (IEC 61966-2-1 transfer function). BUG-327:
@@ -108,13 +113,18 @@ pub fn linear_to_srgb8(v: f32) -> u8 {
 /// — the BUG-327 sibling of [`readback_tonemapped_rgba8`]: SAME GPU readback and
 /// SAME alpha-composite-over-black, but the tonemap closure is replaced by
 /// [`linear_to_srgb8`] (no Reinhard).
-pub fn readback_srgb_rgba8(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
+pub fn readback_srgb_rgba8(
+    device: &GpuDevice,
+    tex: &GpuTexture,
+    w: u32,
+    h: u32,
+) -> Result<Vec<u8>, String> {
     let bytes_per_row = w * 8; // Rgba16Float = 8 bytes/pixel
     let total = u64::from(h * bytes_per_row);
     let buf = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("headless-readback-srgb");
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait()?;
 
     let ptr = buf
         .mapped_ptr()
@@ -135,7 +145,7 @@ pub fn readback_srgb_rgba8(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32)
         out.push(linear_to_srgb8(b * a));
         out.push(255);
     }
-    out
+    Ok(out)
 }
 
 /// Raw `Rgba16Float` bytes, untouched — no tonemap, no alpha composite. Used
@@ -143,17 +153,22 @@ pub fn readback_srgb_rgba8(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32)
 /// convergence check (BUG-117): comparing the pre-tonemap bytes catches any
 /// change the final PNG would show, and skips the composite math on every
 /// candidate frame, not just the one that's written out.
-pub fn readback_raw_halves(device: &GpuDevice, tex: &GpuTexture, w: u32, h: u32) -> Vec<u8> {
+pub fn readback_raw_halves(
+    device: &GpuDevice,
+    tex: &GpuTexture,
+    w: u32,
+    h: u32,
+) -> Result<Vec<u8>, String> {
     let bytes_per_row = w * 8;
     let total = u64::from(h * bytes_per_row);
     let buf = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("headless-convergence-readback");
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait()?;
     let ptr = buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
-    unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), total as usize) }.to_vec()
+    Ok(unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), total as usize) }.to_vec())
 }
 
 /// BUG-jhpj: mean absolute per-component difference between two raw

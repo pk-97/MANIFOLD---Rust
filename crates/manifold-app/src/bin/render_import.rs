@@ -229,9 +229,10 @@ impl AppPresentation {
             (0.0, 0.0, width as f32, height as f32),
             GpuLoadAction::Clear,
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
 
-        let raw = readback_raw_halves(device, &self.target.texture, width, height);
+        let raw = readback_raw_halves(device, &self.target.texture, width, height)
+            .expect("GPU readback completes");
         LinearUiReadback::from_bytes(&raw, width, height, UI_FORMAT, AlphaInterpretation::Opaque)
             .expect("presentation readback has UI_FORMAT dimensions")
             .to_srgb_rgba8()
@@ -784,7 +785,7 @@ fn main() {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
             runtime.render(&mut gpu, &target.texture, &ctx, &seq_manifest);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let rgba = if let Some(presentation) = app_presentation.as_mut() {
             presentation.capture(
@@ -796,6 +797,7 @@ fn main() {
             )
         } else {
             readback_tonemapped_rgba8(&device, &target.texture, args.width, args.height)
+                .expect("GPU readback completes")
         };
         let fraction = non_black_fraction(&rgba);
         println!(
@@ -896,7 +898,7 @@ fn benchmark_static_frames(
             let mut gpu = RendererGpuEncoder::new(&mut encoder, device);
             runtime.render(&mut gpu, &target.texture, &context, manifest);
         }
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         if runtime.io_pending() {
             return Err(format!("IO became pending during warmup frame {offset}"));
         }
@@ -1015,7 +1017,7 @@ fn render_single_frame(
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
             runtime.render(&mut gpu, &target.texture, &ctx, manifest);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         // G-P6 gate-review fix: byte-stability alone can't see a decode
         // that hasn't LANDED yet — a 74 MB 4k EXR decodes for seconds while
@@ -1026,7 +1028,8 @@ fn render_single_frame(
         // sources' in-flight decodes (`EffectNode::io_pending`); while any
         // decode is pending, stable frames don't count.
         let io_pending = runtime.io_pending();
-        let raw = readback_raw_halves(device, &target.texture, args.width, args.height);
+        let raw = readback_raw_halves(device, &target.texture, args.width, args.height)
+            .expect("GPU readback completes");
         let byte_stable = prev_raw.as_deref() == Some(raw.as_slice());
         // BUG-jhpj: the RT irradiance accumulator (fixed-alpha EMA over
         // per-frame jittered samples) dithers at steady state forever, so
@@ -1060,7 +1063,8 @@ fn render_single_frame(
         // does — real cost, only worth paying while bisecting.
         if args.trace {
             let frame_rgba =
-                readback_tonemapped_rgba8(device, &target.texture, args.width, args.height);
+                readback_tonemapped_rgba8(device, &target.texture, args.width, args.height)
+                    .expect("GPU readback completes");
             let frame_fraction = non_black_fraction(&frame_rgba);
             println!(
                 "trace: frame={} fraction={:.4} io_pending={} byte_stable={} stable_count={} mean_diff={:.6}",
@@ -1081,6 +1085,7 @@ fn render_single_frame(
                 )
             } else {
                 readback_tonemapped_rgba8(device, &target.texture, args.width, args.height)
+                    .expect("GPU readback completes")
             };
             last_fraction = non_black_fraction(&rgba);
             if last_fraction > args.non_black_floor {
@@ -1099,7 +1104,8 @@ fn render_single_frame(
         // BUG-jhpj: `last_fraction` is only written after a stable streak,
         // so a scene that renders fine but never stabilizes used to report
         // 0.0000 ("all black") — measure the final frame for the warning.
-        let rgba = readback_tonemapped_rgba8(device, &target.texture, args.width, args.height);
+        let rgba = readback_tonemapped_rgba8(device, &target.texture, args.width, args.height)
+            .expect("GPU readback completes");
         last_fraction = non_black_fraction(&rgba);
         eprintln!(
             "render-import: WARNING — never converged after {} frames (final-frame non-black fraction {:.4}); a decode may be stuck or the frame never stabilized",
@@ -1117,7 +1123,8 @@ fn render_single_frame(
             &presentation.target.texture,
             args.width,
             args.height,
-        );
+        )
+        .expect("GPU readback completes");
         LinearUiReadback::from_bytes(
             &raw,
             args.width,

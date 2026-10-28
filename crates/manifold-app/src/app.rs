@@ -1642,7 +1642,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let native_dev = content_pipeline.native_device().unwrap();
                 let mut clear_enc = native_dev.create_encoder("Clip Atlas Init Clear");
                 clear_enc.clear_texture(clip_atlas_tex, 0.0, 0.0, 0.0, 0.0);
-                clear_enc.commit_and_wait_completed();
+                if let Err(e) = clear_enc.commit_and_wait() {
+                    log::error!("[GPU] clip atlas clear failed: {e}");
+                }
                 content_pipeline.set_clip_atlas_texture(clip_atlas_tex.clone());
             }
             self.content_pipeline_output = Some(content_pipeline.shared_output());

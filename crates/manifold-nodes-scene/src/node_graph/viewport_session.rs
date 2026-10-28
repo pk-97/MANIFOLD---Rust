@@ -191,7 +191,7 @@ impl ViewportSession {
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         Ok((runtime, target, camera_instance))
     }
@@ -333,13 +333,13 @@ impl ViewportSession {
                 self.runtime
                     .render(&mut gpu, &self.target.texture, frame_ctx, params);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             self.cached_rgba = readback_tonemapped_rgba8(
                 &self.device,
                 &self.target.texture,
                 self.width,
                 self.height,
-            );
+            ).expect("GPU readback completes");
             self.dirty = false;
             self.param_values_hash = Some(params_hash);
         }

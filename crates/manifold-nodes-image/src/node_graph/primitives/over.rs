@@ -163,12 +163,12 @@ mod gpu_tests {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "over",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let buf = device.create_buffer(u64::from(w * h * 8), manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder("over-readback");
         enc.copy_texture_to_buffer(&out.texture, &buf, w, h, w * 8);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = buf.mapped_ptr().expect("shared readback");
         let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), n * 4) };
         for i in 0..n {

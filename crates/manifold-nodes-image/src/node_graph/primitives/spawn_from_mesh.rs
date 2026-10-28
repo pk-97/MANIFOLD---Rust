@@ -444,7 +444,7 @@ mod gpu_tests {
                 "vertices",
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let ptr = pbuf.mapped_ptr().expect("shared particle buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const Particle, capacity as usize) }.to_vec()

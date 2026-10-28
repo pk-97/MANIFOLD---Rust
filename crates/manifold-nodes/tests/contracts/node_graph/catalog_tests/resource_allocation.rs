@@ -230,7 +230,7 @@ fn temporary_arrays_match_dedicated_storage_across_animated_and_repeat_frames() 
                     &mut gpu,
                 );
             }
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
             let backend = executor.backend();
             let buffer = backend
                 .array_buffer(backend.slot_for(*output).unwrap())

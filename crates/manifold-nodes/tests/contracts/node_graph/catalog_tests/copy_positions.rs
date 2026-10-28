@@ -54,7 +54,7 @@ fn dispatch(src: &[InstanceTransform]) -> Vec<Vec4Vertex> {
         [(src.len() as u32).div_ceil(256), 1, 1],
         "wave-pilot-copy",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = output.mapped_ptr().unwrap();
     unsafe { std::slice::from_raw_parts(ptr as *const Vec4Vertex, src.len()) }.to_vec()
 }
@@ -304,7 +304,7 @@ fn wave_pilot_fused_copy_wave_displace_matches_standalone_and_cpu() {
         [groups, 1, 1],
         "wave-pilot-standalone-displace",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let fused_pipeline =
         device.create_compute_pipeline(&fused.wgsl, ENTRY, "wave-pilot-fused-chain");
@@ -351,7 +351,7 @@ fn wave_pilot_fused_copy_wave_displace_matches_standalone_and_cpu() {
         [groups, 1, 1],
         "wave-pilot-fused-chain",
     );
-    fused_enc.commit_and_wait_completed();
+    fused_enc.commit_and_wait().expect("GPU work completes");
     let standalone_ptr = standalone_out.mapped_ptr().unwrap();
     let fused_ptr = fused_out.mapped_ptr().unwrap();
     let standalone = unsafe {

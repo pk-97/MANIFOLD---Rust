@@ -375,7 +375,7 @@ mod gpu_tests {
             [(verts.len() as u32).div_ceil(256), 1, 1],
             "skin-mesh-test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = out_buf.mapped_ptr().expect("shared dst buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, verts.len()) }.to_vec()
     }

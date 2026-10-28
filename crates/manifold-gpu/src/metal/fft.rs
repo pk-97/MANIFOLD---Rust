@@ -379,7 +379,7 @@ mod tests {
         let out_buf = device.create_buffer(fft.output_len_bytes(), BufferUse::Upload);
         let mut enc = device.create_encoder("gpu-fft-test");
         fft.encode(&mut enc, &in_buf, &out_buf);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let out = download(&out_buf, fft.output_element_count());
         let (peak_bin, peak_mag2) = (0..n / 2 + 1)
             .map(|b| (b, out[2 * b] * out[2 * b] + out[2 * b + 1] * out[2 * b + 1]))
@@ -425,7 +425,7 @@ mod tests {
             for &m in &order {
                 fft.encode(&mut enc, &inputs[m], &outputs[target(m)]);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let bits = |buf: &GpuBuffer| {
             download(buf, fft.output_element_count())
@@ -438,7 +438,7 @@ mod tests {
             let out = device.create_buffer(fft.output_len_bytes(), BufferUse::Upload);
             let mut enc = device.create_encoder("gpu-fft-fresh");
             fresh.encode(&mut enc, input, &out);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             assert_eq!(
                 bits(&outputs[target(m)]),
                 bits(&out),
@@ -479,7 +479,7 @@ mod tests {
         let mut enc = device.create_encoder("gpu-fft-nd-test");
         forward.encode(&mut enc, &in_buf, &spectrum);
         inverse.encode(&mut enc, &spectrum, &back);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let spec = download(&spectrum, forward.output_element_count());
         let tau = std::f64::consts::TAU;
@@ -570,7 +570,7 @@ mod tests {
             let mut enc = device.create_encoder("gpu-fft-mixed-test");
             forward.encode(&mut enc, &input, &spectrum);
             inverse.encode(&mut enc, &spectrum, &back);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let spec = download(&spectrum, forward.output_element_count());
             let half_x = shape[2] / 2 + 1;
             let tau = std::f64::consts::TAU;
@@ -648,7 +648,7 @@ mod tests {
             let mut enc = device.create_encoder("gpu-fft-plane-wave");
             forward.encode(&mut enc, &input, &spectrum);
             inverse.encode(&mut enc, &spectrum, &back);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let spec = download(&spectrum, forward.output_element_count());
             let half_x = shape[2] / 2 + 1;
             let peak = 2 * (k[2] + half_x * (k[1] + shape[1] * k[0]));

@@ -14,7 +14,7 @@ fn read_pixels(device: &GpuDevice, renderer: &SpectrumGpuRenderer) -> Vec<u8> {
         renderer.height(),
         renderer.width() * 4,
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     unsafe { std::slice::from_raw_parts(readback.mapped_ptr().unwrap(), bytes as usize) }.to_vec()
 }
 fn rgb(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 3] {

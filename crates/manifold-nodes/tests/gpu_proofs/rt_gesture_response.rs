@@ -404,7 +404,7 @@ fn run_accumulate_frame(
             label,
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     history.advance();
 }
 
@@ -414,7 +414,7 @@ fn read_r_center(device: &GpuDevice, texture: &GpuTexture) -> f32 {
     let buf = device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = device.create_encoder("gr-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
     let f16s: &[f16] =
         unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H * 4) as usize) };
@@ -428,7 +428,7 @@ fn read_rgba_pixels(device: &GpuDevice, texture: &GpuTexture) -> Vec<[f32; 4]> {
     let buf = device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = device.create_encoder("gr-readback-rgba");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
     let f16s: &[f16] =
         unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H * 4) as usize) };
@@ -443,7 +443,7 @@ fn read_rgb_center(device: &GpuDevice, texture: &GpuTexture) -> [f32; 3] {
     let buf = device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = device.create_encoder("gr-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
     let f16s: &[f16] =
         unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H * 4) as usize) };
@@ -457,7 +457,7 @@ fn read_scalar_pixels(device: &GpuDevice, texture: &GpuTexture) -> Vec<f32> {
     let buf = device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = device.create_encoder("gr-readback-r16-all");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
     let f16s: &[f16] = unsafe { std::slice::from_raw_parts(ptr.cast::<f16>(), (W * H) as usize) };
     f16s.iter().map(|v| v.to_f32()).collect()
@@ -1277,7 +1277,7 @@ fn read_moments_w_center(device: &GpuDevice, texture: &GpuTexture) -> f32 {
     let buf = device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = device.create_encoder("gr-readback-moments");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
     let f32s: &[f32] =
         unsafe { std::slice::from_raw_parts(ptr.cast::<f32>(), (W * H * 4) as usize) };

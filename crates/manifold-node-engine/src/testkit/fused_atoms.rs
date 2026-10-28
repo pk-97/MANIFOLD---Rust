@@ -125,7 +125,7 @@ pub fn fused_into<T: bytemuck::Pod + KnownItem>(
         [(count as u32).div_ceil(256), 1, 1],
         "fused atoms",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     read(&output.1, count)
 }
 pub fn run<P: Primitive + 'static, T: bytemuck::Pod + crate::ports::KnownItem>(

@@ -345,7 +345,7 @@ fn inspect_output(ct: &ContentThread) -> (bool, usize, f32) {
     let buffer = device.create_buffer(size as u64, BufferUse::Upload);
     let mut encoder = device.create_encoder("blob-v2-performance-output");
     encoder.copy_texture_to_buffer(texture, &buffer, texture.width, texture.height, row_bytes);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let ptr = buffer.mapped_ptr().expect("performance readback mapping");
     let bytes = unsafe { std::slice::from_raw_parts(ptr, size) };
     let mut finite = true;

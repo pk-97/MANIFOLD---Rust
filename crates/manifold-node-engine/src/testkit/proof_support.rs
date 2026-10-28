@@ -129,7 +129,7 @@ pub fn render_graph(
     {
         let mut e = device.create_encoder("freeze-src-fill");
         e.copy_texture_to_texture(input, &src_rt.texture, w, h, 1);
-        e.commit_and_wait_completed();
+        e.commit_and_wait().expect("GPU work completes");
     }
     let out_rt = RenderTarget::new(device, w, h, FMT, "freeze-graph-out");
 
@@ -143,7 +143,7 @@ pub fn render_graph(
         let mut gpu = RendererGpuEncoder::new(&mut enc, device);
         exec.execute_frame_with_gpu(graph, plan, frame_time(), &mut gpu);
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let result = RenderTarget::new(device, w, h, FMT, "freeze-graph-result");
     let out_tex = exec
@@ -153,7 +153,7 @@ pub fn render_graph(
     {
         let mut e = device.create_encoder("freeze-graph-copy");
         e.copy_texture_to_texture(out_tex, &result.texture, w, h, 1);
-        e.commit_and_wait_completed();
+        e.commit_and_wait().expect("GPU work completes");
     }
     result
 }
@@ -175,7 +175,7 @@ pub fn render_graph_at_time(
     {
         let mut e = device.create_encoder("freeze-src-fill");
         e.copy_texture_to_texture(input, &src_rt.texture, w, h, 1);
-        e.commit_and_wait_completed();
+        e.commit_and_wait().expect("GPU work completes");
     }
     let out_rt = RenderTarget::new(device, w, h, FMT, "freeze-graph-out");
 
@@ -192,7 +192,7 @@ pub fn render_graph_at_time(
         let mut gpu = RendererGpuEncoder::new(&mut enc, device);
         exec.execute_frame_with_state(graph, plan, ft, &mut gpu, &mut state, 0);
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let result = RenderTarget::new(device, w, h, FMT, "freeze-graph-result");
     let out_tex = exec
@@ -202,7 +202,7 @@ pub fn render_graph_at_time(
     {
         let mut e = device.create_encoder("freeze-graph-copy");
         e.copy_texture_to_texture(out_tex, &result.texture, w, h, 1);
-        e.commit_and_wait_completed();
+        e.commit_and_wait().expect("GPU work completes");
     }
     result
 }
@@ -243,7 +243,7 @@ pub fn render_fused_gain(device: &GpuDevice, input: &GpuTexture, product: f32) -
         [w.div_ceil(16), h.div_ceil(16), 1],
         "freeze.gain_fused",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     out_rt
 }
 
@@ -391,7 +391,7 @@ pub fn render_effect_frames_with_state(
     {
         let mut e = device.create_encoder("freeze-fb-src-fill");
         e.copy_texture_to_texture(input, &src_rt.texture, w, h, 1);
-        e.commit_and_wait_completed();
+        e.commit_and_wait().expect("GPU work completes");
     }
     let out_rt = RenderTarget::new(device, w, h, FMT, "freeze-fb-out");
     let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FMT);
@@ -414,7 +414,7 @@ pub fn render_effect_frames_with_state(
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
             exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     let result = RenderTarget::new(device, w, h, FMT, "freeze-fb-result");
@@ -425,7 +425,7 @@ pub fn render_effect_frames_with_state(
     {
         let mut e = device.create_encoder("freeze-fb-copy");
         e.copy_texture_to_texture(&out_tex.clone(), &result.texture, w, h, 1);
-        e.commit_and_wait_completed();
+        e.commit_and_wait().expect("GPU work completes");
     }
     result
 }
@@ -477,7 +477,7 @@ pub fn render_generator_8_frames(
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     target
 }
@@ -599,7 +599,7 @@ pub fn render_def_capture_node_host(
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
             exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     let res = exec.preview_resource()?;
     let slot = exec.backend().slot_for(res)?;
@@ -611,7 +611,7 @@ pub fn render_def_capture_node_host(
         let mut gpu = RendererGpuEncoder::new(&mut enc, device);
         gpu.copy_texture_to_texture(tex, &out.texture, tex.width, tex.height);
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     Some((out, dims))
 }
 
@@ -635,7 +635,7 @@ pub fn render_graph_at(
     {
         let mut e = device.create_encoder("freeze-src-fill");
         e.copy_texture_to_texture(input, &src_rt.texture, sw, sh, 1);
-        e.commit_and_wait_completed();
+        e.commit_and_wait().expect("GPU work completes");
     }
     let out_rt = RenderTarget::new(device, out_w, out_h, FMT, "freeze-graph-out");
 
@@ -649,7 +649,7 @@ pub fn render_graph_at(
         let mut gpu = RendererGpuEncoder::new(&mut enc, device);
         exec.execute_frame_with_gpu(graph, plan, frame_time(), &mut gpu);
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let result = RenderTarget::new(device, out_w, out_h, FMT, "freeze-graph-result");
     let out_tex = exec
@@ -659,7 +659,7 @@ pub fn render_graph_at(
     {
         let mut e = device.create_encoder("freeze-graph-copy");
         e.copy_texture_to_texture(out_tex, &result.texture, out_w, out_h, 1);
-        e.commit_and_wait_completed();
+        e.commit_and_wait().expect("GPU work completes");
     }
     result
 }

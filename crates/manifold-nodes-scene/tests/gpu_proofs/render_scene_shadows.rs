@@ -118,7 +118,7 @@ fn shadow_scene_json(cast: bool, num_lights: usize) -> String {
 }
 
 /// Render a scene-graph JSON to `Rgba16Float`, returning readback bytes.
-/// Two committed frames so pipeline warm-up is past; `commit_and_wait_completed`
+/// Two committed frames so pipeline warm-up is past; `commit_and_wait`
 /// hard-checks for Metal GPU errors, so a bad shadow-map bind or a failed
 /// depth-only PSO surfaces as a panic here, not a silently wrong frame.
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
@@ -162,7 +162,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     (h.readback(&target.texture), h.width, h.height)
 }

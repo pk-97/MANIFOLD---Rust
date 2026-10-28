@@ -125,7 +125,7 @@ fn render(json: &str) -> (f64, f64) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         if fr == 0 {
             let bytes = h.readback(&tgt.texture);
             f0 = Some(probe_luma(&bytes, h.width, h.height));
@@ -250,7 +250,7 @@ fn ms(json: &str, label: &str, n: usize) -> (f64, f64) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         ts.push(t0.elapsed().as_secs_f64() * 1000.0);
     }
     let tail: Vec<f64> = ts[4..].to_vec();
@@ -380,7 +380,7 @@ fn at() {
             true,
         )
         .expect("encode");
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let t = accel.emissive_table.as_ref().expect("table");
     let stats =
         unsafe { (t.stats.mapped_ptr().unwrap() as *const EmissiveTableStats).read_unaligned() };

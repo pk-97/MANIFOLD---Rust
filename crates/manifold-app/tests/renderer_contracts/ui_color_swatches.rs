@@ -109,7 +109,7 @@ fn browser_popup_thumbnails_paint() {
     {
         let mut enc = device.create_encoder("browser-popup-thumbs-render");
         ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     let bytes = readback(&device, &target.texture);
     let out_dir = std::env::var("SWATCH_OUT")
@@ -197,7 +197,7 @@ fn font_list_picker_paints() {
     {
         let mut enc = device.create_encoder("font-list-picker-render");
         ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     let bytes = readback(&device, &target.texture);
     let out_dir = std::env::var("SWATCH_OUT")
@@ -349,7 +349,7 @@ fn clip_waveform_sheet() {
     {
         let mut enc = device.create_encoder("clip-waveform-bodies");
         ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     {
         let mut enc = device.create_encoder("clip-waveform-content");
@@ -363,7 +363,7 @@ fn clip_waveform_sheet() {
             tracks,
             &clips,
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     let bytes = readback(&device, &target.texture);
     let capture = LinearUiReadback::from_bytes(
@@ -467,7 +467,7 @@ fn box_downsample_averages_high_frequency() {
             true,
             "ds-blit",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     let bytes = readback_w(&device, &target.texture, 64, 64);
     let i = ((32 * 64 + 32) * FORMAT.bytes_per_pixel()) as usize;
@@ -493,7 +493,7 @@ fn readback_w(device: &GpuDevice, texture: &GpuTexture, width: u32, height: u32)
 
     let mut enc = device.create_encoder("swatch-readback");
     enc.copy_texture_to_buffer(texture, &buf, width, height, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let ptr = buf.mapped_ptr().expect("shared readback buffer is mapped");
     let bytes: &[u8] =
@@ -671,7 +671,7 @@ fn browser_popup_real_registry_p1_demo() {
         {
             let mut enc = device.create_encoder("browser-popup-p1-render");
             ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let bytes = readback(&device, &target.texture);
         save_capture(&png, &bytes, W, H);
@@ -861,7 +861,7 @@ fn browser_popup_real_registry_p3_demo() {
         {
             let mut enc = device.create_encoder("browser-popup-p3-render");
             ui.render(&mut enc, &target.texture, GpuLoadAction::Clear);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let bytes = readback_w(&device, &target.texture, PW, PH);
         save_capture(&png, &bytes, PW, PH);

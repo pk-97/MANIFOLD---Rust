@@ -245,7 +245,7 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
             exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         // Blit Mix's output texture into a CPU-mapped buffer for readback.
         let mix_tex = exec
@@ -257,7 +257,7 @@ mod gpu_tests {
         let readback_buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Upload);
         let mut readback_enc = device.create_encoder("mix-readback");
         readback_enc.copy_texture_to_buffer(mix_tex, &readback_buf, w, h, bytes_per_row);
-        readback_enc.commit_and_wait_completed();
+        readback_enc.commit_and_wait().expect("GPU work completes");
 
         // Verify pixel (0,0). Solid colors mean every pixel matches.
         let ptr = readback_buf
@@ -333,7 +333,7 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
             exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         let mix_tex = exec
             .backend()
@@ -344,7 +344,7 @@ mod gpu_tests {
         let readback_buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Upload);
         let mut readback_enc = device.create_encoder("mix-modes-readback");
         readback_enc.copy_texture_to_buffer(mix_tex, &readback_buf, w, h, bytes_per_row);
-        readback_enc.commit_and_wait_completed();
+        readback_enc.commit_and_wait().expect("GPU work completes");
 
         let ptr = readback_buf
             .mapped_ptr()

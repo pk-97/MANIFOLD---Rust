@@ -83,7 +83,7 @@ pub fn dispatch_coincident(
         [w.div_ceil(16), h.div_ceil(16), 1],
         "codegen-test-mix",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     out
 }
 
@@ -158,7 +158,7 @@ pub fn dispatch_pointwise(
         [w.div_ceil(16), h.div_ceil(16), 1],
         "codegen-test",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     out
 }
 
@@ -210,7 +210,7 @@ pub fn dispatch_two_texel(
         [w.div_ceil(16), h.div_ceil(16), 1],
         "codegen-test-dither",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     out
 }
 
@@ -252,7 +252,7 @@ pub fn dispatch_coincident_n(
         [w.div_ceil(16), h.div_ceil(16), 1],
         "codegen-coincident-n",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     out
 }
 
@@ -287,7 +287,7 @@ pub fn dispatch_paramless_pointwise(
         [w.div_ceil(16), h.div_ceil(16), 1],
         "codegen-paramless",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     out
 }
 
@@ -332,7 +332,7 @@ textureStore(vol, vec3<i32>(id), vec4<f32>(f.x, f.y, f.z, 0.5 + 0.5 * f.x));\n\
         [n.div_ceil(4), n.div_ceil(4), n.div_ceil(4)],
         "vol-fill",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 }
 
 /// Read back a full n³ volume as f16 bits.
@@ -342,7 +342,7 @@ pub fn readback_volume(device: &GpuDevice, vol: &GpuTexture, n: u32) -> Vec<u16>
     let buf = device.create_buffer(total, BufferUse::Upload);
     let mut renc = device.create_encoder("vol-readback");
     renc.copy_texture_3d_to_buffer(vol, &buf, n, n, n, bytes_per_row);
-    renc.commit_and_wait_completed();
+    renc.commit_and_wait().expect("GPU work completes");
     let ptr = buf.mapped_ptr().expect("shared buffer pointer");
     let halves: &[u16] =
         unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (n * n * n * 4) as usize) };
@@ -381,7 +381,7 @@ pub fn dispatch_two_output_source(
         [w.div_ceil(16), h.div_ceil(16), 1],
         "codegen-multi-out",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     (a, b)
 }
 
@@ -416,6 +416,6 @@ pub fn dispatch_source(
         [w.div_ceil(16), h.div_ceil(16), 1],
         "codegen-source",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     out
 }

@@ -308,7 +308,7 @@ mod gpu_tests {
         enc.dispatch_compute(&finalize, &bindings, [1, 1, 1], "rd-finalize");
         enc.compute_memory_barrier_buffers();
         enc.dispatch_compute(&apply, &bindings, [n.div_ceil(256), 1, 1], "rd-apply");
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let ptr = out_buf.mapped_ptr().expect("shared out buffer");
         let slice = unsafe { std::slice::from_raw_parts(ptr as *const [f32; 3], n as usize) };

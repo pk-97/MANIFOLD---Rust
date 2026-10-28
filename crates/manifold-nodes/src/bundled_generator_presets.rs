@@ -242,20 +242,33 @@ mod tests {
                             &manifold_core::params::ParamManifest::default(),
                         );
                     }
-                    native_enc.commit_and_wait_completed();
+                    native_enc.commit_and_wait()
                 }));
 
-                if let Err(panic) = result {
-                    let msg = panic_msg(&panic);
-                    failures.push(format!("{preset_id}: {frame} panic: {msg}"));
-                    break;
+                match result {
+                    Err(panic) => {
+                        let msg = panic_msg(&panic);
+                        failures.push(format!("{preset_id}: {frame} panic: {msg}"));
+                        break;
+                    }
+                    Ok(Err(e)) => {
+                        failures.push(format!("{preset_id}: {frame} GPU failure: {e}"));
+                        break;
+                    }
+                    Ok(Ok(())) => {}
                 }
-                let bytes = manifold_node_engine::gpu::headless_readback::readback_raw_halves(
+                let bytes = match manifold_node_engine::gpu::headless_readback::readback_raw_halves(
                     &device,
                     &target.texture,
                     w,
                     h,
-                );
+                ) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        failures.push(format!("{preset_id}: {frame} readback failure: {e}"));
+                        break;
+                    }
+                };
                 if let Some(bad) = non_finite_rgba16f(&bytes) {
                     failures.push(format!("{preset_id}: {frame} {bad}"));
                 }

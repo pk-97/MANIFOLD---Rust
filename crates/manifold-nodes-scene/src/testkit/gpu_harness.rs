@@ -120,7 +120,7 @@ pub fn read_rt_channel(
     let buf = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("rt-channel-readback");
     enc.copy_texture_to_buffer(&cap.tex, &buf, cap.w, cap.h, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
@@ -145,7 +145,7 @@ pub fn readback_rgba_f32(
     let buf = device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = device.create_encoder("rt-t2b-readback");
     enc.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");

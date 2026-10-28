@@ -77,7 +77,7 @@ fn readback_rgba16f(
     let buf = device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = device.create_encoder("rt-t38-multibounce-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
@@ -133,7 +133,7 @@ fn render_fixture(json: &str) -> Vec<u8> {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     readback_rgba16f(&h.device, &target.texture)
 }

@@ -219,7 +219,7 @@ mod gpu_tests {
             [(src.len() as u32).div_ceil(256), 1, 1],
             "wave-pilot-displace",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = output.mapped_ptr().unwrap();
         unsafe { std::slice::from_raw_parts(ptr as *const InstanceTransform, src.len()) }.to_vec()
     }

@@ -110,7 +110,7 @@ impl Run {
                 &context,
                 &self.fx.params,
             );
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
             self.frame += 1;
         }
     }
@@ -153,7 +153,8 @@ impl Run {
                 &self.target.texture,
                 WIDTH,
                 HEIGHT,
-            );
+            )
+            .expect("GPU readback completes");
             std::fs::write(std::path::Path::new(&dir).join(format!("{name}.png")), png).unwrap();
         }
     }

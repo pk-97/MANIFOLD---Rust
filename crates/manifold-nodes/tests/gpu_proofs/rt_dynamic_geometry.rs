@@ -325,7 +325,7 @@ mod rt_dynamic_oracle {
             0,
             0,
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let hits_a = read_hits(&hits_a_buf, 1);
         let hit_a = &hits_a[0];
         assert_eq!(hit_a.hit, 1, "state-A ray must hit the fresh AS");
@@ -678,7 +678,7 @@ fn cs_main() {
                 0,
                 0,
             );
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
 
             assert_eq!(
                 update.blas_builds, 1,
@@ -835,7 +835,7 @@ fn cs_main() {
         drop(accel);
         drop(material_textures);
         drop(vertex_buffer);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let hits = read_hits(&hits_buf, 1);
         assert_eq!(
             hits[0].hit, 1,
@@ -990,7 +990,7 @@ fn cs_main() {
                 0,
             ));
             if i + 1 == offsets.len() {
-                enc.commit_and_wait_completed();
+                enc.commit_and_wait().expect("GPU work completes");
             } else {
                 enc.commit();
             }
@@ -1107,7 +1107,7 @@ fn cs_main() {
         }
         for (i, enc) in encoders.into_iter().enumerate() {
             if i + 1 == offsets.len() {
-                enc.commit_and_wait_completed();
+                enc.commit_and_wait().expect("GPU work completes");
             } else {
                 enc.commit();
             }
@@ -1185,7 +1185,7 @@ fn cs_main() {
                 .load(Ordering::Acquire),
             "B starts not-ready"
         );
-        enc_a.commit_and_wait_completed();
+        enc_a.commit_and_wait().expect("GPU work completes");
         assert!(
             ready_a.load(Ordering::Acquire),
             "A's own completion flips A's flag"
@@ -1235,7 +1235,7 @@ fn cs_main() {
             0,
             0,
         );
-        enc_b.commit_and_wait_completed();
+        enc_b.commit_and_wait().expect("GPU work completes");
         assert!(
             accel_b.ready.load(Ordering::Acquire),
             "B's own completion flips B's flag"
@@ -1337,7 +1337,7 @@ fn cs_main() {
             0,
             0,
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let hits = read_hits(&hits_buf, 1);
         assert_eq!(
             hits[0].hit, 1,
@@ -1521,7 +1521,7 @@ fn cs_main() {
             0,
             0,
         );
-        enc3.commit_and_wait_completed();
+        enc3.commit_and_wait().expect("GPU work completes");
         let hits = read_hits(&hits_buf, 2);
         assert_eq!(
             (hits[0].hit, hits[0].object_id),

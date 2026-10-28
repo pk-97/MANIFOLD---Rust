@@ -198,7 +198,7 @@ fn render_center_capture(json: &str, capture: Option<&str>) -> [f32; 3] {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     if let (Some(name), Some(dir)) = (capture, std::env::var_os("MANIFOLD_MATERIAL_PROOF_DIR")) {
         let dir = std::path::PathBuf::from(dir);
@@ -208,7 +208,8 @@ fn render_center_capture(json: &str, capture: Option<&str>) -> [f32; 3] {
             &target.texture,
             h.width,
             h.height,
-        );
+        )
+        .expect("GPU readback completes");
         std::fs::write(dir.join(format!("{name}.png")), png).expect("write material proof image");
     }
     let bytes = h.readback(&target.texture);

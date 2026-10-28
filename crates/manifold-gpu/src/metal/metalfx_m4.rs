@@ -961,7 +961,7 @@ mod tests {
 
         let mut enc = device.create_encoder("upload");
         enc.upload_texture(&tex, width, height, 1, &bytes);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         tex
     }
 
@@ -973,7 +973,7 @@ mod tests {
         let readback = device.create_buffer(total, BufferUse::Upload);
         let mut enc = device.create_encoder("readback");
         enc.copy_texture_to_buffer(tex, &readback, tex.width, tex.height, row_bytes);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback.mapped_ptr().expect("shared buffer mapped pointer");
         let f32_len = (total / 4) as usize;
         assert!(buf.len() >= f32_len);
@@ -1156,7 +1156,7 @@ mod tests {
             encoded,
             "MTL4 denoiser encode skipped on a single-frame test (allocator ring should not be saturated)"
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let mut result = vec![0.0f32; ncomponents];
         readback_texture_via_buffer(&device, &output_tex, &mut result);
@@ -1290,7 +1290,7 @@ mod tests {
             encoded,
             "MTL4 temporal encode skipped on a single-frame test (allocator ring should not be saturated)"
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let bpp = output.format.bytes_per_pixel();
         let row_bytes = bpp * output.width;
@@ -1298,7 +1298,7 @@ mod tests {
         let readback = device.create_buffer(total, BufferUse::Upload);
         let mut enc = device.create_encoder("readback");
         enc.copy_texture_to_buffer(&output, &readback, output.width, output.height, row_bytes);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback.mapped_ptr().expect("shared buffer mapped pointer");
         let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, total as usize) };
         let nonzero = bytes.iter().filter(|&&b| b != 0).count();

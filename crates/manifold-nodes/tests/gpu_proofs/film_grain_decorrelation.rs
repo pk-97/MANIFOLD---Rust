@@ -206,7 +206,7 @@ fn render_film_grain_frame(w: u32, h: u32, frame_count: i64) -> FilmGrainFrame {
         let mut gpu = RendererGpuEncoder::new(&mut native_enc, device);
         exec.execute_frame_with_state(&mut graph, &plan, frame_time, &mut gpu, &mut state_store, 0);
     }
-    native_enc.commit_and_wait_completed();
+    native_enc.commit_and_wait().expect("GPU work completes");
 
     let composited_tex = exec
         .backend()
@@ -234,7 +234,7 @@ fn readback_rgba_f32(
     let buf = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("film-grain-decorrelation-readback");
     enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let ptr = buf
         .mapped_ptr()

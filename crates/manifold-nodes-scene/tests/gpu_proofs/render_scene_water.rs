@@ -369,7 +369,7 @@ fn read_depth(
     let buf = h.device.create_buffer(total, BufferUse::Upload);
     let mut enc = h.device.create_encoder("water-depth-readback");
     enc.copy_texture_to_buffer(tex, &buf, tex.width, tex.height, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
@@ -465,7 +465,7 @@ impl WaterScene {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     /// Two frames, so the scene has settled the way the first proofs do.
@@ -498,7 +498,7 @@ impl WaterScene {
             .create_buffer(u64::from(mask.width * mask.height), BufferUse::Upload);
         let mut enc = self.h.device.create_encoder("water-mask-readback");
         enc.copy_texture_to_buffer(mask, &buf, mask.width, mask.height, mask.width);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = buf.mapped_ptr().expect("shared readback buffer");
         Some(
             unsafe {

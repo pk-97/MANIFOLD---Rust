@@ -77,7 +77,7 @@ fn readback(device: &GpuDevice, tex: &GpuTexture) -> Vec<[f32; 4]> {
     );
     let mut encoder = device.create_encoder("bokeh-proof-readback");
     encoder.copy_texture_to_buffer(tex, &buffer, tex.width, tex.height, row_bytes);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let ptr = buffer.mapped_ptr().expect("shared readback buffer");
     let values: &[u16] = unsafe {
         std::slice::from_raw_parts(ptr.cast::<u16>(), (tex.width * tex.height * 4) as usize)
@@ -194,7 +194,7 @@ fn run_with_settings_texture(
         let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, device);
         gather.encode(&mut gpu, src, width, &out, settings);
     }
-    native.commit_and_wait_completed();
+    native.commit_and_wait().expect("GPU work completes");
     out
 }
 
@@ -302,7 +302,7 @@ fn composite_over_background(
         let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut encoder, device);
         compositor.render(&mut gpu, &frame);
     }
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     readback(device, compositor.output_texture())
 }
 
@@ -388,7 +388,7 @@ fn run_graph(
             &mut gpu,
         );
     }
-    native.commit_and_wait_completed();
+    native.commit_and_wait().expect("GPU work completes");
     let output_texture = executor
         .backend()
         .texture_2d(output_slot)
@@ -1810,7 +1810,7 @@ fn bounded_gpu_benchmark_1080p_and_4k() {
             let mut gpu =
                 manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, &device);
             gather.encode(&mut gpu, &src, &width, &out, settings);
-            native.commit_and_wait_completed();
+            native.commit_and_wait().expect("GPU work completes");
         }
         let mut samples = Vec::with_capacity(10);
         for _ in 0..10 {

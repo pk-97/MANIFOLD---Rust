@@ -764,7 +764,7 @@ fn read_back<T: bytemuck::Pod>(
     let staging = device.create_buffer(bytes, BufferUse::Upload);
     let mut encoder = device.create_encoder("fluid-capture-readback");
     encoder.copy_buffer_to_buffer(buffer, &staging, bytes.min(buffer.size()));
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let ptr = staging.mapped_ptr().expect("shared staging buffer");
     // SAFETY: the copy has completed and nothing else writes the staging buffer.
     let bytes = unsafe { std::slice::from_raw_parts(ptr, (count * record) as usize) };
@@ -1133,9 +1133,10 @@ fn readback_rgba(
     linear: bool,
 ) -> Vec<u8> {
     if linear {
-        readback_srgb_rgba8(device, &target.texture, width, height)
+        readback_srgb_rgba8(device, &target.texture, width, height).expect("GPU readback completes")
     } else {
         readback_tonemapped_rgba8(device, &target.texture, width, height)
+            .expect("GPU readback completes")
     }
 }
 

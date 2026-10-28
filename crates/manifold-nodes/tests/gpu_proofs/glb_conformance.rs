@@ -656,9 +656,10 @@ fn render_asset(
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
             runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
-        let rgba = readback_tonemapped_rgba8(device, &target.texture, WIDTH, HEIGHT);
+        let rgba = readback_tonemapped_rgba8(device, &target.texture, WIDTH, HEIGHT)
+            .expect("GPU readback completes");
         // Live ambient occlusion keeps refining with the clock frozen, so a
         // settled frame is one no viewer can tell from the last: a mean
         // change under one 8-bit step, the measure `check_golden` judges by.

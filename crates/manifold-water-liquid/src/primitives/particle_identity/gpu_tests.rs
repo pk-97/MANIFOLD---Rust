@@ -85,7 +85,7 @@ fn settle_publishes_the_live_end_to_the_identity_and_the_step_record() {
             let step = shared(&device, &[SENTINEL; 4]);
             let mut enc = device.create_encoder("identity settle proof");
             ops.settle(&mut enc, &ranges, 2, &identity, &active, Some(&step));
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let words = read(&identity);
             assert_eq!(words[..4], before[..4], "live {live}: the allocator words");
             assert_eq!(
@@ -99,7 +99,7 @@ fn settle_publishes_the_live_end_to_the_identity_and_the_step_record() {
             let identity = shared(&device, &before);
             let mut enc = device.create_encoder("identity settle proof, no step record");
             ops.settle(&mut enc, &ranges, 2, &identity, &active, None);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             assert_eq!(
                 read(&identity)[4..],
                 record(live),
@@ -137,7 +137,7 @@ fn an_inactive_plan_writes_nothing() {
             params: [SLOTS, 2, 2, EXHAUSTED],
         },
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     assert_eq!(read(&identity), before);
     assert_eq!(read(&step), [SENTINEL; 4]);
 }
@@ -176,7 +176,7 @@ fn reserve_grants_all_or_nothing_and_publishes_the_live_end_plus_the_grant() {
                     params: [SLOTS, 2, 2, EXHAUSTED],
                 },
             );
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let births = if requested <= SLOTS - live {
                 requested
             } else {
@@ -223,7 +223,7 @@ fn reserve_grants_nothing_once_the_tile_pool_is_exhausted() {
             params: [SLOTS, 2, 2, EXHAUSTED],
         },
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let words = read(&identity);
     assert_eq!(words[..4], [11, 4, 6, 0], "the allocator words stay");
     assert_eq!(words[4..], record(300), "n stays the live end");
@@ -256,7 +256,7 @@ fn reserve_leaves_the_record_alone_while_a_reset_is_requested() {
             params: [SLOTS, 2, 2, EXHAUSTED],
         },
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     assert_eq!(read(&identity), before);
 }
 
@@ -278,7 +278,7 @@ fn seed_publishes_the_fills_count() {
         );
         let mut enc = device.create_encoder("identity seed proof");
         ops.seed(&mut enc, &particles, &identity, count, 0);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let words = read(&identity);
         assert_eq!(words[4..], record(count), "count {count}");
         assert_eq!(words[0], count.min(300) + 1, "count {count}: next id");

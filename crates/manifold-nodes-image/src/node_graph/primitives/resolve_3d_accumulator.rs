@@ -232,7 +232,7 @@ mod gpu_tests {
             ],
             "resolve3d-oracle",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         // Read back the density volume (z-slice-major, 8 bytes/voxel).
         let bytes_per_row = vr * 8;
@@ -241,7 +241,7 @@ mod gpu_tests {
         let readback = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
         let mut rb = device.create_encoder("resolve3d-readback");
         rb.copy_texture_3d_to_buffer(&density, &readback, vr, vr, vd, bytes_per_row);
-        rb.commit_and_wait_completed();
+        rb.commit_and_wait().expect("GPU work completes");
         let ptr = readback.mapped_ptr().expect("shared readback");
         let px: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), cells * 4) };
         // u16 index of voxel (x,y,z) R channel: z*(vr*vr*4) + y*(vr*4) + x*4.

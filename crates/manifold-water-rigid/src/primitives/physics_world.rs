@@ -1559,7 +1559,7 @@ mod gpu_tests {
                 .upload(&mut gpu, &output, 130, 1, true)
                 .expect("instance upload");
         }
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let first = read_instances(&output);
         assert_eq!(first[126].pos_scale[0], 126.0);
         assert_eq!(first[127].pos_scale[0], 127.0);
@@ -1583,7 +1583,7 @@ mod gpu_tests {
                 .upload(&mut gpu, &output, 3, 2, true)
                 .expect("instance upload");
         }
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let shrunk = read_instances(&output);
         assert_eq!(shrunk[0].pos_scale[0], 100.0);
         assert_eq!(shrunk[2].pos_scale[0], 102.0);

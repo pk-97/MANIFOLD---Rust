@@ -81,7 +81,7 @@ fn render(scene: &str, gizmo_depth: bool) -> Frame {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     let camera = runtime
         .write_rendered_view(&mut Vec::new())
@@ -99,7 +99,7 @@ fn read(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
     let buf = device.create_buffer(u64::from(texture.height * bytes_per_row), BufferUse::Upload);
     let mut enc = device.create_encoder("gizmo-proof-readback");
     enc.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
     unsafe {
         std::slice::from_raw_parts(ptr.cast::<u8>(), (texture.height * bytes_per_row) as usize)
@@ -181,7 +181,7 @@ fn with_lines(frame: &Frame, mode: GizmoDrawMode) -> Vec<[f32; 4]> {
         &lines(),
         mode,
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     channels(&read(&h.device, &target.texture))
 }
 

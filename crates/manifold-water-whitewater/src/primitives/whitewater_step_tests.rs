@@ -393,7 +393,7 @@ mod gpu {
                     }
                     tick += 1;
                 }
-                native.commit_and_wait_completed();
+                native.commit_and_wait().expect("GPU work completes");
                 let words: Vec<u32> = [
                     &pool,
                     &state,

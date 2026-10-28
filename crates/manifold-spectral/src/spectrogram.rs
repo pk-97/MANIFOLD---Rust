@@ -397,7 +397,7 @@ mod gpu_tests {
         let mut enc = device.create_encoder("scope-gpu-proof");
         // Dividers, tilt, cursor, hover, dim all off — only background + lanes.
         spec.render(&mut enc, &target, [-1.0, -1.0], 0.0, -1.0, -1.0, None);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let bytes_per_row = COLS * 4;
         let readback = device.create_buffer(
@@ -406,7 +406,7 @@ mod gpu_tests {
         );
         let mut rb = device.create_encoder("scope-gpu-proof-readback");
         rb.copy_texture_to_buffer(&target, &readback, COLS, H, bytes_per_row);
-        rb.commit_and_wait_completed();
+        rb.commit_and_wait().expect("GPU work completes");
         let ptr = readback.mapped_ptr().expect("shared buffer maps");
         let px = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (COLS * H * 4) as usize) };
         let at = |x: u32, y: u32| -> [u8; 3] {
@@ -496,7 +496,7 @@ mod gpu_tests {
             -1.0,
             Some((0.3, 0.7)),
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let bytes_per_row = COLS * 4;
         let readback = device.create_buffer(
@@ -505,7 +505,7 @@ mod gpu_tests {
         );
         let mut rb = device.create_encoder("scope-gpu-proof-dim-readback");
         rb.copy_texture_to_buffer(&target, &readback, COLS, H, bytes_per_row);
-        rb.commit_and_wait_completed();
+        rb.commit_and_wait().expect("GPU work completes");
         let ptr = readback.mapped_ptr().expect("shared buffer maps");
         let px = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (COLS * H * 4) as usize) };
         let at = |x: u32, y: u32| -> [u8; 3] {

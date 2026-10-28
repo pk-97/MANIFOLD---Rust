@@ -341,7 +341,7 @@ mod gpu_tests {
             );
             enc.compute_memory_barrier_buffers();
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = output.mapped_ptr().expect("shared output buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, src.len()) }.to_vec()
     }

@@ -254,7 +254,7 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
             exec.execute_frame_with_gpu(&mut g, &plan, frame_time(0.0), &mut gpu);
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         // Frame 2: read frame-1's result, emit on wire. Sink captures it.
         let mut native_enc2 = device.create_encoder("luminance-test-2");
@@ -262,7 +262,7 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc2, &device);
             exec.execute_frame_with_gpu(&mut g, &plan, frame_time(0.0), &mut gpu);
         }
-        native_enc2.commit_and_wait_completed();
+        native_enc2.commit_and_wait().expect("GPU work completes");
 
         let observed = seen.lock().unwrap();
         let v = observed.expect("Capture should have seen a scalar by frame 2");
@@ -317,7 +317,7 @@ mod gpu_tests {
                     let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
                     exec.execute_frame_with_gpu(&mut g, &plan, frame_time(0.0), &mut gpu);
                 }
-                enc.commit_and_wait_completed();
+                enc.commit_and_wait().expect("GPU work completes");
             }
 
             let observed = seen.lock().unwrap();

@@ -1160,7 +1160,7 @@ mod gpu_tests {
             [w.div_ceil(16), h.div_ceil(16), 1],
             "gtao-dispatch",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let bytes_per_row = w * 8;
         let readback = device.create_buffer(
             u64::from(h * bytes_per_row),
@@ -1168,7 +1168,7 @@ mod gpu_tests {
         );
         let mut enc = device.create_encoder("gtao-readback");
         enc.copy_texture_to_buffer(&out.texture, &readback, w, h, bytes_per_row);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback.mapped_ptr().expect("shared readback buffer");
         let halves: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };

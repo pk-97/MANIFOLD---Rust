@@ -216,7 +216,7 @@ mod gpu_tests {
                 [PLATONIC_MESH_CAPACITY.div_ceil(64) as u32, 1, 1],
                 "node.platonic_solid_mesh.gpu-proof",
             );
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
             let ptr = out.mapped_ptr().expect("shared output buffer");
             let bytes = unsafe {
                 std::slice::from_raw_parts(

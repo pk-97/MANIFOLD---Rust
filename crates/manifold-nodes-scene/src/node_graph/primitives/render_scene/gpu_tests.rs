@@ -20,7 +20,7 @@ fn readback_rgba16f(
     let readback = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("shaft-march-readback");
     enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = readback.mapped_ptr().expect("shared readback buffer");
     let halves: &[u16] =
         unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
@@ -48,7 +48,7 @@ fn readback_depth32f(
     let readback = device.create_buffer(total, BufferUse::Upload);
     let mut enc = device.create_encoder("appearance-depth-readback");
     enc.copy_texture_to_buffer(tex, &readback, w, h, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = readback.mapped_ptr().expect("shared depth readback buffer");
     let values: &[f32] = unsafe { std::slice::from_raw_parts(ptr.cast::<f32>(), (w * h) as usize) };
     values.to_vec()
@@ -546,7 +546,7 @@ fn shaft_march_matches_cpu_reference() {
         &[shadow_draw],
         "shaft-test-shadow",
     );
-    shadow_enc.commit_and_wait_completed();
+    shadow_enc.commit_and_wait().expect("GPU work completes");
 
     let bias = light.shadow_bias;
     let caster = manifold_gpu::ShadowCaster {
@@ -643,7 +643,7 @@ fn shaft_march_matches_cpu_reference() {
         [w.div_ceil(16), h.div_ceil(16), 1],
         "shaft-march-dispatch",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let gpu_out = readback_rgba16f(&device, &out_tex, w, h);
 
@@ -836,7 +836,7 @@ fn appearance_weights_discard_zero_triangle_in_shadow_depth() {
             &[draw],
             "appearance-weight-shadow-proof",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         readback_depth32f(&device, &target, w, h)
     };
 
@@ -983,7 +983,7 @@ fn shadow_alpha_mask_preserves_uv_selection_transform_factor_and_mirror() {
         let draw = manifold_gpu::GpuEncoder::depth_msaa_draw(&pipeline, &bindings, vertex_count, 1);
         let mut enc = device.create_encoder("cutout-proof-pass");
         enc.draw_instanced_depth_only_batch(&target, &depth_state, &[draw], "cutout-proof");
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let pixels = readback_depth32f(&device, &target, 8, 4);
         [pixels[17], pixels[22]]
     };
@@ -1161,7 +1161,7 @@ fn fs_vertex_color_probe(input: VsOut) -> @location(0) vec4<f32> {
         manifold_gpu::GpuLoadAction::Clear,
         "vertex-color-albedo-proof-draw",
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let actual = readback_rgba16f(&device, &output, 1, 1)[0];
     let barycentric = [0.5f32, 0.25, 0.25];
     let vertex_color = [barycentric[0], barycentric[1], barycentric[2], 1.0];
@@ -1377,7 +1377,7 @@ fn fs_extension_map_probe(in: VsOut) -> @location(0) vec4<f32> {
         manifold_gpu::GpuLoadAction::Clear,
         "extension-map-proof-draw",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let actual = readback_rgba16f(&device, &output, 6, 1);
     let expected = [
         [0.2, 0.1, 0.0, 1.0],
@@ -1546,7 +1546,7 @@ fn extension_map_mip_filters_follow_authored_choice() {
     device.upload_texture(&map, &data);
     let mut encoder = device.create_encoder("material-mips");
     encoder.generate_mipmaps(&map);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     // Each 2x2 block averages to 0.5 in mip 1. The first mip is black
     // at (1/8,1/8). A 2^0.6 texel footprint independently predicts
     // no mip = 0, nearest mip = 0.5, linear mip = 0.3.
@@ -1622,7 +1622,7 @@ fn extension_map_mip_filters_follow_authored_choice() {
             manifold_gpu::GpuLoadAction::Clear,
             "material-mip-proof",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let actual = readback_rgba16f(&device, &output, 2, 2)[0][0];
         assert!(
             (actual - expected).abs() < 0.005,
@@ -1666,7 +1666,7 @@ fn make_striped_grazing_texture(device: &manifold_gpu::GpuDevice) -> manifold_gp
     device.upload_texture(&tex, &data);
     let mut enc = device.create_encoder("aniso-test-mip-gen");
     enc.generate_mipmaps(&tex);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     tex
 }
 
@@ -1701,7 +1701,7 @@ fn sample_grazing_row(
         [ANISO_TEST_ROW_LEN / 64, 1, 1],
         "aniso-test",
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = out_buf.mapped_ptr().expect("shared output buffer");
     let floats: &[f32] =
         unsafe { std::slice::from_raw_parts(ptr.cast::<f32>(), (ANISO_TEST_ROW_LEN * 4) as usize) };
@@ -1927,7 +1927,7 @@ fn ray_resolution_or_canvas_change_fires_rt_realloc_reset() {
     let mut enc = device.create_encoder("rt-r16-history-clear-read");
     enc.clear_texture(hold, 0.25, 0.0, 0.0, 0.0);
     enc.copy_texture_to_buffer(hold, &readback, 257, 257, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = readback.mapped_ptr().expect("R16 history readback");
     let values: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast(), (257 * 257) as usize) };
     assert!((f16::from_bits(values[0]).to_f32() - 0.25).abs() < 0.01);
@@ -2355,7 +2355,7 @@ fn rt_post_scratch_shared_backing_matches_dedicated_across_queued_frames() {
         bytes_per_row,
     );
     encoder
-        .try_commit_and_wait_completed()
+        .commit_and_wait()
         .expect("RT scratch parity GPU completion");
 
     let assert_exact_finite = |label: &str, shared: &[[f32; 4]], dedicated: &[[f32; 4]]| {
@@ -2835,7 +2835,7 @@ fn rt_firefly_scratch_shared_backing_matches_dedicated_across_queued_frames() {
         encoder.copy_texture_to_buffer(history, readback, W, H, W * 8);
     }
     encoder
-        .try_commit_and_wait_completed()
+        .commit_and_wait()
         .expect("RT firefly scratch parity GPU completion");
 
     let assert_exact = |label: &str, a: &[[f32; 4]], b: &[[f32; 4]]| {

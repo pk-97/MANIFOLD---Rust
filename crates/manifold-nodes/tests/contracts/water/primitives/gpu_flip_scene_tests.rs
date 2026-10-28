@@ -825,7 +825,7 @@ mod native_reference {
                 .create_buffer(bytes, manifold_gpu::BufferUse::Upload);
             let mut enc = run.device.create_encoder("wall phi readback");
             enc.copy_buffer_to_buffer(buffer, &staging, bytes);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             // SAFETY: the copy completed; staging is shared and `bytes` long.
             unsafe {
                 std::slice::from_raw_parts(

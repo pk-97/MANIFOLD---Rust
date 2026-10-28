@@ -106,7 +106,7 @@ fn render_fullscreen(
         true,
         label,
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
 }
 
 fn read_first_pixel(device: &GpuDevice, target: &GpuTexture) -> [u8; 4] {
@@ -117,7 +117,7 @@ fn read_first_pixel(device: &GpuDevice, target: &GpuTexture) -> [u8; 4] {
     );
     let mut encoder = device.create_encoder("pipeline-cache-readback");
     encoder.copy_texture_to_buffer(target, &buffer, target.width, target.height, bytes_per_row);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
 
     let ptr = buffer
         .mapped_ptr()

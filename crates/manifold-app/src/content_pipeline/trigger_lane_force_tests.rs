@@ -355,7 +355,9 @@ fn trigger_lane_force_isolation() {
             &[],
             Some(&tempo),
         );
-        command_buffer.commit_and_wait_completed();
+        command_buffer
+            .commit_and_wait()
+            .expect("GPU work completes");
 
         let renderer = generator(&mut engine);
         let state = renderer
@@ -700,7 +702,9 @@ impl DirectFire {
             skipped,
             Some(&tempo),
         );
-        command_buffer.commit_and_wait_completed();
+        command_buffer
+            .commit_and_wait()
+            .expect("GPU work completes");
         self.engine.reclaim_tick_result(result);
     }
 

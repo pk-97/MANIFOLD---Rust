@@ -213,7 +213,7 @@ mod gpu_tests {
             [input.width.div_ceil(16), input.height.div_ceil(16), 1],
             label,
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         output
     }
 
@@ -231,7 +231,7 @@ mod gpu_tests {
             texture.height,
             bytes_per_row,
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let ptr = buffer
             .mapped_ptr()
             .expect("RGB distance readback should be mapped");

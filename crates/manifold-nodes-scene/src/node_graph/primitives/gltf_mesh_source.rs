@@ -1724,7 +1724,7 @@ mod gpu_tests {
             prim.run(&mut ctx);
             unchanged = ctx.outputs_unchanged;
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
         unchanged
     }
 

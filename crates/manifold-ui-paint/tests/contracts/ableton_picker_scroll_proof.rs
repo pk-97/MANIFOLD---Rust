@@ -111,7 +111,7 @@ fn render(tree: &UITree) -> (Vec<u8>, GpuTexture) {
     {
         let mut enc = device.create_encoder("picker-render");
         ui.render(&mut enc, &target, GpuLoadAction::Clear);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     (readback(&device, &target), target)
 }
@@ -215,7 +215,7 @@ fn readback(device: &GpuDevice, texture: &GpuTexture) -> Vec<u8> {
 
     let mut enc = device.create_encoder("picker-readback");
     enc.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let ptr = buf.mapped_ptr().expect("shared readback buffer is mapped");
     let bytes: &[u8] =

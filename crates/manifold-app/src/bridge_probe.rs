@@ -185,7 +185,7 @@ pub fn run(args: &[String]) -> ! {
                 "fill",
             );
             enc.copy_texture_to_buffer(&tex, &buf, W, H, BYTES_PER_ROW);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let gpu_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let ptr = buf.mapped_ptr().expect("readback mapped");

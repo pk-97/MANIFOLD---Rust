@@ -155,7 +155,7 @@ mod gpu_tests {
             [1, 1, 1],
             "particles-to-copies",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         read(&out, src.len())
     }
 
@@ -262,7 +262,7 @@ mod gpu_tests {
             [1, 1, 1],
             "displace",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let unfused: Vec<InstanceTransform> = read(&unfused_out, src.len());
 
         // Fused: one kernel, uniforms in the region's parameter order.
@@ -296,7 +296,7 @@ mod gpu_tests {
             [1, 1, 1],
             "fused",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let fused_result: Vec<InstanceTransform> = read(&fused_out, src.len());
 
         let cpu: Vec<InstanceTransform> = expected(&src, live_count)

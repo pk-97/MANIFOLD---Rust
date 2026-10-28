@@ -396,7 +396,7 @@ impl Lattice {
                 kept: None,
             },
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let words: Vec<u32> = read(tiles.table(), table_words(count) as usize);
         let entries = table_entries(count);
         let slot_of: HashMap<[i32; 3], u32> = (0..count)
@@ -673,7 +673,7 @@ fn gpu_flip_body_operator_matches_cpu() {
         .passes
         .apply(&mut enc, &scene.bodies(), scene.tiles(), &direction_gpu, &s)
         .expect("apply");
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let impulses = cpu_pressure_impulse(&direction, &scene.water, &scene.open, &scene.solid);
     let (want, scale) = cpu_body_sums(&impulses, &scene.solid, &scene.rows, &scene.mobility);
@@ -732,7 +732,7 @@ fn gpu_flip_body_reaction_matches_cpu() {
             &scratch,
         )
         .expect("apply");
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let pushed = scene.sums();
     let (want, scale) = cpu_body_sums(
         &cpu_pressure_impulse(&pressure, &scene.water, &scene.open, &scene.solid),
@@ -753,7 +753,7 @@ fn gpu_flip_body_reaction_matches_cpu() {
             &reaction,
         )
         .expect("react");
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let changed = scene.records_from_gpu(&scene.buffers[2]);
     let want_changed = cpu_velocity_change(&scene.solid, &pushed, &scene.rows);
@@ -798,7 +798,7 @@ fn gpu_flip_body_operator_holds_a_supported_body_symmetric() {
             .passes
             .apply(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &s)
             .expect("apply");
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         scene.cells_from_gpu(&s)
     };
     let (x, y) = (random_values(cells, 0x5e1e), random_values(cells, 0x5e1f));
@@ -954,7 +954,7 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
                 &self.progress,
                 self.progress.size,
             );
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             (
                 bits(&self.scene.cells_from_gpu(&self.pressure)),
                 bits(&self.scene.sums()),
@@ -1128,7 +1128,7 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
             .passes
             .apply(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &s)
             .expect("apply");
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let pushed = bits(&scene.sums());
         let mut enc = scene.device.create_encoder("sparse react");
         if poison {
@@ -1138,7 +1138,7 @@ fn gpu_flip_body_passes_sparse_match_all_tiles() {
             .passes
             .react(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &reaction)
             .expect("react");
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let s = scene.cells_from_gpu(&s);
         // Only the active tiles' s is compared under poison: the rest holds
         // the NaN written in, which nothing touched.

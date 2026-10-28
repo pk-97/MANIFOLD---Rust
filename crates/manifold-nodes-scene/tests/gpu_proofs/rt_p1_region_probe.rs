@@ -184,7 +184,7 @@ fn scene_json(rt_enabled: bool) -> String {
 /// final readback — the RT-D4 brief's "~7-frame transition" while RT-off
 /// scenes just render the same unshadowed frame that many times (harmless,
 /// no dirty-check churn once `accel_key` stops changing).
-/// `commit_and_wait_completed` hard-checks for Metal GPU errors — a bad RT
+/// `commit_and_wait` hard-checks for Metal GPU errors — a bad RT
 /// dispatch/bind surfaces as a panic here, not a silently wrong frame.
 const RT_WARMUP_FRAMES: i64 = 16;
 
@@ -229,7 +229,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     (h.readback(&target.texture), h.width, h.height)
 }
@@ -382,7 +382,7 @@ fn rt_shadow_darkens_occluded_region_and_leaves_lit_region_alone() {
 /// nonzero GPU cost that used to block the CPU). This drives the SAME
 /// ground+occluder+sun scene with `rt_enabled` true from frame 0 — the
 /// "first-enable" case — for `RT_WARMUP_FRAMES` frames, timing each
-/// frame's wall-clock `render()` + `commit_and_wait_completed()` (the
+/// frame's wall-clock `render()` + `commit_and_wait()` (the
 /// same span a real content-thread tick pays), and asserts no frame past
 /// the first two (typical one-time pipeline-compile warm-up, same
 /// allowance `bug037_verify.rs`/`bug035_verify.rs` use, unrelated to RT-D4)
@@ -443,7 +443,7 @@ fn rt_enable_first_frame_never_stalls_past_20ms() {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let elapsed = start.elapsed();
         eprintln!("frame {frame}: {:.2}ms", elapsed.as_secs_f64() * 1000.0);
         frame_ms.push(elapsed.as_secs_f64() * 1000.0);

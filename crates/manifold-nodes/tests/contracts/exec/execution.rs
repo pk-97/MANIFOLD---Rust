@@ -67,7 +67,7 @@ mod bug_216_gpu_tests {
         let readback_buf = device.create_buffer(total_bytes, manifold_gpu::BufferUse::Upload);
         let mut readback_enc = device.create_encoder("bug216-readback");
         readback_enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
-        readback_enc.commit_and_wait_completed();
+        readback_enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback_buf.mapped_ptr().expect("shared buffer pointer");
         let halves: &[u16] =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (w * h * 4) as usize) };
@@ -131,7 +131,7 @@ mod bug_216_gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
             gpu.clear_texture(&source_target.texture, 0.05, 0.05, 0.05, 1.0);
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         let mut backend = MetalBackend::new(device.arc(), w, h, format);
         backend.pre_bind_texture_2d(source_res, source_target);
@@ -172,7 +172,7 @@ mod bug_216_gpu_tests {
                     owner_key,
                 );
             }
-            native_enc.commit_and_wait_completed();
+            native_enc.commit_and_wait().expect("GPU work completes");
             pixels.push(readback_pixel(&device, &exec, mix_out_res, w, h));
         }
 

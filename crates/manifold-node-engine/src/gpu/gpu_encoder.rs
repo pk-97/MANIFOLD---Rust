@@ -319,7 +319,7 @@ mod tests {
             let mut gpu = super::GpuEncoder::new(&mut native_enc, &device);
             gpu.resize_sample(&src, &dst);
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         let bytes_per_row = 2 * 8; // 2 px × rgba16float (8 bytes)
         let readback = device.create_buffer(
@@ -328,7 +328,7 @@ mod tests {
         );
         let mut rb_enc = device.create_encoder("resize-test-readback");
         rb_enc.copy_texture_to_buffer(&dst, &readback, 2, 2, bytes_per_row);
-        rb_enc.commit_and_wait_completed();
+        rb_enc.commit_and_wait().expect("GPU work completes");
 
         let ptr = readback.mapped_ptr().expect("shared buffer pointer");
         let halves: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), 2 * 2 * 4) };

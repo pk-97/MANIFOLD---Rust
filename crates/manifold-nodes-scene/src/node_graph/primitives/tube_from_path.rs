@@ -340,7 +340,7 @@ mod gpu_tests {
             [dst_cap.div_ceil(256), 1, 1],
             "tube-from-path-test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let ptr = dst_buf.mapped_ptr().expect("shared dst buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, dst_cap as usize) }.to_vec()

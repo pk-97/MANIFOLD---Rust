@@ -490,7 +490,7 @@ where
             );
             dispatches = gpu.rt_dispatches;
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         if frame > 0 {
             warm_elapsed += started.elapsed();
         }
@@ -571,7 +571,7 @@ fn readback(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) -> Vec<u8> {
         texture.height,
         bytes_per_row,
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let ptr = buffer.mapped_ptr().expect("subsurface readback must map");
     unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), total_bytes as usize).to_vec() }
 }
@@ -1236,7 +1236,7 @@ fn read_sss_channel(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) -> V
     let buffer = device.create_buffer(size, BufferUse::Upload);
     let mut encoder = device.create_encoder("SSS history proof readback");
     encoder.copy_texture_to_buffer(texture, &buffer, texture.width, texture.height, row_bytes);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let bytes = unsafe {
         std::slice::from_raw_parts(
             buffer
@@ -1414,7 +1414,7 @@ fn prove_temporal_sss_history(tilted_normals: bool) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         disarm_rt_capture();
         let captures = take_rt_captures();
         if captures.is_empty() {

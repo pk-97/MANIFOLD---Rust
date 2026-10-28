@@ -183,7 +183,7 @@ mod gpu_tests {
             [(src.len() as u32).div_ceil(256), 1, 1],
             "drop-hidden-test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = output.mapped_ptr().expect("shared output buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, src.len()) }.to_vec()
     }

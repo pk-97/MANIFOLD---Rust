@@ -292,7 +292,7 @@ fn run_motion_sequence(
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     };
 
     // Warmup at time 0 (occluder parked at START_X) so the async RT accel

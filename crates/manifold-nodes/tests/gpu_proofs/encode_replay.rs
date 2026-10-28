@@ -54,7 +54,7 @@ fn read_shared(buffer: &manifold_gpu::GpuBuffer, bytes: usize, out: &mut Vec<u8>
         staging = device.create_buffer(bytes as u64, BufferUse::Upload);
         let mut enc = device.create_encoder("encode-replay-readback");
         enc.copy_buffer_to_buffer(buffer, &staging, bytes as u64);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         &staging
     };
     let ptr = source.mapped_ptr().expect("shared buffer");

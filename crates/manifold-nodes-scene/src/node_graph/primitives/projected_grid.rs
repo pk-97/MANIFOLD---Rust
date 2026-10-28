@@ -498,7 +498,7 @@ mod gpu_tests {
             [count.div_ceil(256), 1, 1],
             "projected-grid-test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = out.mapped_ptr().expect("shared buffer");
         let got = unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, count as usize) };
         for (i, v) in got.iter().enumerate() {

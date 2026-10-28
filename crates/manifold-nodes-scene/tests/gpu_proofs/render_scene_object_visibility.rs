@@ -183,7 +183,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     (h.readback(&target.texture), h.width, h.height)
 }
@@ -359,7 +359,7 @@ fn streaming_mesh_drops_only_its_object() {
             );
             gpu.frame_status()
         };
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         status
     };
 

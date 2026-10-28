@@ -58,7 +58,7 @@ fn render(selected: &[u32]) -> (Vec<u8>, Option<Vec<u8>>) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     let mask = runtime
         .selection_mask()
@@ -71,7 +71,7 @@ fn read_mask(device: &manifold_gpu::GpuDevice, mask: &GpuTexture) -> Vec<u8> {
     let buf = device.create_buffer(u64::from(mask.width * mask.height), BufferUse::Upload);
     let mut enc = device.create_encoder("selection-mask-readback");
     enc.copy_texture_to_buffer(mask, &buf, mask.width, mask.height, mask.width);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf.mapped_ptr().expect("shared readback buffer");
     unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (mask.width * mask.height) as usize) }
         .to_vec()

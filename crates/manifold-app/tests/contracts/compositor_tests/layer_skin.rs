@@ -374,7 +374,8 @@ fn settle_two_layer(
         );
         device
             .create_encoder("layer-skin-settle-drain")
-            .commit_and_wait_completed();
+            .commit_and_wait()
+            .expect("GPU work completes");
         frame += 1;
         let pending = runtime_b.warmup_pending()
             || runtime_a
@@ -406,7 +407,7 @@ fn region_luma_pixels(
     let buf = device.create_buffer(u64::from(H * bytes_per_row), BufferUse::Upload);
     let mut rb = device.create_encoder("layer-skin-readback");
     rb.copy_texture_to_buffer(texture, &buf, W, H, bytes_per_row);
-    rb.commit_and_wait_completed();
+    rb.commit_and_wait().expect("GPU work completes");
     let ptr = buf.mapped_ptr().expect("shared buffer mapped");
     let px: &[u16] = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), (W * H * 4) as usize) };
 
@@ -635,7 +636,7 @@ fn skin_tracks_source_content_and_missing_id_falls_back() {
                 device.create_buffer(u64::from(texture.height * bytes_per_row), BufferUse::Upload);
             let mut rb = device.create_encoder("layer-skin-demo-readback");
             rb.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);
-            rb.commit_and_wait_completed();
+            rb.commit_and_wait().expect("GPU work completes");
             let ptr = buf.mapped_ptr().expect("shared buffer mapped");
             let px: &[u16] = unsafe {
                 std::slice::from_raw_parts(

@@ -3231,27 +3231,14 @@ impl GpuEncoder {
         Self::verify_buffer_completed(&committed, "commit_wait_and_continue");
     }
 
-    /// Commit and block until the GPU has fully completed the work.
-    /// Required for synchronous texture readback — a copy to a shared buffer
-    /// is only readable from the CPU once the GPU reports completion.
-    ///
-    /// After the wait, verifies the buffer actually reached `Completed`.
-    /// A GPU fault (page fault, timeout, invalid resource) leaves the
-    /// destination buffer holding garbage the caller would otherwise read
-    /// as valid pixels — the root of the parity/freeze-proof test flakes
-    /// (BUG-013). See [`Self::verify_completed`] for the dev-vs-release split.
-    pub fn commit_and_wait_completed(mut self) {
-        self.debug_assert_lanes_closed();
-        self.end_current();
-        self.register_fault_handler();
-        self.cmd_buf.commit();
-        unsafe { self.cmd_buf.waitUntilCompleted() };
-        self.verify_completed("commit_and_wait_completed");
-    }
-
-    /// Commit, wait for completion, and return a failure instead of panicking.
-    /// Completion handlers have run by the time Metal returns from the wait.
-    pub fn try_commit_and_wait_completed(mut self) -> Result<(), String> {
+    /// Commit and block until the GPU has fully completed the work, with
+    /// every completion handler run. Required for synchronous readback: a
+    /// copy to a shared buffer is only readable once the GPU reports
+    /// completion. `Err` when the buffer did not reach `Completed` (a page
+    /// fault, a timeout, an invalid resource): the destination then holds
+    /// garbage, so the caller skips whatever needed the result. Tests
+    /// `.expect()` it; the live app logs and carries on.
+    pub fn commit_and_wait(mut self) -> Result<(), String> {
         self.debug_assert_lanes_closed();
         self.end_current();
         self.register_fault_handler();
@@ -3266,21 +3253,17 @@ impl GpuEncoder {
             Some(err) => (err.code() as i64, err.localizedDescription().to_string()),
         };
         Err(format!(
-            "[GPU] try_commit_and_wait_completed: command buffer did not reach Completed (status={}, code={}): {}",
+            "[GPU] commit_and_wait: command buffer did not reach Completed (status={}, code={}): {}",
             unsafe { self.cmd_buf.status() }.0,
             code,
             desc
         ))
     }
 
-    /// Assert the command buffer reached `Completed` after a blocking wait.
-    /// Dev/test builds panic so a GPU error surfaces as a loud, localized
-    /// failure instead of silent garbage in a readback; release builds (the
-    /// live show) log and carry on rather than crash mid-set.
-    fn verify_completed(&self, ctx: &str) {
-        Self::verify_buffer_completed(&self.cmd_buf, ctx);
-    }
-
+    /// Check a buffer reached `Completed` after a blocking wait. Dev and test
+    /// builds panic so a GPU error surfaces as a loud, localized failure
+    /// instead of silent garbage in a readback; release builds (the live
+    /// show) log and carry on rather than crash mid-set.
     fn verify_buffer_completed(cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>, ctx: &str) {
         use objc2_metal::MTLCommandBufferStatus;
 
@@ -3490,7 +3473,7 @@ mod tests {
             encoder.commit_and_continue(&device);
         }
 
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
 
         let final_value: u32 = unsafe {
             let ptr = buffer
@@ -3570,7 +3553,7 @@ mod tests {
             let buf = device.create_buffer(64 * 64 * 4, BufferUse::Upload);
             let mut enc = device.create_encoder("test points readback");
             enc.copy_texture_to_buffer(target, &buf, 64, 64, 64 * 4);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let ptr = buf
                 .mapped_ptr()
                 .expect("shared readback buffer must be CPU-mapped");
@@ -3610,7 +3593,7 @@ mod tests {
                 crate::GpuLoadAction::Clear,
                 "test points batch",
             );
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             count_red(device, &target)
         };
 
@@ -3724,7 +3707,7 @@ mod tests {
             0,
             "test indirect fill",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let (direct, indirect) = (read(&direct, 512), read(&indirect, 512));
         assert_eq!(
             direct, indirect,
@@ -3798,7 +3781,7 @@ mod tests {
             );
             let readback = device.create_buffer(64 * 64 * 4, BufferUse::Upload);
             enc.copy_texture_to_buffer(&target, &readback, 64, 64, 64 * 4);
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             let ptr = readback
                 .mapped_ptr()
                 .expect("shared readback buffer must be CPU-mapped");

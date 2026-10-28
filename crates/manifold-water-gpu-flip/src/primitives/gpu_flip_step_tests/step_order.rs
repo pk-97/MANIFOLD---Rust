@@ -133,7 +133,7 @@ pub(super) fn gpu_flip_step_order_cell_cap_compacts_preserving_ids() {
             &labels,
         )
         .unwrap();
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let compacted: Vec<FluidParticle> = read(&output, 300);
     assert_eq!(&compacted[..249], &particles[1..250]);
     assert!(compacted[249..].iter().all(|p| p.position_radius[3] == 0.0));

@@ -137,7 +137,7 @@ pub(super) fn gpu_flip_density_support_matches_original() {
                         [threads.div_ceil(256) as u32, 1, 1],
                         "density-support-proof",
                     );
-                    enc.commit_and_wait_completed();
+                    enc.commit_and_wait().expect("GPU work completes");
                     pass.bound::<f32>(5, cell_len())
                 });
             for (c, (&want, &got)) in outputs[0].iter().zip(&outputs[1]).enumerate() {

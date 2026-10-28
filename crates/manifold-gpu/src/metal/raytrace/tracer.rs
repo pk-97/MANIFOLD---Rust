@@ -2862,8 +2862,7 @@ mod tests {
             let buf = device.create_buffer(9 * 9 * 16, BufferUse::Upload);
             let mut rb = device.create_encoder("f7f1-readback");
             rb.copy_texture_to_buffer(tex, &buf, 9, 9, 9 * 16);
-            rb.try_commit_and_wait_completed()
-                .expect("denoiser readback");
+            rb.commit_and_wait().expect("denoiser readback");
             unsafe {
                 buf.mapped_ptr()
                     .unwrap()
@@ -2923,13 +2922,11 @@ mod tests {
             let mut enc = device.create_encoder("f7f1-batched");
             dispatch(&mut enc, 1, &outputs[0]);
             dispatch(&mut enc, 4, &outputs[1]);
-            enc.try_commit_and_wait_completed()
-                .expect("batched denoiser passes");
+            enc.commit_and_wait().expect("batched denoiser passes");
             for (i, step) in [1, 4].into_iter().enumerate() {
                 let mut enc = device.create_encoder("f7f1-individual-reference");
                 dispatch(&mut enc, step, &outputs[i + 2]);
-                enc.try_commit_and_wait_completed()
-                    .expect("reference denoiser pass");
+                enc.commit_and_wait().expect("reference denoiser pass");
             }
             let values: [[f32; 4]; 4] = std::array::from_fn(|i| read(&outputs[i][2]));
             assert!(
@@ -3105,8 +3102,7 @@ mod tests {
             [1, 1, 1],
             "normal guard regression",
         );
-        enc.try_commit_and_wait_completed()
-            .expect("normal guard dispatch");
+        enc.commit_and_wait().expect("normal guard dispatch");
         let actual = unsafe {
             std::slice::from_raw_parts(
                 output
@@ -3197,8 +3193,7 @@ mod tests {
             [1, 1, 1],
             "trace diagnostics regression",
         );
-        enc.try_commit_and_wait_completed()
-            .expect("trace diagnostic dispatch");
+        enc.commit_and_wait().expect("trace diagnostic dispatch");
         let d = unsafe { ptr.cast::<RtTraceDiagnostics>().read_unaligned() };
         assert_eq!(d.state, 2);
         assert_eq!(d.first_stage, 3);

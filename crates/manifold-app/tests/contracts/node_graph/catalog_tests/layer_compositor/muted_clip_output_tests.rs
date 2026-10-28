@@ -91,7 +91,7 @@ fn run(
         let mut gpu = GpuEncoder::new(&mut native_enc, device);
         comp.generate_layers(&mut gpu, &frame);
     }
-    native_enc.commit_and_wait_completed();
+    native_enc.commit_and_wait().expect("GPU work completes");
 }
 
 fn white_texture(device: &manifold_gpu::testkit::TestDevice) -> GpuTexture {

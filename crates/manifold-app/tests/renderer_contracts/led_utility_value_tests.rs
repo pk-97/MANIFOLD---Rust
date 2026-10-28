@@ -158,7 +158,7 @@ impl LedUtilityFixture {
             self.runtime
                 .render(&mut gpu, &self.target.texture, &ctx, &manifest);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let layer_id = LayerId::from("led0");
         let layers = [CompositeLayerDescriptor {
@@ -210,12 +210,14 @@ impl LedUtilityFixture {
             let mut gpu = GpuEncoder::new(&mut enc, &self.device);
             self.comp.render(&mut gpu, &frame);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let tex = self
             .comp
             .led_composite_texture()
             .expect("an active LED-type layer must produce an LED composite");
-        decode_halves(&readback_raw_halves(&self.device, tex, LED_W, LED_H))
+        decode_halves(
+            &readback_raw_halves(&self.device, tex, LED_W, LED_H).expect("GPU readback completes"),
+        )
     }
 }
 

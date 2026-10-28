@@ -159,7 +159,7 @@ fn readback_rg16float(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) ->
     let buf = device.create_buffer(total_bytes, BufferUse::Upload);
     let mut enc = device.create_encoder("rt-w0-velocity-readback");
     enc.copy_texture_to_buffer(texture, &buf, texture.width, texture.height, bytes_per_row);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let ptr = buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
@@ -214,7 +214,7 @@ fn render_and_dump<'a>(
             &manifold_core::params::ParamManifest::default(),
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let dumped = runtime.dump_textures_all();
     let depth = dumped
@@ -282,7 +282,7 @@ fn rt_w0_forced_gbuffer_matches_orbit_oracle() {
                 );
             }
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     // Measured frame A: orbit = ORBIT0 (seeds prev_view_proj at ORBIT0
@@ -461,7 +461,7 @@ fn rt_w0_default_scene_stays_lazy_no_forced_gbuffer() {
             &manifold_core::params::ParamManifest::default(),
         );
     }
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     let dumped = runtime.dump_textures_all();
     assert!(

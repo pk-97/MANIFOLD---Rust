@@ -200,7 +200,7 @@ impl ParityHarness {
                 rts.push(rt);
             }
         }
-        copy_enc.commit_and_wait_completed();
+        copy_enc.commit_and_wait().expect("GPU work completes");
 
         let mut rts_iter = rts.into_iter();
         for src in &sources {
@@ -223,7 +223,7 @@ impl ParityHarness {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &self.device);
             exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         let prim_tex = exec.backend().texture_2d(prim_output_slot)?;
         Some(self.readback(prim_tex))
@@ -239,7 +239,7 @@ impl ParityHarness {
 
         let mut enc = self.device.create_encoder("gpu-proof-readback");
         enc.copy_texture_to_buffer(texture, &buf, self.width, self.height, bytes_per_row);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let ptr = buf
             .mapped_ptr()
@@ -289,9 +289,9 @@ pub fn port_is_texture(ty: &PortType) -> bool {
 }
 
 /// Retry a closure once if it panics with the GPU-contention signature
-/// (`command buffer did not reach Completed`, the panic from
-/// `GpuEncoder::commit_and_wait_completed` when the device wedges or kills the
-/// buffer as `InnocentVictim`).
+/// (`command buffer did not reach Completed`, the error
+/// `GpuEncoder::commit_and_wait` returns, and tests `.expect()`, when the
+/// device wedges or kills the buffer as `InnocentVictim`).
 ///
 /// Two sessions sharing one Metal device make the gpu-proofs suite contend:
 /// another process hammers the device, a commit times out, and the commit
@@ -405,10 +405,10 @@ mod tests {
 
     use super::retry_on_gpu_commit_error;
 
-    /// The exact message shape `GpuEncoder::verify_completed` panics with.
-    /// Panicked via `panic!("{msg}")` with a `String` local — the same form
-    /// the encoder uses — so the payload is a `String` like the real wedge's.
-    const SIG_PANIC: &str = "[GPU] commit_and_wait_completed: command buffer did not reach Completed (status=4, code=1): hang";
+    /// The exact message shape a test's `commit_and_wait().expect(..)` panics
+    /// with. Panicked via `panic!("{msg}")` with a `String` local, as
+    /// `expect` does, so the payload is a `String` like the real wedge's.
+    const SIG_PANIC: &str = "GPU work completes: \"[GPU] commit_and_wait: command buffer did not reach Completed (status=4, code=1): hang\"";
 
     fn commit_error_panic() -> ! {
         let msg = SIG_PANIC.to_string();

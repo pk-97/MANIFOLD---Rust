@@ -229,7 +229,7 @@ mod gpu_tests {
             [n.div_ceil(256), 1, 1],
             "unpack-oracle",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
 
         let xptr = x_buf.mapped_ptr().expect("shared x buffer");
         let yptr = y_buf.mapped_ptr().expect("shared y buffer");

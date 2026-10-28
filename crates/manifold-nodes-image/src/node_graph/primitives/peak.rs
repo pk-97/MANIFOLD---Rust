@@ -216,7 +216,7 @@ mod gpu_tests {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
                 exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
 
         let v = seen
@@ -267,7 +267,7 @@ mod gpu_tests {
                     let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
                     exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
                 }
-                enc.commit_and_wait_completed();
+                enc.commit_and_wait().expect("GPU work completes");
             }
 
             let v = seen

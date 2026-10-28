@@ -436,7 +436,7 @@ mod gpu_tests {
             unsafe { buffer.write(0, bytemuck::cast_slice(&values)) };
             let mut encoder = device.create_encoder("prefix scan proof (in place)");
             scan.encode_labelled(&mut encoder, n, ScanLabels::DEFAULT);
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
             check(
                 &read(scan.buffer.as_ref().expect("scan storage"), n),
                 "encode_labelled",
@@ -454,7 +454,7 @@ mod gpu_tests {
             scan.parents(&device, n).expect("scan parents");
             let mut encoder = device.create_encoder("prefix scan proof (into)");
             scan.encode_into(&mut encoder, n, &src, &dst);
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
             check(&read(&dst, n), "encode_into");
             assert_eq!(
                 read(&src, n),
@@ -503,7 +503,7 @@ mod gpu_tests {
             unsafe { record.write(0, bytemuck::cast_slice(&words)) };
             let mut encoder = device.create_encoder("counted prefix scan proof");
             scan.encode_labelled_counted(&mut encoder, capacity, ScanLabels::DEFAULT, &record, 16);
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
 
             let ptr = scan.buffer_ref().mapped_ptr().expect("shared buffer");
             // SAFETY: a shared buffer of at least capacity words; GPU work done.

@@ -454,7 +454,7 @@ mod gpu_tests {
             GpuLoadAction::Clear,
         );
         enc.copy_texture_to_buffer(&target, &readback, W, H, ROW_BYTES);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         read_pixel(&readback)
     }
 
@@ -487,7 +487,7 @@ mod gpu_tests {
             );
         }
         native.copy_texture_to_buffer(&tonemap.output.texture, &readback, W, H, ROW_BYTES);
-        native.commit_and_wait_completed();
+        native.commit_and_wait().expect("GPU work completes");
         read_pixel(&readback)
     }
 

@@ -200,7 +200,7 @@ mod gpu_tests {
             texture.height,
             bytes_per_row,
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let ptr = buffer.mapped_ptr().expect("shared readback");
         let pixels: &[u16] = unsafe {
             std::slice::from_raw_parts(
@@ -270,7 +270,7 @@ mod gpu_tests {
             [TEST_W.div_ceil(16), TEST_H.div_ceil(16), 1],
             "render-glyph-grid-test",
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         readback_r(&output.texture, device)
     }
 

@@ -45,7 +45,7 @@ fn solid_texture_nodes(id_base: u32, rgba: [f32; 4]) -> (String, String, u32) {
 
 /// Render a scene-graph JSON to `Rgba16Float`, returning readback bytes.
 /// Two committed frames (pipeline warm-up + F-P1's per-frame IBL
-/// convolution past); `commit_and_wait_completed` hard-checks Metal errors.
+/// convolution past); `commit_and_wait` hard-checks Metal errors.
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
     let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
@@ -87,7 +87,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     (h.readback(&target.texture), h.width, h.height)
 }

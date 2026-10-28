@@ -514,7 +514,7 @@ fn atomic_side_output_atom_cuts_fusion_and_matches_unfused() {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
                 exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
 
         let slot = exec
@@ -543,7 +543,7 @@ fn atomic_side_output_atom_cuts_fusion_and_matches_unfused() {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
             gpu.copy_texture_to_texture(tex, &out.texture, tex.width, tex.height);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         (momentum, out)
     };
 

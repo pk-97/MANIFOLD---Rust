@@ -238,7 +238,7 @@ mod gpu_tests {
             [out_count.div_ceil(256), 1, 1],
             "subdivide-mesh-test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = dbuf.mapped_ptr().expect("shared dst buffer");
         unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, out_count as usize) }.to_vec()
     }

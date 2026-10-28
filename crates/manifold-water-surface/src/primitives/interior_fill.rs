@@ -321,7 +321,7 @@ mod gpu_tests {
             [(elements as u32).div_ceil(THREADS), 1, 1],
             "interior fill proof",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let got = read(&out, elements);
         let mut filled = 0;
         let mut checked = 0;

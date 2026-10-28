@@ -337,13 +337,13 @@ fn run_tlc_fixture(
         true,
         "trace_shadow_rays-tlc-proof",
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
 
     // Read back out_svt (Rgba32Float, at 2x1) — same approach as out_sv.
     let svt_readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Upload);
     let mut enc_svt = device.create_encoder("tlc-svt-readback");
     enc_svt.copy_texture_to_buffer(&out_svt, &svt_readback_buf, 2, 1, 2 * 4 * 4);
-    enc_svt.commit_and_wait_completed();
+    enc_svt.commit_and_wait().expect("GPU work completes");
     let svt_ptr = svt_readback_buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");
@@ -357,7 +357,7 @@ fn run_tlc_fixture(
     let sv_readback_buf = device.create_buffer(2 * 4 * 4, BufferUse::Upload);
     let mut enc2 = device.create_encoder("tlc-sv-readback");
     enc2.copy_texture_to_buffer(&out_sv, &sv_readback_buf, 2, 1, 2 * 4 * 4);
-    enc2.commit_and_wait_completed();
+    enc2.commit_and_wait().expect("GPU work completes");
     let ptr = sv_readback_buf
         .mapped_ptr()
         .expect("shared readback buffer must expose mapped pointer");

@@ -339,7 +339,7 @@ mod gpu_tests {
             [(a.len() as u32).div_ceil(256), 1, 1],
             "mix-arrays-standalone",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         read(&out_buf, a.len())
     }
 
@@ -468,7 +468,7 @@ mod gpu_tests {
             [(a.len() as u32).div_ceil(256), 1, 1],
             "mix-arrays-fused",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let fused_result = read(&out_buf, a.len());
         for (i, (&actual, &expected)) in fused_result.iter().zip(&unfused).enumerate() {
             assert_eq!(

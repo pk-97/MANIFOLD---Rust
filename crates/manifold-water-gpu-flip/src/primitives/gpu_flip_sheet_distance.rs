@@ -311,7 +311,7 @@ mod gpu_tests {
         let staged = device.create_buffer(buffer.size, BufferUse::Upload);
         let mut enc = device.create_encoder("sheet distance readback");
         enc.copy_buffer_to_buffer(buffer, &staged, buffer.size);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         read(&staged, (buffer.size / 4) as usize)
     }
 
@@ -347,7 +347,7 @@ mod gpu_tests {
         let source = shared(device, bytemuck::cast_slice(&pooled));
         let mut enc = device.create_encoder("sheet distance");
         let out = stage.encode_gated(&mut enc, &source, None, H, plan, &world.tiles);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let out: Vec<f32> = copy_out(device, out)
             .into_iter()
             .map(f32::from_bits)

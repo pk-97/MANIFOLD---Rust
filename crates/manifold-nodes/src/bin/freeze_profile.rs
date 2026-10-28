@@ -4,7 +4,7 @@
 //! Two passes:
 //! - **Effects (texture domain):** build each stateless effect preset's
 //!   graph, drive it through `Executor::execute_frame_with_gpu`, time per
-//!   frame with `commit_and_wait_completed` (wall-time ≈ GPU time). Reports
+//!   frame with `commit_and_wait` (wall-time ≈ GPU time). Reports
 //!   dispatch (step) count, ms/frame, and ms/step — the per-node texture
 //!   round-trip cost a fusion pass collapses.
 //! - **Generators (buffer/particle domain):** drive each generator preset
@@ -219,7 +219,7 @@ fn main() {
                     let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
                     exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
                 }
-                enc.commit_and_wait_completed();
+                enc.commit_and_wait().expect("GPU work completes");
             }
 
             let mut gpu_secs = 0.0_f64;
@@ -328,7 +328,7 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
                     };
                     exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
                 }
-                enc.commit_and_wait_completed();
+                enc.commit_and_wait().expect("GPU work completes");
             }
             let mut secs = 0.0;
             for i in 0..30u32 {
@@ -386,7 +386,7 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
                 let mut gpu = RendererGpuEncoder::new(&mut enc, device);
                 generator.render(&mut gpu, &target.texture, &mk(f64::from(i) / 60.0), &params);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let mut secs = 0.0;
         for i in 0..30u32 {
@@ -479,7 +479,7 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gp
                 let mut gpu = RendererGpuEncoder::new(&mut enc, device);
                 exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let mut secs = 0.0_f64;
         for _ in 0..PROF_FRAMES {
@@ -645,7 +645,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
                     "syn-buf-step",
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let mut sep_secs = 0.0_f64;
         for _ in 0..FRAMES {
@@ -681,7 +681,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
                 [groups, 1, 1],
                 "syn-buf-fused",
             );
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let mut fus_secs = 0.0_f64;
         for _ in 0..FRAMES {
@@ -793,7 +793,7 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
         let buf = device.create_buffer(total_bytes, BufferUse::Upload);
         let mut enc = device.create_encoder("scene-readback");
         enc.copy_texture_to_buffer(&target.texture, &buf, w, h, bytes_per_row);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = buf.mapped_ptr().expect("shared readback");
         let bytes: Vec<u8> =
             unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (w * h * 8) as usize).to_vec() };
@@ -863,7 +863,7 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
                 };
                 generator.render(&mut gpu, &target.texture, &ctx, params);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         };
         params.get_mut(&swept_id).unwrap().value = pmin;
         let mut fraction = 0.0f64;
@@ -954,7 +954,7 @@ fn profile_scene(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice
                         let mut gpu = RendererGpuEncoder::new(&mut enc, device);
                         generator.render(&mut gpu, &target.texture, &mk(warm_frames), &params);
                     }
-                    enc.commit_and_wait_completed();
+                    enc.commit_and_wait().expect("GPU work completes");
                     warm_frames += 1;
                 }
                 let (f, _) = read_frame(&target, w, h);
@@ -1165,7 +1165,7 @@ fn profile_auto_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::syn
                 let mut gpu = RendererGpuEncoder::new(&mut enc, device);
                 exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let mut secs = 0.0_f64;
         for _ in 0..FRAMES {
@@ -1320,7 +1320,7 @@ fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Ar
                 let mut gpu = RendererGpuEncoder::new(&mut enc, device);
                 exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let mut un_secs = 0.0_f64;
         for _ in 0..FRAMES {
@@ -1345,7 +1345,7 @@ fn profile_fused_colorgrade(registry: &PrimitiveRegistry, device: &std::sync::Ar
                 &output.texture,
                 &params,
             );
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let mut f_secs = 0.0_f64;
         for _ in 0..FRAMES {
@@ -1545,7 +1545,7 @@ fn attribute_def(
             let mut gpu = RendererGpuEncoder::new(&mut enc, device);
             exec.execute_frame_with_state(&mut graph, &plan, ft(i), &mut gpu, &mut state, 0);
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     #[derive(Default)]
@@ -1747,7 +1747,7 @@ fn profile_synthetic_pointwise(device: &std::sync::Arc<GpuDevice>) {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, device);
                 exec.execute_frame_with_gpu(&mut graph, &plan, frame_time, &mut gpu);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         let mut gpu_secs = 0.0_f64;
         for _ in 0..FRAMES {
@@ -1770,7 +1770,7 @@ fn profile_synthetic_pointwise(device: &std::sync::Arc<GpuDevice>) {
 
 /// Profile generator presets (the BUFFER / particle domain) via the
 /// production `Generator::render` path (state-aware), timing one frame
-/// with `commit_and_wait_completed`. Each (preset, resolution) is wrapped
+/// with `commit_and_wait`. Each (preset, resolution) is wrapped
 /// in `catch_unwind` so one failing preset can't abort the sweep.
 fn profile_generators(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuDevice>) {
     println!("\n--- generators (buffer/particle domain), avg over {GEN_FRAMES} frames ---");
@@ -1834,7 +1834,7 @@ fn profile_generators(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
                             &ParamManifest::default(),
                         );
                     }
-                    enc.commit_and_wait_completed();
+                    enc.commit_and_wait().expect("GPU work completes");
                 }
 
                 let mut gpu_secs = 0.0_f64;
@@ -1977,7 +1977,7 @@ fn profile_fluidsim_particle_sweep(
                         &ParamManifest::default(),
                     );
                 }
-                enc.commit_and_wait_completed();
+                enc.commit_and_wait().expect("GPU work completes");
             }
             let mut gpu_secs = 0.0_f64;
             for i in 0..GEN_FRAMES {

@@ -139,7 +139,7 @@ fn render_frame(
             );
             status = gpu.frame_status();
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     });
     (h.readback(&target.texture), captures.len(), status)
 }
@@ -606,7 +606,7 @@ fn trace_ms_2vs6_caster_delta_reported_as_number() {
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             times.push(t0.elapsed().as_secs_f64() * 1000.0);
         }
         // Discard first 4 frames (warmup: accel build + JIT)

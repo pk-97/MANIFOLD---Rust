@@ -192,7 +192,7 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
                 runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         eprintln!(
             "perf-soak (import): fixed warmup of {n} frames (--warmup-frames, convergence gate \
@@ -211,10 +211,11 @@ pub fn run_import(glb_path_str: &str, args: &[String]) -> Result<bool, String> {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
                 runtime.render(&mut gpu, &target.texture, &ctx, &manifest);
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
 
             let io_pending = runtime.io_pending();
-            let raw = readback_raw_halves(&device, &target.texture, width, height);
+            let raw = readback_raw_halves(&device, &target.texture, width, height)
+                .expect("GPU readback completes");
             let byte_stable = prev_raw.as_deref() == Some(raw.as_slice());
             prev_raw = Some(raw);
             if byte_stable && !io_pending {

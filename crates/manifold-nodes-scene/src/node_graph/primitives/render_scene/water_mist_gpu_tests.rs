@@ -90,7 +90,7 @@ fn run(levelset: &[f32], mist: &[f32]) -> Vec<Mist> {
     let bytes = u64::from(W * H) * 8;
     let read = device.create_buffer(bytes, BufferUse::Upload);
     enc.copy_buffer_to_buffer(march.mist().expect("the mist ran"), &read, bytes);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     let values: &[f32] = unsafe {
         std::slice::from_raw_parts(
             read.mapped_ptr().expect("shared").cast::<f32>(),

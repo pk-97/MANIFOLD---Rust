@@ -621,7 +621,7 @@ mod gpu_tests {
         let readback_buf = device.create_buffer(total, manifold_gpu::BufferUse::Upload);
         let mut enc = device.create_encoder("mux-texture-readback");
         enc.copy_texture_to_buffer(tex, &readback_buf, w, h, bytes_per_row);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = readback_buf.mapped_ptr().expect("shared readback");
         unsafe { std::slice::from_raw_parts(ptr, total as usize) }.to_vec()
     }
@@ -680,7 +680,7 @@ mod gpu_tests {
             prim.evaluate(&mut ctx);
             unchanged = ctx.outputs_unchanged;
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
         unchanged
     }
 

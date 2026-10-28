@@ -317,7 +317,7 @@ fn capture_frame(
     let buffer = device.create_buffer((row_bytes * tex.height) as u64, BufferUse::Upload);
     let mut encoder = device.create_encoder("corridor-capture");
     encoder.copy_texture_to_buffer(tex, &buffer, tex.width, tex.height, row_bytes);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let ptr = buffer.mapped_ptr().unwrap();
     let bytes = unsafe { std::slice::from_raw_parts(ptr, (row_bytes * tex.height) as usize) };
     let rgba: Vec<u8> = bytes
@@ -355,7 +355,7 @@ fn readback_mean_rgba(
     let buffer = device.create_buffer(size as u64, BufferUse::Upload);
     let mut encoder = device.create_encoder("corridor-acceptance-readback");
     encoder.copy_texture_to_buffer(tex, &buffer, tex.width, tex.height, row_bytes);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let ptr = buffer.mapped_ptr().expect("shared readback buffer");
     // GPU completion above makes the mapped bytes available to this thread.
     let bytes = unsafe { std::slice::from_raw_parts(ptr, size) };

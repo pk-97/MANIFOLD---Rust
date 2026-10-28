@@ -351,7 +351,7 @@ mod tests {
                 bound: 18,
             };
             writer.write(&mut encoder, 1, &extent, 18, 5);
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
             let ptr = args.mapped_ptr().expect("shared arguments buffer");
             let words = unsafe { std::slice::from_raw_parts(ptr as *const u32, 16) };
             assert_eq!(
@@ -392,7 +392,7 @@ mod tests {
             writer.write_fixed(&mut encoder, 1, 36);
             encoder.compute_memory_barrier_buffers();
             writer.trim(&mut encoder, 1, &buffer, count);
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
             let ptr = args.mapped_ptr().expect("shared arguments buffer");
             let words = unsafe { std::slice::from_raw_parts(ptr as *const u32, 16) };
             assert_eq!(
@@ -493,7 +493,7 @@ mod tests {
                     prev: with_prev.then_some((&prev_source, &out_prev)),
                 },
             );
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
             let words = unsafe {
                 std::slice::from_raw_parts(args.mapped_ptr().expect("shared") as *const u32, 16)
             };

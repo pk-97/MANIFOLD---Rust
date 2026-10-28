@@ -222,7 +222,7 @@ mod gpu_tests {
             let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
             exec.execute_frame_with_gpu(&mut g, &plan, frame_time(), &mut gpu);
         }
-        native_enc.commit_and_wait_completed();
+        native_enc.commit_and_wait().expect("GPU work completes");
 
         let tex = exec
             .backend()
@@ -235,7 +235,7 @@ mod gpu_tests {
         );
         let mut rb_enc = device.create_encoder("reinhard-readback");
         rb_enc.copy_texture_to_buffer(tex, &buf, w, h, bytes_per_row);
-        rb_enc.commit_and_wait_completed();
+        rb_enc.commit_and_wait().expect("GPU work completes");
 
         let ptr = buf
             .mapped_ptr()

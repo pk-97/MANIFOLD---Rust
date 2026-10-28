@@ -110,7 +110,7 @@ fn fused_colorgrade_matches_unfused_within_tolerance() {
     {
         let mut enc = device.create_encoder("freeze-cg-fused");
         dispatch_fused_colorgrade(&mut enc, &pipeline, &input, &fused.texture, &params);
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     let differ = TextureDiff::new(&device);
@@ -643,7 +643,7 @@ fn every_fused_preset_executes_one_frame() {
                 let mut gpu = RendererGpuEncoder::new(&mut native_enc, &device);
                 exec.execute_frame_with_state(&mut graph, &plan, ft, &mut gpu, &mut state, 0);
             }
-            native_enc.commit_and_wait_completed();
+            native_enc.commit_and_wait().expect("GPU work completes");
         }));
 
         if let Err(panic) = result {
@@ -857,7 +857,7 @@ fn infrared_centre_rgb(palette: f32, fill: [f32; 4]) -> [f32; 3] {
         let buf = device.create_buffer(u64::from(h * bpr), BufferUse::Upload);
         let mut e = device.create_encoder("ir-read");
         e.copy_texture_to_buffer(&rt.texture, &buf, w, h, bpr);
-        e.commit_and_wait_completed();
+        e.commit_and_wait().expect("GPU work completes");
         let ptr = buf.mapped_ptr().expect("mapped");
         let all = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (h * bpr) as usize) };
         let o = (((h / 2) * w + w / 2) * 8) as usize;
@@ -1004,7 +1004,7 @@ fn wireframe_generator_background_is_black() {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
 
     // Read the whole frame, report per-channel min/max and the corner pixel
@@ -1013,7 +1013,7 @@ fn wireframe_generator_background_is_black() {
     let buf = device.create_buffer(u64::from(h * bpr), BufferUse::Upload);
     let mut renc = device.create_encoder("wz-read");
     renc.copy_texture_to_buffer(&target.texture, &buf, w, h, bpr);
-    renc.commit_and_wait_completed();
+    renc.commit_and_wait().expect("GPU work completes");
     let ptr = buf.mapped_ptr().expect("mapped");
     let all = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), (h * bpr) as usize) };
     let at = |x: u32, y: u32| -> [f32; 4] {
@@ -1362,7 +1362,7 @@ fn every_fused_generator_executes_one_frame() {
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }));
         if let Err(panic) = result {
             let msg = panic
@@ -1454,7 +1454,7 @@ fn fused_generator_renders_like_unfused() {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         target
     };
 
@@ -1954,7 +1954,7 @@ fn flow_field_noise_fused_region_animates_over_time() {
                 &manifold_core::params::ParamManifest::default(),
             );
         }
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         target
     };
 
@@ -2036,7 +2036,7 @@ fn digitalplants_buffer_fusion_renders_like_unfused() {
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         target
     };
@@ -2243,7 +2243,7 @@ fn fluidsim_buffer_fusion_renders_like_unfused() {
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         target
     };
@@ -2351,7 +2351,7 @@ fn fluidsim3d_buffer_fusion_includes_3d_sampler_and_renders_like_unfused() {
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         target
     };
@@ -2437,7 +2437,7 @@ fn fluidsim_renders_deterministically_from_fresh_state() {
                     &manifold_core::params::ParamManifest::default(),
                 );
             }
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
         }
         target
     };

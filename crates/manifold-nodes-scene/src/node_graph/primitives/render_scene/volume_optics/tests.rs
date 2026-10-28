@@ -190,7 +190,7 @@ fn read_center(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) -> f32 {
     let readback = device.create_buffer(u64::from(row_bytes * SIZE), BufferUse::Upload);
     let mut encoder = device.create_encoder("volume optics readback");
     encoder.copy_texture_to_buffer(texture, &readback, SIZE, SIZE, row_bytes);
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     let ptr = readback
         .mapped_ptr()
         .expect("shared readback buffer must be CPU mapped");
@@ -318,7 +318,7 @@ fn render_path_with_camera(
             "volume optics far depth",
         );
     }
-    depth_encoder.commit_and_wait_completed();
+    depth_encoder.commit_and_wait().expect("GPU work completes");
 
     let bindings = bindings(&mesh, &u, &instance, &depth);
     let mut encoder = device.create_encoder("volume optics path proof");
@@ -333,7 +333,7 @@ fn render_path_with_camera(
         GpuLoadAction::Clear,
         "volume optics path",
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     read_center(device, &path)
 }
 
@@ -398,7 +398,7 @@ fn render_nearest(device: &manifold_gpu::GpuDevice, vertices: &[MeshVertex]) -> 
         std::slice::from_ref(&draw),
         "volume nearest surface",
     );
-    encoder.commit_and_wait_completed();
+    encoder.commit_and_wait().expect("GPU work completes");
     read_center(device, &depth)
 }
 

@@ -188,13 +188,14 @@ fn math_view_occlusion_applies_to_overlay_only_and_survives_resize() {
                     &ctx,
                     params,
                 );
-                encoder.commit_and_wait_completed();
+                encoder.commit_and_wait().expect("GPU work completes");
                 manifold_node_engine::testkit::gpu::readback_raw_halves(
                     &device,
                     &target.texture,
                     w,
                     h,
                 )
+                .expect("GPU readback completes")
             };
             // A wired mode selector lands one frame late; render once to settle.
             set(&owner, &mut params, "math_view_mode", 1.0);
@@ -237,7 +238,8 @@ fn math_view_occlusion_applies_to_overlay_only_and_survives_resize() {
                                 &target.texture,
                                 w,
                                 h,
-                            ),
+                            )
+                            .expect("GPU readback completes"),
                         )
                         .unwrap();
                     }
@@ -297,8 +299,9 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
                 let mut gpu = GpuEncoder::new(&mut encoder, &device);
                 runtime.render(&mut gpu, &target.texture, &ctx, params);
             }
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
             manifold_node_engine::testkit::gpu::readback_raw_halves(&device, &target.texture, W, H)
+                .expect("GPU readback completes")
         };
     let render = |runtime: &mut PresetRuntime, params: &ParamManifest, frame: i64| {
         render_at(runtime, params, frame, 0)
@@ -362,7 +365,8 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     let moved_restored = render(&mut runtime, &params, 3);
 
     let rgba =
-        manifold_node_engine::testkit::gpu::readback_srgb_rgba8(&device, &target.texture, W, H);
+        manifold_node_engine::testkit::gpu::readback_srgb_rgba8(&device, &target.texture, W, H)
+            .expect("GPU readback completes");
     assert!(
         rgba.chunks_exact(4)
             .filter(|pixel| pixel[..3].iter().any(|channel| *channel > 30))
@@ -617,9 +621,10 @@ fn staged_transform_resize_keeps_compatible_chain_and_renders() {
         )
         .unwrap()
         .clone();
-    encoder.try_commit_and_wait_completed().unwrap();
+    encoder.commit_and_wait().unwrap();
     assert_eq!((output.width, output.height), (24, 32));
-    let pixels = manifold_node_engine::testkit::gpu::readback_raw_halves(&device, &output, 24, 32);
+    let pixels = manifold_node_engine::testkit::gpu::readback_raw_halves(&device, &output, 24, 32)
+        .expect("GPU readback completes");
     assert!(pixels.chunks_exact(8).any(|pixel| {
         pixel[..6]
             .chunks_exact(2)
@@ -677,13 +682,14 @@ fn math_view_instance_echoes_render_copies_and_vertices_only_path_is_unchanged()
             &ctx,
             &params,
         );
-        encoder.commit_and_wait_completed();
+        encoder.commit_and_wait().expect("GPU work completes");
         let pixels = manifold_node_engine::testkit::gpu::readback_raw_halves(
             &device,
             &target.texture,
             320,
             180,
-        );
+        )
+        .expect("GPU readback completes");
         if std::env::var_os("MANIFOLD_MATH_ECHOES_PREVIEW").is_some() {
             // Encode the live target before the closure drops it.
             std::fs::write(
@@ -693,7 +699,8 @@ fn math_view_instance_echoes_render_copies_and_vertices_only_path_is_unchanged()
                     &target.texture,
                     320,
                     180,
-                ),
+                )
+                .expect("GPU readback completes"),
             )
             .unwrap();
         }
@@ -893,8 +900,9 @@ fn math_view_arrows_draw_after_every_mesh_modifier() {
                 &ctx,
                 params,
             );
-            encoder.commit_and_wait_completed();
+            encoder.commit_and_wait().expect("GPU work completes");
             manifold_node_engine::testkit::gpu::readback_raw_halves(&device, &target.texture, w, h)
+                .expect("GPU readback completes")
         };
         // Wired controls land one frame late; render twice per setting.
         set(&owner, &mut params, "math_view_vectors", 1.0);

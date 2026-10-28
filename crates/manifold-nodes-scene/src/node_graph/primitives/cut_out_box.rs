@@ -227,7 +227,7 @@ mod gpu_tests {
             [(vertices.len() as u32).div_ceil(256), 1, 1],
             "cut-out-box-test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let got = read(&out, vertices.len());
         let (mut hidden, mut kept) = (0, 0);
         for (i, (v, g)) in vertices.iter().zip(&got).enumerate() {
@@ -502,7 +502,7 @@ mod gpu_tests {
             groups,
             "ocean-unfused-cut",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let (fused, unfused) = (read(&fused_out, n), read(&unfused_out, n));
         let (mut moved, mut hidden) = (0, 0);
         for (i, (a, b)) in fused.iter().zip(&unfused).enumerate() {

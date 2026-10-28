@@ -610,7 +610,7 @@ pub(crate) mod gpu_tests {
             [(vertices.len() as u32).div_ceil(256), 1, 1],
             "ocean-displace-test",
         );
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let ptr = out.mapped_ptr().expect("shared buffer");
         let got = unsafe { std::slice::from_raw_parts(ptr as *const MeshVertex, vertices.len()) };
         let refs = [

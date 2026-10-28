@@ -554,7 +554,7 @@ fn template_frame(
             result.map(|()| Some(profile))
         }
         _ => {
-            enc.commit_and_wait_completed();
+            enc.commit_and_wait().expect("GPU work completes");
             result.map(|()| None)
         }
     }
@@ -563,7 +563,7 @@ fn template_frame(
 fn reference_frame(device: &GpuDevice, k: &Kernels, run: &Run, frame: u32, spec: Spec) {
     let mut enc = device.create_encoder("template-proof reference");
     encode_reference(&mut enc, k, run, frame, spec);
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 }
 
 /// Every path writes what the unrolled reference writes, frame after frame,
@@ -846,7 +846,7 @@ fn template_refusals_are_atomic() {
         let mut enc = device.create_encoder("template-proof refused");
         let result = encode_template(&mut enc, &k, &mut run, 1, refused, Some(&texture));
         assert!(result.is_err(), "{why}: refused");
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         let after = run.store.stats();
         assert_eq!(
             (
@@ -886,7 +886,7 @@ fn template_refusals_are_atomic() {
         let err = encode_template(&mut enc, &k, &mut run, 0, Spec { chunk, ..spec }, None)
             .expect_err("refused");
         assert!(err.contains("do not fit"), "chunk {chunk}: {err}");
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
     }
     assert_eq!(run.store.slots(), 0);
 }
@@ -965,7 +965,8 @@ fn template_slots_in_flight_are_never_rewritten() {
     unsafe { gate.raw().setSignaledValue(1) };
     device
         .create_encoder("template-proof drain")
-        .commit_and_wait_completed();
+        .commit_and_wait()
+        .expect("GPU work completes");
     for (frame, snapshot) in snapshots.iter().enumerate() {
         let mut got: Vec<Vec<u32>> = snapshot.iter().map(read).collect();
         got[3].truncate(2);
@@ -1034,7 +1035,7 @@ fn template_tickets_name_their_store_and_build() {
         .execute_template(&mut other.store, b)
         .expect_err("a ticket from another store");
     assert!(foreign.contains("another store"), "{foreign}");
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     assert_eq!(
         run.contents(),
         before,
@@ -1047,7 +1048,7 @@ fn template_tickets_name_their_store_and_build() {
     let a2 = prepare_rounds(&mut enc, &k, &mut run, spec, None).expect("hits");
     enc.execute_template(&mut run.store, a).expect("runs");
     enc.execute_template(&mut run.store, a2).expect("runs");
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
 
     // A trim frees idle slots past four, and their tickets go with them.
     let mut held = Vec::new();
@@ -1150,7 +1151,7 @@ fn template_abandoned_encoders_release_their_slots() {
     for key in 0..4 {
         let mut enc = device.create_encoder("template-proof committed");
         encode_template(&mut enc, &k, &mut run, key, Spec::default(), None).expect("encodes");
-        enc.commit_and_wait_completed();
+        enc.commit_and_wait().expect("GPU work completes");
         assert_eq!(run.store.tokens(), 1, "committed frame {key}: no new token");
     }
     // A live encoder's token is never handed to another encoder, and its
@@ -1214,7 +1215,7 @@ fn template_survives_buffer_replacement_and_split_buffers() {
         "the continued buffer uses the slot: {:?}",
         second.store.users()
     );
-    enc.commit_and_wait_completed();
+    enc.commit_and_wait().expect("GPU work completes");
     reference_frame(&device, &k, &reference, 0, spec);
     reference_frame(&device, &k, &reference, 1, spec);
     assert_eq!(
