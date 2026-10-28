@@ -45,8 +45,8 @@ impl WetPass {
         self.mask.as_ref()
     }
 
-    /// Draws the first water's wet map that has one (one wet map per scene)
-    /// into the mask, at 1 / `MASK_SCALE` of the opaque depth's size.
+    /// Draws every water's wet map into the one mask, at 1 / `MASK_SCALE` of
+    /// the opaque depth's size: the first clears it, the rest add to it.
     pub(super) fn encode(
         &mut self,
         device: &GpuDevice,
@@ -55,22 +55,16 @@ impl WetPass {
         view_proj: [[f32; 4]; 4],
         opaque_depth: &GpuTexture,
     ) -> Result<(), &'static str> {
-        let Some((map, model)) = fields
+        let mut maps = fields
             .iter()
-            .find_map(|field| Some((field.wet_map?, field.model)))
-        else {
+            .filter_map(|field| Some((field.wet_map?, field.model)))
+            .peekable();
+        if maps.peek().is_none() {
             self.mask = None;
             return Ok(());
-        };
+        }
         let inverse_view_proj =
             mat4_inverse(view_proj).ok_or("Wet pass: singular camera matrix")?;
-        let world_to_local = mat4_inverse(model).ok_or("Wet pass: singular water model matrix")?;
-        let uniforms = Uniforms {
-            view_proj,
-            model,
-            clip_to_local: mat4_mul(world_to_local, inverse_view_proj),
-            mask_scale: [MASK_SCALE as f32, 0.0, 0.0, 0.0],
-        };
         let pipeline = self.pipeline.get_or_insert_with(|| {
             device.create_render_pipeline(
                 SHADER.as_str(),
@@ -108,31 +102,46 @@ impl WetPass {
                 label: "node.render_scene wet mask",
             }));
         }
-        encoder.draw_instanced(
-            pipeline,
-            self.mask.as_ref().expect("ensured"),
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: map,
+        let mask = self.mask.as_ref().expect("ensured");
+        for (index, (map, model)) in maps.enumerate() {
+            let world_to_local =
+                mat4_inverse(model).ok_or("Wet pass: singular water model matrix")?;
+            let uniforms = Uniforms {
+                view_proj,
+                model,
+                clip_to_local: mat4_mul(world_to_local, inverse_view_proj),
+                mask_scale: [MASK_SCALE as f32, 0.0, 0.0, 0.0],
+            };
+            encoder.draw_instanced(
+                pipeline,
+                mask,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: map,
+                        offset: 0,
+                    },
+                    GpuBinding::Texture {
+                        binding: 2,
+                        texture: opaque_depth,
+                    },
+                ],
+                DrawCount::Indirect {
+                    args: map,
                     offset: 0,
                 },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: opaque_depth,
+                if index == 0 {
+                    GpuLoadAction::Clear
+                } else {
+                    GpuLoadAction::Load
                 },
-            ],
-            DrawCount::Indirect {
-                args: map,
-                offset: 0,
-            },
-            GpuLoadAction::Clear,
-            "node.render_scene wet pass",
-        );
+                "node.render_scene wet pass",
+            );
+        }
         Ok(())
     }
 }
