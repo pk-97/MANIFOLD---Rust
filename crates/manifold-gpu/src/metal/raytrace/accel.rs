@@ -475,14 +475,14 @@ fn blas_sizes(
     let sizes = device
         .raw_device()
         .accelerationStructureSizesWithDescriptor(descriptor);
-    if crate::metal::device::alloc_log_enabled() {
+    if crate::alloc_counts::alloc_log_enabled() {
         eprintln!(
             "[gpu-alloc] blas-plan struct={} build_scratch={} refit_scratch={}",
             sizes.accelerationStructureSize,
             sizes.buildScratchBufferSize,
             sizes.refitScratchBufferSize
         );
-        crate::metal::device::alloc_log_backtrace();
+        crate::alloc_counts::alloc_log_backtrace();
     }
     sizes
 }
@@ -1003,7 +1003,7 @@ pub(crate) fn plan_accel(
     let tlas_sizes = device
         .raw_device()
         .accelerationStructureSizesWithDescriptor(&tlas_descriptor);
-    if crate::metal::device::alloc_log_enabled() {
+    if crate::alloc_counts::alloc_log_enabled() {
         eprintln!(
             "[gpu-alloc] tlas-plan instances={} struct={} build_scratch={} refit_scratch={}",
             total_slots,

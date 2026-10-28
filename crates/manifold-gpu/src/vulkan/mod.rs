@@ -20,6 +20,7 @@
 //! `(set=0, binding=N)` descriptor slots with a descriptor type each. The
 //! per-backend `SlotMap` captures that difference.
 
+mod core;
 mod device;
 mod encoder;
 pub mod fft;
@@ -33,6 +34,9 @@ mod span_timer;
 pub mod surface;
 mod template;
 mod types;
+
+#[cfg(test)]
+mod parity_tests;
 
 pub use device::GpuDevice;
 pub(crate) use device::PoolAllocator;

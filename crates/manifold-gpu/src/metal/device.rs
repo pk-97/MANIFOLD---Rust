@@ -23,35 +23,10 @@ use super::encoder::{EncoderState, RenderBindCache};
 use super::*;
 use crate::types::*;
 
-/// BUG-olp9 diagnostic: MANIFOLD_GPU_ALLOC_LOG=1 prints every texture/buffer
-/// allocation (label, dims, format, bytes) to stderr. Census tool for the
-/// RT-startup memory transient — not hot-path safe, env-gated, read once.
-/// MANIFOLD_GPU_ALLOC_BT=1 additionally prints a caller backtrace per event.
-pub(crate) fn alloc_log_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("MANIFOLD_GPU_ALLOC_LOG").is_some())
-}
-
-const BUFFER_ALLOCATION: usize = 0;
-const TEXTURE_ALLOCATION: usize = 1;
-const ACCEL_ALLOCATION: usize = 2;
-
-thread_local! {
-    /// Allocations made on this thread, per device: (resource scope id,
-    /// [buffers, textures, acceleration structures]). Per thread so a probe
-    /// that renders on its own thread counts only its own work while other
-    /// threads share the device (the parallel gpu-proofs binary).
-    static THREAD_ALLOCATIONS: std::cell::RefCell<Vec<(u64, [u64; 3])>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-pub(crate) fn alloc_log_backtrace() {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *ENABLED.get_or_init(|| std::env::var_os("MANIFOLD_GPU_ALLOC_BT").is_some()) {
-        let bt = std::backtrace::Backtrace::force_capture();
-        eprintln!("[gpu-alloc-bt] {bt}");
-    }
-}
+use crate::alloc_counts::{
+    ACCEL_ALLOCATION, BUFFER_ALLOCATION, TEXTURE_ALLOCATION, alloc_log_backtrace,
+    alloc_log_enabled,
+};
 
 /// Env-gated log for every pipeline cache miss that becomes a cold touch.
 /// Mirrors the rebuild-reason logger in chain_dispatch.rs so probe runs
@@ -243,15 +218,7 @@ impl GpuDevice {
     }
 
     fn on_device(device: Retained<ProtocolObject<dyn MTLDevice>>) -> Self {
-        static NEXT_RESOURCE_SCOPE: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(1);
-        let resource_scope_id = NEXT_RESOURCE_SCOPE
-            .fetch_update(
-                std::sync::atomic::Ordering::Relaxed,
-                std::sync::atomic::Ordering::Relaxed,
-                |id| id.checked_add(1),
-            )
-            .expect("GPU resource scope identifiers exhausted");
+        let resource_scope_id = crate::alloc_counts::next_resource_scope_id();
         let queue = device
             .newCommandQueue()
             .expect("Failed to create command queue");
@@ -490,28 +457,11 @@ impl GpuDevice {
     /// for warmup/steady-state probes; the probe must render on the thread
     /// that reads them.
     pub fn allocation_counts(&self) -> [u64; 3] {
-        THREAD_ALLOCATIONS.with_borrow(|counts| {
-            counts
-                .iter()
-                .find(|(scope, _)| *scope == self.resource_scope_id)
-                .map_or([0; 3], |(_, count)| *count)
-        })
+        crate::alloc_counts::allocation_counts(self.resource_scope_id)
     }
 
     fn record_allocation(&self, kind: usize) {
-        THREAD_ALLOCATIONS.with_borrow_mut(|counts| {
-            match counts
-                .iter_mut()
-                .find(|(scope, _)| *scope == self.resource_scope_id)
-            {
-                Some((_, count)) => count[kind] += 1,
-                None => {
-                    let mut count = [0; 3];
-                    count[kind] = 1;
-                    counts.push((self.resource_scope_id, count));
-                }
-            }
-        });
+        crate::alloc_counts::record_allocation(self.resource_scope_id, kind);
     }
 
     pub(crate) fn record_accel_allocation(&self) {

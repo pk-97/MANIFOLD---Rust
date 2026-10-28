@@ -9,7 +9,7 @@ publish = false
 # everywhere else. `vulkan` switches macOS to the Vulkan backend, run on
 # KosmicKrisp or MoltenVK (D21) to check the portable path from the dev box.
 default = []
-vulkan = ["dep:ash"]
+vulkan = ["dep:ash", "dep:gpu-allocator"]
 testkit = []
 # GPU-backed proofs (requires an Apple Silicon device). Off by default — run with
 # `cargo test -p manifold-gpu --features gpu-proofs -- --test-threads=1`.
@@ -33,11 +33,14 @@ uuid = { workspace = true }
 # SPIR-V optimization (wraps Google SPIRV-Tools C++)
 spirv-tools = { version = "0.13", features = ["use-compiled-tools"] }
 
-# Vulkan loader bindings: the `vulkan` feature on macOS, always elsewhere.
+# Vulkan loader bindings and memory allocator: the `vulkan` feature on
+# macOS, always elsewhere.
 ash = { version = "0.38", optional = true }
+gpu-allocator = { version = "0.28", default-features = false, features = ["std", "vulkan"], optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 ash = "0.38"
+gpu-allocator = { version = "0.28", default-features = false, features = ["std", "vulkan"] }
 raw-window-handle = "0.6"
 
 # Native Metal backend
@@ -149,7 +152,7 @@ objc2-metal-performance-shaders-graph = { version = "0.3", default-features = fa
 [lints]
 workspace = true
 
-# The Vulkan stubs do not call `ash` yet (P1 does), so cargo-machete
-# reports it unused.
+# The Vulkan backend's crates are optional on macOS, so cargo-machete's
+# default scan reports them unused.
 [package.metadata.cargo-machete]
-ignored = ["ash"]
+ignored = ["ash", "gpu-allocator"]

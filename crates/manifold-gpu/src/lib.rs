@@ -46,6 +46,7 @@ pub struct GpuMemorySnapshot {
 // Compiled on every platform; each backend's shader compiler consumes the
 // optimised SPIR-V and emits platform-specific shader modules.
 mod shader_common;
+mod alloc_counts;
 mod workgroup_zeroing;
 
 // ─── Backend selection ────────────────────────────────────────────────

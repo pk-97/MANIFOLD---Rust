@@ -7,7 +7,7 @@
 
 ## 0. Where it stands
 
-- **GPU:** `manifold-gpu/src/vulkan/` is 514 lines of stubs against about 30,000 in `metal/`. `cargo check -p manifold-gpu --features vulkan` fails at `shadow_caster.rs:87` (`create_buffer_shared`), and that is only the first error, so `scripts/feature_matrix.py` is red on that row today.
+- **GPU:** `manifold-gpu/src/vulkan/` builds the real device, memory, buffers, textures and samplers (`core.rs`, `device.rs`, `types.rs`); everything else is still `todo!` stubs against about 30,000 lines in `metal/`. The parity kit is `vulkan/parity_tests.rs`. The workspace lints clean with `--features manifold-gpu/vulkan` except `manifold-app`, `manifold-media` and `manifold-recording`, and compiles on Linux.
 - **Linux:** the workspace has never been compiled for Linux. Off the Mac the app opens a window with no text, no preview and no content render (`manifold-app/src/content_pipeline.rs:1997` logs "Non-macOS render path not available").
 - **Tooling:** installed on 28 Oct (section 1). There is no CI.
 - **Already portable:** shaders (WGSL → SPIR-V is shared), the machine-wide GPU queue lock (`queue.rs` has a Linux branch), the audio device list through cpal, MIDI (midir), Ableton Link (rusty_link), OSC and Art-Net (std UDP), the prefs path (`user_prefs.rs:38` has an XDG arm), the content-thread deadline sleep (`frame_timer.rs:266`), all in-repo C and C++ (Box3D, the FLIP Fluids oracle, Signalsmith), the embedded Inter fonts, and every `include_str!`/`include_bytes!` path (case-clean). No Rust code is ARM-only apart from one test assert (`manifold-fluids/src/sheet_oracle.rs:257`).
@@ -202,7 +202,7 @@ The overnight run does steps 2 to 8 with buffer use after step 5, then P1, GPU t
 - **GPU timing** consolidation, with its own spec and a profiler session before and after. Before P2.
 
 **P1, one batch each, in this order**
-9. Instance, device and queues (D1, D5, D21, D23), gpu-allocator, buffers by use (D14), textures, uploads (D22), samplers, memory snapshot (D18), debug names (D20).
+9. Done 28 Oct: one shared instance and device (`vulkan/core.rs`), gpu-allocator, buffers, textures and views, samplers, uploads, the memory snapshot and debug names. Private buffers are device-local and shared ones host-visible until the buffer-use API lands (D14). Textures go to `GENERAL` and uploads copy through staging in a submit the caller waits on; step 12 can make both asynchronous (D22).
 10. Compute pipelines from SPIR-V, descriptor sets with update templates and the set cache (D2), uniform ring (D3), pipeline and SPIR-V disk caches (D11).
 11. Encoder: dispatch, indirect dispatch, copies, clears, readbacks, and the hazard tracker (design section 5).
 12. Submission: command pools (D6), per-queue timelines, resource lifetime, the waiter thread and completion handlers (D7, D8), async lanes, device loss (D19), and the Vulkan hooks for the hoisted frame-lifetime types.
