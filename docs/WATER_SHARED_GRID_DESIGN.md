@@ -1,8 +1,8 @@
 # Water shared grid: one table, one budget, memory that follows the water
 
-<!-- index: Design for cutting GPU FLIP water memory: one world-tile table per water shared by the sim, the surface and whitewater; one memory budget from the device; scratch fields sharing one arena by lifetime; no padding or dead lanes; spray off the surface table; pools that shrink; 16-bit storage. Starts from the 28 Oct inventory and the waterBoxTests 22 GB refusal. -->
+<!-- index: Design for cutting GPU FLIP water memory: one world-tile table per World shared by every Water's sim, surface and whitewater, so Waters push on each other and merge; one memory budget from the device; scratch fields sharing one arena by lifetime; no padding or dead lanes; spray off the surface table; pools that shrink; 16-bit storage. Starts from the 28 Oct inventory and the waterBoxTests 22 GB refusal. -->
 
-**Status:** design, not started. Each phase needs Peter's go-ahead. Phase 1 stands alone and fixes the blowup.
+**Status:** phase 1 partly landed (0aaaee527: spray and foam hold no display tiles, the display pool shrinks). D1 and D2 are per World since 29 Oct (Peter). Each phase needs Peter's go-ahead.
 **Companions:** [GPU_FLIP_END_GAME_DESIGN.md](GPU_FLIP_END_GAME_DESIGN.md) (D4 memory follows the water, D5 16-bit storage, D12 one shared grid, D13 spray as impostors), [WATER_FINE_BLOCKS_DESIGN.md](WATER_FINE_BLOCKS_DESIGN.md) (its second display table becomes a fine level here, D2).
 
 ## Why
@@ -45,9 +45,9 @@ Per full water cell, at 8 particles: about 730 + 8 × 430, or **4 KB or more, an
 
 ## Decisions
 
-**D1. One budget per water, from the device.** All of a water's pools and arrays draw on one budget, which is a share of what the device check admits (`admit_candidate_bytes`: 75% of the recommended working set on Metal; the heap budget on Vulkan). `POOL_BUDGET_BYTES` is deleted. Rejected: per-pool constants, because they cannot follow the card and they disagree.
+**D1. One budget per World, from the device.** All the World's water pools and arrays draw on one budget, which is a share of what the device check admits (`admit_candidate_bytes`: 75% of the recommended working set on Metal; the heap budget on Vulkan). `POOL_BUDGET_BYTES` is deleted. Rejected: per-pool constants, because they cannot follow the card and they disagree.
 
-**D2. One table per water, with levels.** The sim's world-tile table is the only table. The surface's fields live on its held tiles at Surface Detail 1, so the display stops building its own. Finer Surface Detail is a fine level of the same table holding only tiles at the surface; this replaces WATER_FINE_BLOCKS' second table. Mist and the multigrid's coarse grids are coarse levels. Matter joins later (D12 in the end-game doc). Rejected: keeping separate tables with a shared budget, because two tables still hold two sets of rings and headroom for the same water.
+**D2. One table per World, with levels.** Every Water in a World is one liquid on one world-tile table with one pressure solve, so two Waters push on each other and merge where they meet. Each Water item contributes its particles with a water index; its look, whitewater and wet marks read that index, so a merged pool keeps each Water's own look up to where they mix. The sim's table is the only table. The surface's fields live on its held tiles at Surface Detail 1, so the display stops building its own. Finer Surface Detail is a fine level of the same table holding only tiles at the surface; this replaces WATER_FINE_BLOCKS' second table. Mist and the multigrid's coarse grids are coarse levels. Matter joins later (D12 in the end-game doc). A Speed per region of the table is where mixed sim speeds would come in (docs/IDEAS.md); today every Water follows the World Speed. Open: the World's water has one cell size, so per-Water Cell Size either moves to the World or the finest Water's sets it. Rejected: one table per water with a shared budget, because Waters then never touch and two tables still hold two sets of rings and headroom.
 
 **D3. Fields by lifetime.** Every field is one of three kinds:
 - **Persistent:** kept across steps. These are the output faces, pressure as the warm start, phi, Narrow Band's grid, and anything the renderer reads after the graph (level set, velocity, mist).
