@@ -303,7 +303,7 @@ fn length(a: [f64; 3]) -> f64 {
 
 /// Solid angle the triangle subtends at `p`, signed by its winding (Van
 /// Oosterom and Strackee 1983).
-fn signed_solid_angle(p: [f64; 3], [a, b, c]: &[[f64; 3]; 3]) -> f64 {
+pub(crate) fn signed_solid_angle(p: [f64; 3], [a, b, c]: &[[f64; 3]; 3]) -> f64 {
     let (a, b, c) = (sub(*a, p), sub(*b, p), sub(*c, p));
     let (la, lb, lc) = (length(a), length(b), length(c));
     let numerator = dot(a, cross(b, c));

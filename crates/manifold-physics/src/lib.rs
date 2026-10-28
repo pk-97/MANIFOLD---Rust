@@ -33,6 +33,7 @@ pub use turbulence::{TurbulenceDrift, TurbulenceField};
 mod mesh;
 pub use mesh::{TriangleMesh, closed_triangles, cook_hull_mesh, validate_closed_mesh};
 pub mod collision_shape;
+pub mod mesh_bvh;
 pub mod sdf;
 use collision_shape::validate_position;
 mod cooked;
