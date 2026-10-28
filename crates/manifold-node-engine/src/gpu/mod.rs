@@ -6,4 +6,3 @@ pub mod headless_readback;
 pub mod render_target;
 pub mod render_target_pool;
 pub mod shader_sources;
-pub mod uniform_arena;

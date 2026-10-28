@@ -12,9 +12,6 @@ pub struct GpuEncoder<'a> {
     /// Texture pool for heap-backed allocation and recycling.
     /// Avoids per-allocation kernel calls for transient textures.
     pub pool: Option<&'a manifold_gpu::TexturePool>,
-    /// Shared-memory uniform arena for generator uniform data.
-    /// Owned by GeneratorRenderer, set during render_all().
-    pub uniform_arena: Option<*mut crate::gpu::uniform_arena::UniformArena>,
     /// When true, the pipeline may split its command buffer mid-encode with
     /// [`Self::checkpoint`]. Always false for profiled frames so per-buffer
     /// dispatch timestamps stay monolithic (UI_RESPONSIVENESS_UNDER_LOAD D5).
@@ -60,7 +57,6 @@ impl<'a> GpuEncoder<'a> {
             native_enc,
             device,
             pool: None,
-            uniform_arena: None,
             chunking_enabled: false,
             preparing: false,
             render_pass: 0,
@@ -88,7 +84,6 @@ impl<'a> GpuEncoder<'a> {
             native_enc,
             device,
             pool: Some(pool),
-            uniform_arena: None,
             chunking_enabled: false,
             preparing: false,
             render_pass: 0,
@@ -123,17 +118,6 @@ impl<'a> GpuEncoder<'a> {
         if self.chunking_enabled {
             self.native_enc.commit_and_continue(self.device);
         }
-    }
-
-    /// Get mutable reference to the shared uniform arena (if set).
-    /// Generators use this instead of buffer writes for uniforms.
-    ///
-    /// # Safety
-    /// Caller must ensure no other mutable reference to the arena exists.
-    #[inline]
-    #[allow(clippy::mut_from_ref)]
-    pub unsafe fn uniform_arena_mut(&self) -> Option<&mut crate::gpu::uniform_arena::UniformArena> {
-        self.uniform_arena.map(|p| unsafe { &mut *p })
     }
 
     // ─── Unified GPU operations ──────────────────────────────────────

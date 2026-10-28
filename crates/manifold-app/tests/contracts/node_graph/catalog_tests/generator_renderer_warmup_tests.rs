@@ -322,7 +322,6 @@ fn render_frames(renderer: &mut GeneratorRenderer, layers: &[Layer], frames: usi
         let time = f as f64 * DT as f64;
         renderer.render_all(&mut gpu, time, 0.0, DT, layers, 1, &[], None);
         native_enc.commit_and_wait_completed();
-        renderer.uniform_arena.flush(&device);
     }
 }
 

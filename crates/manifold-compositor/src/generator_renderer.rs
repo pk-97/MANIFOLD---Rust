@@ -6,7 +6,6 @@ use manifold_core::{Beats, ClipId, LayerId, NodeId, PresetTypeId, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::gpu::render_target::RenderTarget;
-use manifold_node_engine::gpu::uniform_arena::UniformArena;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::runtime::generator_provider::{GeneratorProvider, generator_provider};
 use manifold_node_engine::runtime::preset_context::{PresetContext, ProjectTempo};
@@ -99,12 +98,6 @@ pub struct GeneratorRenderer {
     render_info_scratch: Vec<(i32, u32, u32, f32)>,
     /// The per-frame override-version sweep's snapshot of active layer ids.
     layer_id_scratch: Vec<manifold_core::LayerId>,
-    /// Shared-memory uniform arena for generator uniform data.
-    /// Eliminates per-generator queue.write_buffer() calls.
-    #[cfg(not(any(test, feature = "testkit")))]
-    uniform_arena: UniformArena,
-    #[cfg(any(test, feature = "testkit"))]
-    pub uniform_arena: UniformArena,
     /// Last `structure_key` (Layers, Clips, Effects stamps) — layer_index refresh scan only runs when this changes.
     last_structure_key: u64,
     /// Counts `render_all` calls; a layer stamps it when it actually renders.
@@ -181,8 +174,6 @@ impl GeneratorRenderer {
         // Avoids pre-allocating large textures that may never be used.
         let available_rts = Vec::with_capacity(8);
 
-        let uniform_arena = UniformArena::new(&device);
-
         let registry = generator_provider();
 
         Self {
@@ -201,7 +192,6 @@ impl GeneratorRenderer {
             render_scratch: Vec::with_capacity(16),
             render_info_scratch: Vec::with_capacity(16),
             layer_id_scratch: Vec::new(),
-            uniform_arena,
             last_structure_key: u64::MAX, // force scan on first frame
             render_pass: 0,
             content_clock: Seconds::ZERO,
@@ -932,9 +922,6 @@ impl GeneratorRenderer {
         self.render_pass += 1;
         gpu.render_pass = self.render_pass;
         self.content_clock.0 += f64::from(dt);
-        // Reset uniform arena for this frame and set on GpuEncoder.
-        self.uniform_arena.reset();
-        gpu.uniform_arena = Some(&mut self.uniform_arena as *mut UniformArena);
 
         // Refresh positional cache on active clips — only when the project has
         // structurally changed (the Layers, Clips or Effects stamp moved).
@@ -1271,11 +1258,6 @@ impl GeneratorRenderer {
         if !self.waiting_fires.is_empty() {
             self.settle_waiting_fires(render_skip);
         }
-
-        // Flush uniform arena (recreates buffer if capacity grew).
-        self.uniform_arena.flush(gpu.device);
-        // Clear the arena pointer from GpuEncoder.
-        gpu.uniform_arena = None;
     }
 
     /// Get the animation progress for a rendered clip (for profiling).
@@ -1931,7 +1913,6 @@ impl ClipRenderer for GeneratorRenderer {
                 break;
             }
 
-            self.uniform_arena.reset();
             let mut native_enc = device.create_encoder("warmup");
             native_enc.note_scope(&format!(
                 "warmup layer '{}' ({}) generator {} clip {} frame {} size {}x{}",
@@ -1946,7 +1927,6 @@ impl ClipRenderer for GeneratorRenderer {
             {
                 let mut gpu = GpuEncoder::new(&mut native_enc, &device);
                 gpu.preparing = true;
-                gpu.uniform_arena = Some(&mut self.uniform_arena as *mut UniformArena);
                 if let Some(ls) = self.layer_generators.get_mut(&layer_id) {
                     let params = layer
                         .gen_params()
@@ -1986,7 +1966,6 @@ impl ClipRenderer for GeneratorRenderer {
                 log::error!("Generator warmup failed for layer {layer_id}: {err}");
                 return manifold_core::WarmupOutcome::GpuFailed;
             }
-            self.uniform_arena.flush(&device);
 
             let runtime = self.layer_generators.get(&layer_id);
             if let Some(done) = run.pending_outcome(

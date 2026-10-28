@@ -84,7 +84,6 @@ fn navigated_frame_warms_up_under_the_pipeline_frame_order() {
             );
         }
         native_enc.commit_and_wait_completed();
-        renderer.uniform_arena.flush(&device);
 
         let status = renderer
             .scene_viewport_status(&layer_id)

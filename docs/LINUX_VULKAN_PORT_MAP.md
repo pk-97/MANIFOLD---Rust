@@ -152,7 +152,7 @@ About 525 `target_os` lines in 46 files. Grouped by what they gate:
 | manifold-playback | Works as is: midir and cpal on ALSA, rusty_link (needs cmake and libclang), kira (0.9.6 pins cpal 0.15). Stem separation: the bundled demucs runtime exists only for macOS (`tools/audio_analysis/BundledRuntime/macOS`, `stage_runtime_mac.sh`); the device is `auto`, so CUDA is picked on Linux | P4 (runtime) |
 | manifold-native | The two ML plugins (BlobDetector, DepthEstimator) load `lib<name>.so` from `assets/plugins` on Linux; each `build.sh` builds it against `libopencv-dev`. `region_ffi.rs` tests that use `codesign` and `otool` stay Mac-only | P4: ship the `.so` files with the Linux package |
 | manifold-nodes-scene | Decode cache under `Library/Caches` (`decode_cache.rs:132`) | P3 seams |
-| manifold-node-engine | `exec/metal_backend.rs:1562-1640` tests compare `raw_ptr()` (gpu-proofs). Preset paths (section 6). `gpu/uniform_arena.rs` is dead (section 11) | P3 |
+| manifold-node-engine | `exec/metal_backend.rs:1562-1640` tests compare `raw_ptr()` (gpu-proofs). Preset paths (section 6) | P3 |
 | manifold-nodes | Dead Mac dev-dependencies (section 2) | P3 |
 | manifold-physics | Thread count: Mac performance cores, `available_parallelism` elsewhere (`lib.rs:471-485`). On the 9950X3D that is 32 threads over two chiplets, only one with the extra cache | P8: measure |
 | manifold-fluids | OpenMP (section 2). The `sheet_oracle.rs:245-260` test asserts an arm64 clang build of the oracle, so its baseline does not hold on x86_64 gcc | Test stays Mac-only |
@@ -189,7 +189,7 @@ One batch at a time, and both builds stay green before the next one starts (desi
 The overnight run does steps 2 to 8 with buffer use after step 5, then P1, GPU timing, P2 and cosmic-text on Linux. It starts only with MANIFOLD closed and no other session working in this folder, commits each batch, and parks a batch it cannot fix in a few tries.
 
 1. **Setup** (section 1). Done 28 Oct.
-2. **Build hygiene.** Done 28 Oct, except `UniformArena` (section 11).
+2. **Build hygiene.** Done 28 Oct.
 3. **Folders and tools.** Done 28 Oct (`manifold_foundation::AppDirs`, `find_tool`).
 4. **Hoist neutral logic.** Done 28 Oct.
 5. **Shrink the GPU API**, overnight subset, one batch each: the render-pipeline descriptor, the draw descriptor, commit forms, `current_value` → `encoded_value`. The descriptor specs name presets that use each changed form, and the batch renders those stills. Buffer use and GPU timing are not overnight (section 11).
@@ -253,7 +253,6 @@ Every API the Vulkan backend copies gets built twice and tested twice. So shrink
 | About 20 draw forms (`draw_instanced_depth*` alone has 8) | One draw call taking a descriptor: pass, viewport, depth, instance batch, topology | Same | Overnight |
 | 7 commit forms | `commit`, `commit_and_continue`, `commit_wait_and_continue` (coupled liquids wait mid-graph, `substep_region.rs:223`), and `commit_and_wait` returning a Result | Compiler | Overnight |
 | 5 ways to read GPU time: `tap_gpu_time`, `add_gpu_time_handler`, `commit_and_wait_completed_timed`, `commit_and_wait_profiled`, `GpuSpanTimer` (plus `raytrace/trace_timing.rs`) | One per-submit GPU time stream that the profiler, the span timer and the perf tools all read, plus the per-dispatch profiler. It redesigns the profiler, which proves every speed claim, so it gets its own spec | A profiler session before and after | Attended, before P2 |
-| Dead: `UniformArena` (`node-engine/gpu/uniform_arena.rs`: reset and flushed every frame, never written; plumbing in `generator_renderer.rs`, `gpu_encoder.rs`, `scene_viewport.rs`) | Delete | Build | Overnight |
 
 **Bigger cuts**
 - **Headless harness.** `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `export-repro` boot through a Mac-only harness that duplicates app setup. After the bridge change they boot the normal content pipeline.

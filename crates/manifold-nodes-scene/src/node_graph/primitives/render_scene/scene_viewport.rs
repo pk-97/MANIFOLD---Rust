@@ -83,7 +83,6 @@ impl SceneViewportPass {
 
         let mut viewport_gpu = GpuEncoder::new(&mut *parent_gpu.native_enc, parent_gpu.device);
         viewport_gpu.pool = parent_gpu.pool;
-        viewport_gpu.uniform_arena = parent_gpu.uniform_arena;
         viewport_gpu.chunking_enabled = parent_gpu.chunking_enabled;
         viewport_gpu.preparing = parent_gpu.preparing;
         viewport_gpu.audio_visuals = parent_gpu.audio_visuals;
