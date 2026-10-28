@@ -143,7 +143,7 @@ impl LiquidBodyBuffers {
                 Some(buffer) if !needs => buffer,
                 _ => gpu
                     .device
-                    .create_buffer(bytes.max(row) as u64, BufferUse::Upload),
+                    .create_buffer(bytes.max(row) as u64, BufferUse::Gpu),
             };
             self.stored = Some(Stored {
                 bodies: keep(old_bodies, needs_bodies, row_bytes),
@@ -151,7 +151,7 @@ impl LiquidBodyBuffers {
                     Some(buffer) if !needs_contacts => buffer,
                     _ => gpu.device.create_buffer(
                         contact_bytes.max(std::mem::size_of::<BodySupports>()) as u64,
-                        BufferUse::Upload,
+                        BufferUse::Gpu,
                     ),
                 },
                 regions: keep(old_regions, needs_regions, region_bytes),
@@ -162,10 +162,10 @@ impl LiquidBodyBuffers {
                 atlas: fresh(bytemuck::cast_slice(bodies.atlas()), 4),
                 clock_obstacles: gpu
                     .device
-                    .create_buffer(obstacle_bytes.max(96) as u64, BufferUse::Upload),
+                    .create_buffer(obstacle_bytes.max(96) as u64, BufferUse::Gpu),
                 clock_sources: gpu
                     .device
-                    .create_buffer(source_bytes.max(96) as u64, BufferUse::Upload),
+                    .create_buffer(source_bytes.max(96) as u64, BufferUse::Gpu),
                 version,
             });
         }

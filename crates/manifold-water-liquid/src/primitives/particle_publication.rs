@@ -114,10 +114,10 @@ impl ParticlePublication {
                 )
                 .map_err(|error| error.to_string())?;
                 let pairs = [
-                    device.try_create_buffer(pair_bytes(slots), BufferUse::Upload)?,
-                    device.try_create_buffer(pair_bytes(slots), BufferUse::Upload)?,
+                    device.try_create_buffer(pair_bytes(slots), BufferUse::Gpu)?,
+                    device.try_create_buffer(pair_bytes(slots), BufferUse::Gpu)?,
                 ];
-                let live = device.try_create_buffer(LIVE_BYTES, BufferUse::Upload)?;
+                let live = device.try_create_buffer(LIVE_BYTES, BufferUse::Gpu)?;
                 self.pairs = Some(pairs);
                 self.live = Some(live);
             }

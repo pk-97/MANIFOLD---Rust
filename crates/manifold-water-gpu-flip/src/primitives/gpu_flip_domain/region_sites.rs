@@ -229,7 +229,7 @@ impl RegionSiteBuffer {
             .as_ref()
             .is_none_or(|buffer| buffer.size < bytes)
         {
-            self.buffer = Some(gpu.device.create_buffer(bytes, BufferUse::Upload));
+            self.buffer = Some(gpu.device.create_buffer(bytes, BufferUse::Gpu));
         }
         if fresh && let Some(buffer) = &self.buffer {
             uploader.write_rows(gpu, buffer, bytemuck::cast_slice(rows.rows()), label);

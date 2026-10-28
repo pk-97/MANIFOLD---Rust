@@ -191,10 +191,11 @@ impl Harness {
 }
 
 pub fn read<T: bytemuck::Pod>(buffer: &GpuBuffer, count: usize) -> Vec<T> {
-    let ptr = buffer.mapped_ptr().expect("shared buffer");
-    // SAFETY: shared buffer holding at least `count` elements; GPU work done.
-    let bytes = unsafe { std::slice::from_raw_parts(ptr, count * std::mem::size_of::<T>()) };
-    bytemuck::cast_slice(bytes).to_vec()
+    let bytes = manifold_gpu::testkit::read_bytes(buffer, count * std::mem::size_of::<T>());
+    bytes
+        .chunks_exact(std::mem::size_of::<T>())
+        .map(bytemuck::pod_read_unaligned)
+        .collect()
 }
 
 pub fn params(values: &[(&'static str, f32)]) -> ParamValues {

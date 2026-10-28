@@ -66,6 +66,25 @@ pub fn test_device() -> TestDevice {
     TestDevice { device, _lock }
 }
 
+/// The first `len` bytes of `buffer`, a buffer of the shared test device
+/// whose GPU work is done: straight from its mapping, or for a `Gpu` buffer
+/// through a copy into a `Readback` one.
+#[cfg(feature = "gpu-proofs")]
+pub fn read_bytes(buffer: &crate::GpuBuffer, len: usize) -> Vec<u8> {
+    if let Some(ptr) = buffer.mapped_ptr() {
+        // SAFETY: a mapped buffer at least `len` bytes long, its GPU work done.
+        return unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec();
+    }
+    let device = test_device();
+    let staged = device.create_buffer(len as u64, crate::BufferUse::Readback);
+    let mut enc = device.create_encoder("testkit readback");
+    enc.copy_buffer_to_buffer(buffer, &staged, len as u64);
+    enc.commit_and_wait().expect("GPU work completes");
+    let ptr = staged.mapped_ptr().expect("readback buffers are mapped");
+    // SAFETY: the readback buffer is `len` bytes and its copy has completed.
+    unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
+}
+
 /// Reuse the app's shader disk caches without populating live pipeline
 /// caches. Each backend keeps its own files there: Metal a metallib archive
 /// and MSL, Vulkan a `VkPipelineCache` blob and SPIR-V.

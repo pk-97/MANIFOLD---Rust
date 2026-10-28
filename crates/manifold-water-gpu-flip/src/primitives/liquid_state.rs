@@ -159,7 +159,7 @@ fn create_shared_buffer(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, Str
     .map_err(|error| error.to_string())
     .and_then(|()| {
         device
-            .try_create_buffer(bytes, BufferUse::Upload)
+            .try_create_buffer(bytes, BufferUse::Gpu)
             .map_err(|error| error.to_string())
     })
 }
@@ -805,9 +805,11 @@ impl Primitive for LiquidState {
             Some(index) => index,
             None if self.readback.len() < READBACK_SLOTS => {
                 self.readback.push(ReadbackSlot {
-                    buffer: gpu.device.create_buffer(stats_bytes, BufferUse::Upload),
-                    identity: gpu.device.create_buffer(IDENTITY_BYTES, BufferUse::Upload),
-                    clock_status: gpu.device.create_buffer(32, BufferUse::Upload),
+                    buffer: gpu.device.create_buffer(stats_bytes, BufferUse::Readback),
+                    identity: gpu
+                        .device
+                        .create_buffer(IDENTITY_BYTES, BufferUse::Readback),
+                    clock_status: gpu.device.create_buffer(32, BufferUse::Readback),
                     stamp: 0,
                     epoch,
                     pending: false,

@@ -333,7 +333,7 @@ impl Primitive for LiquidFill {
             match ctx
                 .gpu_encoder()
                 .device
-                .try_create_buffer(bytes, BufferUse::Upload)
+                .try_create_buffer(bytes, BufferUse::Gpu)
             {
                 Ok(buffer) => {
                     self.buffer = Some(buffer);

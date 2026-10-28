@@ -84,7 +84,7 @@ fn ensure_buffer(
     if slot.as_ref().is_none_or(|buffer| buffer.size != bytes) {
         *slot = Some(
             device
-                .try_create_buffer(bytes, BufferUse::Upload)
+                .try_create_buffer(bytes, BufferUse::Gpu)
                 .map_err(|error| error.to_string())?,
         );
     }

@@ -130,7 +130,7 @@ impl Primitive for RunningTotal {
                 ));
             }
             if self.total_cell.is_none() {
-                self.total_cell = Some(gpu.device.create_buffer(4, BufferUse::Upload));
+                self.total_cell = Some(gpu.device.create_buffer(4, BufferUse::Readback));
             }
             if self.last_total.is_none() {
                 let last = gpu.device.create_buffer(4, BufferUse::Upload);
@@ -138,7 +138,7 @@ impl Primitive for RunningTotal {
                 self.last_total = Some(last);
                 self.extent_scratch = Some(
                     gpu.device
-                        .create_buffer(u64::from(EXTENT_WORDS) * 4, BufferUse::Upload),
+                        .create_buffer(u64::from(EXTENT_WORDS) * 4, BufferUse::Gpu),
                 );
             }
         }

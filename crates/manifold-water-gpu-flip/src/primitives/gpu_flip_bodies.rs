@@ -234,8 +234,8 @@ impl BodyPasses {
                 self.partials = Some(device.try_create_buffer(need, BufferUse::Gpu)?);
             }
             if self.sums.is_none() {
-                // Shared so the value proofs can read the last impulse's sums.
-                self.sums = Some(device.try_create_buffer(SUM_BYTES, BufferUse::Upload)?);
+                // Read back so the value proofs can read the last impulse's sums.
+                self.sums = Some(device.try_create_buffer(SUM_BYTES, BufferUse::Readback)?);
             }
             Ok(())
         }

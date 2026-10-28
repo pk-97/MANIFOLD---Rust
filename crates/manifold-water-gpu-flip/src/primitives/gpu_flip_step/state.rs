@@ -196,7 +196,7 @@ impl StepState {
             Some(index) => index,
             None if self.plan_readbacks.len() < PLAN_READBACKS => {
                 self.plan_readbacks.push(PlanReadback {
-                    buffer: device.create_buffer(PLAN_READBACK_BYTES, BufferUse::Upload),
+                    buffer: device.create_buffer(PLAN_READBACK_BYTES, BufferUse::Readback),
                     stamp: 0,
                     pending: false,
                 });

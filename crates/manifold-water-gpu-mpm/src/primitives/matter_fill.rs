@@ -270,7 +270,7 @@ impl Primitive for MatterFill {
                 grown,
             )
             .map_err(|error| error.to_string())
-            .and_then(|()| device.try_create_buffer(grown, BufferUse::Upload));
+            .and_then(|()| device.try_create_buffer(grown, BufferUse::Gpu));
             match created {
                 Ok(buffer) => {
                     self.buffer = Some(buffer);

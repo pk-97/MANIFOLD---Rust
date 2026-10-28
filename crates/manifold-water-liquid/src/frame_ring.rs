@@ -63,7 +63,7 @@ impl FrameRing {
             )
             .map_err(|error| error.to_string())?;
             self.slots = (0..RING)
-                .map(|_| device.try_create_buffer(bytes, BufferUse::Upload))
+                .map(|_| device.try_create_buffer(bytes, BufferUse::Gpu))
                 .collect::<Result<_, _>>()?;
             self.counts = [0; RING];
             self.epoch = None;
