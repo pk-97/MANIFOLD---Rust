@@ -46,6 +46,16 @@ fn liquid_atlas_half(index: u32) -> f32 {
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
 
+fn cb_node(i: u32) -> vec4<f32> {
+    let n = buf_collider_nodes[i];
+    return vec4<f32>(n.x, n.y, n.z, n.w);
+}
+
+fn cb_triangle(i: u32) -> vec4<f32> {
+    let t = buf_collider_triangles[i];
+    return vec4<f32>(t.x, t.y, t.z, t.w);
+}
+
 fn g2m_hash(v: u32) -> u32 {
     var x = v;
     x = x ^ (x >> 16u);
@@ -171,22 +181,35 @@ fn body(
         let sh = buf_shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let centre = bd.position_inv_mass.xyz;
-        let g = liquid_lattice_coord(p.position, centre, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
-        if !liquid_lattice_holds(g, dims) {
-            continue;
+        var phi = 0.0;
+        var grad = vec3<f32>(0.0);
+        var max_scale = 1.0;
+        if sh.tree == 1u {
+            // A static collider's exact mesh, at scale 1.
+            let local = mt_local(p.position, centre, bd.rotation);
+            phi = mt_phi(sh.tree_node, sh.tree_triangle, local, cell_size);
+            if phi >= 0.0 {
+                continue;
+            }
+            grad = mt_gradient(sh.tree_node, sh.tree_triangle, local, cell_size, bd.rotation);
+        } else {
+            let g = liquid_lattice_coord(p.position, centre, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
+            if !liquid_lattice_holds(g, dims) {
+                continue;
+            }
+            phi = liquid_lattice_distance(sh.atlas_offset, dims, g);
+            if phi >= 0.0 {
+                continue;
+            }
+            grad = liquid_lattice_gradient(sh.atlas_offset, dims, g, sh.origin_spacing.w, bd.rotation, sh.scale_min.xyz);
+            // To φ = 0 along the normal, no farther than the surface can be.
+            max_scale = max(sh.scale_min.x, max(sh.scale_min.y, sh.scale_min.z));
         }
-        let phi = liquid_lattice_distance(sh.atlas_offset, dims, g);
-        if phi >= 0.0 {
-            continue;
-        }
-        let grad = liquid_lattice_gradient(sh.atlas_offset, dims, g, sh.origin_spacing.w, bd.rotation, sh.scale_min.xyz);
         let length_sq = dot(grad, grad);
         if !(length_sq > 0.0) {
             continue;
         }
         let normal = grad * inverseSqrt(length_sq);
-        // To φ = 0 along the normal, no farther than the surface can be.
-        let max_scale = max(sh.scale_min.x, max(sh.scale_min.y, sh.scale_min.z));
         p.position = p.position + normal * min(-phi * inverseSqrt(length_sq), -phi * max_scale);
         let v_rel = p.velocity - liquid_body_velocity(bd.linear_velocity.xyz, bd.angular_velocity.xyz, centre, p.position);
         let v_n = dot(v_rel, normal);

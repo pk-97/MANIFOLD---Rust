@@ -369,6 +369,8 @@ fn whitewater_obstacle_source_closed_and_open_domain() {
     let bodies = h.array::<LiquidBody>(&[], 1);
     let shapes = h.array::<LiquidShape>(&[], 1);
     let atlas = h.array::<u32>(&[], 1);
+    let tree_nodes = h.array::<manifold_node_engine::mesh::Vec4Vertex>(&[], 1);
+    let triangles = h.array::<manifold_node_engine::mesh::Vec4Vertex>(&[], 1);
     // Outputs the kernel must overwrite everywhere.
     let stale = WhitewaterSource {
         influence: 9.0,
@@ -393,6 +395,8 @@ fn whitewater_obstacle_source_closed_and_open_domain() {
         bodies: &bodies.1,
         shapes: &shapes.1,
         atlas: &atlas.1,
+        collider_nodes: &tree_nodes.1,
+        collider_triangles: &triangles.1,
         tiles: &tiles.1,
         source: &source.1,
         distance: &distance.1,
@@ -437,6 +441,7 @@ fn whitewater_obstacle_source_closed_and_open_domain() {
             dims_z: dims[2],
             atlas_offset: 0,
             scale_min: [1.0; 4],
+            ..Default::default()
         }],
         1,
     );

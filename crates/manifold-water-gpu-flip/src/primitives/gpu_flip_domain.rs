@@ -599,6 +599,7 @@ manifold_node_engine::primitive! {
         pool_tiles: ScalarF32,
         fill_region: ScalarF32,
         bodies: Array(LiquidBody), regions: Array(LiquidBody), region_sites: Array(u32), shapes: Array(LiquidShape), atlas: Array(u32),
+        collider_nodes: Array(manifold_node_engine::mesh::Vec4Vertex), collider_triangles: Array(manifold_node_engine::mesh::Vec4Vertex),
         reaction: Array(f32),
         contacts: Array(f32),
         forces: Array(f32), impulses: Array(f32),
@@ -706,6 +707,8 @@ impl Primitive for GpuFlipDomain {
                 | "region_sites"
                 | "shapes"
                 | "atlas"
+                | "collider_nodes"
+                | "collider_triangles"
                 | "reaction"
                 | "forces"
                 | "impulses"
@@ -741,6 +744,8 @@ impl Primitive for GpuFlipDomain {
                 | "region_sites"
                 | "shapes"
                 | "atlas"
+                | "collider_nodes"
+                | "collider_triangles"
                 | "reaction"
                 | "forces"
                 | "impulses"
@@ -1234,16 +1239,9 @@ impl GpuFlipDomain {
             .owner
             .as_ref()
             .map_or_else(|| self.observed.geometries(), LiquidRigidOwner::geometries);
-        let coupled_rows = self
-            .coupled
-            .owner
-            .as_ref()
-            .map_or_else(|| self.observed.rows(), LiquidRigidOwner::rows);
         if self.bodies.prepare(
             roles,
             coupled_geometries,
-            coupled_rows,
-            self.coupled.walls.bounds(),
             geometry.layout.cell_size as f32,
             offline,
         )? == BodiesStatus::Pending
@@ -1299,8 +1297,6 @@ impl GpuFlipDomain {
             if self.bodies.prepare(
                 roles,
                 owner.geometries(),
-                owner.rows(),
-                self.coupled.walls.bounds(),
                 geometry.layout.cell_size as f32,
                 offline,
             )? == BodiesStatus::Pending

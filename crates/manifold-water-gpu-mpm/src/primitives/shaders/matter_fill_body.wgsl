@@ -8,7 +8,8 @@
 // when the epoch starts (rows 0..body_count of `bodies`, sampled from its
 // shape's lattice in the atlas) is left an unused slot, id 0, so ids stay
 // sorted. `bodies` (LiquidBody → Element), `shapes` (LiquidShape → Element2)
-// and `atlas` are gathered; the output is MatterPoint (Element3).
+// `atlas` and the collider trees (Vec4Vertex → Element3) are gathered; the
+// output is MatterPoint (Element4).
 fn matter_fill_hash(x: u32) -> u32 {
     let s = x * 747796405u + 2891336453u;
     let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
@@ -24,8 +25,18 @@ fn liquid_atlas_half(index: u32) -> f32 {
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
 
+fn cb_node(i: u32) -> vec4<f32> {
+    let n = buf_collider_nodes[i];
+    return vec4<f32>(n.x, n.y, n.z, n.w);
+}
+
+fn cb_triangle(i: u32) -> vec4<f32> {
+    let t = buf_collider_triangles[i];
+    return vec4<f32>(t.x, t.y, t.z, t.w);
+}
+
 // Whether `x` lies inside an enabled body at its tick-start pose.
-fn mf_inside_collider(x: vec3<f32>, body_count: i32) -> bool {
+fn mf_inside_collider(x: vec3<f32>, body_count: i32, cell_size: f32) -> bool {
     for (var b = 0; b < body_count; b = b + 1) {
         let bd = buf_bodies[u32(b)];
         let shape_index = i32(bd.accel_shape.w);
@@ -33,6 +44,13 @@ fn mf_inside_collider(x: vec3<f32>, body_count: i32) -> bool {
             continue;
         }
         let sh = buf_shapes[u32(shape_index)];
+        if sh.tree == 1u {
+            let local = mt_local(x, bd.position_inv_mass.xyz, bd.rotation);
+            if mt_phi(sh.tree_node, sh.tree_triangle, local, cell_size) < 0.0 {
+                return true;
+            }
+            continue;
+        }
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let g = liquid_lattice_coord(x, bd.position_inv_mass.xyz, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
         if liquid_lattice_holds(g, dims) && liquid_lattice_distance(sh.atlas_offset, dims, g) < 0.0 {
@@ -63,7 +81,7 @@ fn body(
     seed: i32,
     body_count: i32,
     epoch: i32,
-) -> Element3 {
+) -> Element4 {
     let ppc = u32(points_per_cell);
     var per_axis = 2u;
     if ppc == 27u {
@@ -93,9 +111,9 @@ fn body(
         matter_fill_unit(h0 ^ 0x85ebca6bu),
     );
     let local = vec3<f32>(cell) + (vec3<f32>(s) + jitter) / f32(per_axis);
-    var p: Element3;
+    var p: Element4;
     p.position = vec3<f32>(fill_min_x, fill_min_y, fill_min_z) + local * cell_size;
-    p.id = select(idx + 1u, 0u, mf_inside_collider(p.position, body_count));
+    p.id = select(idx + 1u, 0u, mf_inside_collider(p.position, body_count, cell_size));
     p.velocity = vec3<f32>(0.0);
     p.volume_ratio = 1.0;
     p.affine_x = vec4<f32>(0.0, 0.0, 0.0, 1.0);

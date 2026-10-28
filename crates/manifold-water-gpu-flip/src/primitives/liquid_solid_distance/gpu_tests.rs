@@ -51,6 +51,8 @@ struct Rig {
     bodies: Slot,
     shapes: Slot,
     atlas: Slot,
+    nodes: Slot,
+    triangles: Slot,
     tiles: Slot,
     out: Slot,
 }
@@ -62,6 +64,8 @@ impl Rig {
         let (bodies, _) = harness.array(bodies, bodies.len());
         let (shapes, _) = harness.array(shapes, shapes.len());
         let (atlas, _) = harness.array(atlas, atlas.len());
+        let (nodes, _) = harness.array::<manifold_node_engine::mesh::Vec4Vertex>(&[], 1);
+        let (triangles, _) = harness.array::<manifold_node_engine::mesh::Vec4Vertex>(&[], 1);
         let words = table_words_of(POOL, HELD);
         let (tiles, _) = harness.array(&words, words.len());
         let (out, _) = harness.array::<f32>(&[], 1);
@@ -71,6 +75,8 @@ impl Rig {
             bodies,
             shapes,
             atlas,
+            nodes,
+            triangles,
             tiles,
             out,
         }
@@ -98,6 +104,8 @@ impl Rig {
                 ("bodies", self.bodies),
                 ("shapes", self.shapes),
                 ("atlas", self.atlas),
+                ("collider_nodes", self.nodes),
+                ("collider_triangles", self.triangles),
                 ("tiles", self.tiles),
             ],
             &[("solid", self.out)],
@@ -159,6 +167,7 @@ fn a_posed_body_and_the_walls_make_the_solid() {
         dims_z: dims,
         atlas_offset: 0,
         scale_min: [1.0; 4],
+        ..Default::default()
     };
     let centre = [0.1, -0.05, 0.05];
     let body = LiquidBody {

@@ -16,7 +16,7 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
-use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::bodies::{COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_water_liquid::fluid_particles::CellRange;
 use manifold_water_liquid::tile_pool::tile_pool;
 use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, WhitewaterParticle};
@@ -60,6 +60,7 @@ manifold_node_engine::primitive! {
         order: Array(u32) required,
         solid: Array(f32) required,
         regions: Array(LiquidBody) optional, shapes: Array(LiquidShape) optional, atlas: Array(u32) optional,
+        collider_nodes: Array(manifold_node_engine::mesh::Vec4Vertex) optional, collider_triangles: Array(manifold_node_engine::mesh::Vec4Vertex) optional,
         tiles: Array(u32) required,
         region_count: ScalarF32 optional, region_offset: ScalarF32 optional, tick_seconds: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -97,9 +98,9 @@ manifold_node_engine::primitive! {
     aliases: ["whitewater removal", "remove whitewater", "diffuse particle removal"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/keep_whitewater_body.wgsl"),
-    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     output_capacity: FusedOutputCapacity::FromInput { input: "pool" },
-    wgsl_includes: [READ_SIDE, WHITEWATER_COMMON, LIQUID_POSE, LIQUID_COLLIDER],
+    wgsl_includes: [READ_SIDE, WHITEWATER_COMMON, LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH],
 }
 
 impl Primitive for KeepWhitewater {
@@ -181,15 +182,14 @@ impl Primitive for KeepWhitewater {
             _pad0: 0,
         };
         if uniforms.region_count > 0.0 {
-            for name in ["regions", "shapes", "atlas"] {
+            for name in ["regions", "shapes", "atlas", "collider_nodes", "collider_triangles"] {
                 if ctx.inputs.array(name).is_none() {
                     ctx.error(format!("Keep Whitewater: outflows require {name}"));
                     return;
                 }
             }
         }
-        let extra =
-            ["regions", "shapes", "atlas"].map(|name| ctx.inputs.array(name).unwrap_or(solid));
+        let extra = ["regions", "shapes", "atlas", "collider_nodes", "collider_triangles"].map(|name| ctx.inputs.array(name).unwrap_or(solid));
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -240,11 +240,21 @@ impl Primitive for KeepWhitewater {
                 },
                 GpuBinding::Buffer {
                     binding: 9,
-                    buffer: tiles,
+                    buffer: extra[3],
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 10,
+                    buffer: extra[4],
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 11,
+                    buffer: tiles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 12,
                     buffer: out,
                     offset: 0,
                 },

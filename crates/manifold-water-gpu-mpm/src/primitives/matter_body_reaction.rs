@@ -5,7 +5,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::matter_common::MATTER_BOUNDS;
+use super::matter_common::{COLLIDER_BVH, MATTER_BOUNDS, MATTER_TREE};
 use crate::matter::{MatterGridNode, REACTION_WORDS, grid_bytes, momentum_unit_fits};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
@@ -14,6 +14,7 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_words};
 use manifold_nodes_physics::force_lattice::{FORCE_LATTICE, ForceLatticeBinding};
+use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 
 #[repr(C)]
@@ -66,6 +67,8 @@ manifold_node_engine::primitive! {
         bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
+        collider_nodes: Array(Vec4Vertex) optional,
+        collider_triangles: Array(Vec4Vertex) optional,
         reaction: Array(i32) optional,
         forces: Array(f32) optional,
         impulses: Array(f32) optional,
@@ -143,8 +146,8 @@ manifold_node_engine::primitive! {
     fusion_kind: Boundary,
     boundary_reason: Blocked,
     wgsl_body: include_str!("shaders/matter_body_reaction_body.wgsl"),
-    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [READ_SIDE, LIQUID_POSE, LIQUID_COLLIDER, MATTER_BOUNDS, FORCE_LATTICE],
+    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [READ_SIDE, LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH, MATTER_TREE, MATTER_BOUNDS, FORCE_LATTICE],
     atomic_outputs: ["reaction_out"],
 }
 
@@ -213,6 +216,8 @@ impl Primitive for MatterBodyReaction {
             ctx.inputs.array("bodies"),
             ctx.inputs.array("shapes"),
             ctx.inputs.array("atlas"),
+            ctx.inputs.array("collider_nodes"),
+            ctx.inputs.array("collider_triangles"),
         );
         let reaction = ctx.outputs.array("reaction_out");
         let field = ForceLatticeBinding::read(
@@ -224,7 +229,7 @@ impl Primitive for MatterBodyReaction {
         // The GPU is touched on every path so the aliased reaction array keeps
         // its place in the frame's hazard order.
         let gpu = ctx.gpu_encoder();
-        let (Some(grid), Some(tiles), (Some(bodies), Some(shapes), Some(atlas)), Some(reaction)) =
+        let (Some(grid), Some(tiles), (Some(bodies), Some(shapes), Some(atlas), Some(collider_nodes), Some(collider_triangles)), Some(reaction)) =
             (grid, tiles, colliders, reaction)
         else {
             return;
@@ -337,26 +342,36 @@ impl Primitive for MatterBodyReaction {
                 },
                 GpuBinding::Buffer {
                     binding: 5,
-                    buffer: reaction,
+                    buffer: collider_nodes,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 6,
-                    buffer: field.forces.unwrap_or(grid),
+                    buffer: collider_triangles,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 7,
-                    buffer: field.impulses.unwrap_or(grid),
+                    buffer: reaction,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 8,
-                    buffer: tiles,
+                    buffer: field.forces.unwrap_or(grid),
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 9,
+                    buffer: field.impulses.unwrap_or(grid),
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 10,
+                    buffer: tiles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 11,
                     buffer: reaction,
                     offset: 0,
                 },

@@ -36,7 +36,7 @@ This deletes the closed/open split, `SHELL_FRACTION`, `thinnest`, the 32-node ru
 - A tile farther than the band from every static triangle (one BVH box query) skips the nodes: it takes the sign of one winding query at its centre.
 - Memory: about 2.9 KB a tile (f16 distance, u16 shape) against about 300 KB of water fields, so it follows the water, not the mesh. A 200 m terrain costs nothing where there's no water.
 
-**C5. Outside held tiles, a static query asks the BVH directly.** Spray, dust and fill sites outside the sim's tiles call `collider_phi` on the tree. It's exact everywhere, and it costs only for the points that are there.
+**C5. Every other reader asks the tree directly.** The step's own corners and samples inside held tiles read the per-tile cache. Elsewhere `collider_phi` runs on the tree: emission sites outside held tiles, the display's solid, whitewater, Matter and the fill. It's exact everywhere and costs only for the points that are there. Phase 4 measures the display and Matter, the readers with the most points. If either costs too much, it reads the step's cache instead.
 
 **C6. Moving bodies keep a body-local lattice, built on the GPU.** Box3D bodies and Colliders that move keep a dense f16 lattice in their own frame, like today, sampled by the same `liquid_shape_distance`. But it's built by one GPU pass from the BVH at the water's cell size: no CPU build, no stand-in, no 32-node rule and no node cap. It's rebuilt only when the geometry, scale or cell size changes. Its bytes go through the Water's memory budget, and a refusal names the body on the card. If big moving bodies at fine cells measure too costly, sparse local bricks come later.
 

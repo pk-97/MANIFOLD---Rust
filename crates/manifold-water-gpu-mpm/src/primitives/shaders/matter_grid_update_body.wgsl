@@ -29,6 +29,16 @@ fn liquid_atlas_half(index: u32) -> f32 {
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
 
+fn cb_node(i: u32) -> vec4<f32> {
+    let n = buf_collider_nodes[i];
+    return vec4<f32>(n.x, n.y, n.z, n.w);
+}
+
+fn cb_triangle(i: u32) -> vec4<f32> {
+    let t = buf_collider_triangles[i];
+    return vec4<f32>(t.x, t.y, t.z, t.w);
+}
+
 // The tick's force at x: push and drag rate, then drag rate × wind.
 struct GridUpdateForce {
     push_drag: vec4<f32>,
@@ -156,11 +166,19 @@ fn body(
             continue;
         }
         let sh = buf_shapes[u32(shape_index)];
-        v = liquid_collider_project(
-            v, x, bd.position_inv_mass.xyz, bd.rotation, bd.linear_velocity.xyz,
-            bd.angular_velocity.xyz, bd.linear_velocity.w, sh.origin_spacing,
-            vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z), sh.atlas_offset, sh.scale_min.xyz,
-        );
+        if sh.tree == 1u {
+            v = mt_collider_project(
+                v, x, bd.position_inv_mass.xyz, bd.rotation, bd.linear_velocity.xyz,
+                bd.angular_velocity.xyz, bd.linear_velocity.w,
+                sh.tree_node, sh.tree_triangle, cell_size,
+            );
+        } else {
+            v = liquid_collider_project(
+                v, x, bd.position_inv_mass.xyz, bd.rotation, bd.linear_velocity.xyz,
+                bd.angular_velocity.xyz, bd.linear_velocity.w, sh.origin_spacing,
+                vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z), sh.atlas_offset, sh.scale_min.xyz,
+            );
+        }
     }
 
     let limit = 0.9 * vel_unit;

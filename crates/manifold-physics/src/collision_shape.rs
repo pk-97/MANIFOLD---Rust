@@ -7,8 +7,8 @@
 //! - A body in Box3D: a spatial split into convex hulls with automatic detail
 //!   ([`CollisionShape::body_hulls`]), open surfaces and flat pieces given a
 //!   0.1% shell.
-//! - Water: a distance lattice ([`water_plan`], [`water_lattice`]), cropped to
-//!   what the caller asks for, with an automatic shell.
+//! - Water: a distance lattice ([`water_plan`], [`water_lattice`]) with an
+//!   automatic shell.
 //!
 //! Its [`ShapeKey`] is the cache key: the mesh content that was actually
 //! loaded (so a mesh arriving late changes it), the item's scale and the
@@ -33,7 +33,7 @@ use std::sync::{Arc, OnceLock};
 use manifold_foundation::mesh_partition::partition;
 
 use crate::sdf::{
-    DistanceLattice, MAX_LATTICE_NODES, signed_distance_union_within, union_lattice_nodes,
+    DistanceLattice, MAX_LATTICE_NODES, signed_distance_union, union_lattice_nodes,
 };
 use crate::{
     BodyConfig, BodyHandle, CookedSolid, PhysicsError, PhysicsWorld, TriangleMesh,
@@ -288,14 +288,9 @@ impl CollisionShape {
     }
 
     /// The lattice plan water with cells `cell_size` metres across uses for
-    /// this shape at `scale`, cropped to `domain`; see [`water_plan`].
-    pub fn water_plan(
-        &self,
-        cell_size: f32,
-        scale: [f32; 3],
-        domain: Option<[[f32; 3]; 2]>,
-    ) -> Result<LatticePlan, PhysicsError> {
-        water_plan(&self.parts, self.has_open_parts(), cell_size, scale, domain)
+    /// this shape at `scale`; see [`water_plan`].
+    pub fn water_plan(&self, cell_size: f32, scale: [f32; 3]) -> Result<LatticePlan, PhysicsError> {
+        water_plan(&self.parts, self.has_open_parts(), cell_size, scale)
     }
 
     /// The distance lattice to `plan`; see [`water_lattice`].
@@ -400,7 +395,7 @@ fn any_open(meshes: &[TriangleMesh]) -> bool {
 pub struct LatticePlan {
     pub spacing: f32,
     /// Local units: two water cells (one each side of the surface) or
-    /// [`SHELL_FRACTION`] of the sampled part's longest side, whichever is
+    /// [`SHELL_FRACTION`] of the mesh's longest side, whichever is
     /// thicker, over the smallest scale.
     pub shell_thickness: f32,
     /// Whether any part is open, so the solid has shells.
@@ -409,10 +404,6 @@ pub struct LatticePlan {
     pub capped: bool,
     /// The meshes' joint local bounds.
     pub extent: [f32; 3],
-    /// Local min then max the lattice is built within: the water's domain
-    /// on the mesh's bounds, grown by the lattice's own padding. `None`
-    /// builds over the whole mesh.
-    pub crop: Option<[[f32; 3]; 2]>,
 }
 
 impl LatticePlan {
@@ -424,10 +415,7 @@ impl LatticePlan {
 }
 
 /// The lattice water with cells `cell_size` metres across builds for
-/// `meshes` at `scale`, over only the part inside `domain` (the water's box
-/// in the meshes' local frame) when one is given, so a 100 m ground under a
-/// 4 m water costs and resolves only the 4 m the water touches. A closed
-/// solid keeps a 32nd of the sampled part's longest side, finer where its
+/// `meshes` at `scale`. A closed solid keeps a 32nd of the longest side, finer where its
 /// thinnest side would hold fewer than two spacings, down to the cells: a
 /// 14 m slab 0.2 m thick is sampled every 0.1 m, not every 0.44 m. A
 /// shell's faces sit at least one spacing from its surface, so with open
@@ -439,7 +427,6 @@ pub fn water_plan(
     open: bool,
     cell_size: f32,
     scale: [f32; 3],
-    domain: Option<[[f32; 3]; 2]>,
 ) -> Result<LatticePlan, PhysicsError> {
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
@@ -456,42 +443,7 @@ pub fn water_plan(
             "the mesh has no extent for a distance lattice",
         ));
     }
-    // The sampled part: the domain clamped onto the mesh's bounds. A domain
-    // clear of the mesh leaves a flat box on its nearest face, so the lattice
-    // stays tiny and its reach outside still reads the mesh's distance.
-    let sampled = match domain {
-        None => [min, max],
-        Some([low, high]) => {
-            if low.iter().chain(&high).any(|value| !value.is_finite())
-                || (0..3).any(|axis| high[axis] < low[axis])
-            {
-                return Err(PhysicsError::InvalidInput(
-                    "a water domain crop must be finite, min under max",
-                ));
-            }
-            let clamp = |value: f32, axis: usize| value.max(min[axis]).min(max[axis]);
-            [
-                std::array::from_fn(|axis| clamp(low[axis], axis)),
-                std::array::from_fn(|axis| clamp(high[axis], axis)),
-            ]
-        }
-    };
-    let sampled_extent: [f32; 3] = std::array::from_fn(|axis| sampled[1][axis] - sampled[0][axis]);
-    let sampled_longest = match sampled_extent.into_iter().fold(0.0f32, f32::max) {
-        side if side > 0.0 => side,
-        _ => longest,
-    };
-    // The crop reaches the padding past the sampled part that the build
-    // gives the whole mesh, so the gradient at the domain's edge is exact.
-    let crop = |pad: f32| {
-        domain.map(|_| {
-            [
-                sampled[0].map(|value| value - pad),
-                sampled[1].map(|value| value + pad),
-            ]
-        })
-    };
-    let coarse = sampled_longest / DISTANCE_NODES_ALONG_LONGEST;
+    let coarse = longest / DISTANCE_NODES_ALONG_LONGEST;
     validate_scale(scale)?;
     if !(cell_size.is_finite() && cell_size > 0.0) {
         return Err(PhysicsError::InvalidInput(
@@ -504,7 +456,7 @@ pub fn water_plan(
     let (shell_thickness, wanted) = if open {
         // One water cell each side of the surface: a shell thinner than two
         // cells is one the water's grid cannot see, and liquid leaks through.
-        let world_longest = sampled_longest * largest;
+        let world_longest = longest * largest;
         let shell = (2.0 * cell_size).max(SHELL_FRACTION * world_longest) / smallest;
         (shell, coarse.min(cell))
     } else {
@@ -514,44 +466,32 @@ pub fn water_plan(
         (0.0, coarse.min((0.5 * thinnest).max(cell)))
     };
     let mut spacing = wanted;
-    while union_lattice_nodes(
-        sampled_extent,
-        spacing,
-        2.0 * spacing,
-        shell_thickness,
-        open,
-    ) > MAX_LATTICE_NODES
+    while union_lattice_nodes(extent, spacing, 2.0 * spacing, shell_thickness, open)
+        > MAX_LATTICE_NODES
     {
         spacing *= 1.125;
     }
-    let pad = if open {
-        2.0 * spacing + (0.5 * shell_thickness).max(spacing)
-    } else {
-        2.0 * spacing
-    };
     Ok(LatticePlan {
         spacing,
         shell_thickness,
         open,
         capped: spacing > wanted,
         extent,
-        crop: crop(pad),
     })
 }
 
 /// One lattice over every mesh to `plan`: closed parts solid, open parts
-/// shells, only the nodes inside the plan's crop when it has one. Costs
+/// shells. Costs
 /// nodes × triangles; never on the content thread.
 pub fn water_lattice(
     meshes: &[TriangleMesh],
     plan: &LatticePlan,
 ) -> Result<DistanceLattice, PhysicsError> {
-    signed_distance_union_within(
+    signed_distance_union(
         meshes,
         plan.spacing,
         2.0 * plan.spacing,
         plan.shell_thickness,
-        plan.crop,
     )
 }
 

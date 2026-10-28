@@ -86,19 +86,6 @@ pub fn signed_distance_union(
     padding: f32,
     shell_thickness: f32,
 ) -> Result<DistanceLattice, PhysicsError> {
-    signed_distance_union_within(meshes, spacing, padding, shell_thickness, None)
-}
-
-/// [`signed_distance_union`] over only the part of its bounds inside `crop`
-/// (local min then max), so a solid larger than what samples it costs only
-/// the nodes that are sampled.
-pub fn signed_distance_union_within(
-    meshes: &[TriangleMesh],
-    spacing: f32,
-    padding: f32,
-    shell_thickness: f32,
-    crop: Option<[[f32; 3]; 2]>,
-) -> Result<DistanceLattice, PhysicsError> {
     if !(spacing.is_finite() && spacing > 0.0 && padding.is_finite() && padding >= 0.0) {
         return Err(PhysicsError::InvalidInput(
             "distance lattice spacing must be positive and padding non-negative",
@@ -142,24 +129,8 @@ pub fn signed_distance_union_within(
     } else {
         padding
     };
-    let mut origin: [f32; 3] = std::array::from_fn(|axis| min[axis] - padding);
-    let mut end: [f32; 3] = std::array::from_fn(|axis| max[axis] + padding);
-    if let Some([low, high]) = crop {
-        if low.iter().chain(&high).any(|value| !value.is_finite()) {
-            return Err(PhysicsError::InvalidInput(
-                "a distance lattice crop must be finite",
-            ));
-        }
-        for axis in 0..3 {
-            origin[axis] = origin[axis].max(low[axis]);
-            end[axis] = end[axis].min(high[axis]);
-        }
-        if (0..3).any(|axis| end[axis] < origin[axis]) {
-            return Err(PhysicsError::InvalidInput(
-                "the mesh lies outside the distance lattice crop",
-            ));
-        }
-    }
+    let origin: [f32; 3] = std::array::from_fn(|axis| min[axis] - padding);
+    let end: [f32; 3] = std::array::from_fn(|axis| max[axis] + padding);
     let dims = lattice_dims(
         std::array::from_fn(|axis| end[axis] - origin[axis]),
         spacing,

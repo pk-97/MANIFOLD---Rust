@@ -8,11 +8,13 @@ use manifold_gpu::{GpuBinding, GpuBuffer};
 
 use crate::matter::MatterPoint;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
+use super::matter_common::{COLLIDER_BVH, MATTER_TREE};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 
 /// Most cells per axis the `fill_cells_*` wires may carry.
@@ -118,6 +120,8 @@ manifold_node_engine::primitive! {
         bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
+        collider_nodes: Array(Vec4Vertex) optional,
+        collider_triangles: Array(Vec4Vertex) optional,
         body_count: ScalarF32 optional,
         epoch: ScalarF32 optional,
     },
@@ -155,8 +159,8 @@ manifold_node_engine::primitive! {
     aliases: ["seed matter", "matter fill", "initial fill", "pool"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/matter_fill_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH, MATTER_TREE],
     extra_fields: {
         buffer: Option<GpuBuffer> = None,
         filled: Option<([u32; 18], usize)> = None,
@@ -237,6 +241,8 @@ impl Primitive for MatterFill {
             ctx.inputs.array("bodies"),
             ctx.inputs.array("shapes"),
             ctx.inputs.array("atlas"),
+            ctx.inputs.array("collider_nodes"),
+            ctx.inputs.array("collider_triangles"),
         );
         let body_count = int("body_count", 0.0).min(MAX_LIQUID_BODIES as u32) as i32;
         // With colliders the seeds depend on their pose at the epoch's start.
@@ -286,14 +292,15 @@ impl Primitive for MatterFill {
         }
         let gpu = ctx.gpu_encoder();
         let buffer = self.buffer.as_ref().expect("fill storage prepared");
-        // Without all three collider arrays no body is read; the points buffer
+        // Without all five collider arrays no body is read; the points buffer
         // fills their slots.
-        let (bodies, shapes, atlas, body_count) = match colliders {
-            (Some(bodies), Some(shapes), Some(atlas)) => {
+        let (bodies, shapes, atlas, collider_nodes, collider_triangles, body_count) = match colliders
+        {
+            (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)) => {
                 let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64) as i32;
-                (bodies, shapes, atlas, body_count.min(rows))
+                (bodies, shapes, atlas, nodes, triangles, body_count.min(rows))
             }
-            _ => (buffer, buffer, buffer, 0),
+            _ => (buffer, buffer, buffer, buffer, buffer, 0),
         };
         let key = [
             grid.min[0].to_bits(),
@@ -366,6 +373,16 @@ impl Primitive for MatterFill {
                 },
                 GpuBinding::Buffer {
                     binding: 4,
+                    buffer: collider_nodes,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: collider_triangles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
                     buffer,
                     offset: 0,
                 },

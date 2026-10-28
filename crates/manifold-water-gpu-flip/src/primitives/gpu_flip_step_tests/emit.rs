@@ -130,6 +130,7 @@ pub(super) fn region_box(
         dims_z: dims[2],
         atlas_offset: 0,
         scale_min: [1.0; 4],
+        ..Default::default()
     };
     let p: [f32; 3] = std::array::from_fn(|a| min[a] + lo[a] as f32 * H);
     let row = LiquidBody {

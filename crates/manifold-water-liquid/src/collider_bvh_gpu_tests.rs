@@ -5,7 +5,7 @@ use manifold_gpu::{BufferUse, GpuBinding, GpuBuffer, GpuDevice};
 use manifold_physics::TriangleMesh;
 use manifold_physics::mesh_bvh::MeshBvh;
 
-const LIBRARY: &str = include_str!("primitives/shaders/collider_bvh.wgsl");
+use crate::bodies::COLLIDER_BVH as LIBRARY;
 
 const HARNESS: &str = r"
 struct Params {

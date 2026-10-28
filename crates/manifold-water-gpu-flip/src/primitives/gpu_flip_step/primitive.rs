@@ -300,9 +300,11 @@ impl Primitive for GpuFlipStep {
         let bodies_in = ctx.inputs.array("bodies");
         let shapes_in = ctx.inputs.array("shapes");
         let atlas_in = ctx.inputs.array("atlas");
-        let (bodies, shapes, atlas, body_count, rows, shapes_len) =
-            match (bodies_in, shapes_in, atlas_in) {
-                (Some(bodies), Some(shapes), Some(atlas)) => {
+        let nodes_in = ctx.inputs.array("collider_nodes");
+        let triangles_in = ctx.inputs.array("collider_triangles");
+        let (bodies, shapes, atlas, collider_nodes, collider_triangles, body_count, rows, shapes_len) =
+            match (bodies_in, shapes_in, atlas_in, nodes_in, triangles_in) {
+                (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)) => {
                     let held =
                         (bodies.size / size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32;
                     let shapes_len = (shapes.size / size_of::<LiquidShape>() as u64)
@@ -316,12 +318,14 @@ impl Primitive for GpuFlipStep {
                         bodies,
                         shapes,
                         atlas,
+                        nodes,
+                        triangles,
                         body_count,
                         rows.min(held).min(through_tick),
                         shapes_len,
                     )
                 }
-                _ => (&zeros, &zeros, &zeros, 0, 0, 0),
+                _ => (&zeros, &zeros, &zeros, &zeros, &zeros, 0, 0, 0),
             };
         let reaction_in = ctx.inputs.array("reaction");
         let dynamic = body_count > 0 && ctx.scalar_or_param("dynamic_bodies", 0.0) > 0.0;
@@ -409,6 +413,9 @@ impl Primitive for GpuFlipStep {
                 _pad_lo: 0,
                 wall_velocity_hi,
                 _pad_hi: 0,
+                // The encode decides: it knows the buffers it last built from.
+                static_all: 0,
+                _pad_static: [0; 3],
             },
             clock_plan: &zeros,
             particles,
@@ -421,6 +428,8 @@ impl Primitive for GpuFlipStep {
             region_sites,
             shapes,
             atlas,
+            collider_nodes,
+            collider_triangles,
             reaction,
             contacts: ctx.inputs.array("contacts").unwrap_or(&zeros),
             dynamic,

@@ -294,6 +294,7 @@ pub(super) fn pooled<'a>(
         buffer(34, &l.phi),
         buffer(35, &l.rhs),
         buffer(43, &l.corners),
+        buffer(45, &l.static_corners),
         buffer(55, &l.a),
         buffer(56, &l.b),
         buffer(57, &l.f),
@@ -395,8 +396,73 @@ pub(super) fn encode_tiles(
     }
 }
 
-/// The solid corners of every held slot, from this step's posed bodies and
-/// the walls (`solid_corners`), before any pass reads the solids.
+/// The static colliders' corners, after the tile build and `pose_bodies`:
+/// the fresh slots', then every held slot's when `static_all` is set or a
+/// static body moves (`static_corners_args` takes both), before
+/// `solid_corners` reads them.
+pub(super) fn encode_static_corners(
+    enc: &mut GpuEncoder,
+    pipes: &Pipelines,
+    params: &StepParams,
+    l: &LatticeBuffers,
+    tiles: &WorldTiles,
+    step: &Step<'_>,
+    posed: &GpuBuffer,
+) {
+    let ring = tiles.reach().ring_max;
+    enc.dispatch_compute_indirect(
+        &pipes.static_fresh,
+        &[
+            uniform(params),
+            buffer(15, step.shapes),
+            buffer(27, step.collider_nodes),
+            buffer(28, step.collider_triangles),
+            buffer(45, &l.static_corners),
+            buffer(46, step.clock_plan),
+            buffer(48, posed),
+            buffer(51, tiles.table()),
+            buffer(53, &tiles.lists().fresh),
+        ],
+        tiles.args(),
+        fresh_args_offset(ring),
+        "gpu_flip.step.static_corners.fresh",
+    );
+    enc.compute_memory_barrier_buffers();
+    enc.dispatch_compute(
+        &pipes.static_args,
+        &[
+            uniform(params),
+            buffer(31, tiles.args()),
+            buffer(46, step.clock_plan),
+            buffer(52, &l.static_scratch),
+        ],
+        [1, 1, 1],
+        "gpu_flip.step.static_corners.args",
+    );
+    enc.compute_memory_barrier_buffers();
+    enc.dispatch_compute_indirect(
+        &pipes.static_held,
+        &[
+            uniform(params),
+            buffer(15, step.shapes),
+            buffer(27, step.collider_nodes),
+            buffer(28, step.collider_triangles),
+            buffer(29, &tiles.lists().by_rank),
+            buffer(45, &l.static_corners),
+            buffer(46, step.clock_plan),
+            buffer(48, posed),
+            buffer(51, tiles.table()),
+        ],
+        &l.static_scratch,
+        STATIC_TRIPLE_OFFSET,
+        "gpu_flip.step.static_corners.held",
+    );
+    enc.compute_memory_barrier_buffers();
+}
+
+/// The solid corners of every held slot, from this step's posed bodies, the
+/// static corners and the walls (`solid_corners`), before any pass reads the
+/// solids.
 pub(super) fn encode_solid_corners(
     enc: &mut GpuEncoder,
     pipes: &Pipelines,
@@ -414,6 +480,7 @@ pub(super) fn encode_solid_corners(
             buffer(16, step.atlas),
             buffer(29, &tiles.lists().by_rank),
             buffer(43, &l.corners),
+            buffer(45, &l.static_corners),
             buffer(46, step.clock_plan),
             buffer(48, posed),
             buffer(51, tiles.table()),

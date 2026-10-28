@@ -710,6 +710,8 @@ pub mod gpu {
                         regions: None,
                         shapes: None,
                         atlas: None,
+                        collider_nodes: None,
+                        collider_triangles: None,
                         region_count: 0,
                     });
                     let old_current = stage.current;

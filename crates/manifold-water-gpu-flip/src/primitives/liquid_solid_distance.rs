@@ -14,7 +14,7 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_physics::clock::TICK;
-use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::bodies::{COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::tile_pool::tile_pool;
 
@@ -55,6 +55,8 @@ manifold_node_engine::primitive! {
         bodies: Array(LiquidBody) required,
         shapes: Array(LiquidShape) required,
         atlas: Array(u32) required,
+        collider_nodes: Array(manifold_node_engine::mesh::Vec4Vertex) required,
+        collider_triangles: Array(manifold_node_engine::mesh::Vec4Vertex) required,
         tiles: Array(u32) required,
         closed_faces: ScalarF32 optional,
         bounds_lo_x: ScalarF32 optional, bounds_lo_y: ScalarF32 optional, bounds_lo_z: ScalarF32 optional,
@@ -92,8 +94,8 @@ manifold_node_engine::primitive! {
     aliases: ["solid lattice", "collider distance", "solid field"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/liquid_solid_distance_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [READ_SIDE, LIQUID_POSE, LIQUID_COLLIDER],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [READ_SIDE, LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH],
     extra_fields: {
         solid: Option<GpuBuffer> = None,
         clock_plan: Option<GpuBuffer> = None,
@@ -149,6 +151,8 @@ impl Primitive for LiquidSolidDistance {
             ctx.inputs.array("bodies"),
             ctx.inputs.array("shapes"),
             ctx.inputs.array("atlas"),
+            ctx.inputs.array("collider_nodes"),
+            ctx.inputs.array("collider_triangles"),
             ctx.inputs.array("tiles"),
         );
         let elements = pool.elements();
@@ -203,7 +207,11 @@ impl Primitive for LiquidSolidDistance {
             }
         }
         let gpu = ctx.gpu_encoder();
-        let ((Some(bodies), Some(shapes), Some(atlas), Some(tiles)), Some(solid), Some(plan)) =
+        let (
+            (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles), Some(tiles)),
+            Some(solid),
+            Some(plan),
+        ) =
             (inputs, self.solid.as_ref(), self.clock_plan.as_ref())
         else {
             return;
@@ -254,16 +262,26 @@ impl Primitive for LiquidSolidDistance {
                 },
                 GpuBinding::Buffer {
                     binding: 4,
-                    buffer: tiles,
+                    buffer: nodes,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 5,
-                    buffer: solid,
+                    buffer: triangles,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 6,
+                    buffer: tiles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 7,
+                    buffer: solid,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 8,
                     buffer: plan,
                     offset: 0,
                 },

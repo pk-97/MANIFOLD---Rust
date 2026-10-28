@@ -133,6 +133,7 @@ def stats_layout() -> str:
 
 STACKS = {
     "step": (True, [LIQ / "liquid_pose.wgsl", LIQ / "liquid_collider.wgsl",
+                    LIQ / "collider_bvh.wgsl",
                     C / "manifold-nodes-physics/src/shaders/force_lattice.wgsl",
                     LIQ / "tile_grid.wgsl", WORLD_READ,
                     *[FLIP / "gpu_flip_step" / f"{p}.wgsl" for p in STEP_PARTS]]),

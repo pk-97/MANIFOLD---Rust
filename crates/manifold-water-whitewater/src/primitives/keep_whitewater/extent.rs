@@ -15,6 +15,8 @@ fn keep_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         )?;
         x.covers("shapes", size_of::<LiquidShape>() as u64)?;
         x.covers("atlas", 4)?;
+        x.covers("collider_nodes", 16)?;
+        x.covers("collider_triangles", 16)?;
     }
     let elements = tile_pool(x)?;
     x.covers("solid", elements * 4)?;

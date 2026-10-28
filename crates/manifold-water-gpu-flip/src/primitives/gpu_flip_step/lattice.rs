@@ -34,8 +34,8 @@ pub(crate) fn scratch_bytes(pool: u32, slots: u64) -> u64 {
 
 /// The lattice's pooled cell arrays (`LatticeBuffers`): water, φ, the
 /// right-hand side, the pressure, the pocket state and label, the solve
-/// mask, the pocket leaders and the solid corners.
-pub(super) const LATTICE_CELL_ARRAYS: u64 = 9;
+/// mask, the pocket leaders, the solid corners and the static corners.
+pub(super) const LATTICE_CELL_ARRAYS: u64 = 10;
 
 /// The lattice's pooled face grids: the gathered, saved, scratch, forced,
 /// open-fraction and solid-velocity grids and the step's internal faces.
@@ -62,6 +62,12 @@ pub(super) struct LatticeBuffers {
     pub(super) pressure: GpuBuffer,
     /// The solid distance at each held cell's low corner (`solid_corners`).
     pub(super) corners: GpuBuffer,
+    /// The static colliders' distance and nearest body at each held cell's
+    /// low corner (`static_corners`), one packed word a pool element.
+    pub(super) static_corners: GpuBuffer,
+    /// Eight words: the static corners' rebuild flag and the indirect triple
+    /// of their pass over every held slot (`static_corners_args`).
+    pub(super) static_scratch: GpuBuffer,
     /// The particles' faces as gathered over C; canonical elsewhere.
     pub(super) g: GpuBuffer,
     /// The saved (old) faces: `g` extended.
@@ -95,6 +101,12 @@ pub(super) struct LatticeBuffers {
     /// pooled cell field.
     pub(super) pocket_leader: GpuBuffer,
 }
+
+/// Bytes of [`LatticeBuffers::static_scratch`].
+const STATIC_SCRATCH_BYTES: u64 = 32;
+
+/// Byte offset of the held pass's indirect triple in `static_scratch`.
+pub(super) const STATIC_TRIPLE_OFFSET: u64 = 16;
 
 pub(super) fn allocate(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
     manifold_node_engine::load::expand::admit_candidate_bytes(
@@ -130,6 +142,8 @@ impl LatticeBuffers {
             rhs: allocate(device, cell)?,
             pressure: allocate(device, cell)?,
             corners: allocate(device, cell)?,
+            static_corners: allocate(device, cell)?,
+            static_scratch: allocate_zeroed(device, STATIC_SCRATCH_BYTES)?,
             g: allocate(device, face)?,
             a: allocate(device, face)?,
             b: allocate(device, face)?,

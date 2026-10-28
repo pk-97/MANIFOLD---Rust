@@ -64,6 +64,8 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
             )?;
             x.covers("shapes", size_of::<LiquidShape>() as u64)?;
             x.covers("atlas", 4)?;
+            x.covers("collider_nodes", 16)?;
+            x.covers("collider_triangles", 16)?;
         }
     }
     x.covers("pool", shape.pool_bytes())?;

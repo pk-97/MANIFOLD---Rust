@@ -260,6 +260,7 @@ mod tests {
                 scale[2],
                 scale[0].min(scale[1]).min(scale[2]),
             ],
+            ..Default::default()
         }
     }
 

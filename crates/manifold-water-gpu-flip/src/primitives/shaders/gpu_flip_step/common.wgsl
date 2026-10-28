@@ -129,6 +129,12 @@ struct Params {
     _pad2: u32,
     wall_velocity_hi: vec3<f32>,
     _pad3: u32,
+    // Nonzero when every held slot's static corners are rebuilt this step:
+    // the first step, new lattice buffers, or a new shapes buffer.
+    static_all: u32,
+    _pad4: u32,
+    _pad5: u32,
+    _pad6: u32,
 };
 
 struct CellRange {
@@ -165,6 +171,13 @@ struct LiquidShape {
     dims_z: u32,
     atlas_offset: u32,
     scale_min: vec4<f32>,
+    // A static collider (tree == 1) has no lattice: its geometry is the BVH
+    // at node `tree_node` and first triangle `tree_triangle` of
+    // `collider_nodes` and `collider_triangles`.
+    tree_node: u32,
+    tree_triangle: u32,
+    tree: u32,
+    tree_pad: u32,
 };
 
 struct ClockPlan {

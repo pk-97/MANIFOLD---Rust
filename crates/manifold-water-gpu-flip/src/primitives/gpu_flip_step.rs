@@ -60,7 +60,7 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_nodes_physics::force_lattice::{FORCE_LATTICE, ForceLatticeBinding};
 use manifold_water_liquid::WATER_DENSITY;
 use manifold_water_liquid::bodies::{
-    LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, MOBILITY_BYTES,
+    COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, MOBILITY_BYTES,
 };
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::fluid_particles::FaceSample;
@@ -327,6 +327,9 @@ pub(crate) struct StepParams {
     pub(crate) _pad_lo: u32,
     pub(crate) wall_velocity_hi: [f32; 3],
     pub(crate) _pad_hi: u32,
+    /// Nonzero when every held slot's static corners are rebuilt this step.
+    pub(crate) static_all: u32,
+    pub(crate) _pad_static: [u32; 3],
 }
 }
 
@@ -411,6 +414,9 @@ pub(crate) struct StepState {
     /// table's points in place of the particles, and their record.
     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     box_points: Option<(GpuBuffer, GpuBuffer)>,
+    /// The shapes buffer (identity, size) the static corners were last
+    /// built from; `None` before the first step.
+    static_built: Option<(usize, u64)>,
     /// A lattice was just built: its pooled fields' canonical elements are
     /// written by the next step (`pool_canon`).
     pool_canon_pending: bool,
@@ -510,6 +516,9 @@ struct Step<'a> {
     bodies: &'a GpuBuffer,
     shapes: &'a GpuBuffer,
     atlas: &'a GpuBuffer,
+    /// The static colliders' BVHs: four vec4 a node, three a triangle.
+    collider_nodes: &'a GpuBuffer,
+    collider_triangles: &'a GpuBuffer,
     /// Inflow and outflow rows; read when `params.region_count` > 0.
     regions: &'a GpuBuffer,
     /// Each region row's half-cell site box (`gpu_flip_domain` RegionSites),
@@ -562,6 +571,8 @@ manifold_node_engine::primitive! {
         bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
+        collider_nodes: Array(manifold_node_engine::mesh::Vec4Vertex) optional,
+        collider_triangles: Array(manifold_node_engine::mesh::Vec4Vertex) optional,
         body_count: ScalarF32 optional,
         regions: Array(LiquidBody) optional,
         region_count: ScalarF32 optional,

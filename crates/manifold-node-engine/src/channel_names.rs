@@ -183,6 +183,10 @@ pub mod well_known {
         DIMS_Z            = "dims_z";
         ATLAS_OFFSET      = "atlas_offset";
         SCALE_MIN         = "scale_min";
+        TREE_NODE         = "tree_node";
+        TREE_TRIANGLE     = "tree_triangle";
+        TREE              = "tree";
+        TREE_PAD          = "tree_pad";
 
         // ─── Liquid face grid: the three face
         // velocities a padded cell owns

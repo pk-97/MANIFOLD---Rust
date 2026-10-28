@@ -43,6 +43,7 @@ use manifold_node_engine::scene::transform::Transform;
 use manifold_nodes_physics::tick_sampled::{TickSampled, TickSampledRegistration};
 use manifold_physics::clock::TICK;
 use manifold_physics::tick_samples::TickSamples;
+use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::bounds::{
@@ -351,6 +352,7 @@ manifold_node_engine::primitive! {
         force_lattices: ScalarF32,
         impulse_tick: ScalarF32,
         bodies: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
+        collider_nodes: Array(Vec4Vertex), collider_triangles: Array(Vec4Vertex),
         reaction: Array(i32),
         forces: Array(f32), impulses: Array(f32),
     },
@@ -671,7 +673,14 @@ impl Primitive for MatterDomain {
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(
             port,
-            "bodies" | "shapes" | "atlas" | "reaction" | "forces" | "impulses"
+            "bodies"
+                | "shapes"
+                | "atlas"
+                | "collider_nodes"
+                | "collider_triangles"
+                | "reaction"
+                | "forces"
+                | "impulses"
         )
     }
 
@@ -694,7 +703,14 @@ impl Primitive for MatterDomain {
         // Provided storage: a one-record hint, grown at run time.
         matches!(
             port_name,
-            "bodies" | "shapes" | "atlas" | "reaction" | "forces" | "impulses"
+            "bodies"
+                | "shapes"
+                | "atlas"
+                | "collider_nodes"
+                | "collider_triangles"
+                | "reaction"
+                | "forces"
+                | "impulses"
         )
         .then_some(1)
     }
@@ -1189,16 +1205,9 @@ impl MatterDomain {
             .owner
             .as_ref()
             .map_or_else(|| self.observed.geometries(), LiquidRigidOwner::geometries);
-        let coupled_rows = self
-            .coupled
-            .owner
-            .as_ref()
-            .map_or_else(|| self.observed.rows(), LiquidRigidOwner::rows);
         if self.bodies.prepare(
             roles,
             coupled_geometries,
-            coupled_rows,
-            self.coupled.walls.bounds(),
             cell_size,
             offline,
         )? == BodiesStatus::Pending
@@ -1248,8 +1257,6 @@ impl MatterDomain {
             if self.bodies.prepare(
                 roles,
                 owner.geometries(),
-                owner.rows(),
-                self.coupled.walls.bounds(),
                 cell_size,
                 offline,
             )? == BodiesStatus::Pending

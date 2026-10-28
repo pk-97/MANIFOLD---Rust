@@ -474,7 +474,15 @@ impl MatterScene {
         manifold_nodes_water::testkit::couple(graph, domain, world, colliders)
             .expect("couple the liquid with its bodies");
         // The fill leaves seeds inside a collider's starting pose unused.
-        for port in ["bodies", "shapes", "atlas", "body_count", "epoch"] {
+        for port in [
+            "bodies",
+            "shapes",
+            "atlas",
+            "collider_nodes",
+            "collider_triangles",
+            "body_count",
+            "epoch",
+        ] {
             wire(graph, (domain, port), (fill, port));
         }
         let bodies = add(graph, "node.matter_move_bodies");
@@ -496,12 +504,19 @@ impl MatterScene {
         }
         wire(graph, (bodies, "bodies_out"), (update, "bodies"));
         wire(graph, (bodies, "bodies_out"), (reaction, "bodies"));
-        for port in ["shapes", "atlas"] {
+        for port in [
+            "shapes",
+            "atlas",
+            "collider_nodes",
+            "collider_triangles",
+        ] {
             wire(graph, (domain, port), (reaction, port));
         }
         for port in [
             "shapes",
             "atlas",
+            "collider_nodes",
+            "collider_triangles",
             "body_count",
             "field_min_x",
             "field_min_y",
@@ -510,7 +525,13 @@ impl MatterScene {
             wire(graph, (domain, port), (update, port));
         }
         wire(graph, (bodies, "bodies_out"), (g2p, "bodies"));
-        for port in ["shapes", "atlas", "body_count"] {
+        for port in [
+            "shapes",
+            "atlas",
+            "collider_nodes",
+            "collider_triangles",
+            "body_count",
+        ] {
             wire(graph, (domain, port), (g2p, port));
         }
         transforms

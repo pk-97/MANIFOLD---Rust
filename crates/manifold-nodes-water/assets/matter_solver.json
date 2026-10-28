@@ -561,6 +561,18 @@
     },
     {
       "fromNode": 1,
+      "fromPort": "collider_nodes",
+      "toNode": 2,
+      "toPort": "collider_nodes"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "collider_triangles",
+      "toNode": 2,
+      "toPort": "collider_triangles"
+    },
+    {
+      "fromNode": 1,
       "fromPort": "body_count",
       "toNode": 2,
       "toPort": "body_count"
@@ -633,6 +645,18 @@
     },
     {
       "fromNode": 1,
+      "fromPort": "collider_nodes",
+      "toNode": 6,
+      "toPort": "collider_nodes"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "collider_triangles",
+      "toNode": 6,
+      "toPort": "collider_triangles"
+    },
+    {
+      "fromNode": 1,
       "fromPort": "body_count",
       "toNode": 6,
       "toPort": "body_count"
@@ -654,6 +678,18 @@
       "fromPort": "atlas",
       "toNode": 7,
       "toPort": "atlas"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "collider_nodes",
+      "toNode": 7,
+      "toPort": "collider_nodes"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "collider_triangles",
+      "toNode": 7,
+      "toPort": "collider_triangles"
     },
     {
       "fromNode": 1,
@@ -786,6 +822,18 @@
       "fromPort": "atlas",
       "toNode": 15,
       "toPort": "atlas"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "collider_nodes",
+      "toNode": 15,
+      "toPort": "collider_nodes"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "collider_triangles",
+      "toNode": 15,
+      "toPort": "collider_triangles"
     },
     {
       "fromNode": 1,

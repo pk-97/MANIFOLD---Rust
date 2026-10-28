@@ -12,7 +12,7 @@
 // past a Wall. Bodies are sampled in their pose after tick_seconds, as
 // liquid_solid_distance does; the nearest of the walls and the bodies sets
 // both the distance and the kind (none 0, domain 1, obstacle 2).
-// LiquidBody = Element; LiquidShape = Element2; WhitewaterSource = Element3.
+// LiquidBody = Element; LiquidShape = Element2; the collider tree (Vec4Vertex) = Element3; WhitewaterSource = Element4.
 
 var<private> ww_pool_tiles: u32;
 fn ts_pool_tiles() -> u32 { return ww_pool_tiles; }
@@ -22,6 +22,9 @@ fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
+
+fn cb_node(i: u32) -> vec4<f32> { let n = buf_collider_nodes[i]; return vec4<f32>(n.x, n.y, n.z, n.w); }
+fn cb_triangle(i: u32) -> vec4<f32> { let t = buf_collider_triangles[i]; return vec4<f32>(t.x, t.y, t.z, t.w); }
 
 fn body(
     idx: u32,
@@ -41,7 +44,7 @@ fn body(
     pool_tiles: f32,
 ) -> BufferOutputs {
     ww_pool_tiles = u32(pool_tiles);
-    let canonical = BufferOutputs(Element3(0.0, 0.0, 0u, 0u), 1.0e30);
+    let canonical = BufferOutputs(Element4(0.0, 0.0, 0u, 0u), 1.0e30);
     if idx >= ts_canon() {
         return canonical;
     }
@@ -87,9 +90,15 @@ fn body(
         let q = liquid_turn(bd.rotation, bd.angular_velocity.xyz, tick_seconds);
         let sh = buf_shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
-        let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
-        let candidate = liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz);
+        var candidate: f32;
+        if sh.tree == 1u {
+            let local = liquid_rotate(vec4<f32>(-q.xyz, q.w), x - position);
+            candidate = cb_phi(sh.tree_node, sh.tree_triangle, local, 4.0 * cell_size, cell_size);
+        } else {
+            let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
+            candidate = liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz);
+        }
         if candidate < distance { distance = candidate; kind = 2u; }
     }
-    return BufferOutputs(Element3(influence, select(dust_strength, 1.0, kind == 1u), kind, 0u), distance);
+    return BufferOutputs(Element4(influence, select(dust_strength, 1.0, kind == 1u), kind, 0u), distance);
 }

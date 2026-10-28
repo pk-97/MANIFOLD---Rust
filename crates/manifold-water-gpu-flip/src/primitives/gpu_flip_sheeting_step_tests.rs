@@ -112,7 +112,7 @@ struct Splash {
     faces: manifold_node_engine::bindings::Slot,
     tiles: manifold_node_engine::bindings::Slot,
     capped: manifold_node_engine::bindings::Slot,
-    regions: Option<[manifold_node_engine::bindings::Slot; 5]>,
+    regions: Option<[manifold_node_engine::bindings::Slot; 7]>,
     region_count: usize,
     site_total: u32,
     markers: usize,
@@ -173,12 +173,15 @@ impl Splash {
                 dims_z: dims[2],
                 atlas_offset: 0,
                 scale_min: [1.0; 4],
+                ..Default::default()
             };
             [
                 h.array(regions, regions.len()).0,
                 h.array(&sites, sites.len()).0,
                 h.array(&[shape], 1).0,
                 h.array(&atlas, atlas.len()).0,
+                h.array::<manifold_node_engine::mesh::Vec4Vertex>(&[], 1).0,
+                h.array::<manifold_node_engine::mesh::Vec4Vertex>(&[], 1).0,
                 h.array::<LiquidBody>(&[], 1).0,
             ]
         });
@@ -225,7 +228,7 @@ impl Splash {
             ("particles", self.particles.0),
             ("identity", self.identity.0),
         ];
-        if let Some([regions, sites, shapes, atlas, bodies]) = self.regions {
+        if let Some([regions, sites, shapes, atlas, collider_nodes, collider_triangles, bodies]) = self.regions {
             values.extend([
                 ("region_count", self.region_count as f32),
                 ("region_site_total", self.site_total as f32),
@@ -236,6 +239,8 @@ impl Splash {
                 ("region_sites", sites),
                 ("shapes", shapes),
                 ("atlas", atlas),
+                ("collider_nodes", collider_nodes),
+                ("collider_triangles", collider_triangles),
                 ("bodies", bodies),
             ]);
         }

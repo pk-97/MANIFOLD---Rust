@@ -155,6 +155,8 @@ mod fused_tests {
                         regions: None,
                         shapes: None,
                         atlas: None,
+                        collider_nodes: None,
+                        collider_triangles: None,
                         region_count: 0,
                     });
                     let mut frame = fixture.frame(true);

@@ -1,7 +1,8 @@
 //! A GPU liquid's bodies: the coupled Physics World's bodies become
 //! one [`LiquidBody`] row per body per tick, Inflow and Outflow roles one
 //! region row per role per tick from their authored motion, and every
-//! shape's distance lattice one packed atlas with a [`LiquidShape`] each.
+//! shape's distance lattice one packed atlas with a [`LiquidShape`] each; a
+//! static collider has a mesh tree the GPU queries instead of a lattice.
 //! Solids reach the water only as coupled bodies, the World's Colliders and
 //! Bodies (SCENE_DOCUMENT_DESIGN.md section 7.8 (Physics and collision
 //! shapes)). Role motion is the authored roles replayed at each tick's start
@@ -23,6 +24,7 @@ use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
 use manifold_node_engine::scene::transform::Transform;
 use manifold_physics::PlayedTime;
 use manifold_physics::clock::TICK;
+use manifold_physics::mesh_bvh::MeshBvh;
 use manifold_physics::sdf::{DistanceLattice, MAX_LATTICE_NODES};
 use manifold_physics::tick_samples::TickSamples;
 use manifold_water_rigid::physics::pose_from_transform;
@@ -56,6 +58,10 @@ manifold_core::testkit_visible! {
 /// `liquid_atlas_half`.
 pub const LIQUID_COLLIDER: &str = include_str!("primitives/shaders/liquid_collider.wgsl");
 }
+
+/// Mesh BVH distance and winding queries for static colliders; the
+/// including body provides `cb_node` and `cb_triangle`.
+pub const COLLIDER_BVH: &str = include_str!("primitives/shaders/collider_bvh.wgsl");
 
 /// A collider, source, drain or coupled body during one tick. 128 bytes.
 /// The domain uploads one per body per tick of the frame, holding the tick's
@@ -197,7 +203,8 @@ pub fn unpack_supports(
     MAX_SUPPORT_POINTS
 }
 
-/// A body-local signed-distance lattice in the domain's atlas. 48 bytes.
+/// A body-local signed-distance lattice in the domain's atlas, or a static
+/// collider's tree. 64 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LiquidShape {
@@ -211,6 +218,15 @@ pub struct LiquidShape {
     /// The role's scale per axis; w = the smallest, which turns a local
     /// distance into a world one that never overstates it.
     pub scale_min: [f32; 4],
+    /// A static collider's tree: its root node and first triangle in the
+    /// domain's `collider_nodes` / `collider_triangles` (MeshBvh::gpu_nodes /
+    /// gpu_triangles layout, inner `first` relative to the root, leaf `first`
+    /// relative to the first triangle).
+    pub tree_node: u32,
+    pub tree_triangle: u32,
+    /// 1 for a static collider read through its tree (dims 0, no atlas), else 0.
+    pub tree: u32,
+    pub tree_pad: u32,
 }
 
 pub const LIQUID_SHAPE_SPECS: &[ChannelSpec] = &[
@@ -238,6 +254,22 @@ pub const LIQUID_SHAPE_SPECS: &[ChannelSpec] = &[
         name: well_known::SCALE_MIN,
         ty: ChannelElementType::Vec4F,
     },
+    ChannelSpec {
+        name: well_known::TREE_NODE,
+        ty: ChannelElementType::U32,
+    },
+    ChannelSpec {
+        name: well_known::TREE_TRIANGLE,
+        ty: ChannelElementType::U32,
+    },
+    ChannelSpec {
+        name: well_known::TREE,
+        ty: ChannelElementType::U32,
+    },
+    ChannelSpec {
+        name: well_known::TREE_PAD,
+        ty: ChannelElementType::U32,
+    },
 ];
 
 impl KnownItem for LiquidShape {
@@ -246,7 +278,7 @@ impl KnownItem for LiquidShape {
 
 const _: () = {
     assert!(std::mem::size_of::<LiquidBody>() == 128);
-    assert!(std::mem::size_of::<LiquidShape>() == 48);
+    assert!(std::mem::size_of::<LiquidShape>() == 64);
 };
 
 /// Packs distance values two per word as WGSL's `pack2x16float` does (the
@@ -358,54 +390,36 @@ fn thinnest(plan: &LatticePlan, scale: [f32; 3]) -> f32 {
 type LatticeBuild = Result<Arc<DistanceLattice>, String>;
 
 /// One geometry's distance lattice in one liquid. A liquid owns its
-/// lattices because their spacing follows its cells and their crop its
-/// domain; one build runs at a time and the newest plan wins.
+/// lattices because their spacing follows its cells; one build runs at a
+/// time and the newest plan wins.
 struct RoleLattice {
     geometry: Arc<PreparedFluidGeometry>,
-    /// The cell size and scale steps (`scale_steps`) `plan` was made from,
-    /// and the local domain box it was cropped to.
-    asked: (f32, [i32; 2], Option<[[f32; 3]; 2]>),
+    /// The cell size and scale steps (`scale_steps`) `plan` was made from.
+    asked: (f32, [i32; 2]),
     plan: LatticePlan,
     ready: Option<(LatticePlan, Arc<DistanceLattice>)>,
     building: Option<(LatticePlan, mpsc::Receiver<LatticeBuild>)>,
     failed: Option<(LatticePlan, String)>,
 }
 
-/// `geometry`'s lattice for this frame, covering at least `domain` (local
-/// min then max) when given: `None` while live and nothing is built yet. A
-/// crop that still holds the domain is kept; one that doesn't is made again
-/// with a margin ([`with_margin`]). Live, a lattice built to an older plan
-/// stands in until the current one is ready; `wait` blocks for the current
-/// one.
+/// `geometry`'s lattice for this frame: `None` while live and nothing is
+/// built yet. Live, a lattice built to an older plan stands in until the
+/// current one is ready; `wait` blocks for the current one.
 fn resolve_lattice(
     lattices: &mut Vec<RoleLattice>,
     geometry: &Arc<PreparedFluidGeometry>,
     cell_size: f32,
     scale: [f32; 3],
-    domain: Option<[[f32; 3]; 2]>,
     wait: bool,
 ) -> Result<Option<(Arc<DistanceLattice>, LatticePlan)>, String> {
-    let held = lattices
-        .iter()
-        .find(|entry| Arc::ptr_eq(&entry.geometry, geometry))
-        .and_then(|entry| entry.asked.2);
-    let domain = domain.map(|need| match held {
-        Some(have)
-            if (0..3)
-                .all(|axis| have[0][axis] <= need[0][axis] && need[1][axis] <= have[1][axis]) =>
-        {
-            have
-        }
-        _ => with_margin(need),
-    });
-    let asked = (cell_size, scale_steps(scale), domain);
+    let asked = (cell_size, scale_steps(scale));
     let index = match lattices
         .iter()
         .position(|entry| Arc::ptr_eq(&entry.geometry, geometry))
     {
         Some(index) => index,
         None => {
-            let plan = geometry.lattice_plan(cell_size, scale, domain)?;
+            let plan = geometry.lattice_plan(cell_size, scale)?;
             lattices.push(RoleLattice {
                 geometry: Arc::clone(geometry),
                 asked,
@@ -419,7 +433,7 @@ fn resolve_lattice(
     };
     let entry = &mut lattices[index];
     if entry.asked != asked {
-        entry.plan = geometry.lattice_plan(cell_size, scale, domain)?;
+        entry.plan = geometry.lattice_plan(cell_size, scale)?;
         entry.asked = asked;
     }
     let plan = entry.plan;
@@ -489,6 +503,114 @@ fn resolve_lattice(
             .ready
             .as_ref()
             .map(|(stale, lattice)| (Arc::clone(lattice), *stale)));
+    }
+}
+
+type TreeBuild = Result<Arc<MeshBvh>, String>;
+
+/// One static collider's mesh tree in one liquid, built once on a worker.
+struct RoleTree {
+    geometry: Arc<PreparedFluidGeometry>,
+    ready: Option<Arc<MeshBvh>>,
+    building: Option<mpsc::Receiver<TreeBuild>>,
+    failed: Option<String>,
+}
+
+/// `geometry`'s tree for this frame: `None` while live and not built yet;
+/// `wait` blocks for it.
+fn resolve_tree(
+    trees: &mut Vec<RoleTree>,
+    geometry: &Arc<PreparedFluidGeometry>,
+    wait: bool,
+) -> Result<Option<Arc<MeshBvh>>, String> {
+    let index = match trees
+        .iter()
+        .position(|entry| Arc::ptr_eq(&entry.geometry, geometry))
+    {
+        Some(index) => index,
+        None => {
+            trees.push(RoleTree {
+                geometry: Arc::clone(geometry),
+                ready: None,
+                building: None,
+                failed: None,
+            });
+            trees.len() - 1
+        }
+    };
+    let entry = &mut trees[index];
+    loop {
+        if let Some(receiver) = &entry.building {
+            let settled = if wait {
+                Some(
+                    receiver
+                        .recv()
+                        .unwrap_or_else(|_| Err("Fluid role tree build stopped".into())),
+                )
+            } else {
+                match receiver.try_recv() {
+                    Ok(result) => Some(result),
+                    Err(mpsc::TryRecvError::Empty) => None,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        Some(Err("Fluid role tree build stopped".into()))
+                    }
+                }
+            };
+            if let Some(result) = settled {
+                entry.building = None;
+                match result {
+                    Ok(tree) => entry.ready = Some(tree),
+                    Err(error) => entry.failed = Some(error),
+                }
+            }
+        }
+        if let Some(tree) = &entry.ready {
+            return Ok(Some(Arc::clone(tree)));
+        }
+        if let Some(error) = &entry.failed {
+            return Err(error.clone());
+        }
+        if entry.building.is_none() {
+            let (sender, receiver) = mpsc::channel();
+            let source = Arc::clone(&entry.geometry);
+            let spawned = std::thread::Builder::new()
+                .name("fluid-role-tree".into())
+                .spawn(move || {
+                    // Always settle, so a waiter never waits on a build that panicked.
+                    let built = std::panic::catch_unwind(|| source.build_tree())
+                        .unwrap_or_else(|_| Err("Fluid role tree build panicked".into()));
+                    let _ = sender.send(built);
+                });
+            match spawned {
+                Ok(_) => entry.building = Some(receiver),
+                Err(error) => {
+                    entry.failed = Some(format!("Fluid role tree could not start: {error}"));
+                    continue;
+                }
+            }
+        }
+        if wait {
+            continue;
+        }
+        return Ok(None);
+    }
+}
+
+/// A shape as resolved this frame: a distance lattice, or for a static
+/// collider the tree the GPU queries.
+#[derive(Clone)]
+enum Resolved {
+    Lattice(Arc<DistanceLattice>, LatticePlan),
+    Tree(Arc<MeshBvh>),
+}
+
+impl Resolved {
+    fn same_as(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Lattice(a, _), Self::Lattice(b, _)) => Arc::ptr_eq(a, b),
+            (Self::Tree(a), Self::Tree(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
     }
 }
 
@@ -669,7 +791,11 @@ pub struct LiquidBodies {
     /// Each shape's local mesh bounds, unscaled: min then max.
     bounds: Vec<[[f32; 3]; 2]>,
     atlas: Vec<u32>,
-    /// Bumped whenever `shapes` or `atlas` is rebuilt.
+    /// Every static shape's tree end to end ([`MeshBvh::gpu_nodes`] and
+    /// [`MeshBvh::gpu_triangles`]), one copy per distinct tree.
+    collider_nodes: Vec<[f32; 4]>,
+    collider_triangles: Vec<[f32; 4]>,
+    /// Bumped whenever `shapes`, `atlas` or the colliders' trees are rebuilt.
     pub version: u64,
     rows: Vec<LiquidBody>,
     /// One per row of `rows` once [`Self::set_contacts`] ran; zero for a
@@ -680,15 +806,17 @@ pub struct LiquidBodies {
     warned_thin: bool,
     /// Each geometry's distance lattice at this liquid's plan for it.
     lattices: Vec<RoleLattice>,
-    /// This frame's lattice and plan per shape, roles then coupled bodies.
-    resolved: Vec<(Arc<DistanceLattice>, LatticePlan)>,
-    /// The lattices the shapes and atlas were last built from.
-    used: Vec<Arc<DistanceLattice>>,
-    /// Each coupled body's lattice and plan in the last build, beside
+    /// Each static collider's tree in this liquid.
+    trees: Vec<RoleTree>,
+    /// This frame's lattice or tree per shape, roles then coupled bodies.
+    resolved: Vec<Resolved>,
+    /// What the shapes and atlas were last built from.
+    used: Vec<Resolved>,
+    /// Each coupled body's lattice or tree in the last build, beside
     /// `coupled`: a body whose shape was swapped in place keeps its own
     /// (found by its Box3D handle) until its new one is ready, so the liquid
     /// never holds for a reshaped body.
-    coupled_lattices: Vec<(Arc<DistanceLattice>, LatticePlan)>,
+    coupled_resolved: Vec<Resolved>,
     /// Whether Inflow and Outflow roles are accepted as regions; a solver
     /// without sources and drains leaves this off and refuses them.
     accepts_regions: bool,
@@ -848,6 +976,16 @@ impl LiquidBodies {
         &self.atlas
     }
 
+    /// Every static shape's tree nodes, [`MeshBvh::gpu_nodes`] layout.
+    pub fn collider_nodes(&self) -> &[[f32; 4]] {
+        &self.collider_nodes
+    }
+
+    /// Every static shape's tree triangles, [`MeshBvh::gpu_triangles`] layout.
+    pub fn collider_triangles(&self) -> &[[f32; 4]] {
+        &self.collider_triangles
+    }
+
     /// The rows the last [`Self::rows`] call produced.
     pub fn last_rows(&self) -> &[LiquidBody] {
         &self.rows
@@ -859,22 +997,16 @@ impl LiquidBodies {
     /// the fill seeds inside; anything else is refused rather than ignored. A new geometry,
     /// scale or distance lattice rebuilds the shapes and the atlas. Each
     /// geometry's lattice is built on a worker to the plan `cell_size` and
-    /// the role's scale ask for ([`PreparedFluidGeometry::lattice_plan`]).
-    /// Live, a geometry with no lattice yet leaves the bodies Pending, and
-    /// one whose plan changed keeps its last lattice until the new one is
-    /// ready; `wait` (offline) waits for the lattice the plan asks for, so no
-    /// simulated time goes by while it builds. A fixed collider's lattice
-    /// covers only `domain` (the Bounds box, world min then max) where its
-    /// row places it (SCENE_DOCUMENT_DESIGN.md section 7.18 (Fit with the
-    /// water end game)), so a large ground costs and resolves only what the
-    /// water touches. Without a `domain` (Bounds off) the lattice covers the
-    /// whole collider, at its own longest side.
+    /// the role's scale ask for ([`PreparedFluidGeometry::lattice_plan`]); a
+    /// fixed collider's tree is built on a worker once.
+    /// Live, a geometry with no lattice or tree yet leaves the bodies Pending,
+    /// and a lattice whose plan changed keeps its last one until the new one
+    /// is ready; `wait` (offline) waits for what the plan asks for, so no
+    /// simulated time goes by while it builds.
     pub fn prepare(
         &mut self,
         roles: &[Option<FluidRole>],
         coupled: &[Arc<PreparedFluidGeometry>],
-        coupled_rows: &[LiquidBody],
-        domain: Option<[[f32; 3]; 2]>,
         cell_size: f32,
         wait: bool,
     ) -> Result<BodiesStatus, String> {
@@ -921,10 +1053,9 @@ impl LiquidBodies {
                 &role.geometry,
                 cell_size,
                 role.transform.scale,
-                None,
                 wait,
             ) {
-                Ok(Some(found)) => self.resolved.push(found),
+                Ok(Some((lattice, plan))) => self.resolved.push(Resolved::Lattice(lattice, plan)),
                 Ok(None) => return Ok(BodiesStatus::Pending),
                 Err(error) => return Err(format!("Liquid: role {slot}: {error}")),
             }
@@ -944,20 +1075,16 @@ impl LiquidBodies {
                         .iter()
                         .position(|known| known.body() == Some(body))
                 })
-                .and_then(|known| self.coupled_lattices.get(known));
-            let crop = coupled_rows
-                .get(index)
-                .filter(|_| geometry.is_fixed())
-                .zip(domain)
-                .map(|(row, domain)| local_domain(row, domain));
-            match resolve_lattice(
-                &mut self.lattices,
-                geometry,
-                cell_size,
-                [1.0; 3],
-                crop,
-                wait,
-            ) {
+                .and_then(|known| self.coupled_resolved.get(known))
+                .filter(|known| matches!(known, Resolved::Tree(_)) == geometry.is_fixed());
+            let found = if geometry.is_fixed() {
+                resolve_tree(&mut self.trees, geometry, wait)
+                    .map(|found| found.map(Resolved::Tree))
+            } else {
+                resolve_lattice(&mut self.lattices, geometry, cell_size, [1.0; 3], wait)
+                    .map(|found| found.map(|(lattice, plan)| Resolved::Lattice(lattice, plan)))
+            };
+            match found {
                 Ok(Some(found)) => self.resolved.push(found),
                 Ok(None) => match stand_in {
                     Some(stand_in) => self.resolved.push(stand_in.clone()),
@@ -978,7 +1105,7 @@ impl LiquidBodies {
                 .used
                 .iter()
                 .zip(&self.resolved)
-                .all(|(a, (b, _))| Arc::ptr_eq(a, b));
+                .all(|(a, b)| a.same_as(b));
         if same {
             return Ok(BodiesStatus::Ready);
         }
@@ -1001,8 +1128,11 @@ impl LiquidBodies {
         self.shapes.clear();
         self.bounds.clear();
         self.atlas.clear();
+        self.collider_nodes.clear();
+        self.collider_triangles.clear();
         self.used.clear();
         let mut placed: Vec<(Arc<DistanceLattice>, LiquidShape)> = Vec::new();
+        let mut placed_trees: Vec<(Arc<MeshBvh>, LiquidShape)> = Vec::new();
         let role_shapes = roles.iter().enumerate().filter_map(|(slot, role)| {
             role.as_ref().map(|role| {
                 (
@@ -1021,26 +1151,54 @@ impl LiquidBodies {
             .chain(coupled_shapes)
             .zip(&self.resolved)
             .collect();
-        for ((name, slot, geometry, scale), (lattice, plan)) in shapes {
-            let base = match placed.iter().find(|(known, _)| Arc::ptr_eq(known, lattice)) {
-                Some((_, shape)) => *shape,
-                None => {
-                    let shape = LiquidShape {
-                        origin_spacing: [
-                            lattice.origin[0],
-                            lattice.origin[1],
-                            lattice.origin[2],
-                            lattice.spacing,
-                        ],
-                        dims_x: lattice.dims[0],
-                        dims_y: lattice.dims[1],
-                        dims_z: lattice.dims[2],
-                        atlas_offset: self.atlas.len() as u32 * 2,
-                        scale_min: [1.0; 4],
+        for ((name, slot, geometry, scale), resolved) in shapes {
+            let (base, plan) = match resolved {
+                Resolved::Lattice(lattice, plan) => {
+                    let base = match placed.iter().find(|(known, _)| Arc::ptr_eq(known, lattice)) {
+                        Some((_, shape)) => *shape,
+                        None => {
+                            let shape = LiquidShape {
+                                origin_spacing: [
+                                    lattice.origin[0],
+                                    lattice.origin[1],
+                                    lattice.origin[2],
+                                    lattice.spacing,
+                                ],
+                                dims_x: lattice.dims[0],
+                                dims_y: lattice.dims[1],
+                                dims_z: lattice.dims[2],
+                                atlas_offset: self.atlas.len() as u32 * 2,
+                                scale_min: [1.0; 4],
+                                ..LiquidShape::default()
+                            };
+                            pack_distance_atlas(&lattice.values, &mut self.atlas);
+                            placed.push((Arc::clone(lattice), shape));
+                            shape
+                        }
                     };
-                    pack_distance_atlas(&lattice.values, &mut self.atlas);
-                    placed.push((Arc::clone(lattice), shape));
-                    shape
+                    (base, Some(plan))
+                }
+                Resolved::Tree(tree) => {
+                    let base = match placed_trees
+                        .iter()
+                        .find(|(known, _)| Arc::ptr_eq(known, tree))
+                    {
+                        Some((_, shape)) => *shape,
+                        None => {
+                            let shape = LiquidShape {
+                                scale_min: [1.0; 4],
+                                tree_node: (self.collider_nodes.len() / 4) as u32,
+                                tree_triangle: (self.collider_triangles.len() / 3) as u32,
+                                tree: 1,
+                                ..LiquidShape::default()
+                            };
+                            tree.gpu_nodes(&mut self.collider_nodes);
+                            tree.gpu_triangles(&mut self.collider_triangles);
+                            placed_trees.push((Arc::clone(tree), shape));
+                            shape
+                        }
+                    };
+                    (base, None)
                 }
             };
             let smallest = scale[0].min(scale[1]).min(scale[2]);
@@ -1050,22 +1208,24 @@ impl LiquidBodies {
                 ..base
             });
             self.bounds.push(geometry.bounds());
-            let thinnest = thinnest(plan, scale);
-            if slot.is_none()
-                && (plan.capped || thinnest < THIN_COLLIDER_CELLS * cell_size)
-                && !self.warned_thin
-            {
-                self.warned_thin = true;
-                if plan.capped {
-                    log::warn!(
-                        "[liquid] {name} needs more than {MAX_LATTICE_NODES} distance nodes at the liquid's {cell_size:.3} m cells; its lattice is {:.3} m apart, so its shell is {thinnest:.3} m thick",
-                        plan.spacing * largest
-                    );
-                } else {
-                    log::warn!(
-                        "[liquid] {name} is {thinnest:.3} m thick, under {THIN_COLLIDER_CELLS} cells ({:.3} m); liquid may leak through it",
-                        THIN_COLLIDER_CELLS * cell_size
-                    );
+            if let Some(plan) = plan {
+                let thinnest = thinnest(plan, scale);
+                if slot.is_none()
+                    && (plan.capped || thinnest < THIN_COLLIDER_CELLS * cell_size)
+                    && !self.warned_thin
+                {
+                    self.warned_thin = true;
+                    if plan.capped {
+                        log::warn!(
+                            "[liquid] {name} needs more than {MAX_LATTICE_NODES} distance nodes at the liquid's {cell_size:.3} m cells; its lattice is {:.3} m apart, so its shell is {thinnest:.3} m thick",
+                            plan.spacing * largest
+                        );
+                    } else {
+                        log::warn!(
+                            "[liquid] {name} is {thinnest:.3} m thick, under {THIN_COLLIDER_CELLS} cells ({:.3} m); liquid may leak through it",
+                            THIN_COLLIDER_CELLS * cell_size
+                        );
+                    }
                 }
             }
             if let Some((slot, kind)) = slot {
@@ -1076,12 +1236,12 @@ impl LiquidBodies {
                     scale,
                 });
             }
-            self.used.push(Arc::clone(lattice));
+            self.used.push(resolved.clone());
         }
         self.coupled.clear();
         self.coupled.extend(coupled.iter().cloned());
-        self.coupled_lattices.clear();
-        self.coupled_lattices.extend(
+        self.coupled_resolved.clear();
+        self.coupled_resolved.extend(
             self.resolved[self.resolved.len() - coupled.len()..]
                 .iter()
                 .cloned(),
@@ -1094,6 +1254,11 @@ impl LiquidBodies {
                 || coupled
                     .iter()
                     .any(|geometry| Arc::ptr_eq(geometry, &entry.geometry))
+        });
+        self.trees.retain(|entry| {
+            coupled
+                .iter()
+                .any(|geometry| Arc::ptr_eq(geometry, &entry.geometry))
         });
         self.version += 1;
     }
@@ -1409,44 +1574,6 @@ pub fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
     std::array::from_fn(|i| v[i] + 2.0 * (q[3] * uv[i] + uuv[i]))
 }
 
-/// The share of a crop's longest side added on every side when a fixed
-/// collider's lattice is cropped again. A collider dragged less than that
-/// while its new lattice builds is still covered by the old one, so water
-/// never drops through at the domain's edge.
-const CROP_MARGIN: f32 = 0.125;
-
-/// `crop` grown by [`CROP_MARGIN`] of its longest side on every side.
-fn with_margin(crop: [[f32; 3]; 2]) -> [[f32; 3]; 2] {
-    let longest = (0..3)
-        .map(|axis| crop[1][axis] - crop[0][axis])
-        .fold(0.0f32, f32::max);
-    let margin = CROP_MARGIN * longest;
-    [
-        crop[0].map(|value| value - margin),
-        crop[1].map(|value| value + margin),
-    ]
-}
-
-/// The world box `domain` (min then max) in the frame of the body `row`
-/// places (about its centre of mass): the box round the domain's corners
-/// turned back into the body.
-fn local_domain(row: &LiquidBody, domain: [[f32; 3]; 2]) -> [[f32; 3]; 2] {
-    let q = row.rotation;
-    let inverse = [-q[0], -q[1], -q[2], q[3]];
-    let mut local = [[f32::INFINITY; 3], [f32::NEG_INFINITY; 3]];
-    for corner in 0..8 {
-        let offset: [f32; 3] = std::array::from_fn(|axis| {
-            domain[(corner >> axis) & 1][axis] - row.position_inv_mass[axis]
-        });
-        let point = rotate(inverse, offset);
-        for axis in 0..3 {
-            local[0][axis] = local[0][axis].min(point[axis]);
-            local[1][axis] = local[1][axis].max(point[axis]);
-        }
-    }
-    local
-}
-
 /// A coupled body's row with its shape index moved past the roles' shapes.
 fn coupled_row(row: &LiquidBody, offset: f32) -> LiquidBody {
     let shape = row.accel_shape[3];
@@ -1621,7 +1748,7 @@ mod tests {
         // A poll count, not a wall-clock budget, so a loaded machine cannot fail it.
         let mut polls = 0u32;
         while bodies
-            .prepare(roles, coupled, &[], None, 0.0625, false)
+            .prepare(roles, coupled, 0.0625, false)
             .expect("bodies")
             == BodiesStatus::Pending
         {
@@ -1634,7 +1761,7 @@ mod tests {
     #[test]
     fn liquid_body_records_match_their_channel_layouts() {
         assert_eq!(std430_stride(LIQUID_BODY_SPECS), 128);
-        assert_eq!(std430_stride(LIQUID_SHAPE_SPECS), 48);
+        assert_eq!(std430_stride(LIQUID_SHAPE_SPECS), 64);
     }
 
     /// A quarter turn about y over one tick: halfway through, the pose is the
@@ -1987,7 +2114,7 @@ mod tests {
         let many: Vec<_> = (0..=MAX_LIQUID_BODIES).map(|_| Arc::clone(&hull)).collect();
         assert!(
             bodies
-                .prepare(&roles, &many, &[], None, 0.0625, false)
+                .prepare(&roles, &many, 0.0625, false)
                 .unwrap_err()
                 .contains("exceed")
         );
@@ -2000,155 +2127,58 @@ mod tests {
         let roles = vec![inflow(&cube(), [0.0; 3], 0.0)];
         let mut live = LiquidBodies::with_regions();
         assert_eq!(
-            live.prepare(&roles, &[], &[], None, 0.0625, false),
+            live.prepare(&roles, &[], 0.0625, false),
             Ok(BodiesStatus::Pending)
         );
         let roles = vec![inflow(&cube(), [0.0; 3], 0.0)];
         let mut offline = LiquidBodies::with_regions();
         assert_eq!(
-            offline.prepare(&roles, &[cube()], &[], None, 0.0625, true),
+            offline.prepare(&roles, &[cube()], 0.0625, true),
             Ok(BodiesStatus::Ready)
         );
         assert_eq!((offline.count(), offline.region_count()), (1, 1));
     }
 
-    /// A fixed collider far larger than the water (a 100 m slab under a 4 m
-    /// domain) gets a lattice over only the domain where its row places it,
-    /// with a margin, a 32nd of the crop apart, exact on the floor; a second
-    /// water crops the same slab to its own box. A moving hull keeps its
-    /// whole lattice.
+    /// A fixed collider gets a tree and no lattice: its shape row reads
+    /// through the tree (dims 0, no atlas), the domain holds the tree's
+    /// nodes and triangles once however many bodies share it, and a moving
+    /// hull beside it keeps its lattice. Unchanged geometry rebuilds nothing.
     #[test]
-    fn liquid_bodies_crop_a_fixed_collider_to_the_domain() {
+    fn liquid_bodies_give_a_fixed_collider_a_tree() {
         let slab = [box_mesh([50.0, 0.5, 50.0])];
         let fixed = Arc::new(PreparedFluidGeometry::fixed(slab.to_vec()));
         let moving = Arc::new(PreparedFluidGeometry::new(slab.to_vec()));
-        // The slab's top face at world y = 0.
-        let row = LiquidBody {
-            position_inv_mass: [0.0, -0.5, 0.0, 0.0],
-            rotation: [0.0, 0.0, 0.0, 1.0],
-            ..LiquidBody::default()
-        };
-        let lattice_in = |geometry: &Arc<PreparedFluidGeometry>, domain: Option<[[f32; 3]; 2]>| {
-            let mut bodies = LiquidBodies::default();
-            let status = bodies.prepare(
-                &[],
-                std::slice::from_ref(geometry),
-                &[row],
-                domain,
-                0.0625,
-                true,
-            );
-            assert_eq!(status, Ok(BodiesStatus::Ready));
-            bodies.resolved[0].clone()
-        };
-        let margin = 4.0 * CROP_MARGIN;
-        let spacing = (4.0 + 2.0 * margin) / crate::fluid_role::DISTANCE_NODES_ALONG_LONGEST;
-        let (lattice, plan) = lattice_in(&fixed, Some([[-2.0, 0.0, -2.0], [2.0, 4.0, 2.0]]));
-        assert_eq!(lattice.spacing, spacing);
-        assert!(plan.crop.is_some());
-        // The crop plus two spacings each side across; in height the slab's
-        // top half-metre the margin reaches down into, plus two spacings.
-        assert_eq!(lattice.dims, [37, 9, 37]);
-        let low = -2.0 - margin - 2.0 * spacing;
-        assert_eq!(lattice.origin, [low, -2.0 * spacing, low]);
-        for k in [5, 8] {
-            let above_top = lattice.origin[1] + k as f32 * spacing - 0.5;
-            assert!(
-                (lattice.value([18, k, 18]) - above_top).abs() < 1e-5,
-                "node {k}: {}",
-                lattice.value([18, k, 18])
-            );
-        }
-
-        let (other, _) = lattice_in(&fixed, Some([[10.0, 0.0, 10.0], [14.0, 4.0, 14.0]]));
-        assert_eq!(other.origin[0], 10.0 - margin - 2.0 * spacing);
-
-        let (whole, plan) = lattice_in(&moving, Some([[-2.0, 0.0, -2.0], [2.0, 4.0, 2.0]]));
-        assert!(plan.crop.is_none());
-        assert_eq!(
-            whole.spacing,
-            100.0 / crate::fluid_role::DISTANCE_NODES_ALONG_LONGEST
-        );
-
-        // Without a domain (Bounds off) the fixed collider is whole too.
-        let (all, plan) = lattice_in(&fixed, None);
-        assert!(plan.crop.is_none());
-        assert_eq!(all.spacing, whole.spacing);
-    }
-
-    /// Dragging a fixed collider less than the crop's margin keeps its
-    /// lattice; dragging it further crops again, and live the old lattice
-    /// stands in, still covering the domain, until the new one is built.
-    #[test]
-    fn a_dragged_fixed_collider_stays_covered() {
-        let fixed = Arc::new(PreparedFluidGeometry::fixed(vec![box_mesh([
-            50.0, 0.5, 50.0,
-        ])]));
-        let domain = Some([[-2.0, 0.0, -2.0], [2.0, 4.0, 2.0]]);
-        let at = |x: f32| LiquidBody {
-            position_inv_mass: [x, -0.5, 0.0, 0.0],
-            rotation: [0.0, 0.0, 0.0, 1.0],
-            ..LiquidBody::default()
-        };
         let mut bodies = LiquidBodies::default();
-        let geometries = std::slice::from_ref(&fixed);
+        let hulls = [Arc::clone(&fixed), Arc::clone(&moving), Arc::clone(&fixed)];
         assert_eq!(
-            bodies.prepare(&[], geometries, &[at(0.0)], domain, 0.0625, true),
+            bodies.prepare(&[], &hulls, 0.0625, true),
             Ok(BodiesStatus::Ready)
         );
-        let (first, _) = bodies.resolved[0].clone();
-        assert_eq!(
-            bodies.prepare(&[], geometries, &[at(0.4)], domain, 0.0625, false),
-            Ok(BodiesStatus::Ready)
-        );
-        assert!(
-            Arc::ptr_eq(&bodies.resolved[0].0, &first),
-            "a drag inside the margin keeps the lattice"
-        );
-        assert_eq!(
-            bodies.prepare(&[], geometries, &[at(0.6)], domain, 0.0625, false),
-            Ok(BodiesStatus::Ready)
-        );
-        let crop = bodies.resolved[0].1.crop.expect("cropped");
-        assert!(
-            Arc::ptr_eq(&bodies.resolved[0].0, &first) && crop[0][0] <= -2.6,
-            "the old lattice stands in and covers: {crop:?}"
-        );
-        assert_eq!(
-            bodies.prepare(&[], geometries, &[at(0.6)], domain, 0.0625, true),
-            Ok(BodiesStatus::Ready)
-        );
-        let (moved, plan) = bodies.resolved[0].clone();
-        assert!(
-            !Arc::ptr_eq(&moved, &first),
-            "a drag past the margin crops again"
-        );
-        let crop = plan.crop.expect("cropped");
-        assert!(
-            crop[0][0] <= -2.6 && crop[1][0] >= 1.4,
-            "the new crop covers the domain: {crop:?}"
-        );
-    }
-
-    /// A turned body sees the domain turned back into its own frame: a
-    /// quarter turn about Y carries world X onto local Z.
-    #[test]
-    fn a_fixed_collider_crop_follows_its_turn() {
-        let (s, c) = std::f32::consts::FRAC_PI_4.sin_cos();
-        let row = LiquidBody {
-            rotation: [0.0, s, 0.0, c],
-            ..LiquidBody::default()
-        };
-        let local = local_domain(&row, [[0.0, 0.0, -1.0], [4.0, 1.0, 1.0]]);
-        let expected = [[-1.0, 0.0, 0.0], [1.0, 1.0, 4.0]];
-        for side in 0..2 {
-            for axis in 0..3 {
-                assert!(
-                    (local[side][axis] - expected[side][axis]).abs() <= 1e-5,
-                    "{local:?}"
-                );
-            }
+        let tree = fixed.build_tree().unwrap();
+        let (mut nodes, mut triangles) = (Vec::new(), Vec::new());
+        tree.gpu_nodes(&mut nodes);
+        tree.gpu_triangles(&mut triangles);
+        let shapes = bodies.shapes();
+        assert_eq!(shapes.len(), 3);
+        for index in [0, 2] {
+            let shape = shapes[index];
+            assert_eq!(
+                (shape.tree, shape.dims_x, shape.dims_y, shape.dims_z),
+                (1, 0, 0, 0)
+            );
+            assert_eq!(shape.scale_min, [1.0; 4]);
+            assert_eq!((shape.tree_node, shape.tree_triangle), (0, 0));
         }
+        assert_eq!((shapes[1].tree, shapes[1].atlas_offset), (0, 0));
+        assert!(shapes[1].dims_x > 0, "a moving hull keeps its lattice");
+        assert_eq!(bodies.collider_nodes(), nodes.as_slice());
+        assert_eq!(bodies.collider_triangles(), triangles.as_slice());
+        let version = bodies.version;
+        assert_eq!(
+            bodies.prepare(&[], &hulls, 0.0625, false),
+            Ok(BodiesStatus::Ready)
+        );
+        assert_eq!(bodies.version, version, "an unchanged tree rebuilds nothing");
     }
 
     /// Two roles sharing one geometry share its atlas block; a scale change
@@ -2184,7 +2214,7 @@ mod tests {
         let mut no_regions = LiquidBodies::default();
         assert!(
             no_regions
-                .prepare(&roles, &[], &[], None, 0.0625, false)
+                .prepare(&roles, &[], 0.0625, false)
                 .unwrap_err()
                 .contains("no Inflow, Outflow or Initial Fill")
         );
@@ -2485,12 +2515,12 @@ mod tests {
     #[test]
     fn liquid_thinnest_counts_a_shell_wall_not_its_bounds() {
         let closed = cube_of(0.5);
-        let plan = closed.lattice_plan(0.1, [1.0; 3], None).unwrap();
+        let plan = closed.lattice_plan(0.1, [1.0; 3]).unwrap();
         assert_eq!(thinnest(&plan, [2.0, 1.0, 3.0]), 1.0);
         let mut meshes = closed.meshes.clone();
         meshes[0].triangles.truncate(10);
         let lidless = PreparedFluidGeometry::new(meshes);
-        let plan = lidless.lattice_plan(0.1, [1.0; 3], None).unwrap();
+        let plan = lidless.lattice_plan(0.1, [1.0; 3]).unwrap();
         assert!(plan.open);
         assert!(
             (thinnest(&plan, [1.0; 3]) - 0.2).abs() < 1e-6,
@@ -2510,19 +2540,19 @@ mod tests {
         let mut bodies = LiquidBodies::with_regions();
         let spacing = |cell: f32| {
             plane
-                .lattice_plan(cell, [0.4, 0.2, 0.3], None)
+                .lattice_plan(cell, [0.4, 0.2, 0.3])
                 .unwrap()
                 .spacing
         };
         assert_eq!(
-            bodies.prepare(&roles, &[], &[], None, 0.1, true),
+            bodies.prepare(&roles, &[], 0.1, true),
             Ok(BodiesStatus::Ready)
         );
         assert_eq!(bodies.shapes()[0].origin_spacing[3], 2.0 / 32.0);
         let mut polls = 0u32;
         while bodies.shapes()[0].origin_spacing[3] != spacing(0.01) {
             assert_eq!(
-                bodies.prepare(&roles, &[], &[], None, 0.01, false),
+                bodies.prepare(&roles, &[], 0.01, false),
                 Ok(BodiesStatus::Ready),
                 "live keeps the last lattice"
             );
@@ -2531,7 +2561,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(
-            bodies.prepare(&roles, &[], &[], None, 0.005, true),
+            bodies.prepare(&roles, &[], 0.005, true),
             Ok(BodiesStatus::Ready)
         );
         assert_eq!(
@@ -2543,12 +2573,12 @@ mod tests {
         let cube = cube_of(0.5);
         let roles = [inflow(&cube, [0.0; 3], 0.0)];
         assert_eq!(
-            bodies.prepare(&roles, &[], &[], None, 0.1, true),
+            bodies.prepare(&roles, &[], 0.1, true),
             Ok(BodiesStatus::Ready)
         );
         let version = bodies.version;
         assert_eq!(
-            bodies.prepare(&roles, &[], &[], None, 0.01, false),
+            bodies.prepare(&roles, &[], 0.01, false),
             Ok(BodiesStatus::Ready)
         );
         assert_eq!(bodies.version, version);
@@ -2569,18 +2599,21 @@ mod tests {
         };
         let mut bodies = LiquidBodies::with_regions();
         assert_eq!(
-            bodies.prepare(&posed(1.0), &[], &[], None, 0.05, true),
+            bodies.prepare(&posed(1.0), &[], 0.05, true),
             Ok(BodiesStatus::Ready)
         );
-        let lattice = Arc::clone(&bodies.used[0]);
+        let Resolved::Lattice(lattice, _) = &bodies.used[0] else {
+            panic!("a role resolves a lattice");
+        };
+        let lattice = Arc::clone(lattice);
         for k in 0..40 {
             let scale = 1.0 + 0.04 * (k as f32 * 0.3).sin();
             assert_eq!(
-                bodies.prepare(&posed(scale), &[], &[], None, 0.05, true),
+                bodies.prepare(&posed(scale), &[], 0.05, true),
                 Ok(BodiesStatus::Ready)
             );
             assert!(
-                Arc::ptr_eq(&bodies.used[0], &lattice),
+                matches!(&bodies.used[0], Resolved::Lattice(used, _) if Arc::ptr_eq(used, &lattice)),
                 "scale {scale} replanned"
             );
             assert!(
@@ -2590,11 +2623,11 @@ mod tests {
             assert_eq!(bodies.shapes()[0].scale_min[3], scale);
         }
         assert_eq!(
-            bodies.prepare(&posed(1.2), &[], &[], None, 0.05, true),
+            bodies.prepare(&posed(1.2), &[], 0.05, true),
             Ok(BodiesStatus::Ready)
         );
         assert!(
-            !Arc::ptr_eq(&bodies.used[0], &lattice),
+            !matches!(&bodies.used[0], Resolved::Lattice(used, _) if Arc::ptr_eq(used, &lattice)),
             "a step away builds a new lattice"
         );
     }

@@ -384,6 +384,7 @@ manifold_node_engine::primitive! {
         field_spacing: ScalarF32 optional, force_lattices: ScalarF32 optional,
         impulse_tick: ScalarF32 optional, first_tick: ScalarF32 optional,
         regions: Array(LiquidBody) optional, shapes: Array(LiquidShape) optional, atlas: Array(u32) optional,
+        collider_nodes: Array(manifold_node_engine::mesh::Vec4Vertex) optional, collider_triangles: Array(manifold_node_engine::mesh::Vec4Vertex) optional,
         region_count: ScalarF32 optional,
         pool: Array(WhitewaterParticle) optional,
         pool_state: Array(u32) optional,
@@ -595,7 +596,7 @@ pub(crate) struct Removal {
     pub kill_height: f32,
 }}
 
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(feature = "gpu-proofs")]
 impl Removal {
     /// Nothing leaves: no Open face and no kill height.
     pub(crate) const NONE: Self = Self {
@@ -652,6 +653,8 @@ pub(crate) struct MotionInputs<'a> {
     pub regions: Option<&'a GpuBuffer>,
     pub shapes: Option<&'a GpuBuffer>,
     pub atlas: Option<&'a GpuBuffer>,
+    pub collider_nodes: Option<&'a GpuBuffer>,
+    pub collider_triangles: Option<&'a GpuBuffer>,
     pub region_count: u32,
 }
 }
@@ -684,8 +687,13 @@ fn require_inputs(shape: &StepShape, inputs: &StepInputs<'_>) -> Result<(), Stri
         if m.faces.size < u64::from(m.count) * elements * HISTORY_RECORD {
             return Err("substep face history is too short".into());
         }
-        if m.region_count > 0 && (m.regions.is_none() || m.shapes.is_none() || m.atlas.is_none()) {
-            return Err("outflows require regions, shapes and atlas".into());
+        if m.region_count > 0 && (m.regions.is_none()
+                || m.shapes.is_none()
+                || m.atlas.is_none()
+                || m.collider_nodes.is_none()
+                || m.collider_triangles.is_none())
+        {
+            return Err("outflows require regions, shapes, atlas and the collider trees".into());
         }
     }
     if inputs
@@ -2040,6 +2048,8 @@ impl Step {
                 motion.and_then(|m| m.regions).unwrap_or(empty),
                 motion.and_then(|m| m.shapes).unwrap_or(empty),
                 motion.and_then(|m| m.atlas).unwrap_or(empty),
+                motion.and_then(|m| m.collider_nodes).unwrap_or(empty),
+                motion.and_then(|m| m.collider_triangles).unwrap_or(empty),
                 inputs.tiles,
                 &f.scan,
             ],
@@ -2320,6 +2330,8 @@ impl Primitive for WhitewaterStep {
                 regions: ctx.inputs.array("regions"),
                 shapes: ctx.inputs.array("shapes"),
                 atlas: ctx.inputs.array("atlas"),
+                collider_nodes: ctx.inputs.array("collider_nodes"),
+                collider_triangles: ctx.inputs.array("collider_triangles"),
                 region_count: ctx.scalar_or_param("region_count", 0.0) as u32,
             })
         } else {

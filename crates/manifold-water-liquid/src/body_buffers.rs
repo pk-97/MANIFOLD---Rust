@@ -1,7 +1,7 @@
 //! The GPU storage a liquid domain provides for its bodies: the body rows and
 //! their contact normals, the source and drain region rows, the shapes and the half-precision
-//! distance atlas. Shapes and the
-//! atlas are rebuilt into fresh buffers, so a buffer the GPU may still read is
+//! distance atlas, and the static colliders' tree nodes and triangles. Shapes,
+//! atlas and trees are rebuilt into fresh buffers, so a buffer the GPU may still read is
 //! never written; body and region rows are written in encoder order each frame.
 
 use manifold_gpu::BufferUse;
@@ -32,6 +32,8 @@ struct Stored {
     regions: GpuBuffer,
     shapes: GpuBuffer,
     atlas: GpuBuffer,
+    collider_nodes: GpuBuffer,
+    collider_triangles: GpuBuffer,
     clock_obstacles: GpuBuffer,
     clock_sources: GpuBuffer,
     /// The clock vertices' generation last written; `None` until written.
@@ -39,7 +41,8 @@ struct Stored {
     version: u64,
 }
 
-/// A domain's provided `bodies`, `regions`, `shapes` and `atlas` outputs.
+/// A domain's provided `bodies`, `regions`, `shapes`, `atlas`,
+/// `collider_nodes` and `collider_triangles` outputs.
 #[derive(Default)]
 pub struct LiquidBodyBuffers {
     stored: Option<Stored>,
@@ -67,8 +70,16 @@ impl LiquidBodyBuffers {
         self.stored.as_ref().map(|stored| &stored.atlas)
     }
 
-    /// The provided buffer behind a domain's `bodies`, `regions`, `shapes`
-    /// or `atlas` output.
+    pub fn collider_nodes(&self) -> Option<&GpuBuffer> {
+        self.stored.as_ref().map(|stored| &stored.collider_nodes)
+    }
+
+    pub fn collider_triangles(&self) -> Option<&GpuBuffer> {
+        self.stored.as_ref().map(|stored| &stored.collider_triangles)
+    }
+
+    /// The provided buffer behind a domain's `bodies`, `regions`, `shapes`,
+    /// `atlas`, `collider_nodes` or `collider_triangles` output.
     pub fn output(&self, port: &str) -> Option<&GpuBuffer> {
         match port {
             "bodies" => self.bodies(),
@@ -76,6 +87,8 @@ impl LiquidBodyBuffers {
             "regions" => self.regions(),
             "shapes" => self.shapes(),
             "atlas" => self.atlas(),
+            "collider_nodes" => self.collider_nodes(),
+            "collider_triangles" => self.collider_triangles(),
             "clock_obstacles" => self.stored.as_ref().map(|s| &s.clock_obstacles),
             "clock_sources" => self.stored.as_ref().map(|s| &s.clock_sources),
             _ => None,
@@ -83,7 +96,7 @@ impl LiquidBodyBuffers {
     }
 
     /// Keep the buffers current with `bodies`: a new shape version rebuilds
-    /// shapes and atlas, and when `rows_fresh` this frame's body and region
+    /// shapes, atlas and colliders' trees, and when `rows_fresh` this frame's body and region
     /// rows are written in encoder order. `label` names the dispatches for
     /// the profiler.
     pub fn upload(
@@ -141,33 +154,37 @@ impl LiquidBodyBuffers {
                 ),
                 None => (None, None, None),
             };
-            let keep = |old: Option<GpuBuffer>, needs: bool, bytes: usize| match old {
+            let keep = |old: Option<GpuBuffer>, needs: bool, bytes: usize, usage| match old {
                 Some(buffer) if !needs => buffer,
-                _ => gpu
-                    .device
-                    .create_buffer(bytes.max(row) as u64, BufferUse::Gpu),
+                _ => gpu.device.create_buffer(bytes.max(row) as u64, usage),
             };
+            // A coupled liquid's tick exchange writes the body rows and the
+            // contact normals from the CPU (`exchange_tick`), so both are
+            // shared; the region rows only ever take the GPU upload.
             self.stored = Some(Stored {
-                bodies: keep(old_bodies, needs_bodies, row_bytes),
+                bodies: keep(old_bodies, needs_bodies, row_bytes, BufferUse::Upload),
                 contacts: match old_contacts {
                     Some(buffer) if !needs_contacts => buffer,
                     _ => gpu.device.create_buffer(
                         contact_bytes.max(std::mem::size_of::<BodySupports>()) as u64,
-                        BufferUse::Gpu,
+                        BufferUse::Upload,
                     ),
                 },
-                regions: keep(old_regions, needs_regions, region_bytes),
+                regions: keep(old_regions, needs_regions, region_bytes, BufferUse::Gpu),
                 shapes: fresh(
                     bytemuck::cast_slice(bodies.shapes()),
                     std::mem::size_of::<LiquidShape>(),
                 ),
                 atlas: fresh(bytemuck::cast_slice(bodies.atlas()), 4),
+                collider_nodes: fresh(bytemuck::cast_slice(bodies.collider_nodes()), 16),
+                collider_triangles: fresh(bytemuck::cast_slice(bodies.collider_triangles()), 16),
+                // The coupled exchange writes the clock vertices from the CPU too.
                 clock_obstacles: gpu
                     .device
-                    .create_buffer(obstacle_bytes.max(96) as u64, BufferUse::Gpu),
+                    .create_buffer(obstacle_bytes.max(96) as u64, BufferUse::Upload),
                 clock_sources: gpu
                     .device
-                    .create_buffer(source_bytes.max(96) as u64, BufferUse::Gpu),
+                    .create_buffer(source_bytes.max(96) as u64, BufferUse::Upload),
                 clock_gen: None,
                 version,
             });

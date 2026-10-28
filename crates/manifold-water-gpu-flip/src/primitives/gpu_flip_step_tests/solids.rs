@@ -348,6 +348,7 @@ pub(super) fn solids() -> Solids {
             dims_z: 4,
             atlas_offset: 0,
             scale_min: [1.0, 1.0, 1.0, 1.0],
+            ..Default::default()
         },
         LiquidShape {
             origin_spacing: [-0.39, -0.42, -0.44, 0.4],
@@ -356,6 +357,7 @@ pub(super) fn solids() -> Solids {
             dims_z: 3,
             atlas_offset: 64,
             scale_min: [1.2, 1.0, 1.1, 1.0],
+            ..Default::default()
         },
     ];
     let distances: Vec<f32> = random_values(64 + 27, 0x50d)

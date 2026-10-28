@@ -58,6 +58,7 @@ fn pool_canon() {
     canonical_cell(at);
     fresh_fields(at);
     tile_corners[at] = CANON_CORNER_CELLS * u.cell_size;
+    static_corners[at] = static_pack(static_band(), STATIC_NONE);
 }
 
 // 512 threads a fresh slot (the triple at world_tiles.rs
@@ -83,16 +84,62 @@ fn tiles_retire(@builtin(global_invocation_id) gid: vec3<u32>) {
     faces_out[idx] = CANONICAL_FACE;
 }
 
+// The static colliders' corner at pool index idx, at origin + p·h: the
+// smallest world distance to any static body and which body it is, saturated
+// at the band.
+fn static_corner_at(idx: u32) {
+    let x = fma(vec3<f32>(ts_cell_coord(idx)), vec3<f32>(u.cell_size), u.origin);
+    let s = static_direct(x);
+    static_corners[idx] = static_pack(s.x, select(STATIC_NONE, u32(s.y) + 1u, s.y >= 0.0));
+}
+
+// 512 threads a fresh slot (the triple at `fresh_args_offset`): the static
+// corners of the slot's tile, which `tiles_fresh` leaves untouched.
+@compute @workgroup_size(256)
+fn static_corners_fresh(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = ts_list_cell(tiles_fresh_list[gid.x >> 9u], gid.x);
+    ts_home(idx);
+    static_corner_at(idx);
+}
+
+// One thread, before `static_corners_held`: notes a rebuild of every held
+// slot's static corners (`static_all`) in the flag word, then, on an active
+// step, takes the flag (also set by `pose_bodies` when a static body moves)
+// and writes the held pass's triple: every held slot's when set, else none.
+@compute @workgroup_size(1)
+fn static_corners_args() {
+    if u.static_all != 0u {
+        atomicOr(&static_scratch[0], 1u);
+    }
+    if !clock_active() { return; }
+    let rebuild = atomicExchange(&static_scratch[0], 0u) != 0u;
+    let at = 3u * u.ring_max;
+    atomicStore(&static_scratch[4], select(0u, tile_args[at], rebuild));
+    atomicStore(&static_scratch[5], select(1u, tile_args[at + 1u], rebuild));
+    atomicStore(&static_scratch[6], select(1u, tile_args[at + 2u], rebuild));
+}
+
+// 512 threads a held slot, over the triple `static_corners_args` wrote.
+@compute @workgroup_size(256)
+fn static_corners_held(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
+    static_corner_at(list_cell(gid.x));
+}
+
 // 512 threads a held slot (the triple over every held slot), before any
 // pass reads the solids: corner p, at origin + p·h, is the solid distance
-// there (`solid_distance`: the Wall faces and this step's posed bodies), for
-// every cell of the tile.
+// there, for every cell of the tile: the smallest of the Wall faces, the
+// static colliders' stored corner (`static_corners`) and this step's posed
+// moving bodies.
 @compute @workgroup_size(256)
 fn solid_corners(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let idx = list_cell(gid.x);
     let x = fma(vec3<f32>(ts_cell_coord(idx)), vec3<f32>(u.cell_size), u.origin);
-    tile_corners[idx] = solid_distance(x);
+    tile_corners[idx] = min(
+        walls_distance(x),
+        min(static_far(static_phi(static_corners[idx])), bodies_distance(x)),
+    );
 }
 
 // One thread, after the step's first sort (`capped` bound at the solver
@@ -140,6 +187,7 @@ fn poison_free(@builtin(global_invocation_id) gid: vec3<u32>) {
     tile_phi[idx] = nan;
     tile_rhs[idx] = nan;
     tile_corners[idx] = nan;
+    static_corners[idx] = 0x7fc07fc0u;
     faces_out[idx] = bad;
     fresh_a[idx] = bad;
     fresh_b[idx] = bad;

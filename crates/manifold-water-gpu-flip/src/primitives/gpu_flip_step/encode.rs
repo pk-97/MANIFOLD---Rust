@@ -47,7 +47,15 @@ impl StepState {
         let table = tiles.table();
         let pool = tiles.pool_tiles();
         let ring = tiles.reach().ring_max;
-        let p = step.params;
+        // Every held slot's static corners are rebuilt on the first step, on
+        // new lattice buffers and when the shapes buffer is a different one;
+        // otherwise only the fresh slots' and a moving static body's.
+        let shapes_key = (step.shapes.identity_key(), step.shapes.size);
+        let p = StepParams {
+            static_all: u32::from(self.pool_canon_pending || self.static_built != Some(shapes_key)),
+            ..step.params
+        };
+        self.static_built = Some(shapes_key);
         let capacity = p.capacity;
         // Every sort covers the slots in use, from the slot record, and keys
         // each particle on its world cell's pool index.
@@ -95,11 +103,13 @@ impl StepState {
                 &[
                     uniform(&base),
                     buffer(14, step.bodies),
+                    buffer(15, step.shapes),
                     buffer(21, step.reaction),
                     buffer(46, step.clock_plan),
                     buffer(48, posed),
                     buffer(49, step.contacts),
                     buffer(50, mobility),
+                    buffer(52, &l.static_scratch),
                 ],
                 [(p.body_count as u32).div_ceil(64), 1, 1],
                 "gpu_flip.step.pose_bodies",
@@ -155,6 +165,7 @@ impl StepState {
         // object is (a body flush with a wall then seals against it, where
         // the body's own lattice distance alone would leave a sub-cell open
         // channel between them). Open faces are no solids.
+        encode_static_corners(enc, pipes, &base, l, tiles, step, posed);
         encode_solid_corners(enc, pipes, &base, l, tiles, step, posed);
         self.sorter.encode_pooled(
             device,
@@ -275,6 +286,9 @@ impl StepState {
                     buffer(4, &l.b),
                     buffer(15, step.shapes),
                     buffer(16, step.atlas),
+                    buffer(27, step.collider_nodes),
+                    buffer(28, step.collider_triangles),
+                    buffer(45, &l.static_corners),
                     buffer(48, posed),
                 ],
                 "gpu_flip.step.solid_velocity",
@@ -837,8 +851,11 @@ impl StepState {
                     buffer(2, step.out),
                     buffer(15, step.shapes),
                     buffer(16, step.atlas),
+                    buffer(27, step.collider_nodes),
+                    buffer(28, step.collider_triangles),
                     buffer(36, step.regions),
                     buffer(44, step.region_sites),
+                    buffer(45, &l.static_corners),
                     buffer(46, step.clock_plan),
                     buffer(48, posed),
                     buffer(37, &scan),

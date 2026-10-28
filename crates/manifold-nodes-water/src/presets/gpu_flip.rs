@@ -543,10 +543,12 @@ const WALL_VELOCITY_WIRES: [&str; 6] = [
 
 /// The colliders and the shaped fill's region the fill seeds around, and the
 /// pool it seeds into, as the domain publishes them.
-pub(crate) const FILL_SHAPE_WIRES: [&str; 8] = [
+pub(crate) const FILL_SHAPE_WIRES: [&str; 10] = [
     "bodies",
     "shapes",
     "atlas",
+    "collider_nodes",
+    "collider_triangles",
     "regions",
     "fill_region",
     "body_count",
@@ -584,7 +586,15 @@ fn solid_wires(b: &mut Builder, domain: usize, node: usize) {
     b.wires(
         domain,
         node,
-        &["bodies", "shapes", "atlas", "closed_faces", "body_count"],
+        &[
+            "bodies",
+            "shapes",
+            "atlas",
+            "collider_nodes",
+            "collider_triangles",
+            "closed_faces",
+            "body_count",
+        ],
     );
     b.wire((domain, "body_rows"), node, "rows");
     b.wires(domain, node, &BOUNDS_WIRES);
@@ -852,6 +862,8 @@ impl WaterScene {
                 "region_count",
                 "shapes",
                 "atlas",
+                "collider_nodes",
+                "collider_triangles",
             ],
         );
         b.wire((state, "tick_index"), whitewater, "tick_index");
@@ -1552,6 +1564,8 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
             "contacts",
             "shapes",
             "atlas",
+            "collider_nodes",
+            "collider_triangles",
             "body_count",
             "dynamic_bodies",
             "closed_faces",

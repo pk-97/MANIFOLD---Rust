@@ -22,7 +22,7 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
-use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::bodies::{COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::primitives::sort_particles_into_cells::int_param;
 
@@ -191,6 +191,8 @@ manifold_node_engine::primitive! {
         bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
+        collider_nodes: Array(manifold_node_engine::mesh::Vec4Vertex) optional,
+        collider_triangles: Array(manifold_node_engine::mesh::Vec4Vertex) optional,
         regions: Array(LiquidBody) optional,
         fill_region: ScalarF32 optional,
         body_count: ScalarF32 optional,
@@ -234,7 +236,7 @@ manifold_node_engine::primitive! {
         int_param!("fill_region", "Fill Region", -1.0, -1.0, 16_777_215.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Feeds node.liquid_state's seed; count is the filled sites that state starts its live slots from. The pool and box sites, the fill's box (fill_min, fill_cells, cell_size), the Bounds box and Wall faces, bodies, shapes, atlas, body_count and epoch come from the liquid's domain, so a Resolution change refills at the new size and a restart refills around the colliders' starting poses.",
+    composition_notes: "Feeds node.liquid_state's seed; count is the filled sites that state starts its live slots from. The pool and box sites, the fill's box (fill_min, fill_cells, cell_size), the Bounds box and Wall faces, bodies, shapes, atlas, the collider trees, body_count and epoch come from the liquid's domain, so a Resolution change refills at the new size and a restart refills around the colliders' starting poses.",
     examples: [],
     picker: { label: "Liquid Fill", category: Atom },
     summary: "Places the liquid's starting particles: a pool on the floor plus one block of water.",
@@ -243,8 +245,8 @@ manifold_node_engine::primitive! {
     aliases: ["seed liquid", "initial water", "dam break fill", "pool"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/liquid_fill_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH],
     extra_fields: {
         buffer: Option<GpuBuffer> = None,
         filled: Option<([u32; 27], usize)> = None,
@@ -351,19 +353,21 @@ impl Primitive for LiquidFill {
             ctx.inputs.array("bodies"),
             ctx.inputs.array("shapes"),
             ctx.inputs.array("atlas"),
+            ctx.inputs.array("collider_nodes"),
+            ctx.inputs.array("collider_triangles"),
         );
         let regions = ctx.inputs.array("regions");
         let gpu = ctx.gpu_encoder();
         let buffer = self.buffer.as_ref().expect("fill storage prepared");
-        // Without all three collider arrays no body is read; the particle
+        // Without all five collider arrays no body is read; the particle
         // buffer fills their slots.
-        let (bodies, shapes, atlas, body_count) = match colliders {
-            (Some(bodies), Some(shapes), Some(atlas)) => {
+        let (bodies, shapes, atlas, nodes, triangles, body_count) = match colliders {
+            (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)) => {
                 let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64)
                     .min(i32::MAX as u64) as i32;
-                (bodies, shapes, atlas, body_count.min(rows))
+                (bodies, shapes, atlas, nodes, triangles, body_count.min(rows))
             }
-            _ => (buffer, buffer, buffer, 0),
+            _ => (buffer, buffer, buffer, buffer, buffer, 0),
         };
         // A shaped fill's region row, read from the regions beside the
         // collider shapes; without them the fill is its whole box.
@@ -466,11 +470,21 @@ impl Primitive for LiquidFill {
                 },
                 GpuBinding::Buffer {
                     binding: 4,
-                    buffer: regions,
+                    buffer: nodes,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 5,
+                    buffer: triangles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: regions,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 7,
                     buffer,
                     offset: 0,
                 },

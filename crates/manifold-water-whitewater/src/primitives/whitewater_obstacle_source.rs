@@ -13,7 +13,7 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_physics::clock::TICK;
-use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::bodies::{COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::tile_pool::{TilePool, tile_pool};
 
@@ -75,6 +75,8 @@ manifold_node_engine::primitive! {
         bodies: Array(LiquidBody) required,
         shapes: Array(LiquidShape) required,
         atlas: Array(u32) required,
+        collider_nodes: Array(manifold_node_engine::mesh::Vec4Vertex) required,
+        collider_triangles: Array(manifold_node_engine::mesh::Vec4Vertex) required,
         tiles: Array(u32) required,
         cell_size: ScalarF32 optional,
         closed_faces: ScalarF32 optional,
@@ -107,7 +109,7 @@ manifold_node_engine::primitive! {
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16777216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire the same body, shape and atlas inputs as liquid_solid_distance, and tiles, pool_tiles and cell_size from node.gpu_flip_step; source feeds whitewater_step.obstacle_source and dust_potential.source, distance their solid. Both outputs are node arrays of pool_len(pool_tiles) elements. Domain influence is resolved from the whitewater base level; obstacle controls default to FLIP MeshObject defaults. A custom nearest-object metadata producer may replace this node for per-object properties.",
+    composition_notes: "Wire the same body, shape, atlas and collider tree inputs as liquid_solid_distance, and tiles, pool_tiles and cell_size from node.gpu_flip_step; source feeds whitewater_step.obstacle_source and dust_potential.source, distance their solid. Both outputs are node arrays of pool_len(pool_tiles) elements. Domain influence is resolved from the whitewater base level; obstacle controls default to FLIP MeshObject defaults. A custom nearest-object metadata producer may replace this node for per-object properties.",
     examples: ["WaterDamBreakMatter"],
     picker: { label: "Whitewater Obstacle Source", category: Atom },
     summary: "Supplies obstacle properties for dust emission and whitewater influence.",
@@ -116,8 +118,8 @@ manifold_node_engine::primitive! {
     aliases: ["dust obstacle source", "whitewater influence source"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/whitewater_obstacle_source_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, READ_SIDE],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH, READ_SIDE],
     extra_fields: {
         source: Option<GpuBuffer> = None,
         distance: Option<GpuBuffer> = None,
@@ -178,6 +180,8 @@ impl Primitive for WhitewaterObstacleSource {
             ctx.inputs.array("bodies"),
             ctx.inputs.array("shapes"),
             ctx.inputs.array("atlas"),
+            ctx.inputs.array("collider_nodes"),
+            ctx.inputs.array("collider_triangles"),
             ctx.inputs.array("tiles"),
         );
         // The storage follows the pool the dispatch covers, before it is
@@ -219,7 +223,11 @@ impl Primitive for WhitewaterObstacleSource {
         let influence = ctx.scalar_or_param("influence", 1.0);
         let dust_strength = ctx.scalar_or_param("dust_strength", 1.0);
         let gpu = ctx.gpu_encoder();
-        let ((Some(bodies), Some(shapes), Some(atlas), Some(tiles)), Some(source), Some(distance)) =
+        let (
+            (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles), Some(tiles)),
+            Some(source),
+            Some(distance),
+        ) =
             (inputs, self.source.as_ref(), self.distance.as_ref())
         else {
             return;
@@ -237,6 +245,8 @@ impl Primitive for WhitewaterObstacleSource {
             bodies,
             shapes,
             atlas,
+            collider_nodes: nodes,
+            collider_triangles: triangles,
             tiles,
             source,
             distance,
@@ -271,6 +281,8 @@ pub(crate) struct ObstacleSourceJob<'a> {
     pub bodies: &'a GpuBuffer,
     pub shapes: &'a GpuBuffer,
     pub atlas: &'a GpuBuffer,
+    pub collider_nodes: &'a GpuBuffer,
+    pub collider_triangles: &'a GpuBuffer,
     /// The world-tile table of the pool.
     pub tiles: &'a GpuBuffer,
     /// At least one 16-byte WhitewaterSource per pool element.
@@ -335,16 +347,26 @@ pub(crate) fn encode_obstacle_source(
             },
             GpuBinding::Buffer {
                 binding: 4,
-                buffer: job.tiles,
+                buffer: job.collider_nodes,
                 offset: 0,
             },
             GpuBinding::Buffer {
                 binding: 5,
-                buffer: job.source,
+                buffer: job.collider_triangles,
                 offset: 0,
             },
             GpuBinding::Buffer {
                 binding: 6,
+                buffer: job.tiles,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 7,
+                buffer: job.source,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 8,
                 buffer: job.distance,
                 offset: 0,
             },

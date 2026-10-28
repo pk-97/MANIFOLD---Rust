@@ -49,6 +49,12 @@ pub(super) struct Pipelines {
     pub(super) slot_open: GpuComputePipeline,
     pub(super) tiles_fresh: GpuComputePipeline,
     pub(super) tiles_retire: GpuComputePipeline,
+    /// The static colliders' corners of the fresh slots, then of every held
+    /// slot when a static body moved or the statics are rebuilt, over the
+    /// triple the args pass writes.
+    pub(super) static_fresh: GpuComputePipeline,
+    pub(super) static_args: GpuComputePipeline,
+    pub(super) static_held: GpuComputePipeline,
     /// The solid corners of every held slot.
     pub(super) solid_corners: GpuComputePipeline,
     /// The pool's held share and the particles with no slot.
@@ -90,7 +96,7 @@ manifold_core::testkit_visible! {
 /// proof that composes one of them on its own.
 pub(crate) fn step_source_with(body: &str) -> String {
     with_stats_layout(&format!(
-        "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{FORCE_LATTICE}\n{TILE_GRID}\n{READ_SIDE}\n{body}"
+        "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{COLLIDER_BVH}\n{FORCE_LATTICE}\n{TILE_GRID}\n{READ_SIDE}\n{body}"
     ))
 }
 }
@@ -151,6 +157,9 @@ impl Pipelines {
             slot_open: pipe("slot_open"),
             tiles_fresh: pipe("tiles_fresh"),
             tiles_retire: pipe("tiles_retire"),
+            static_fresh: pipe("static_corners_fresh"),
+            static_args: pipe("static_corners_args"),
+            static_held: pipe("static_corners_held"),
             solid_corners: pipe("solid_corners"),
             tiles_tally: pipe("tiles_tally"),
             pool_canon: pipe("pool_canon"),

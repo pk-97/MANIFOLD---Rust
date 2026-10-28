@@ -72,6 +72,9 @@ fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
+fn cb_node(i: u32) -> vec4<f32> { let n = buf_collider_nodes[i]; return vec4<f32>(n.x, n.y, n.z, n.w); }
+fn cb_triangle(i: u32) -> vec4<f32> { let t = buf_collider_triangles[i]; return vec4<f32>(t.x, t.y, t.z, t.w); }
+var<private> kw_cell: f32;
 fn kw_drained(position: vec3<f32>, region_count: f32, region_offset: f32, tick_seconds: f32) -> bool {
     for (var r = 0u; r < u32(region_count); r = r + 1u) {
         let row = u32(region_offset) + r;
@@ -84,6 +87,11 @@ fn kw_drained(position: vec3<f32>, region_count: f32, region_offset: f32, tick_s
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let p = fma(bd.linear_velocity.xyz, vec3<f32>(tick_seconds), bd.position_inv_mass.xyz);
         let q = liquid_turn(bd.rotation, bd.angular_velocity.xyz, tick_seconds);
+        if sh.tree == 1u {
+            let local = liquid_rotate(vec4<f32>(-q.xyz, q.w), position - p);
+            if cb_phi(sh.tree_node, sh.tree_triangle, local, 4.0 * kw_cell, kw_cell) < 0.0 { return true; }
+            continue;
+        }
         let g = liquid_lattice_coord(position, p, q, sh.origin_spacing, sh.scale_min.xyz);
         if liquid_lattice_holds(g, dims) && liquid_lattice_distance(sh.atlas_offset, dims, g) * sh.scale_min.w < 0.0 { return true; }
     }
@@ -123,6 +131,7 @@ fn body(
     kw_lo = vec3<f32>(bounds_lo_x, bounds_lo_y, bounds_lo_z);
     kw_hi = vec3<f32>(bounds_hi_x, bounds_hi_y, bounds_hi_z);
     kw_kill = kill_height;
+    kw_cell = cell_size;
     let h = cell_size;
     let mine = kw_check(e_pool, h, region_count, region_offset, tick_seconds);
     if mine.w == 0 {

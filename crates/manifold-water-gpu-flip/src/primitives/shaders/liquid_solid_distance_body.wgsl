@@ -21,8 +21,8 @@ fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 // per-axis overshoots. Open faces are not solids. This is the formula of
 // manifold_water_liquid::lattice::bounds_distance.
 //
-// ABI: `bodies` (LiquidBody), `shapes` (LiquidShape) and `atlas` (distances
-// two halves per word) are gathered with the table; the output is one f32 per
+// ABI: `bodies` (LiquidBody), `shapes` (LiquidShape), `atlas` (distances
+// two halves per word) and the `collider_nodes` / `collider_triangles` BVH (static shapes, tree == 1) are gathered with the table; the output is one f32 per
 // pool element. Poses and sampling are liquid_pose.wgsl's and
 // liquid_collider.wgsl's.
 
@@ -41,7 +41,7 @@ struct ClockPlan {
     live_mode: u32,
 };
 
-@group(0) @binding(6) var<storage, read> clock_plan: array<ClockPlan>;
+@group(0) @binding(8) var<storage, read> clock_plan: array<ClockPlan>;
 
 fn adaptive_tick_seconds(tick_seconds: f32) -> f32 {
     return select(tick_seconds, clock_plan[0].elapsed, clock_plan[0].live_mode != 0u);
@@ -51,6 +51,9 @@ fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
+
+fn cb_node(i: u32) -> vec4<f32> { let n = buf_collider_nodes[i]; return vec4<f32>(n.x, n.y, n.z, n.w); }
+fn cb_triangle(i: u32) -> vec4<f32> { let t = buf_collider_triangles[i]; return vec4<f32>(t.x, t.y, t.z, t.w); }
 
 fn body(
     idx: u32,
@@ -110,8 +113,13 @@ fn body(
         let q = liquid_turn(bd.rotation, bd.angular_velocity.xyz, pose_time);
         let sh = buf_shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
-        let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
-        distance = min(distance, liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz));
+        if sh.tree == 1u {
+            let local = liquid_rotate(vec4<f32>(-q.xyz, q.w), x - position);
+            distance = min(distance, cb_phi(sh.tree_node, sh.tree_triangle, local, 4.0 * cell_size, cell_size));
+        } else {
+            let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
+            distance = min(distance, liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz));
+        }
     }
     return distance;
 }

@@ -472,6 +472,8 @@ fn whitewater_engine_outflow_values_and_fusion() {
     let mut atlas = Vec::new();
     pack_distance_atlas(&[-4.0, 4.0, -4.0, 4.0, -4.0, 4.0, -4.0, 4.0], &mut atlas);
     let a = h.array(&atlas, 4);
+    let nodes = h.array::<manifold_node_engine::mesh::Vec4Vertex>(&[], 1);
+    let triangles = h.array::<manifold_node_engine::mesh::Vec4Vertex>(&[], 1);
     let values = [
         ("cell_size", 1.0),
         ("pool_tiles", pool_tiles as f32),
@@ -489,6 +491,8 @@ fn whitewater_engine_outflow_values_and_fusion() {
             ("regions", regions.0),
             ("shapes", shapes.0),
             ("atlas", a.0),
+            ("collider_nodes", nodes.0),
+            ("collider_triangles", triangles.0),
             ("tiles", tiles.0),
         ],
         12,
@@ -500,10 +504,11 @@ fn whitewater_engine_outflow_values_and_fusion() {
         &mut h,
         vec![member::<KeepWhitewater>(
             0,
-            (0..9).map(InputSource::External).collect(),
+            (0..11).map(InputSource::External).collect(),
         )],
         &[
-            &p.1, &p.1, &range.1, &order.1, &solid.1, &regions.1, &shapes.1, &a.1, &tiles.1,
+            &p.1, &p.1, &range.1, &order.1, &solid.1, &regions.1, &shapes.1, &a.1, &nodes.1,
+            &triangles.1, &tiles.1,
         ],
         12,
         &values,
@@ -581,10 +586,11 @@ fn whitewater_leaves_past_open_faces_and_below_the_kill_height() {
             &mut h,
             vec![member::<KeepWhitewater>(
                 0,
-                (0..9).map(InputSource::External).collect(),
+                (0..11).map(InputSource::External).collect(),
             )],
             &[
-                &p.1, &p.1, &range.1, &order.1, &solid.1, &solid.1, &solid.1, &solid.1, &tiles.1,
+                &p.1, &p.1, &range.1, &order.1, &solid.1, &solid.1, &solid.1, &solid.1, &solid.1,
+                &solid.1, &tiles.1,
             ],
             6,
             values,

@@ -201,8 +201,128 @@ fn liquid_atlas_half(index: u32) -> f32 {
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
 
-// The posed bodies' signed distance at x, the smallest of them, sampled
-// from each shape's lattice (liquid_collider.wgsl); far (1e30) with none.
+// The static colliders' BVHs (4 vec4 a node, 3 a triangle; collider_bvh.wgsl).
+@group(0) @binding(27) var<storage, read> collider_nodes: array<vec4<f32>>;
+
+@group(0) @binding(28) var<storage, read> collider_triangles: array<vec4<f32>>;
+
+// The static solid at each held cell's low corner, one word per pool
+// element: the f16 distance in the low half, one more than the posed index
+// of the static body nearest there in the high half (STATIC_NONE, 0, for
+// none). A word naming no body reads far, so a zeroed or canonical element
+// holds no static solid.
+@group(0) @binding(45) var<storage, read_write> static_corners: array<u32>;
+
+// Word 0: set when a static body moves this tick (`pose_bodies`) or the
+// statics are rebuilt (`static_corners_args`); words 4 to 6: the indirect
+// triple of the pass over every held slot.
+@group(0) @binding(52) var<storage, read_write> static_scratch: array<atomic<u32>>;
+
+fn cb_node(i: u32) -> vec4<f32> {
+    return collider_nodes[i];
+}
+
+fn cb_triangle(i: u32) -> vec4<f32> {
+    return collider_triangles[i];
+}
+
+// A static collider's distance is searched, and stored, out to this many
+// cells; past it the corner reads far.
+const STATIC_BAND_CELLS: f32 = 4.0;
+
+const STATIC_NONE: u32 = 0u;
+
+fn static_band() -> f32 {
+    return STATIC_BAND_CELLS * u.cell_size;
+}
+
+// A stored static distance at or past the band is far (1e30): the f16 round
+// trip of the band itself lands just under it.
+fn static_far(phi: f32) -> f32 {
+    return select(phi, 1e30, phi > 0.99 * static_band());
+}
+
+// `body` is one more than the posed index, STATIC_NONE for none.
+fn static_pack(phi: f32, body: u32) -> u32 {
+    return (pack2x16float(vec2<f32>(phi, 0.0)) & 0xffffu) | (body << 16u);
+}
+
+fn static_phi(word: u32) -> f32 {
+    return select(unpack2x16float(word & 0xffffu).x, static_band(), (word >> 16u) == STATIC_NONE);
+}
+
+// The static colliders' signed distance at x straight from their BVHs, the
+// smallest over the posed bodies whose shape is a tree, and the posed index
+// of that body (−1 where none is within the band). The distance saturates
+// at the band.
+fn static_direct(x: vec3<f32>) -> vec2<f32> {
+    let band = static_band();
+    var phi = band;
+    var body = -1.0;
+    let held = min(u.body_count, u.rows);
+    for (var b = 0; b < held; b = b + 1) {
+        let bd = posed[u32(b)];
+        let shape_index = i32(bd.accel_shape.w);
+        if shape_index < 0 || u32(shape_index) >= u.shapes_len {
+            continue;
+        }
+        let sh = shapes[u32(shape_index)];
+        if sh.tree != 1u {
+            continue;
+        }
+        let local = liquid_rotate(vec4<f32>(-bd.rotation.xyz, bd.rotation.w), x - bd.position_inv_mass.xyz);
+        let root = 4u * sh.tree_node;
+        let lo = cb_node(root).xyz - vec3<f32>(band);
+        let hi = cb_node(root + 1u).xyz + vec3<f32>(band);
+        if any(local < lo) || any(local > hi) {
+            continue;
+        }
+        let d = cb_phi(sh.tree_node, sh.tree_triangle, local, band, u.cell_size);
+        if d < phi {
+            phi = d;
+            body = f32(b);
+        }
+    }
+    return vec2<f32>(phi, body);
+}
+
+// The static colliders' signed distance at x and the body nearest it (−1
+// for none): trilinear over the eight stored corners around x, the body that
+// of the nearest corner; the BVHs directly where any of the eight is in a
+// tile that is not stored.
+fn static_solid(x: vec3<f32>) -> vec2<f32> {
+    let g = (x - u.origin) / u.cell_size;
+    let f0 = floor(g);
+    let p0 = vec3<i32>(f0);
+    let t = g - f0;
+    var idx: array<u32, 8>;
+    for (var k = 0; k < 8; k = k + 1) {
+        idx[k] = ts_cell_at(p0 + vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1));
+        if idx[k] == ts_canon() {
+            return static_direct(x);
+        }
+    }
+    var phi = 0.0;
+    var nearest = 1e30;
+    var body = -1.0;
+    for (var k = 0; k < 8; k = k + 1) {
+        let word = static_corners[idx[k]];
+        let v = static_phi(word);
+        let o = vec3<bool>((k & 1) == 1, ((k >> 1u) & 1) == 1, ((k >> 2u) & 1) == 1);
+        let w = select(vec3<f32>(1.0) - t, t, o);
+        phi = phi + w.x * w.y * w.z * v;
+        let id = word >> 16u;
+        if id != STATIC_NONE && v < nearest {
+            nearest = v;
+            body = f32(id - 1u);
+        }
+    }
+    return vec2<f32>(phi, body);
+}
+
+// The posed moving bodies' signed distance at x, the smallest of them,
+// sampled from each shape's lattice (liquid_collider.wgsl); far (1e30) with
+// none. A static collider (a tree) is `static_solid`'s.
 fn bodies_distance(x: vec3<f32>) -> f32 {
     var nearest = 1e30;
     let held = min(u.body_count, u.rows);
@@ -213,6 +333,9 @@ fn bodies_distance(x: vec3<f32>) -> f32 {
             continue;
         }
         let sh = shapes[u32(shape_index)];
+        if sh.tree == 1u {
+            continue;
+        }
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let g = liquid_lattice_coord(x, bd.position_inv_mass.xyz, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
         nearest = min(nearest, liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz));
@@ -221,11 +344,12 @@ fn bodies_distance(x: vec3<f32>) -> f32 {
 }
 
 // The solid's signed distance at x, positive in free space: the Bounds Wall
-// faces and this step's posed bodies, as node.liquid_solid_distance writes
-// its lattice. The solid corners hold it at the corners; emission
-// tests a site with it directly, so a site needs no stored tile.
+// faces, the static colliders and this step's posed bodies, as
+// node.liquid_solid_distance writes its lattice. The solid corners hold it at
+// the corners; emission tests a site with it directly, so a site needs no
+// stored tile.
 fn solid_distance(x: vec3<f32>) -> f32 {
-    return min(walls_distance(x), bodies_distance(x));
+    return min(walls_distance(x), min(static_far(static_solid(x).x), bodies_distance(x)));
 }
 
 // A body of this tick, `b` counted from its first row, posed at this step's
@@ -276,6 +400,12 @@ fn pose_bodies(@builtin(global_invocation_id) gid: vec3<u32>) {
         out.rotation = liquid_turn(bd.rotation, bd.angular_velocity.xyz, t);
     }
     posed[u32(b)] = out;
+    // A static collider that moves rebuilds the static corners this tick.
+    let shape_index = i32(bd.accel_shape.w);
+    if shape_index >= 0 && u32(shape_index) < u.shapes_len && shapes[u32(shape_index)].tree == 1u
+        && (any(out.linear_velocity.xyz != vec3<f32>(0.0)) || any(out.angular_velocity.xyz != vec3<f32>(0.0))) {
+        atomicOr(&static_scratch[0], 1u);
+    }
     let packed = liquid_constrained_mobility(&supports, liquid_support_count(&supports), closed, stuck, unturned, m);
     let at = 6u * u32(b);
     mobility[at] = packed.m0;
@@ -295,8 +425,8 @@ fn support_vec4(i: u32) -> vec4<f32> {
 }
 
 // The body nearest x (smallest signed distance), counted from this tick's
-// first row, −1 when no body is enabled or the Wall faces are nearer: the solid
-// there is the Bounds'.
+// first row, static colliders included, −1 when no body is enabled or the
+// Wall faces are nearer: the solid there is the Bounds'.
 fn closest_body(x: vec3<f32>) -> i32 {
     var best = -1;
     var nearest = 0.0;
@@ -308,6 +438,9 @@ fn closest_body(x: vec3<f32>) -> i32 {
             continue;
         }
         let sh = shapes[u32(shape_index)];
+        if sh.tree == 1u {
+            continue;
+        }
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let g = liquid_lattice_coord(x, bd.position_inv_mass.xyz, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
         let d = liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz);
@@ -315,6 +448,11 @@ fn closest_body(x: vec3<f32>) -> i32 {
             best = b;
             nearest = d;
         }
+    }
+    let still = static_solid(x);
+    if still.y >= 0.0 && (best < 0 || still.x < nearest) {
+        best = i32(still.y);
+        nearest = still.x;
     }
     return select(best, -1, best >= 0 && nearest > walls_distance(x));
 }

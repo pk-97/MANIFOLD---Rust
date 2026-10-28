@@ -148,7 +148,7 @@ const INFLOW_POOL: usize = 512;
 struct InflowStep {
     h: Harness,
     node: GpuFlipStep,
-    inputs: [(&'static str, Slot); 7],
+    inputs: [(&'static str, Slot); 9],
     outputs: [(&'static str, Slot); 4],
     params: ParamValues,
     particles: GpuBuffer,
@@ -184,6 +184,8 @@ impl InflowStep {
         let sites = h.array(&sites, 8);
         let shapes = h.array(&[shape], 1);
         let atlas = h.array(&atlas, atlas.len());
+        let collider_nodes = h.array::<manifold_node_engine::mesh::Vec4Vertex>(&[], 1);
+        let collider_triangles = h.array::<manifold_node_engine::mesh::Vec4Vertex>(&[], 1);
         let bodies = h.array::<LiquidBody>(&[], 1);
         let params = params(
             &[
@@ -207,6 +209,8 @@ impl InflowStep {
             ("region_sites", sites.0),
             ("shapes", shapes.0),
             ("atlas", atlas.0),
+            ("collider_nodes", collider_nodes.0),
+            ("collider_triangles", collider_triangles.0),
             ("bodies", bodies.0),
             ("identity", identity.0),
         ];

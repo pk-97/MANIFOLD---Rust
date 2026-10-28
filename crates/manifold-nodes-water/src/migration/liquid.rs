@@ -1008,6 +1008,54 @@ pub(crate) fn whitewater_off_display_tiles(def: &mut EffectGraphDef) -> bool {
     def.wires.len() != before
 }
 
+/// Wire the static colliders' trees beside every saved collider wire: each
+/// wire carrying a domain's `atlas` gains the domain's `collider_nodes` and
+/// `collider_triangles` into the same node, so a Fixed Collider's exact mesh
+/// reaches every reader. A port already wired is kept. Idempotent.
+pub(crate) fn wire_collider_trees(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    let domains: Vec<u32> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == GPU_FLIP_DOMAIN_TYPE_ID || n.type_id == MATTER_DOMAIN_TYPE_ID)
+        .map(|n| n.id)
+        .collect();
+    let mut added: Vec<EffectGraphWire> = Vec::new();
+    for wire in def
+        .wires
+        .iter()
+        .filter(|w| domains.contains(&w.from_node) && w.from_port == "atlas")
+    {
+        for port in ["collider_nodes", "collider_triangles"] {
+            let wired = def
+                .wires
+                .iter()
+                .chain(&added)
+                .any(|w| w.to_node == wire.to_node && w.to_port == port);
+            if !wired {
+                added.push(EffectGraphWire {
+                    from_node: wire.from_node,
+                    from_port: port.into(),
+                    to_node: wire.to_node,
+                    to_port: port.into(),
+                });
+            }
+        }
+    }
+    let changed = !added.is_empty();
+    def.wires.extend(added);
+    changed
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "wire_collider_trees",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 440,
+        apply: wire_collider_trees,
+    }
+}
+
 inventory::submit! {
     manifold_node_engine::load::migration::GraphMigration {
         name: "whitewater_off_display_tiles",

@@ -1,6 +1,6 @@
 // Ported from FLIP Fluids fluidsimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 // node.liquid_fill — BUFFER source body. One thread per particle slot
-// (FluidParticle → Element3). Particles sit on the half-cell site lattice,
+// (FluidParticle → Element4). Particles sit on the half-cell site lattice,
 // site j at (1/4 + j/2) cells along each axis (2·fill_cells sites per axis), the
 // FLIP Fluids engine's seeding lattice. The domain puts the box on whole world
 // cells (cell p centred on p·h), so site j is world half cell 2p + 1 + j, at
@@ -23,7 +23,8 @@
 // shaped fill's: a site outside region row fill_region of `regions` (its
 // lattice in `shapes` and `atlas`, read as the step reads a region) is dead
 // too. `bodies` and `regions` (LiquidBody → Element), `shapes` (LiquidShape →
-// Element2) and `atlas` are gathered.
+// Element2), `atlas` and the collider trees (Vec4Vertex → Element3) are
+// gathered.
 
 fn liquid_fill_hash(x: u32) -> u32 {
     let s = x * 747796405u + 2891336453u;
@@ -39,6 +40,10 @@ fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
+
+fn cb_node(i: u32) -> vec4<f32> { let n = buf_collider_nodes[i]; return vec4<f32>(n.x, n.y, n.z, n.w); }
+fn cb_triangle(i: u32) -> vec4<f32> { let t = buf_collider_triangles[i]; return vec4<f32>(t.x, t.y, t.z, t.w); }
+var<private> lf_cell: f32;
 
 // The Wall faces' distance at node `y`: the least of x − lo (low face) and
 // hi − x (high face) over the Wall faces, 1e30 with none, and past a Wall
@@ -71,6 +76,11 @@ fn liquid_fill_solid_node(y: vec3<f32>, lo: vec3<f32>, hi: vec3<f32>, faces: u32
             continue;
         }
         let sh = buf_shapes[u32(shape_index)];
+        if sh.tree == 1u {
+            let local = liquid_rotate(vec4<f32>(-bd.rotation.xyz, bd.rotation.w), y - bd.position_inv_mass.xyz);
+            d = min(d, cb_phi(sh.tree_node, sh.tree_triangle, local, 4.0 * lf_cell, lf_cell));
+            continue;
+        }
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let g = liquid_lattice_coord(y, bd.position_inv_mass.xyz, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
         d = min(d, liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz));
@@ -87,6 +97,10 @@ fn liquid_fill_in_shape(x: vec3<f32>, r: i32) -> bool {
         return false;
     }
     let sh = buf_shapes[u32(shape_index)];
+    if sh.tree == 1u {
+        let local = liquid_rotate(vec4<f32>(-bd.rotation.xyz, bd.rotation.w), x - bd.position_inv_mass.xyz);
+        return cb_phi(sh.tree_node, sh.tree_triangle, local, 4.0 * lf_cell, lf_cell) <= 0.0;
+    }
     let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
     let g = liquid_lattice_coord(x, bd.position_inv_mass.xyz, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
     return liquid_lattice_holds(g, dims) && liquid_lattice_distance(sh.atlas_offset, dims, g) * sh.scale_min.w <= 0.0;
@@ -138,8 +152,9 @@ fn body(
     bounds_hi_y: f32,
     bounds_hi_z: f32,
     fill_region: i32,
-) -> Element3 {
-    var out = Element3(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
+) -> Element4 {
+    lf_cell = cell_size;
+    var out = Element4(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
     let n = 2u * vec3<u32>(max(vec3<i32>(fill_cells_x, fill_cells_y, fill_cells_z), vec3<i32>(0)));
     let pool = min(u32(max(pool_sites, 0)), n.y);
     let x0 = min(u32(max(box_x0, 0)), n.x);

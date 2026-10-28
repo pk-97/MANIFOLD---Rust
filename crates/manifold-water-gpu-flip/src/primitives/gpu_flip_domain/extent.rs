@@ -75,6 +75,8 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         ("region_sites", size_of::<RegionSites>() as u64),
         ("shapes", size_of::<LiquidShape>() as u64),
         ("atlas", 4),
+        ("collider_nodes", 16),
+        ("collider_triangles", 16),
         ("clock_obstacles", 96),
         ("clock_sources", 96),
         ("live_hits", 16),

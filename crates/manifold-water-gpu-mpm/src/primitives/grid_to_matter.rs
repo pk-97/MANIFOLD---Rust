@@ -8,11 +8,13 @@ use manifold_gpu::GpuBinding;
 
 use crate::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, grid_bytes, momentum_unit_fits};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
+use super::matter_common::{COLLIDER_BVH, MATTER_TREE};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_words};
+use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 
 #[repr(C)]
@@ -54,6 +56,8 @@ manifold_node_engine::primitive! {
         bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
+        collider_nodes: Array(Vec4Vertex) optional,
+        collider_triangles: Array(Vec4Vertex) optional,
         reaction: Array(i32) optional,
         tiles: Array(u32) required,
         cell_size: ScalarF32 optional,
@@ -116,8 +120,8 @@ manifold_node_engine::primitive! {
     fusion_kind: Boundary,
     boundary_reason: Blocked,
     wgsl_body: include_str!("shaders/grid_to_matter_body.wgsl"),
-    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [READ_SIDE, LIQUID_POSE, LIQUID_COLLIDER],
+    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [READ_SIDE, LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH, MATTER_TREE],
     atomic_outputs: ["reaction_out"],
 }
 
@@ -194,6 +198,8 @@ impl Primitive for GridToMatter {
             ctx.inputs.array("bodies"),
             ctx.inputs.array("shapes"),
             ctx.inputs.array("atlas"),
+            ctx.inputs.array("collider_nodes"),
+            ctx.inputs.array("collider_triangles"),
         );
         let reaction = ctx.inputs.array("reaction");
         let unit_fits = momentum_unit_fits(momentum_unit, cell_size, step_dt);
@@ -216,14 +222,15 @@ impl Primitive for GridToMatter {
             ));
             return;
         }
-        // Without all three collider arrays the body loop runs zero times over
+        // Without all five collider arrays the body loop runs zero times over
         // the grid buffer bound in their slots.
-        let (bodies, shapes, atlas, body_count) = match colliders {
-            (Some(bodies), Some(shapes), Some(atlas)) => {
+        let (bodies, shapes, atlas, collider_nodes, collider_triangles, body_count) = match colliders
+        {
+            (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)) => {
                 let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64) as i32;
-                (bodies, shapes, atlas, body_count.min(rows))
+                (bodies, shapes, atlas, nodes, triangles, body_count.min(rows))
             }
-            _ => (grid, grid, grid, 0),
+            _ => (grid, grid, grid, grid, grid, 0),
         };
         // Reaction words are written only with a slot covering every body and
         // a momentum unit the words can hold; the grid stands in otherwise.
@@ -294,21 +301,31 @@ impl Primitive for GridToMatter {
                 },
                 GpuBinding::Buffer {
                     binding: 6,
-                    buffer: reaction,
+                    buffer: collider_nodes,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 7,
-                    buffer: tiles,
+                    buffer: collider_triangles,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 8,
-                    buffer: points,
+                    buffer: reaction,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 9,
+                    buffer: tiles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 10,
+                    buffer: points,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 11,
                     buffer: reaction,
                     offset: 0,
                 },
