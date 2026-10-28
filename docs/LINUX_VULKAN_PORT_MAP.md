@@ -52,7 +52,7 @@
 
 ## 3. GPU backend: the surface to build
 
-Every row below exists on Metal and is missing on Vulkan. Phases are the design doc's (section 9).
+Every row below exists on Metal and is missing on Vulkan. Phases are the design doc's (section 9). Section 11 shrinks several groups on Metal before any of this is ported.
 
 | Group | Items (call sites) | Phase |
 |---|---|---|
@@ -68,7 +68,7 @@ Every row below exists on Metal and is missing on Vulkan. Phases are the design 
 | Mipmaps | `generate_mipmaps` (20) | P2 |
 | Submission | `commit` (497), `commit_and_wait_completed` (806), `try_commit_and_wait_completed` (8), `commit_and_wait_completed_timed` (17), `commit_and_continue` (6), `commit_wait_and_continue` (2), `commit_and_wait_scheduled` (2), `add_completed_handler` (9), `add_completed_handler_with_status`, `add_gpu_time_handler` (5), `tap_gpu_time` (5) | P1 (D8) |
 | Events and lanes | `create_event` (8); `GpuEvent` (`current_value` 69, `signaled_value`, `is_done`, `wait_until_done`); `signal_event` (12), `signal_event_value`, `wait_event`; `use_async_lane`, `use_main_lane`, `finish_async_lane`, `wait_async_lane`; `GpuFenceWaiter` | P1 (D5, D7) |
-| Frame lifetime | `frame_clock` (31), `FrameClock`, `RetireQueue`, `RetireMark`, `RetireSender`, `set_retirement`, `FrameFence`, `TexturePool` (`acquire`, `release`, `begin_frame`) | P1, after the hoist in section 9 step 3 |
+| Frame lifetime | `frame_clock` (31), `FrameClock`, `RetireQueue`, `RetireMark`, `RetireSender`, `set_retirement`, `FrameFence`, `TexturePool` (`acquire`, `release`, `begin_frame`) | P1, after the hoist in section 9 step 4 |
 | Memory | `modifier_memory_snapshot` (44, D18), `allocation_counts`, `resource_scope_id` | P1 |
 | Water fast paths | `begin_replay`/`end_replay` (stubbed already), `begin_gated_segment`, `dispatch_compute_gated`, `end_gated_segments`, `GpuTemplateStore` (`prepare_template`, `execute_template`), `GatedRecorder`, `TemplateTicket`, `TemplateRanges` | P1 correct, P6 fast (design section 7) |
 | Render pipelines | `create_render_pipeline` (35), `_depth` (10), `_depth_only` (10), `_msaa` (13), `_depth_msaa` (2), `_depth_msaa_point_size` (4), `_with_vertex_layout` (6), `create_specialized_render_pipeline_depth_msaa` (1), `create_depth_stencil_state` (17), `GpuDepthStencilState` | P2 |
@@ -208,24 +208,27 @@ Out of scope: `plugins/` (the analyzer VST, its own workspace, uses IOSurface in
 
 One batch at a time, and both builds stay green before the next one starts (design section 3). Workers write; the lead builds and tests.
 
-**This week, all on the Mac**
+**Before any Vulkan code, all on the Mac.** Each step shrinks or cleans what gets ported, and the existing tests and GPU proofs check that Metal behaves the same.
 1. **Setup** (section 1). Peter installs the Vulkan SDK; the lead sets up the Linux VM.
-2. **Build hygiene**, one batch: everything in section 2 except backend selection and the app feature, plus deleting `create_compute_pipeline_half` and gating the nodes-water `autoreleasepool`. Done when the Mac build and clippy are unchanged.
-3. **Hoist neutral logic** out of `metal/` (section 3, "Hoist before porting"). Done when the Metal GPU proofs for those types pass unchanged.
-4. **Vulkan skeleton.**
+2. **Build hygiene**, one batch: everything in section 2 except backend selection and the app feature, the dead functions and the stem-separation device from section 11, and gating the nodes-water `autoreleasepool`. Done when the Mac build and clippy are unchanged.
+3. **Platform crate** (section 11): `manifold-platform` with directories, tool lookup, reveal, keep-awake, thread priority and performance cores. The scattered path and tool sites move onto it.
+4. **Hoist neutral logic** out of `metal/` (section 3, "Hoist before porting"). Done when the Metal GPU proofs for those types pass unchanged.
+5. **Shrink the GPU API** (section 11), one batch each: buffer use, the render-pipeline descriptor, the draw descriptor, commit forms, GPU timing.
+6. **Frame bridge on one device** (section 11), proven with `bridge-probe`; the headless subcommands then boot the normal pipeline.
+7. **Vulkan skeleton.**
    - Every section 3 row exists in `vulkan/` with the Metal signature and a `todo!("vulkan P1")` body.
    - Ray tracing, the denoiser, the upscaler and the FFT exist as unavailable capabilities.
    - Faults, firmware, capture scopes and residency are empty.
    - `manifold-app` gets the `vulkan` feature, and the section 4 callers stop assuming Metal.
    - Done when `cargo check --workspace --features manifold-app/vulkan` passes on the Mac. From here the compiler holds the remaining list.
-5. **Linux compile.** In the VM, select the backend by target and run `cargo check --workspace`. Fix the compile breaks in sections 6 and 7 with gates or neutral stubs, no features yet. Done when the workspace compiles on Linux.
+8. **Linux compile.** In the VM, select the backend by target and run `cargo check --workspace`. Fix the compile breaks in sections 6 and 7 with gates or neutral stubs, no features yet. Done when the workspace compiles on Linux.
 
 **P1, one batch each, in this order**
-6. Instance, device and queues (D1, D5, D21), gpu-allocator, buffers, textures, samplers, memory snapshot (D18), debug names (D20).
-7. Compute pipelines from SPIR-V, descriptor sets with update templates (D2), uniform ring (D3), pipeline and SPIR-V disk caches (D11).
-8. Encoder: dispatch, indirect dispatch, copies, clears, uploads, readbacks, and the hazard and layout tracker (design section 5).
-9. Submission: command pools (D6), timeline events, the waiter thread and completion handlers (D7, D8), async lanes, and the Vulkan hooks for the hoisted frame-lifetime types.
-10. Water paths: replay spans, gated segments, templates as indirect dispatches (design section 7).
+9. Instance, device and queues (D1, D5, D21), gpu-allocator, buffers by use, textures, samplers, memory snapshot (D18), debug names (D20).
+10. Compute pipelines from SPIR-V, descriptor sets with update templates (D2), uniform ring (D3), pipeline and SPIR-V disk caches (D11).
+11. Encoder: dispatch, indirect dispatch, copies, clears, uploads, readbacks, and the hazard and layout tracker (design section 5).
+12. Submission: command pools (D6), timeline events, the waiter thread and completion handlers (D7, D8), async lanes, and the Vulkan hooks for the hoisted frame-lifetime types.
+13. Water paths: replay spans, gated segments, templates as indirect dispatches (design section 7).
 
 P1 is done when the `manifold-gpu` tests and every compute GPU proof pass on KosmicKrisp and MoltenVK with synchronization validation clean.
 
@@ -238,7 +241,7 @@ P1 is done when the `manifold-gpu` tests and every compute GPU proof pass on Kos
 - P7: ray tracing.
 - P8: on the 5080.
 
-P4's text work touches only `manifold-ui-paint` and `manifold-nodes-image`, so it can slot between GPU batches once step 5 lands.
+P4's text work touches only `manifold-ui-paint` and `manifold-nodes-image`, so it can slot between GPU batches once step 8 lands.
 
 **What a first Linux show needs:** P1 to P4. That covers generators, effects, raster scenes, water, audio input, MIDI, Link, OSC, LED and the output window. Video clips need P5. Ray-traced scenes need P7.
 
@@ -251,3 +254,49 @@ P4's text work touches only `manifold-ui-paint` and `manifold-nodes-image`, so i
 3. **Menu bar on Linux.** Recommended: none. muda's Linux menus need GTK windows, which winit doesn't make, and dropping it removes GTK and libxdo from the Linux build. Shortcuts and in-app menus cover the rig.
 4. **Text on the Mac** (design 11.1). Recommended: cosmic-text everywhere after a side-by-side `ui-snap`.
 5. Ray-tracing shader language, denoiser, GPU FFT and HAP stay where design section 11 puts them (P5 and P7).
+
+---
+
+## 11. Simplify while porting
+
+Every API the Vulkan backend copies gets built twice and tested twice. So shrink it first, on Metal, where the GPU proofs already check the result, then port the smaller surface. Each item is its own batch, and Metal behaviour stays the same unless the row says otherwise.
+
+**One place for each kind of difference**
+- **GPU differences** live in `manifold-gpu` only (design section 3). Shared crates never ask which backend runs. A missing feature answers through a capability check.
+- **OS differences** live in one new crate, `manifold-platform`. It holds plain functions with one signature each, with bodies per OS in `mac.rs`, `linux.rs` and later `windows.rs`, selected by `cfg` on the `mod` lines only. It owns:
+  - app directories: prefs, logs, caches, data, presets
+  - finding external tools: ffmpeg, ffprobe, the audio-analysis runtime
+  - reveal in the file manager
+  - keep-awake during a show
+  - real-time thread priority
+  - performance-core count
+  - plugin library names
+  - SIGPIPE
+
+  It replaces the path and tool sites scattered through sections 6 and 7.
+- **Big OS services** keep one seam each in their own crate:
+  - text: cosmic-text everywhere means no per-OS code at all
+  - system-audio capture: `CaptureBackend`, which already exists
+  - video: `ClipRenderer`
+  - window chrome: EDR and window level, in the app's window module
+- **Target:** `target_os` appears only in `manifold-gpu`'s backend selection, `manifold-platform` and those seams. Today `manifold-app` alone has 523.
+
+**GPU API reductions**
+
+| Today | After | Checked by |
+|---|---|---|
+| `create_buffer`, `create_buffer_shared`, `try_create_buffer`, `try_create_buffer_shared` (581 production calls). Shared memory is the default for GPU-only scratch, CPU-filled inputs and readbacks alike. That costs nothing on Apple's unified memory; on the 5080 it decides whether a shader reads VRAM or crosses PCIe | One `create_buffer(size, use)` plus `try_`, where use is `Gpu`, `Upload` or `Readback`. On Metal, `Gpu` is Private and the other two are Shared. On Vulkan they are VRAM, CPU-writable VRAM (Resizable BAR, else system memory) and cached system memory | GPU proofs unchanged on Metal. This is the biggest NVIDIA speed item in the port |
+| 8 render-pipeline constructors | One `RenderPipelineDesc`: depth, MSAA, point size, vertex layout, specialisation | Scene, UI and compositor proofs |
+| About 20 draw forms (`draw_instanced_depth*` alone has 8) | One draw call taking a descriptor: pass, viewport, depth, instance batch, topology | Same |
+| 8 commit forms, one with no callers (`commit_and_wait_scheduled`) | `commit`, `commit_and_continue`, and `commit_and_wait` returning a Result | All GPU tests |
+| 5 ways to read GPU time: `tap_gpu_time`, `add_gpu_time_handler`, `commit_and_wait_completed_timed`, `commit_and_wait_profiled`, `GpuSpanTimer` (plus `raytrace/trace_timing.rs`) | One per-submit GPU time stream that the profiler, the span timer and the perf tools all read, plus the per-dispatch profiler | Profiler sessions and perf-soak report the same numbers |
+| No callers: `create_compute_pipeline_half`, `create_texture_memoryless`, `supports_denoiser`, `set_motion_vector_scale`, `defer_probe_enabled` | Delete | Build |
+
+**Bigger cuts**
+- **Frame bridge on one device.** The content→UI handoff stores frames in IOSurfaces so two `GpuDevice`s can share them, and that drives about 199 of the app's Mac gates. Both devices call `MTLCreateSystemDefaultDevice` (`metal/device.rs:242`), so they are the same GPU. If both threads share one Metal device, each with its own queue (`clone_queue` already exists), the bridge can hold plain `GpuTexture`s and keep its slot and lease logic. That is also design D16's shape for Vulkan, so IOSurface goes and the bridge is the same code on both backends. Prove it with `bridge-probe` (zero torn reads) before cutting over.
+- **Headless harness.** `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `export-repro` boot through a Mac-only harness that duplicates app setup. After the bridge change they boot the normal content pipeline.
+- **One text engine.** The UI (2,172 lines) and the Text generator (689 lines) are two separate CoreText implementations. One cosmic-text module serves both.
+- **MetalFX and denoiser wrappers** reach into raw Metal handles from `manifold-compositor` and `manifold-nodes-scene`. They move into `manifold-gpu` behind the upscaler and denoiser capabilities (design 6.2), and those crates lose all raw-handle code.
+- **Stem-separation device.** `manifold-playback/src/percussion_backend.rs:439-448` hardcodes `mps` on the Mac and `cpu` elsewhere. The Python side already picks `mps`, `cuda` or `cpu` itself when given `auto` (`manifold_audio/external_tools.py:185-190`). Pass `auto` and delete the function, and the 5080 runs it on CUDA.
+
+**Checked, not a problem:** the frame loop never waits on the GPU. The production `commit_and_wait_completed` calls (about 35) sit in warmup, bakes, thumbnails and tools.

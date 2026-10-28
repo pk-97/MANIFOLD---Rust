@@ -22,7 +22,7 @@ Backend selection and the shader front end are done: `lib.rs` picks `metal/` or 
 
 - **`ash` 0.38 only.** No wgpu, no vulkano. `gpu-allocator` 0.28 (built on ash 0.38) for memory, `ash-window` for surfaces. ash 0.38's headers are Vulkan 1.3.281: `VK_EXT_present_timing` needs a newer ash and waits until it ships.
 - **Backend differences live inside `manifold-gpu`.** Shared crates never check which backend is active. A Metal-only feature becomes a backend-neutral API with a capability query (`denoiser_available()` returns false on Vulkan until it is built). A feature that is off logs once at boot, by name.
-- **`target_os` gates only OS services:** text, video, audio, window chrome, paths. An OS service that touches raw GPU objects (`manifold-media`, `manifold-recording`) also forwards a `vulkan` feature to pick its implementation.
+- **`target_os` gates only OS services:** text, video, audio, window chrome, paths. Small services live in `manifold-platform` and big ones keep one seam in their own crate (port map section 11); shared code never writes `cfg(target_os)`. An OS service that touches raw GPU objects (`manifold-media`, `manifold-recording`) also forwards a `vulkan` feature to pick its implementation.
 - **Raw handles stay Metal-only.** `raw_device`, `raw_cmd_buf`, `raw_ptr`, `raw_device_ptr`, `mtl4_bridge` are not exported on Vulkan. Their callers are macOS-gated today; the compile error under `--features vulkan` enforces it.
 - **Metal is the oracle.** Never change `metal/`, shared WGSL or test tolerances to make Vulkan pass. A difference is a Vulkan bug until shown otherwise.
 - **During construction,** a Vulkan method not built yet panics with `todo!("vulkan P2")`. The phase that builds it deletes the `todo!`. None survive P3.
