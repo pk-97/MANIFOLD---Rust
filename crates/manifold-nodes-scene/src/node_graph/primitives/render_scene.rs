@@ -83,6 +83,7 @@ use field_objects::{FieldObject, ObjectMaterial};
 mod water_cover;
 mod water_march;
 use water_march::{FieldDraw, FieldView};
+mod caustics;
 mod ripple_detail;
 mod water_shade;
 mod wet_pass;
@@ -1419,6 +1420,7 @@ pub struct RenderScene {
     opaque_depth_snapshot_height: u32,
     volume_optics: volume_optics::VolumeOptics,
     wet_pass: wet_pass::WetPass,
+    caustics: caustics::Caustics,
     water_march: water_march::WaterMarch,
     water_shade: water_shade::WaterShade,
     ripple_detail: ripple_detail::RippleDetail,
@@ -3258,6 +3260,42 @@ impl RenderScene {
                 Self::fail_frame(ctx, None, error);
                 return;
             }
+        }
+
+        // Caustics follow the sun whose shadow map was drawn this frame: the
+        // raster maps render unless traced shadows own the visibility and
+        // nothing is transparent (`raster_shadow_prepasses`).
+        let raster_shadows = !(pre.rt_enabled && rt_ready && pre.rt_shadows_enabled)
+            || draws.iter().any(ObjectDraw::routes_to_transparent);
+        let sun = caustics::sun_slot(&pre.shadow_casters)
+            .filter(|_| raster_shadows)
+            .and_then(|slot| {
+                let maps = self.shadow_maps.as_ref()?;
+                maps.layers.get(slot)?;
+                Some((
+                    caustics::Sun {
+                        slot,
+                        caster: &pre.shadow_casters[slot],
+                        shadow_maps: &maps.texture,
+                    },
+                    // A drawn shadow map means its depth pipeline and state
+                    // were made.
+                    caustics::SurfaceDraw {
+                        pipeline: self.solid_depth_pipeline.as_ref()?,
+                        depth_state: self.shadow_depth_stencil.as_ref()?,
+                        identity_stub: self.identity_instance_stub.as_ref()?,
+                        dummy: self.dummy_texture.as_ref()?,
+                        sampler: self.sampler.as_ref()?,
+                    },
+                ))
+            });
+        let gpu = ctx.gpu_encoder();
+        if let Err(error) = self
+            .caustics
+            .encode(gpu.device, gpu.native_enc, sun, &fields)
+        {
+            Self::fail_frame(ctx, None, error);
+            return;
         }
 
         // ---- RAYTRACING_DESIGN.md RT-D3 (P1-part-2): half-res hard-

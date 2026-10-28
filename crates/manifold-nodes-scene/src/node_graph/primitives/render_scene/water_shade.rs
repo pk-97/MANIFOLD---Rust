@@ -29,6 +29,10 @@ pub(super) static WATER_SHADE_WGSL: LazyLock<String> = LazyLock::new(|| {
     .concat()
 });
 
+/// The scene-wide bindings every mesh draw and every water draw shares
+/// (`scene_bindings` in `pass2_draw.rs`).
+pub(super) const SCENE_BINDINGS: usize = 19;
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct ShadeUniforms {
@@ -196,55 +200,58 @@ impl WaterShade {
         target: &GpuTexture,
         depth: &GpuTexture,
         depth_state: &GpuDepthStencilState,
-        scene: &[GpuBinding; 16],
+        scene: &[GpuBinding; SCENE_BINDINGS],
         object_uniforms: &[u8],
         hits: &GpuBuffer,
         shade: &ShadeUniforms,
         look: &LookBindings,
     ) {
         let pipeline = self.pipeline(device, target.format);
-        let mut bindings = [scene[0]; 25];
-        bindings[..16].copy_from_slice(scene);
-        bindings[16] = GpuBinding::Bytes {
-            binding: 0,
-            data: object_uniforms,
-        };
-        bindings[17] = GpuBinding::Buffer {
-            binding: 60,
-            buffer: hits,
-            offset: 0,
-        };
-        bindings[18] = GpuBinding::Bytes {
-            binding: 61,
-            data: bytemuck::bytes_of(shade),
-        };
-        bindings[19] = GpuBinding::Texture {
-            binding: 62,
-            texture: look.slopes,
-        };
-        bindings[20] = GpuBinding::Sampler {
-            binding: 63,
-            sampler: look.sampler,
-        };
-        bindings[21] = GpuBinding::Bytes {
-            binding: 64,
-            data: bytemuck::bytes_of(look.uniforms),
-        };
-        bindings[22] = GpuBinding::Buffer {
-            binding: 65,
-            buffer: look.velocity,
-            offset: 0,
-        };
-        bindings[23] = GpuBinding::Buffer {
-            binding: 66,
-            buffer: look.foam,
-            offset: 0,
-        };
-        bindings[24] = GpuBinding::Buffer {
-            binding: 70,
-            buffer: look.tiles,
-            offset: 0,
-        };
+        let own = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: object_uniforms,
+            },
+            GpuBinding::Buffer {
+                binding: 60,
+                buffer: hits,
+                offset: 0,
+            },
+            GpuBinding::Bytes {
+                binding: 61,
+                data: bytemuck::bytes_of(shade),
+            },
+            GpuBinding::Texture {
+                binding: 62,
+                texture: look.slopes,
+            },
+            GpuBinding::Sampler {
+                binding: 63,
+                sampler: look.sampler,
+            },
+            GpuBinding::Bytes {
+                binding: 64,
+                data: bytemuck::bytes_of(look.uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 65,
+                buffer: look.velocity,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 66,
+                buffer: look.foam,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 70,
+                buffer: look.tiles,
+                offset: 0,
+            },
+        ];
+        let mut bindings = [scene[0]; SCENE_BINDINGS + 9];
+        bindings[..SCENE_BINDINGS].copy_from_slice(scene);
+        bindings[SCENE_BINDINGS..].copy_from_slice(&own);
         let draw = GpuEncoder::depth_msaa_draw(pipeline, &bindings, 3, 1);
         enc.draw_instanced_depth_batch(
             target,
@@ -269,7 +276,7 @@ impl WaterShade {
         enc: &mut GpuEncoder,
         target: &GpuTexture,
         depth: &GpuTexture,
-        scene: &[GpuBinding; 16],
+        scene: &[GpuBinding; SCENE_BINDINGS],
         object_uniforms: &[u8],
         mist: &GpuBuffer,
         shade: &ShadeUniforms,
@@ -288,48 +295,51 @@ impl WaterShade {
                 write_enabled: false,
             })
         });
-        let mut bindings = [scene[0]; 25];
-        bindings[..16].copy_from_slice(scene);
-        bindings[16] = GpuBinding::Bytes {
-            binding: 0,
-            data: object_uniforms,
-        };
-        bindings[17] = GpuBinding::Bytes {
-            binding: 61,
-            data: bytemuck::bytes_of(shade),
-        };
-        bindings[18] = GpuBinding::Texture {
-            binding: 62,
-            texture: look.slopes,
-        };
-        bindings[19] = GpuBinding::Sampler {
-            binding: 63,
-            sampler: look.sampler,
-        };
-        bindings[20] = GpuBinding::Bytes {
-            binding: 64,
-            data: bytemuck::bytes_of(look.uniforms),
-        };
-        bindings[21] = GpuBinding::Buffer {
-            binding: 65,
-            buffer: look.velocity,
-            offset: 0,
-        };
-        bindings[22] = GpuBinding::Buffer {
-            binding: 66,
-            buffer: look.foam,
-            offset: 0,
-        };
-        bindings[23] = GpuBinding::Buffer {
-            binding: 67,
-            buffer: mist,
-            offset: 0,
-        };
-        bindings[24] = GpuBinding::Buffer {
-            binding: 70,
-            buffer: look.tiles,
-            offset: 0,
-        };
+        let own = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: object_uniforms,
+            },
+            GpuBinding::Bytes {
+                binding: 61,
+                data: bytemuck::bytes_of(shade),
+            },
+            GpuBinding::Texture {
+                binding: 62,
+                texture: look.slopes,
+            },
+            GpuBinding::Sampler {
+                binding: 63,
+                sampler: look.sampler,
+            },
+            GpuBinding::Bytes {
+                binding: 64,
+                data: bytemuck::bytes_of(look.uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 65,
+                buffer: look.velocity,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 66,
+                buffer: look.foam,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 67,
+                buffer: mist,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 70,
+                buffer: look.tiles,
+                offset: 0,
+            },
+        ];
+        let mut bindings = [scene[0]; SCENE_BINDINGS + 9];
+        bindings[..SCENE_BINDINGS].copy_from_slice(scene);
+        bindings[SCENE_BINDINGS..].copy_from_slice(&own);
         let draw = GpuEncoder::depth_msaa_draw(pipeline, &bindings, 3, 1);
         enc.draw_instanced_depth_batch(
             target,

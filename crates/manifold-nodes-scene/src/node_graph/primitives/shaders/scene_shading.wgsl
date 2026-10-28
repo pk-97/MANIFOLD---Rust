@@ -302,6 +302,24 @@ struct ShadowCaster {
 @group(0) @binding(10) var shadow_maps: texture_depth_2d_array;
 @group(0) @binding(14) var shadow_sampler: sampler_comparison;
 
+// Caustics (`render_scene/caustics.rs`, `caustics.wgsl`): the sun's light
+// through the water onto what lies under it, in the sun's view. The renderer
+// binds a black texel, a cleared depth and slot 0 when no caustics run.
+struct CausticRead {
+    // The sun's caster slot + 1; 0 when no caustics run this frame.
+    slot: u32,
+    // How far past the water's surface, in the sun's depth, a receiver must
+    // lie to be under it: the water's own surface stays plainly lit.
+    bias: f32,
+    pad0: u32,
+    pad1: u32,
+}
+// The light the sun puts through the water, relative to its own.
+@group(0) @binding(11) var caustic_map: texture_2d<f32>;
+// The water's surface in the sun's depth.
+@group(0) @binding(12) var caustic_surface: texture_depth_2d;
+@group(0) @binding(13) var<uniform> caustic: CausticRead;
+
 // Split-sum IBL. Always bound (same
 // always-bind ABI-stub discipline as bindings 4/5/7/10-14 above) —
 // `render_scene.rs::ensure_ibl_resources` guarantees all three exist
@@ -826,7 +844,41 @@ fn light_visibility(caster_slot: f32, world_pos: vec3<f32>, frag_xy: vec2<f32>) 
     if u.rt_flags.z > 0.5 && i32(caster_slot + 0.5) == i32(u.rt_flags.z - 0.5) {
         vis3 = textureLoad(rt_sun_tint, vec2<i32>(frag_xy), 0).rgb;
     }
+    if caster_slot >= 0.0 {
+        vis3 = vis3 * caustic_light(u32(caster_slot + 0.5), world_pos);
+    }
     return vis3;
+}
+
+// The share of caster `slot`'s light that reaches `world_pos` through the
+// water: the caustic map, bilinear, where the point lies under the water in
+// the sun's view; 1 for any other light, and above or beside the water.
+fn caustic_light(slot: u32, world_pos: vec3<f32>) -> vec3<f32> {
+    if caustic.slot != slot + 1u {
+        return vec3<f32>(1.0);
+    }
+    let clip = casters[slot].view_proj * vec4<f32>(world_pos, 1.0);
+    if clip.w <= 0.0 {
+        return vec3<f32>(1.0);
+    }
+    let ndc = clip.xyz / clip.w;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5);
+    if any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0)) {
+        return vec3<f32>(1.0);
+    }
+    let size = vec2<i32>(textureDimensions(caustic_surface));
+    let last = size - vec2<i32>(1);
+    if ndc.z <= textureLoad(caustic_surface, min(vec2<i32>(uv * vec2<f32>(size)), last), 0) + caustic.bias {
+        return vec3<f32>(1.0);
+    }
+    let p = uv * vec2<f32>(size) - vec2<f32>(0.5);
+    let low = floor(p);
+    let f = p - low;
+    let a = clamp(vec2<i32>(low), vec2<i32>(0), last);
+    let b = clamp(vec2<i32>(low) + vec2<i32>(1), vec2<i32>(0), last);
+    let top = mix(textureLoad(caustic_map, a, 0).rgb, textureLoad(caustic_map, vec2<i32>(b.x, a.y), 0).rgb, f.x);
+    let bottom = mix(textureLoad(caustic_map, vec2<i32>(a.x, b.y), 0).rgb, textureLoad(caustic_map, b, 0).rgb, f.x);
+    return mix(top, bottom, f.y);
 }
 
 // Every light's direct term, split by lobe so the caller can compose them.

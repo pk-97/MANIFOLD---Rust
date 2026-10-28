@@ -237,6 +237,10 @@ impl RenderScene {
         let caster_offset = self.caster_offset;
         let refraction_sampler = self.refraction_sampler.as_ref().expect("ensured");
         let prefiltered_sheen = self.prefiltered_sheen.as_ref().unwrap_or(dummy);
+        // The sun's light through the water; a black texel, a cleared depth
+        // and slot 0 when no caustics ran.
+        let caustic_read = self.caustics.read();
+        let (caustic_map, caustic_surface) = self.caustics.maps().unwrap_or((dummy, dummy_depth));
         let scene_bindings = |opaque_scene_color| {
             [
                 GpuBinding::Texture {
@@ -260,6 +264,18 @@ impl RenderScene {
                 GpuBinding::Texture {
                     binding: 10,
                     texture: shadow_maps,
+                },
+                GpuBinding::Texture {
+                    binding: 11,
+                    texture: caustic_map,
+                },
+                GpuBinding::Texture {
+                    binding: 12,
+                    texture: caustic_surface,
+                },
+                GpuBinding::Bytes {
+                    binding: 13,
+                    data: bytemuck::bytes_of(&caustic_read),
                 },
                 GpuBinding::Sampler {
                     binding: 14,
@@ -309,7 +325,7 @@ impl RenderScene {
         };
         // Indexed by draw, so a draw wholly outside the camera's clip volume
         // keeps its place with no binding set built for it.
-        let binding_sets: Vec<Option<[GpuBinding; 55]>> = draws
+        let binding_sets: Vec<Option<[GpuBinding; 58]>> = draws
             .iter()
             .enumerate()
             .map(|(draw_index, draw)| {
@@ -322,6 +338,9 @@ impl RenderScene {
                     s8,
                     s9,
                     s10,
+                    s11,
+                    s12,
+                    s13,
                     s14,
                     s16,
                     s17,
@@ -380,6 +399,9 @@ impl RenderScene {
                     // slot — always bound, same D4 discipline.
                     s9,
                     s10,
+                    s11,
+                    s12,
+                    s13,
                     s14,
                     // D11: per-object instances_n, or the identity stub when
                     // that object leaves it unwired.
