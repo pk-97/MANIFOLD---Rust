@@ -94,6 +94,9 @@ A GPU material solver for sand, snow, goo and lava, so these can play as instrum
 ### Cloth and rope simulation
 Lets cloth and ropes swing and drape live in the scene, and could move with the beat. Nothing solves cloth or rope motion yet.
 
+### Coarse water with small helper networks for fine detail
+Runs the GPU FLIP water on cells two or more times larger, which gives about 8× fewer cells per doubling, and lets small networks add back what the small cells would have caught: surface tension on drops and thin sheets, the swirl that coarse grids smear away, and fine surface ripples. The real solver stays in charge of pressure and volume and each network only adds a correction, so a wrong guess costs detail instead of breaking the sim. Training data comes from running the same scenes coarse and fine on the 5080, and training runs the coarse solver in the loop so the networks learn to fix their own drift. In the show each network runs as a small hand-written compute shader with built-in weights, like the audio detector's CNN. Open risks: flicker from frame to frame, and whether the networks cost less than the cells they save, which needs a same-scene measurement.
+
 ### Replay recorded GPU work every frame
 Records the GPU work of a repeated section once and replays it each frame, cutting the CPU cost of repeated steps and leaving more room in each frame. Already built: part of it is on the main line. The fluid step is still open.
 
