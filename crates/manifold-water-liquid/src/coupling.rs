@@ -31,7 +31,7 @@ use manifold_node_engine::scene::transform::Transform;
 #[cfg(test)]
 use manifold_physics::clock::TICK;
 use manifold_physics::collision_shape::scaled_mesh;
-use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidLayout};
+use manifold_water_rigid::coupled_frame::{CoupledRigidLayout, RigidFrame};
 use manifold_water_rigid::physics::{RigidBody, RigidSceneInputs, RigidSimulation, Solid};
 
 /// Where a coupled body's controls come from.
@@ -233,7 +233,7 @@ pub struct LiquidRigidOwner {
     completed_time: Seconds,
     bodies: Vec<Coupled>,
     geometries: Vec<Arc<PreparedFluidGeometry>>,
-    frame: CoupledRigidFrame,
+    frame: RigidFrame,
     rows: Vec<LiquidBody>,
     contacts: Vec<BodySupports>,
     /// The most support points one body touched at the last capture when
@@ -287,7 +287,7 @@ impl LiquidRigidOwner {
             geometries,
             uncoupled,
         } = bind(&rigid, &walled, colliders, capacity, known)?;
-        let mut frame = CoupledRigidFrame::default();
+        let mut frame = RigidFrame::default();
         layout.prepare_output(&mut frame);
         layout.capture(world, &mut frame)?;
         frame.stamp = TickStamp { epoch, tick: 0 };
@@ -479,7 +479,7 @@ impl LiquidRigidOwner {
     }
 
     /// The accepted rigid frame: Box3D at the end of the last settled tick.
-    pub fn frame(&self) -> &CoupledRigidFrame {
+    pub fn frame(&self) -> &RigidFrame {
         &self.frame
     }
 
@@ -695,7 +695,11 @@ fn fixed_motion(before: &LiquidBody, now: &mut LiquidBody, dt: f32) {
     }
     let sin = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2]).sqrt();
     let angle = 2.0 * sin.atan2(q[3]);
-    let scale = if sin > 1e-12 { angle / (sin * dt) } else { 2.0 / dt };
+    let scale = if sin > 1e-12 {
+        angle / (sin * dt)
+    } else {
+        2.0 / dt
+    };
     for (w, q) in now.angular_velocity.iter_mut().zip(&q[..3]) {
         *w = q * scale;
     }
@@ -894,7 +898,7 @@ pub struct LiquidCoupling<'a> {
     expected: TickStamp,
     duration: Seconds,
     layout: &'a CoupledRigidLayout,
-    frame: &'a mut CoupledRigidFrame,
+    frame: &'a mut RigidFrame,
     bodies: &'a [Coupled],
     rows: &'a mut Vec<LiquidBody>,
     contacts: &'a mut Vec<BodySupports>,
@@ -1177,10 +1181,18 @@ mod tests {
             };
             fixed_motion(&before, &mut now, dt);
             let close = |a: f32, b: f32| (a - b).abs() < 1e-3 * b.abs().max(1.0);
-            assert!(close(now.linear_velocity[0], 0.3 / dt), "{:?}", now.linear_velocity);
+            assert!(
+                close(now.linear_velocity[0], 0.3 / dt),
+                "{:?}",
+                now.linear_velocity
+            );
             assert!(close(now.linear_velocity[1], 0.0) && close(now.linear_velocity[2], 0.0));
             let turn = std::f32::consts::FRAC_PI_2 / dt;
-            assert!(close(now.angular_velocity[1], turn), "{:?}", now.angular_velocity);
+            assert!(
+                close(now.angular_velocity[1], turn),
+                "{:?}",
+                now.angular_velocity
+            );
             assert!(close(now.angular_velocity[0], 0.0) && close(now.angular_velocity[2], 0.0));
         }
         // Standing still: no motion.

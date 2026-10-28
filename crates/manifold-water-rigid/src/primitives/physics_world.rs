@@ -35,7 +35,7 @@ use manifold_node_engine::ports::{
 use manifold_node_engine::scene::transform::Transform;
 use manifold_physics::FieldValue;
 
-use crate::coupled_frame::CoupledRigidFrame;
+use crate::coupled_frame::RigidFrame;
 use crate::node::{PhysicsNode, PhysicsNodeRegistration};
 use crate::physics::{
     MAX_COPIES, ResolvedRigidImpulse, RigidSceneInputs, RigidSceneObservation, RigidSimulation,
@@ -258,7 +258,7 @@ pub struct PhysicsWorldNode {
     /// Whether `observation` is the latest successful evaluation.
     observation_valid: bool,
     coupled_mode: bool,
-    coupled_frame: Option<CoupledRigidFrame>,
+    coupled_frame: Option<RigidFrame>,
     coupled_frame_ready: bool,
     names: PortNames,
     /// The refusals the card shows, as world input and reason, rebuilt only
@@ -541,11 +541,11 @@ impl PhysicsWorldNode {
     }
 
     fn reset_coupled_storage(&mut self) {
-        self.coupled_frame = Some(CoupledRigidFrame {
+        self.coupled_frame = Some(RigidFrame {
             poses: Vec::with_capacity(self.bodies),
             copies: Vec::with_capacity(MAX_COPIES),
             group_copies: Vec::with_capacity(self.groups),
-            ..CoupledRigidFrame::default()
+            ..RigidFrame::default()
         });
     }
 }
@@ -848,7 +848,7 @@ impl PhysicsNode for PhysicsWorldNode {
         Ok(())
     }
 
-    fn accept_coupled_rigid_frame(&mut self, frame: Option<&CoupledRigidFrame>) {
+    fn accept_coupled_rigid_frame(&mut self, frame: Option<&RigidFrame>) {
         if !self.coupled_mode {
             return;
         }
@@ -858,7 +858,7 @@ impl PhysicsNode for PhysicsWorldNode {
         };
         assert!(
             frame.copies.len() <= MAX_COPIES,
-            "CoupledRigidFrame copies exceed MAX_COPIES"
+            "RigidFrame copies exceed MAX_COPIES"
         );
         if self.coupled_frame.is_none() {
             self.reset_coupled_storage();
@@ -1409,9 +1409,9 @@ mod tests {
         let mut node = PhysicsWorldNode::new();
         evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, true)
             .expect("coupled capture observation");
-        let mut frame = CoupledRigidFrame {
+        let mut frame = RigidFrame {
             stamp: manifold_physics::TickStamp { epoch: 9, tick: 4 },
-            ..CoupledRigidFrame::default()
+            ..RigidFrame::default()
         };
         frame.poses =
             vec![manifold_node_engine::scene::transform::Transform::default(); node.body_count()];
@@ -1441,7 +1441,7 @@ mod tests {
         let mut node = PhysicsWorldNode::new();
         evaluate_mock_world(&mut node, 0.0, 1, MockFieldState::Complete, false, true)
             .expect("coupled capture observation");
-        let mut frame = CoupledRigidFrame::default();
+        let mut frame = RigidFrame::default();
         frame
             .copies
             .push(manifold_node_engine::scene::transform::Transform::default());

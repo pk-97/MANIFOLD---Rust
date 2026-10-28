@@ -67,7 +67,7 @@ use manifold_water_liquid::fluid_role::{
 };
 use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_liquid::{PARTICLE_RADIUS_CELLS, RolePorts, WATER_DENSITY};
-use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs, RigidPresentation};
+use manifold_water_rigid::coupled_frame::{CoupledRigidInputs, RigidFrame, RigidPresentation};
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
 use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
@@ -503,7 +503,6 @@ pub struct Coupling {
 }
 
 impl Coupling {
-
     fn reset(&mut self) {
         let (mode, epochs) = (self.mode, self.epochs);
         *self = Self {
@@ -1062,7 +1061,7 @@ impl PhysicsNode for GpuFlipDomain {
         self.coupled.error = error.map(str::to_owned);
     }
 
-    fn coupled_rigid_frame(&self) -> Option<&CoupledRigidFrame> {
+    fn coupled_rigid_frame(&self) -> Option<&RigidFrame> {
         let coupled = &self.coupled;
         if !coupled.mode
             || self.role_pending

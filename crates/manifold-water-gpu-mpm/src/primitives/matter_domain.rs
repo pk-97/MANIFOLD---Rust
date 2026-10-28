@@ -37,13 +37,13 @@ use manifold_core::physics_gizmo::{PhysicsGizmo, PhysicsGizmoFamily};
 use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::exec::substeps::{SubstepClockOutput, SubstepInterval};
+use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::transform::Transform;
 use manifold_nodes_physics::tick_sampled::{TickSampled, TickSampledRegistration};
 use manifold_physics::clock::TICK;
 use manifold_physics::tick_samples::TickSamples;
-use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_water_liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::bounds::{
@@ -57,7 +57,7 @@ use manifold_water_liquid::coupling::{
 };
 use manifold_water_liquid::fluid_role::{FluidRole, InitialFill, take_initial_fill};
 use manifold_water_liquid::gizmos::SetupReport;
-use manifold_water_rigid::coupled_frame::{CoupledRigidFrame, CoupledRigidInputs, RigidPresentation};
+use manifold_water_rigid::coupled_frame::{CoupledRigidInputs, RigidFrame, RigidPresentation};
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
 use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
@@ -1003,7 +1003,7 @@ impl PhysicsNode for MatterDomain {
         self.coupled.error = error.map(str::to_owned);
     }
 
-    fn coupled_rigid_frame(&self) -> Option<&CoupledRigidFrame> {
+    fn coupled_rigid_frame(&self) -> Option<&RigidFrame> {
         let coupled = &self.coupled;
         if !coupled.mode
             || self.role_pending
@@ -1124,9 +1124,9 @@ impl MatterDomain {
         if ticks && self.coupled.owner.is_some() {
             gpu.native_enc.clear_buffer(reaction);
         }
-        if let Err(error) = self
-            .body_buffers
-            .upload(gpu, &self.bodies, rows_fresh, "node.matter_domain.bodies")
+        if let Err(error) =
+            self.body_buffers
+                .upload(gpu, &self.bodies, rows_fresh, "node.matter_domain.bodies")
         {
             ctx.error(error);
         }
@@ -1209,12 +1209,10 @@ impl MatterDomain {
             .owner
             .as_ref()
             .map_or_else(|| self.observed.geometries(), LiquidRigidOwner::geometries);
-        if self.bodies.prepare(
-            roles,
-            coupled_geometries,
-            cell_size,
-            offline,
-        )? == BodiesStatus::Pending
+        if self
+            .bodies
+            .prepare(roles, coupled_geometries, cell_size, offline)?
+            == BodiesStatus::Pending
         {
             return Ok(None);
         }
@@ -1258,12 +1256,10 @@ impl MatterDomain {
             && owner.wants_rebind()
         {
             owner.rebind()?;
-            if self.bodies.prepare(
-                roles,
-                owner.geometries(),
-                cell_size,
-                offline,
-            )? == BodiesStatus::Pending
+            if self
+                .bodies
+                .prepare(roles, owner.geometries(), cell_size, offline)?
+                == BodiesStatus::Pending
             {
                 return Ok(None);
             }

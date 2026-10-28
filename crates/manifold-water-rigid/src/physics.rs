@@ -723,7 +723,7 @@ pub struct RigidSimulation {
     pool_made: Vec<usize>,
     /// This frame's settled poses, bodies then copies, as a presentation
     /// frame; `presented` says whether a clock frame blended it.
-    settled: crate::coupled_frame::CoupledRigidFrame,
+    settled: crate::coupled_frame::RigidFrame,
     /// The bodies as drawn: the two newest settled ticks blended at the
     /// clock's display time, so motion stays smooth between Sim Rate updates.
     presentation: crate::coupled_frame::RigidPresentation,
@@ -754,7 +754,7 @@ impl Default for RigidSimulation {
             authored_bodies: PackedRows::new(None),
             targeted_fields: TargetedFieldHistory::default(),
             reset_count: None,
-            settled: crate::coupled_frame::CoupledRigidFrame::default(),
+            settled: crate::coupled_frame::RigidFrame::default(),
             presentation: crate::coupled_frame::RigidPresentation::default(),
             presented: false,
             poses: Vec::new(),
@@ -829,7 +829,7 @@ impl RigidSimulation {
     /// The bodies and copies to draw: blended between the two newest ticks
     /// at the display time when the last advance had a clock frame, else
     /// the settled poses.
-    pub fn shown(&self) -> &crate::coupled_frame::CoupledRigidFrame {
+    pub fn shown(&self) -> &crate::coupled_frame::RigidFrame {
         if self.presented {
             self.presentation.shown(&self.settled)
         } else {

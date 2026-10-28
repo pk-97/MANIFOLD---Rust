@@ -79,16 +79,12 @@ pub trait PhysicsNode: Send {
     ) {
     }
 
-    fn coupled_rigid_frame(&self) -> Option<&crate::coupled_frame::CoupledRigidFrame> {
+    fn coupled_rigid_frame(&self) -> Option<&crate::coupled_frame::RigidFrame> {
         None
     }
 
     /// Latch the rigid result of the liquid step before any scene consumer runs.
-    fn accept_coupled_rigid_frame(
-        &mut self,
-        _frame: Option<&crate::coupled_frame::CoupledRigidFrame>,
-    ) {
-    }
+    fn accept_coupled_rigid_frame(&mut self, _frame: Option<&crate::coupled_frame::RigidFrame>) {}
 
     /// Epoch of native impulse inputs accepted by this node, if any.
     fn physics_impulse_epoch(&self) -> Option<u64> {
