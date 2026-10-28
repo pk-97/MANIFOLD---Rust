@@ -7,10 +7,11 @@
 // 1989, "The damping of ocean waves by surface films"), which
 // `look_ripple_detail` applies by scaling its strength by `1 - c`.
 
-// Thick fresh sea foam reflects about 55% of visible light, diffusely
-// (Whitlock, Bartlett and Gurganus 1982, "Sea foam reflectance and influence on
-// optimum wavelength for remote sensing of ocean aerosols").
-const FOAM_ALBEDO: f32 = 0.55;
+// Foam that fully covers the water is a dense pack of bubbles that scatters
+// nearly all visible light, diffusely, so it reads white like snow; 0.85
+// keeps its shading. Thin foam's see-through rides the cover fraction `c`,
+// not the albedo.
+const FOAM_ALBEDO: f32 = 0.85;
 
 fn look_foam(
     world_pos: vec3<f32>,

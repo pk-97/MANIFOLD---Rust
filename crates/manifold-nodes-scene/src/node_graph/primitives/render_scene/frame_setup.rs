@@ -57,6 +57,7 @@ impl RenderScene {
             temporal_upscale,
             width,
             native_width,
+            native_height,
             ..
         } = pre;
         // SCENE_RENDER_MODE_DESIGN.md D4/INV-R4: the effective mode for this
@@ -317,6 +318,19 @@ impl RenderScene {
             uniforms.instance_inner = instance_inner;
             uniforms.appearance[3] = *env_rotation;
             uniforms.prev_instance_inner = prev_inner_n;
+            if object.min_pixel_radius > 0.0
+                && let Some(bounds) = mesh_slot
+                    .and_then(|s| inputs.cpu_value_slot::<Option<MeshBounds>>(s))
+                    .flatten()
+            {
+                // The mesh's largest half-extent about its origin: a round
+                // bead's radius.
+                let radius = (0..3)
+                    .map(|a| bounds.min[a].abs().max(bounds.max[a].abs()))
+                    .fold(0.0, f32::max);
+                uniforms.pixel_floor =
+                    [object.min_pixel_radius, radius, *native_height as f32, 0.0];
+            }
             if single_object.is_some() {
                 uniforms.appearance[2] = (1u32
                     | if legacy_roughness_map.is_some() { 2 } else { 0 }

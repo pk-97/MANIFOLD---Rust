@@ -8,13 +8,14 @@
 // extinction efficiency Q = 2: droplets far larger than the wavelength remove
 // twice their cross-section from a beam, the extinction paradox (van de Hulst
 // 1957). Extinction at a node x is strength * sum_k Q pi r_k^2 W3(|x - x_k|),
-// W3 the 3D cubic-spline kernel (Monaghan 1992) of smoothing length h, the
-// display cell size, reaching 2h. Node p sits at (p - 1/2) h and is element
+// W3 the 3D cubic-spline kernel (Monaghan 1992) of smoothing length 2h, twice
+// the display cell size, reaching 4h: neighbouring droplets merge into one
+// haze instead of a puff each. Node p sits at (p - 1/2) h and is element
 // `ts_cell_at(p)` of the pool; a node in a tile the table does not hold takes
 // nothing, and the canonical element reads 0.
 //
 // Three passes in command order: cs_clear zeroes the accumulator, cs_scatter
-// adds every droplet's kernel-weighted extinction area to the nodes within 2h,
+// adds every droplet's kernel-weighted extinction area to the nodes within 4h,
 // cs_resolve turns each node's sum into the coefficient.
 
 struct Params {
@@ -50,6 +51,8 @@ const EXTINCTION_EFFICIENCY: f32 = 2.0;
 // Past this many cells from the origin a position is no water's: it keeps
 // the node coordinate inside an i32.
 const REACH_CELLS: f32 = 1.0e9;
+// The kernel's smoothing length, in display cells.
+const SMOOTHING_CELLS: f32 = 2.0;
 
 // The 3D cubic-spline kernel, normalised over space: 1 / (pi h^3) f(q).
 fn kernel(distance: f32, h: f32) -> f32 {
@@ -78,14 +81,15 @@ fn cs_scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let r = params.radius * fade;
     let x = p.position_radius.xyz;
-    let reach = 2.0 * params.h;
+    let smoothing = SMOOTHING_CELLS * params.h;
+    let reach = 2.0 * smoothing;
     // The droplet's node coordinate: node n is at n = x / h + 1/2.
     let q = x / params.h + vec3<f32>(0.5);
     if !all(abs(q) < vec3<f32>(REACH_CELLS)) {
         return;
     }
-    let lo = vec3<i32>(floor(q - vec3<f32>(2.0)));
-    let hi = vec3<i32>(ceil(q + vec3<f32>(2.0)));
+    let lo = vec3<i32>(floor(q - vec3<f32>(2.0 * SMOOTHING_CELLS)));
+    let hi = vec3<i32>(ceil(q + vec3<f32>(2.0 * SMOOTHING_CELLS)));
     ts_home(ts_cell_at(vec3<i32>(floor(q))));
     let area = EXTINCTION_EFFICIENCY * PI * r * r;
     for (var k = lo.z; k <= hi.z; k++) {
@@ -100,7 +104,7 @@ fn cs_scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if index == ts_canon() {
                     continue;
                 }
-                let add = u32(round(area * kernel(d, params.h) * SPLAT_FIXED_SCALE));
+                let add = u32(round(area * kernel(d, smoothing) * SPLAT_FIXED_SCALE));
                 atomicAdd(&accum[index], add);
             }
         }

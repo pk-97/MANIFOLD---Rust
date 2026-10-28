@@ -816,6 +816,39 @@ pub(crate) fn wetness_onto_wet_map(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Give a saved water's spray object the pixel floor a new Water gets, after
+/// flattening. A spray object that already sets one keeps it. Idempotent.
+pub(crate) fn spray_pixel_floor(def: &mut EffectGraphDef) -> bool {
+    use crate::presets::gpu_flip::SPRAY_MIN_PIXEL_RADIUS;
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    let mut changed = false;
+    for node in def
+        .nodes
+        .iter_mut()
+        .filter(|n| n.type_id == "node.scene_object" && n.node_id.as_str() == "spray_object")
+    {
+        if !node.params.contains_key("min_pixel_radius") {
+            node.params.insert(
+                "min_pixel_radius".to_owned(),
+                SerializedParamValue::Float {
+                    value: SPRAY_MIN_PIXEL_RADIUS,
+                },
+            );
+            changed = true;
+        }
+    }
+    changed
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "spray_pixel_floor",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 410,
+        apply: spray_pixel_floor,
+    }
+}
+
 inventory::submit! {
     manifold_node_engine::load::migration::GraphMigration {
         name: "wetness_onto_wet_map",

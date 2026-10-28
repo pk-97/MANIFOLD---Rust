@@ -41,8 +41,8 @@ struct MistUniforms {
     pad_c: u32,
 }
 
-/// The shader's constants for `pool`: the kernel's smoothing length is the
-/// display cell size.
+/// The shader's constants for `pool`: `h` is the display cell size, and the
+/// kernel's smoothing length twice it.
 fn mist_uniforms(
     pool: TilePool,
     strength: f32,
@@ -101,7 +101,7 @@ fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
 manifold_node_engine::primitive! {
     name: SprayMist,
     type_id: "node.spray_mist",
-    purpose: "Per node of the display's world tiles, the extinction coefficient per metre of the spray's droplets in the air. Each live particle (a slot with fade 0 is empty) is a droplet of radius r, the Droplet Radius times the particle's fade (its w, 0 to 1), and cross-section pi r^2 and extinction efficiency 2 (droplets far larger than the wavelength remove twice their cross-section, the extinction paradox); the coefficient at a node is strength times the sum over droplets of 2 pi r^2 W(distance), W the 3D cubic-spline kernel normalised over space, with smoothing length the display cell size, reaching two cells. Node p is at (p - 1/2) cells; a node in a tile the table does not hold takes nothing, and the canonical element reads 0.",
+    purpose: "Per node of the display's world tiles, the extinction coefficient per metre of the spray's droplets in the air. Each live particle (a slot with fade 0 is empty) is a droplet of radius r, the Droplet Radius times the particle's fade (its w, 0 to 1), and cross-section pi r^2 and extinction efficiency 2 (droplets far larger than the wavelength remove twice their cross-section, the extinction paradox); the coefficient at a node is strength times the sum over droplets of 2 pi r^2 W(distance), W the 3D cubic-spline kernel normalised over space, with smoothing length two display cells, reaching four cells, so neighbouring droplets merge into one haze. Node p is at (p - 1/2) cells; a node in a tile the table does not hold takes nothing, and the canonical element reads 0.",
     inputs: {
         particles: Array(FluidParticle) required,
         tiles: Array(u32) required,
@@ -287,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn the_smoothing_length_is_the_display_cell_over_a_pool_of_any_size() {
+    fn the_lattice_cell_is_the_display_cell_over_a_pool_of_any_size() {
         let pool = TilePool {
             pool_tiles: 13,
             cell_size: 0.0625,

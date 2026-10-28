@@ -43,6 +43,11 @@ pub struct SceneObject {
     /// The mesh is closed and outward-wound, so an opaque draw may skip its
     /// back faces. Set by the scene compiler for built-in solids.
     pub closed: bool,
+    /// The smallest radius a copy draws at, in output pixels: a copy smaller
+    /// on screen grows about its centre to it, so distant spray stays a dot
+    /// instead of flickering between pixels. 0 draws copies at their true
+    /// size.
+    pub min_pixel_radius: f32,
     /// Local TRS. Identity ([`Transform::default`]) when the `transform`
     /// input port is unwired.
     pub transform: Transform,

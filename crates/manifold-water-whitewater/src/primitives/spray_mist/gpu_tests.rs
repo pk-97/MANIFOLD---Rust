@@ -13,7 +13,9 @@ use manifold_water_liquid::testkit::world_box::BoxTable;
 const RADIUS: f32 = 0.02;
 const FADE: f32 = 0.5;
 const H: f32 = 0.05;
-const KERNEL_PEAK: f32 = 1.0 / (std::f32::consts::PI * H * H * H);
+/// The kernel's smoothing length: two display cells.
+const SMOOTHING: f32 = 2.0 * H;
+const KERNEL_PEAK: f32 = 1.0 / (std::f32::consts::PI * SMOOTHING * SMOOTHING * SMOOTHING);
 
 /// Nodes -6..=7 in x, -5..=6 in y and -7..=4 in z: two tiles on every axis,
 /// split at the origin.
@@ -82,7 +84,7 @@ fn spline(q: f64) -> f64 {
 
 /// The dense reference: the extinction at `node` summed over every live droplet.
 fn reference_mist(particles: &[FluidParticle], node: [f32; 3]) -> f64 {
-    let h = f64::from(H);
+    let h = f64::from(SMOOTHING);
     particles
         .iter()
         .filter(|p| p.position_radius[3] > 0.0)
@@ -160,9 +162,9 @@ fn one_droplet_follows_the_kernel_across_a_tile_face() {
         (own - peak).abs() <= 1e-5 * peak,
         "own node: {own}, expected {peak}"
     );
-    // One spacing away the kernel is a quarter of its peak, on either side of
-    // the face. The fixed-point sum rounds to 1 part in 2^20, which a
-    // quarter-size term feels more.
+    // One spacing away, half a smoothing length, the kernel is 23/32 of its
+    // peak, on either side of the face. The fixed-point sum rounds to 1 part
+    // in 2^20.
     for step in [
         [1, 0, 0],
         [-1, 0, 0],
@@ -174,12 +176,12 @@ fn one_droplet_follows_the_kernel_across_a_tile_face() {
         let n = std::array::from_fn(|a| on[a] + step[a]);
         let got = at(n);
         assert!(
-            (got - 0.25 * peak).abs() <= 1e-4 * peak,
+            (got - 0.71875 * peak).abs() <= 1e-4 * peak,
             "node {n:?}: {got}, expected {}",
-            0.25 * peak
+            0.71875 * peak
         );
     }
-    // Three nodes away on any axis the kernel is out of reach: exactly 0.
+    // Four nodes away on any axis the kernel is out of reach: exactly 0.
     for z in 0..table.cells[2] {
         for y in 0..table.cells[1] {
             for x in 0..table.cells[0] {
@@ -187,7 +189,7 @@ fn one_droplet_follows_the_kernel_across_a_tile_face() {
                 let apart: Vec<i32> = (0..3)
                     .map(|a| (n[a] + table.origin[a] - on[a]).abs())
                     .collect();
-                if apart.iter().any(|&d| d >= 3) {
+                if apart.iter().any(|&d| d >= 4) {
                     let index = (x + table.cells[0] * (y + table.cells[1] * z)) as usize;
                     assert_eq!(dense[index], 0.0, "node {n:?}");
                 }
@@ -199,7 +201,7 @@ fn one_droplet_follows_the_kernel_across_a_tile_face() {
 #[test]
 fn a_node_in_a_tile_the_table_does_not_hold_takes_nothing() {
     // The droplet sits between nodes 7 and 8: node 7 is the last of tile 0,
-    // and tile 1 is not in the table, so nodes 8 and 9 of its footprint are
+    // and tile 1 is not in the table, so nodes 8 to 11 of its footprint are
     // lost.
     let table = table();
     let particles = [at_node([7.6, 0.3, 0.3], FADE, 0)];

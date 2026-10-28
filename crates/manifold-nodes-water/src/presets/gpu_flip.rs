@@ -74,6 +74,10 @@ manifold_core::testkit_visible! {
 pub(crate) const DAM_OBSTACLE: [[f64; 3]; 2] = [[0.35, 0.58, -0.1], [0.6, 1.16, 0.85]];
 }
 
+/// The smallest radius a spray bead draws at, in output pixels: far spray
+/// reads as fine white points instead of flickering out between pixels.
+pub(crate) const SPRAY_MIN_PIXEL_RADIUS: f32 = 1.5;
+
 /// The material a new Water draws with: clear water at stage scale, a look
 /// the user stylises from. Pure water absorbs about 0.26, 0.054 and 0.0098
 /// per metre at 615, 545 and 465 nm (Pope and Fry 1997), so a metre passes
@@ -887,10 +891,15 @@ impl WaterScene {
                 params["volume_particle_density"] = float(70.0);
             }
             let material = b.node(&format!("{kind}_material"), "node.pbr_material", params);
+            let object_params = if kind == "spray" {
+                json!({"cast_shadows": float(0.0), "min_pixel_radius": float(f64::from(SPRAY_MIN_PIXEL_RADIUS))})
+            } else {
+                json!({"cast_shadows": float(0.0)})
+            };
             let object = b.node(
                 &format!("{kind}_object"),
                 "node.scene_object",
-                json!({"cast_shadows": float(0.0)}),
+                object_params,
             );
             let copies = b.node(
                 &format!("{kind}_copies"),

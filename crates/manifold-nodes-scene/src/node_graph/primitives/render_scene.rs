@@ -924,6 +924,11 @@ struct RenderSceneUniforms {
     instance_inner: [[f32; 4]; 4],
     /// Last frame's `instance_inner`, the velocity pair of `prev_model`.
     prev_instance_inner: [[f32; 4]; 4],
+    /// The copies' pixel floor: `x` = the smallest radius a copy draws at,
+    /// in output pixels (0 = off), `y` = the mesh's radius about its origin,
+    /// `z` = the output height in pixels. `vs_main` grows a copy smaller on
+    /// screen about its centre.
+    pixel_floor: [f32; 4],
 }
 
 // 800 = 50 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
@@ -947,7 +952,8 @@ struct RenderSceneUniforms {
 // field keeps its offset (appending is the byte-identical contract).
 // 848 after optional closed-volume optics and scattering colour (+32).
 // 976 after the instance-space pair `instance_inner`/`prev_instance_inner` (+128).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 976);
+// 992 after the copies' `pixel_floor` (+16).
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 992);
 
 /// Per-map sampling metadata. Core maps retain hardware anisotropic
 /// samplers; extension maps use these settings within Metal sampler limits.
@@ -2644,6 +2650,7 @@ fn build_uniforms(
         // Object space; frame setup writes the Group-space pair.
         instance_inner: IDENTITY_M4,
         prev_instance_inner: IDENTITY_M4,
+        pixel_floor: [0.0; 4],
     }
 }
 
@@ -2912,6 +2919,7 @@ impl RenderScene {
             visible: true,
             cast_shadows: true,
             closed: false,
+            min_pixel_radius: 0.0,
             transform: manifold_node_engine::scene::transform::Transform::default(),
             parent_transform: None,
             material: inputs.material("material"),
