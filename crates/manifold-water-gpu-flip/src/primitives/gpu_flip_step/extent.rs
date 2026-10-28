@@ -31,12 +31,15 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.provide("tiles", table_words(pool) * 4);
     x.publish("pool_tiles", pool as f32);
     let history = history_slots(whole(x, "live_hit_count", 0.0));
-    x.provide("substep_schedule", u64::from(history) * 16);
-    x.provide("substep_faces", u64::from(history) * pool_len(pool) * 16);
     x.publish("substep_count", history as f32);
-    x.hold(manifold_water_liquid::substep_history::history_bytes(
-        pool, history,
-    ));
+    // The substep history exists only while something reads it.
+    if x.feeds("substep_faces") || x.feeds("substep_schedule") {
+        x.provide("substep_schedule", u64::from(history) * 16);
+        x.provide("substep_faces", u64::from(history) * pool_len(pool) * 16);
+        x.hold(manifold_water_liquid::substep_history::history_bytes(
+            pool, history,
+        ));
+    }
     let slots = x.items("particles").unwrap_or(0);
     x.hold(crate::primitives::gpu_flip_clock::GpuFlipClock::held_bytes(
         slots as u32,

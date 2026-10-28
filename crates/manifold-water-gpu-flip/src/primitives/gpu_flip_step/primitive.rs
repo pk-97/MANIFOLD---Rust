@@ -468,11 +468,17 @@ impl Primitive for GpuFlipStep {
             ctx.error(format!("{NAME}: {error}"));
             return;
         }
+        // Only a wired history output has a slot; with no reader the rows,
+        // their capture and the remap cost nothing.
+        let keep_history = ctx.outputs.slot("substep_faces").is_some()
+            || ctx.outputs.slot("substep_schedule").is_some();
         let gpu = ctx.gpu_encoder();
-        self.state.history.prepare(gpu.device);
-        if let Err(error) = self.state.history.reserve(gpu.device, pool, history_slots) {
-            ctx.error(format!("{NAME}: {error}"));
-            return;
+        if keep_history {
+            self.state.history.prepare(gpu.device);
+            if let Err(error) = self.state.history.reserve(gpu.device, pool, history_slots) {
+                ctx.error(format!("{NAME}: {error}"));
+                return;
+            }
         }
         // The first substep reads the tick's particles, every later one the
         // last one's out. The reaction is in place, so the bodies feel every
@@ -564,27 +570,31 @@ impl Primitive for GpuFlipStep {
                     return;
                 }
                 gpu.native_enc.set_profile_tag("gpu_flip.stage.finish");
-                self.state.history.capture(
-                    gpu.native_enc,
-                    k as u32,
-                    &plan_buffer,
-                    &PooledFaces {
-                        faces: &self.state.lattice.as_ref().expect("lattice prepared").faces,
-                        table: self.state.tiles.as_ref().expect("tiles prepared").table(),
-                        pool_tiles: pool,
-                    },
-                );
+                if keep_history {
+                    self.state.history.capture(
+                        gpu.native_enc,
+                        k as u32,
+                        &plan_buffer,
+                        &PooledFaces {
+                            faces: &self.state.lattice.as_ref().expect("lattice prepared").faces,
+                            table: self.state.tiles.as_ref().expect("tiles prepared").table(),
+                            pool_tiles: pool,
+                        },
+                    );
+                }
                 last_clock_plan = plan_buffer;
             }
         }
         self.state.narrow_band.finish(narrow_band);
         // Tiles change slot, come and go between substeps: every captured
         // row moves onto the table the step publishes.
-        self.state.history.remap(
-            gpu.native_enc,
-            self.state.tiles.as_ref().expect("tiles prepared").table(),
-            encoded_steps,
-        );
+        if keep_history {
+            self.state.history.remap(
+                gpu.native_enc,
+                self.state.tiles.as_ref().expect("tiles prepared").table(),
+                encoded_steps,
+            );
+        }
         if let Some(status) = clock_status {
             gpu.native_enc
                 .copy_buffer_to_buffer(&last_clock_plan, &status, 32);
