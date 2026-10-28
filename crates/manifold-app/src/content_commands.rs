@@ -1401,25 +1401,13 @@ impl ContentThread {
                 self.pending_job = Some(PendingJob::Load(project))
             }
             // ── Settings ───────────────────────────────────────────
-            ContentCommand::SetResolution(new_preset) => {
-                if let Some(project) = self.engine.project() {
-                    let old_preset = project.settings.resolution_preset;
-                    if old_preset != new_preset {
-                        let command =
-                            manifold_editing::commands::settings::ChangeResolutionCommand::new(
-                                old_preset, new_preset,
-                            );
-                        self.execute_resize_command(Box::new(command));
-                    }
-                }
-            }
-            ContentCommand::SetDisplayResolution(width, height) => {
+            ContentCommand::SetOutputSize(width, height) => {
                 if let Some(project) = self.engine.project() {
                     let old_width = project.settings.output_width;
                     let old_height = project.settings.output_height;
                     if old_width != width || old_height != height {
                         let command =
-                            manifold_editing::commands::settings::SetDisplayDimensionsCommand::new(
+                            manifold_editing::commands::settings::SetOutputSizeCommand::new(
                                 old_width, old_height, width, height,
                             );
                         self.execute_resize_command(Box::new(command));

@@ -154,6 +154,9 @@
       "led-layer-create",
       "trigger-lane-assignment"
     ],
+    "crates/manifold-ui/src/panels/settings_popup.rs": [
+      "settings-resolution"
+    ],
     "crates/manifold-ui/src/panels/audio_setup_panel.rs": [
       "audio-setup-hygiene"
     ],
@@ -227,6 +230,7 @@
     "drag-clip": "timeline",
     "drag-survives-rebuild": "inspector",
     "led-layer-create": "timeline",
+    "settings-resolution": "timeline",
     "led-inspector-preview": "dmxcard",
     "envelope-modulation": "envmod",
     "t-drawer-step": "envmod",

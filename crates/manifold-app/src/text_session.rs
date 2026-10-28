@@ -182,6 +182,22 @@ pub(crate) fn begin_for_action(
                 11.0,
             );
         }
+        PanelAction::Transport(TransportAction::CustomResolutionClicked) => {
+            let r = ui_root
+                .settings_popup
+                .resolution_field_rect(&ui_root.tree)
+                .unwrap_or(manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0));
+            text_input.begin_owned(
+                TextSessionOwner::MainOverlay(OverlayId::Settings),
+                TextInputField::Resolution,
+                &format!(
+                    "{}x{}",
+                    project.settings.output_width, project.settings.output_height
+                ),
+                anchor_of(r),
+                11.0,
+            );
+        }
         PanelAction::Root(RootAction::BeginColourTextInput {
             target,
             param_ids,
@@ -719,6 +735,11 @@ pub(crate) fn commit<'a>(
                 ));
                 // The content thread renders at project FPS; the UI runs at display rate.
                 ContentCommand::send(cx.content_tx, ContentCommand::SetFrameRate(fps as f64));
+            }
+        }
+        TextInputField::Resolution => {
+            if let Some((w, h)) = crate::text_input::parse_resolution(text) {
+                ContentCommand::send(cx.content_tx, ContentCommand::SetOutputSize(w, h));
             }
         }
         TextInputField::SliderRange | TextInputField::EditorSliderRange => {

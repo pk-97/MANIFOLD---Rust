@@ -181,35 +181,6 @@ const QUANTIZE_MODE: EnumTable = EnumTable {
     any_string_is_default: false,
 };
 
-const RESOLUTION_PRESET: EnumTable = EnumTable {
-    numbers: &[
-        (0, "HD720p"),
-        (1, "FHD1080p"),
-        (2, "QHD1440p"),
-        (3, "UHD4K"),
-        (4, "Square1080"),
-        (5, "Portrait720"),
-        (6, "Portrait1080"),
-        (7, "Portrait1440"),
-        (8, "Portrait4K"),
-        (9, "Square4K"),
-    ],
-    default: "FHD1080p",
-    legacy: &[
-        ("HD_720p", "HD720p"),
-        ("FHD_1080p", "FHD1080p"),
-        ("QHD_1440p", "QHD1440p"),
-        ("UHD_4K", "UHD4K"),
-        ("Square_1080", "Square1080"),
-        ("Portrait_720", "Portrait720"),
-        ("Portrait_1080", "Portrait1080"),
-        ("Portrait_1440", "Portrait1440"),
-        ("Portrait_4K", "Portrait4K"),
-        ("Square_4K", "Square4K"),
-    ],
-    any_string_is_default: false,
-};
-
 const TEMPO_POINT_SOURCE: EnumTable = EnumTable {
     numbers: &[
         (0, "Unknown"),
@@ -242,7 +213,6 @@ fn table_for(key: &str, path: &[String]) -> Option<&'static EnumTable> {
         ("clockAuthority", Some("settings")) => Some(&CLOCK_AUTHORITY),
         ("oscSyncMode", Some("settings")) => Some(&OSC_SYNC_MODE),
         ("quantizeMode", Some("settings")) => Some(&QUANTIZE_MODE),
-        ("resolutionPreset", Some("settings")) => Some(&RESOLUTION_PRESET),
         ("triggerType", Some("instruments" | "events")) => Some(&PERCUSSION_TRIGGER_TYPE),
         ("color", Some("markers")) => Some(&MARKER_COLOR),
         ("startTempoSource" | "endTempoSource", Some("recordedClips")) => Some(&TEMPO_POINT_SOURCE),
@@ -315,7 +285,7 @@ mod tests {
     use manifold_core::project::Project;
     use manifold_core::types::{
         BeatDivision, BlendMode, ClipDurationMode, ClockAuthority, DriverWaveform, LayerType,
-        MarkerColor, OscSyncMode, QuantizeMode, ResolutionPreset, TempoPointSource,
+        MarkerColor, OscSyncMode, QuantizeMode, TempoPointSource,
     };
     use serde_json::json;
 
@@ -362,7 +332,6 @@ mod tests {
                 "clockAuthority": v(2, "MidiClock"),
                 "oscSyncMode": v(1, "AbletonOsc"),
                 "quantizeMode": v(2, "Beat"),
-                "resolutionPreset": v(1, "FHD1080p"),
                 "extra": { "waveform": 0.5, "color": 0.25 }
             },
             "tempoMap": { "points": [
@@ -411,7 +380,6 @@ mod tests {
         assert_eq!(p.settings.clock_authority, ClockAuthority::MidiClock);
         assert_eq!(p.settings.osc_sync_mode, OscSyncMode::AbletonOsc);
         assert_eq!(p.settings.quantize_mode, QuantizeMode::Beat);
-        assert_eq!(p.settings.resolution_preset, ResolutionPreset::FHD1080p);
         assert_eq!(p.tempo_map.points()[0].source, TempoPointSource::MidiClock);
         let rec = &p.recording_provenance;
         assert_eq!(
@@ -451,12 +419,10 @@ mod tests {
     #[test]
     fn unknown_numbers_map_to_the_old_default() {
         let mut j = project_json(true);
-        j["settings"]["resolutionPreset"] = json!(99);
         j["settings"]["clockAuthority"] = json!(-4);
         j["timeline"]["layers"][0]["layerType"] = json!(42);
         j["timeline"]["markers"][0]["color"] = json!(1.5);
         let p = load(&j);
-        assert_eq!(p.settings.resolution_preset, ResolutionPreset::FHD1080p);
         assert_eq!(p.settings.clock_authority, ClockAuthority::Internal);
         assert_eq!(p.timeline.layers[0].layer_type, LayerType::Video);
         assert_eq!(p.timeline.markers[0].color, MarkerColor::Red);
@@ -465,10 +431,8 @@ mod tests {
     #[test]
     fn legacy_spellings_become_names() {
         let mut j = project_json(false);
-        j["settings"]["resolutionPreset"] = json!("QHD_1440p");
         j["timeline"]["layers"][0]["effects"][0]["drivers"][0]["beatDivision"] = json!("_1_4T");
         let p = load(&j);
-        assert_eq!(p.settings.resolution_preset, ResolutionPreset::QHD1440p);
         let driver = &p.timeline.layers[0].effects.as_ref().unwrap()[0]
             .drivers
             .as_ref()

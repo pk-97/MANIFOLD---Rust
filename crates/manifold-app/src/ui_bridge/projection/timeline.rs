@@ -210,12 +210,11 @@ pub fn sync_project_all(ui: &mut UIRoot, project: &Project, selection: &Selectio
 /// Settings stamp, so they are fed here, before the rebuild that stamp plans.
 fn feed_settings_panels(ui: &mut UIRoot, project: &Project) {
     let settings = &project.settings;
-    // The preset's name when the size matches it, otherwise "WxH".
-    let (preset_w, preset_h) = settings.resolution_preset.dimensions();
-    let res_label = if preset_w == settings.output_width && preset_h == settings.output_height {
-        settings.resolution_preset.display_name().to_string()
-    } else {
-        format!("{}x{}", settings.output_width, settings.output_height)
+    // The preset's name when the size matches one, otherwise "WxH".
+    let (w, h) = (settings.output_width, settings.output_height);
+    let res_label = match manifold_core::types::ResolutionPreset::matching(w, h) {
+        Some(preset) => preset.display_name().to_string(),
+        None => format!("{w}x{h}"),
     };
     let popup = &mut ui.settings_popup;
     popup.set_resolution_text(&res_label);

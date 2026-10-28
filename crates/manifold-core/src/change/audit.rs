@@ -184,7 +184,6 @@ fn settings_fp(fp: &mut Fp, settings: &crate::settings::ProjectSettings) {
         time_signature_numerator,
         time_signature_denominator,
         quantize_mode,
-        resolution_preset,
         render_scale,
         tonemap_curve,
         tonemap_enabled,
@@ -244,7 +243,6 @@ fn settings_fp(fp: &mut Fp, settings: &crate::settings::ProjectSettings) {
         Part::Settings,
         &(
             quantize_mode,
-            resolution_preset,
             render_scale,
             tonemap_curve,
             tonemap_enabled,

@@ -15,6 +15,8 @@ use manifold_ui::text_edit;
 pub enum TextInputField {
     Bpm,
     Fps,
+    /// Custom output size from the resolution dropdown, typed as "WxH".
+    Resolution,
     /// Layer rename. LayerId stored in `TextInputState::layer_id` (not `Copy`,
     /// so kept off this `Copy` enum — mirrors `MarkerName`/`AudioSendLabel`).
     /// Was index-based (BUG-031): a layer-list change between double-click and
@@ -33,7 +35,7 @@ pub enum TextInputField {
     EditorInspectorParam,
     /// "Set slider range…" type-in ("min to max"; empty resets). The target
     /// and id ride on [`TextInputState::inspector_param`]. Commit dispatches
-    /// `SetSliderRange` 
+    /// `SetSliderRange`
     SliderRange,
     /// The same slider range entry, hosted by the graph-editor window.
     EditorSliderRange,
@@ -790,6 +792,22 @@ pub fn parse_lenient_numeric(text: &str) -> Option<f32> {
     cleaned.parse::<f32>().ok()
 }
 
+/// Parse a custom output size: two whole numbers separated by "x", "×", a
+/// comma or spaces. Each side is clamped to 16–8192 px and rounded down to
+/// even, which video encoders need. Anything else is `None`.
+pub fn parse_resolution(text: &str) -> Option<(i32, i32)> {
+    let spaced = text.replace(['x', 'X', '\u{00D7}', ',', '*'], " ");
+    let numbers: Vec<i32> = spaced
+        .split_whitespace()
+        .map(|n| n.parse().ok())
+        .collect::<Option<_>>()?;
+    let side = |v: i32| v.clamp(16, 8192) & !1;
+    match numbers.as_slice() {
+        [w, h] => Some((side(*w), side(*h))),
+        _ => None,
+    }
+}
+
 /// Parse a "Set slider range…" entry: two numbers separated by spaces, a
 /// comma, "to" or "..", in either order. Empty text means reset (`Some(None)`);
 /// anything else unparseable is `None` (the entry is dropped).
@@ -887,6 +905,18 @@ mod parse_tests {
         assert_eq!(parse_slider_range("3"), None);
         assert_eq!(parse_slider_range("2 to 2"), None);
         assert_eq!(parse_slider_range("a to b"), None);
+    }
+
+    #[test]
+    fn resolution_parses_any_separator_and_clamps_to_even() {
+        for text in ["2560x1600", "2560 X 1600", "2560\u{00D7}1600", " 2560, 1600 "] {
+            assert_eq!(parse_resolution(text), Some((2560, 1600)), "{text}");
+        }
+        assert_eq!(parse_resolution("1921x1081"), Some((1920, 1080)));
+        assert_eq!(parse_resolution("5x99999"), Some((16, 8192)));
+        assert_eq!(parse_resolution("1920"), None);
+        assert_eq!(parse_resolution("1920x1080x3"), None);
+        assert_eq!(parse_resolution("wide x tall"), None);
     }
 
     #[test]

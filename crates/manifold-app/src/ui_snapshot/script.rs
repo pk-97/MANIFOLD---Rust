@@ -1219,6 +1219,13 @@ impl Runner {
                 let detail = if self.perform.active { "perform mode entered" } else { "perform mode not entered" };
                 StepResult { index, action: action_desc, status: if self.perform.active { "ok" } else { "fail" }, detail: detail.into(), artifact: None }
             }
+            // The App's menu drain opens the settings popup for MANIFOLD > Settings….
+            AutomationAction::Menu { item: manifold_ui::automation::MenuItem::Settings } => {
+                ui.settings_popup.open();
+                ui.mark_overlay_dirty();
+                self.live_frame(ui, data, render, false, true);
+                StepResult { index, action: action_desc, status: "ok", detail: "settings popup opened".into(), artifact: None }
+            }
             AutomationAction::ResetWork => {
                 // Settle whatever setup left pending, so the window counts
                 // only the gesture that follows.
@@ -2495,6 +2502,18 @@ impl Runner {
                         Ok(command) => ContentCommand::Execute(command),
                         Err(message) => ContentCommand::GraphEditRejected(message),
                     }
+                }
+                // The content thread wraps a size change in its resize command.
+                ContentCommand::SetOutputSize(width, height) => {
+                    let settings = &data.project.settings;
+                    ContentCommand::Execute(Box::new(
+                        manifold_editing::commands::settings::SetOutputSizeCommand::new(
+                            settings.output_width,
+                            settings.output_height,
+                            width,
+                            height,
+                        ),
+                    ))
                 }
                 other => other,
             };

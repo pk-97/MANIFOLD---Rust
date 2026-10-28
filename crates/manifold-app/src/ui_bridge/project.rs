@@ -158,15 +158,8 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::handled()
         }
-        ProjectAction::SetResolution(preset_idx) => {
-            use manifold_core::types::ResolutionPreset;
-            if let Some(new) = ResolutionPreset::from_index(*preset_idx) {
-                ContentCommand::send(content_tx, ContentCommand::SetResolution(new));
-            }
-            DispatchResult::handled()
-        }
-        ProjectAction::SetDisplayResolution(w, h) => {
-            ContentCommand::send(content_tx, ContentCommand::SetDisplayResolution(*w, *h));
+        ProjectAction::SetOutputSize(w, h) => {
+            ContentCommand::send(content_tx, ContentCommand::SetOutputSize(*w, *h));
             DispatchResult::handled()
         }
         ProjectAction::SetSimRate(rate) => {

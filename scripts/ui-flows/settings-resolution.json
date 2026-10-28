@@ -1,0 +1,15 @@
+[
+  { "Menu": { "item": "Settings" } },
+  { "Pointer": { "target": { "Query": { "text": "1080p", "type": "Button" } }, "gesture": { "Click": { "modifiers": {} } } } },
+  { "Pointer": { "target": { "Query": { "text": "Custom…" } }, "gesture": { "Click": { "modifiers": {} } } } },
+  { "Text": { "text": "3456x2234" } },
+  { "Key": { "key": "Enter", "modifiers": {} } },
+  { "Step": { "frames": 2 } },
+  { "Assert": { "selector": { "Query": { "text": "3456x2234", "type": "Button" } }, "check": "Exists" } },
+  "Snapshot",
+  { "Pointer": { "target": { "Query": { "text": "3456x2234", "type": "Button" } }, "gesture": { "Click": { "modifiers": {} } } } },
+  { "Pointer": { "target": { "Query": { "text": "1080p  (1920x1080)" } }, "gesture": { "Click": { "modifiers": {} } } } },
+  { "Step": { "frames": 2 } },
+  { "Assert": { "selector": { "Query": { "text": "1080p", "type": "Button" } }, "check": "Exists" } },
+  "Snapshot"
+]

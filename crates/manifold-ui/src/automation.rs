@@ -169,6 +169,8 @@ pub enum AutomationAction {
 pub enum MenuItem {
     /// View > Perform: enter performance mode.
     Perform,
+    /// MANIFOLD > Settings…: open the settings popup.
+    Settings,
 }
 
 /// A window a flow's input can go to.

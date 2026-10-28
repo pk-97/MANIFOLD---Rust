@@ -471,57 +471,6 @@ impl Command for ChangeBpmCommand {
     }
 }
 
-/// Change output resolution.
-/// Caller is responsible for applying the resolution to the runtime pipeline.
-/// Matches Unity: only sets the preset, never width/height.
-#[derive(Debug)]
-pub struct ChangeResolutionCommand {
-    old_preset: manifold_core::ResolutionPreset,
-    new_preset: manifold_core::ResolutionPreset,
-}
-
-impl ChangeResolutionCommand {
-    pub fn new(
-        old_preset: manifold_core::ResolutionPreset,
-        new_preset: manifold_core::ResolutionPreset,
-    ) -> Self {
-        Self {
-            old_preset,
-            new_preset,
-        }
-    }
-
-    pub fn old_preset(&self) -> manifold_core::ResolutionPreset {
-        self.old_preset
-    }
-    pub fn new_preset(&self) -> manifold_core::ResolutionPreset {
-        self.new_preset
-    }
-}
-
-impl Command for ChangeResolutionCommand {
-    fn touches(&self) -> ChangeSet {
-        ChangeSet::of(&[Part::Settings])
-    }
-    fn do_execute(&mut self, project: &mut Project) {
-        project.settings.resolution_preset = self.new_preset;
-        let (w, h) = self.new_preset.dimensions();
-        project.settings.output_width = w;
-        project.settings.output_height = h;
-    }
-
-    fn do_undo(&mut self, project: &mut Project) {
-        project.settings.resolution_preset = self.old_preset;
-        let (w, h) = self.old_preset.dimensions();
-        project.settings.output_width = w;
-        project.settings.output_height = h;
-    }
-
-    fn description(&self) -> &str {
-        "Change Resolution"
-    }
-}
-
 /// Change quantize mode.
 #[derive(Debug)]
 pub struct ChangeQuantizeModeCommand {
@@ -1149,16 +1098,18 @@ impl Command for ChangeLayerMidiTriggerModeCommand {
     }
 }
 
-/// Change display resolution (direct width/height, not preset-based).
+/// Change the output size. Presets, display sizes and typed sizes all land
+/// here; `output_width`/`output_height` are the only stored resolution.
+/// The caller resizes the content pipeline.
 #[derive(Debug)]
-pub struct SetDisplayDimensionsCommand {
+pub struct SetOutputSizeCommand {
     old_width: i32,
     old_height: i32,
     new_width: i32,
     new_height: i32,
 }
 
-impl SetDisplayDimensionsCommand {
+impl SetOutputSizeCommand {
     pub fn new(old_width: i32, old_height: i32, new_width: i32, new_height: i32) -> Self {
         Self {
             old_width,
@@ -1169,7 +1120,7 @@ impl SetDisplayDimensionsCommand {
     }
 }
 
-impl Command for SetDisplayDimensionsCommand {
+impl Command for SetOutputSizeCommand {
     fn touches(&self) -> ChangeSet {
         ChangeSet::of(&[Part::Settings])
     }
@@ -1184,7 +1135,7 @@ impl Command for SetDisplayDimensionsCommand {
     }
 
     fn description(&self) -> &str {
-        "Set Display Resolution"
+        "Change Resolution"
     }
 }
 

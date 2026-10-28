@@ -157,8 +157,9 @@ pub(super) fn dispatch_transport(
             }
             DispatchResult::handled()
         }
-        TransportAction::ResolutionClicked => {
-            // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
+        TransportAction::ResolutionClicked | TransportAction::CustomResolutionClicked => {
+            // Intercepted upstream: the dropdown opens in UIRoot::try_open_dropdown,
+            // the custom size field in text_session::begin_for_action.
             DispatchResult::handled()
         }
         TransportAction::FpsFieldClicked => {

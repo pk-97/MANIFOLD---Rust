@@ -611,8 +611,7 @@ fn export_disposition(cmd: &ContentCommand) -> ExportDisposition {
 
         // Show and output settings: each can change what the show outputs.
         ContentCommand::SetFrameRate(_)
-        | ContentCommand::SetResolution(_)
-        | ContentCommand::SetDisplayResolution(..)
+        | ContentCommand::SetOutputSize(..)
         | ContentCommand::SetRenderScale(_)
         | ContentCommand::SetTonemapCurve(_)
         | ContentCommand::SetTonemapEnabled(_)

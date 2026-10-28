@@ -61,6 +61,8 @@ pub struct SettingsPopup {
     host: ChromeHost,
     bg_id: NodeId,
     close_id: NodeId,
+    /// The Resolution dropdown trigger; the custom-size text field opens over it.
+    resolution_id: NodeId,
     /// Clicked-node → action map, rebuilt each `build_nodes`.
     actions: Vec<(NodeId, PanelAction)>,
 
@@ -95,6 +97,7 @@ impl SettingsPopup {
             host: ChromeHost::new(),
             bg_id: NodeId::PLACEHOLDER,
             close_id: NodeId::PLACEHOLDER,
+            resolution_id: NodeId::PLACEHOLDER,
             actions: Vec::new(),
             resolution_text: "1080p".into(),
             render_scale: 1.0,
@@ -134,6 +137,11 @@ impl SettingsPopup {
     /// enter/exit motion). Kept as a no-op so callers can still call it
     /// unconditionally every frame without special-casing.
     pub fn update(&mut self, _tree: &mut UITree) {}
+
+    /// Bounds of the Resolution dropdown trigger while the popup is open.
+    pub fn resolution_field_rect(&self, tree: &UITree) -> Option<Rect> {
+        self.open.then(|| tree.get_bounds(self.resolution_id))
+    }
 
     // ── State setters (store only; the next build applies them) ──
     pub fn set_resolution_text(&mut self, text: &str) {
@@ -290,7 +298,7 @@ impl SettingsPopup {
 
         // Resolution: label + dropdown trigger (opens the existing picker).
         self.row_label(tree, inner_x, cy, "Resolution");
-        let res_id = tree.add_button(
+        self.resolution_id = tree.add_button(
             Some(self.bg_id),
             ctrl_x,
             cy,
@@ -300,7 +308,7 @@ impl SettingsPopup {
             &self.resolution_text,
         );
         self.actions.push((
-            res_id,
+            self.resolution_id,
             PanelAction::Transport(TransportAction::ResolutionClicked),
         ));
         cy += ROW_H + ROW_GAP;

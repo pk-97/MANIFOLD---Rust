@@ -63,12 +63,9 @@ pub enum ContentCommand {
 
     // ── Settings ───────────────────────────────────────────────────
     SetFrameRate(f64),
-    /// Apply an output resolution setting and resize the content pipeline as
-    /// one content-owned, undoable operation.
-    SetResolution(manifold_core::types::ResolutionPreset),
-    /// Apply direct output dimensions and resize the content pipeline as one
+    /// Set the output width and height and resize the content pipeline as one
     /// content-owned, undoable operation.
-    SetDisplayResolution(i32, i32),
+    SetOutputSize(i32, i32),
     /// Apply render scale and resize the content pipeline as one content-owned,
     /// undoable operation.
     SetRenderScale(f32),

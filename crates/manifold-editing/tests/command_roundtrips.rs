@@ -2560,9 +2560,9 @@ fn project_commands_undo_and_redo_restore_the_whole_project() {
                 applied: |p| p.settings.export_hdr,
             },
             SetterCase {
-                name: "display dimensions",
+                name: "output size",
                 build: |p| {
-                    Box::new(SetDisplayDimensionsCommand::new(
+                    Box::new(SetOutputSizeCommand::new(
                         p.settings.output_width,
                         p.settings.output_height,
                         3840,
@@ -2862,16 +2862,6 @@ fn project_commands_undo_and_redo_restore_the_whole_project() {
                 applied: |p| p.timeline.layers[0].midi_trigger_mode == MidiTriggerMode::AllNotes,
             },
             // Project settings
-            SetterCase {
-                name: "resolution",
-                build: |p| {
-                    Box::new(ChangeResolutionCommand::new(
-                        p.settings.resolution_preset,
-                        ResolutionPreset::UHD4K,
-                    ))
-                },
-                applied: |p| p.settings.resolution_preset == ResolutionPreset::UHD4K,
-            },
             SetterCase {
                 name: "render scale",
                 build: |p| Box::new(ChangeRenderScaleCommand::new(p.settings.render_scale, 0.5)),

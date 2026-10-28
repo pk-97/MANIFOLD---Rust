@@ -236,10 +236,11 @@ impl QuantizeMode {
 
 // ─── Resolution Preset ───
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+/// Named output sizes offered in the resolution dropdown. The project stores
+/// only `output_width`/`output_height`; a preset is a shortcut to a size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResolutionPreset {
     HD720p = 0,
-    #[default]
     FHD1080p = 1,
     QHD1440p = 2,
     UHD4K = 3,
@@ -302,8 +303,12 @@ impl ResolutionPreset {
         format!("{}  ({}x{})", self.display_name(), w, h)
     }
 
-    pub fn from_index(i: usize) -> Option<Self> {
-        Self::ALL.get(i).copied()
+    /// The preset with exactly this size, if any.
+    pub fn matching(width: i32, height: i32) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|p| p.dimensions() == (width, height))
     }
 }
 

@@ -74,6 +74,8 @@ pub enum TransportAction {
     ZoomOut,
     CycleQuantize,
     ResolutionClicked,
+    /// "Custom…" in the resolution dropdown: type a width and height.
+    CustomResolutionClicked,
     FpsFieldClicked,
     InspectorScrolled(f32),
     InspectorSectionClicked(usize),
@@ -286,8 +288,7 @@ pub enum ProjectAction {
     SetMidiChannel(LayerId, i32),           // layer, channel (0-15 internal, displayed 1-16)
     SetMidiDevice(LayerId, Option<String>), // layer, device name (None = any)
     SetMidiTriggerMode(LayerId, MidiTriggerMode),
-    SetResolution(usize),           // preset index
-    SetDisplayResolution(i32, i32), // direct width, height (no undo, matches Unity)
+    SetOutputSize(i32, i32), // width, height (presets, displays and typed sizes)
     SetSimRate(manifold_foundation::settings::SimRate),
     SetRenderScale(f32), // render scale: 1.0 (native), 0.75 (quality), 0.5 (performance)
     SetTonemapCurve(TonemapCurve),

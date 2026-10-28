@@ -1429,10 +1429,10 @@ impl UIRoot {
                 // Typed dropdown (2b.11): each item carries its own action.
                 let mut items: Vec<DropdownItem> = ResolutionPreset::ALL
                     .iter()
-                    .enumerate()
-                    .map(|(i, r)| {
+                    .map(|r| {
+                        let (w, h) = r.dimensions();
                         DropdownItem::new(&r.dropdown_label())
-                            .with_action(PanelAction::Project(ProjectAction::SetResolution(i)))
+                            .with_action(PanelAction::Project(ProjectAction::SetOutputSize(w, h)))
                     })
                     .collect();
 
@@ -1443,13 +1443,18 @@ impl UIRoot {
                     for (w, h, label) in &self.display_resolutions {
                         items.push(
                             DropdownItem::new(&format!("{}  ({}x{})", label, w, h)).with_action(
-                                PanelAction::Project(ProjectAction::SetDisplayResolution(
+                                PanelAction::Project(ProjectAction::SetOutputSize(
                                     *w as i32, *h as i32,
                                 )),
                             ),
                         );
                     }
                 }
+                items.push(
+                    DropdownItem::new("Custom\u{2026}").with_action(PanelAction::Transport(
+                        TransportAction::CustomResolutionClicked,
+                    )),
+                );
 
                 self.open_dropdown_typed(items, trigger);
                 true
