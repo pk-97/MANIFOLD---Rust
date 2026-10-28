@@ -194,7 +194,6 @@ impl Application {
         let navigated = crate::preview_navigation::lease_navigated_frame(
             &mut self.ws.preview_navigation,
             self.scene_viewport_pane.as_mut(),
-            &gpu.device,
             &self.content_state.scene_viewport_frames,
             &mut bridge_leases,
         );
@@ -233,13 +232,11 @@ impl Application {
             match navigated.as_ref() {
                 Some((_, slot, outline)) => crate::selection_outline::leased_mask(
                     self.outline_viewport_pane.as_mut(),
-                    &gpu.device,
                     *slot,
                     *outline,
                 ),
                 None => crate::selection_outline::leased_mask(
                     self.outline_output_pane.as_mut(),
-                    &gpu.device,
                     preview_slot,
                     gizmo_frame.and_then(|frame| frame.outline),
                 ),

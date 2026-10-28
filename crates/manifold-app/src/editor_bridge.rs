@@ -1956,7 +1956,6 @@ impl Application {
             if let Some(pane) = self.scene_viewport_pane.as_mut()
                 && let Some((frame, texture, slot)) = crate::scene_viewport::lease_frame(
                     pane,
-                    &gpu.device,
                     &self.content_state.scene_viewport_frames,
                     &request,
                     &mut bridge_leases,
@@ -1964,7 +1963,6 @@ impl Application {
             {
                 viewport_mask = crate::selection_outline::leased_mask(
                     self.outline_viewport_pane.as_mut(),
-                    &gpu.device,
                     slot,
                     frame.outline,
                 );

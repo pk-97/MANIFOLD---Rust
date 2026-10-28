@@ -319,9 +319,7 @@ mod atlas_cell_uv_tests {
 /// holds a *list* of cell indices — so no rectangle packing is needed. Smaller
 /// cells than the node atlas because each is drawn narrow (one bar wide) and many
 /// are live at once. `32×8` × `256×144` → an `8192×1152` atlas (~75.5 MB
-/// Rgba16Float, ONE `SharedAtlasSurface` — no triple-buffer copies (BUG-119:
-/// the old design's persistent-texture-plus-3-rotating-IOSurfaces layout is
-/// gone; content and UI import `GpuTexture`s backed by the same IOSurface).
+/// Rgba16Float, ONE texture both threads use — no triple-buffer copies (BUG-119).
 /// 256 cells ≈ 30 visible clips × ~8 visible bars. Cells doubled from `128×72`
 /// (2026-06-28) so thumbnails are sharp when upscaled into the tall timeline
 /// lanes instead of blocky; format stays Rgba16Float, full cell count kept
@@ -493,25 +491,18 @@ pub struct ContentPipeline {
     last_node_atlas_layout: Vec<(NodeId, u32)>,
 
     // ── Clip thumbnail atlas (section 24 5c) ──────────────────────────────
-    // One IOSurface-backed texture shared by both threads. Every cell blit
+    // One texture shared by both threads. Every cell blit
     // loads and nothing ever clears it, so the UI never samples a half-cleared
     // atlas. `clip_atlas_persistent` is the surface the UI reads: there is no
     // separate write target and no front-buffer flip.
     /// Clips that currently want a timeline thumbnail (sent by the UI, deduped).
     /// Empty = no timeline visible, so the whole snapshot path is skipped.
     clip_atlas_visible: Vec<manifold_core::ClipId>,
-    /// The single shared clip-atlas texture (content-side import), populated by
+    /// The single shared clip-atlas texture, populated by
     /// `set_clip_atlas_texture` at content-thread init — already cleared once
     /// (transparent) by the caller before this is set; never cleared again.
     #[cfg(target_os = "macos")]
     clip_atlas_persistent: Option<manifold_gpu::GpuTexture>,
-    /// Keeps the shared IOSurface alive on the content-thread side (the UI
-    /// thread holds its own `Arc` clone in `Application`; either alone would
-    /// keep the kernel object alive, but both sides holding a clone matches
-    /// the existing preview/node-atlas bridge pattern and needs no reasoning
-    /// about which thread outlives which).
-    #[cfg(target_os = "macos")]
-    clip_atlas_surface: Option<Arc<crate::shared_texture::SharedAtlasSurface>>,
     /// (ClipId, filmstrip cell) → atlas cell allocation + whole-clip LRU eviction.
     clip_atlas_cache: crate::clip_atlas::ClipAtlasCache,
     /// Per clip: the filmstrip cell last captured and the frame it was captured, so
@@ -876,7 +867,6 @@ impl ContentPipeline {
             #[cfg(target_os = "macos")]
             clip_atlas_persistent: None,
             #[cfg(target_os = "macos")]
-            clip_atlas_surface: None,
             clip_atlas_cache: crate::clip_atlas::ClipAtlasCache::new(CLIP_ATLAS_CELLS as u32),
             clip_atlas_last_snapshot: AHashMap::new(),
             clip_atlas_frame: 0,
@@ -1652,18 +1642,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         &self.last_node_atlas_layout
     }
 
-    /// Install the content-side texture + keep-alive `Arc` for the single
-    /// shared clip-thumbnail atlas surface (section 24 5c, BUG-119). The caller must
+    /// Install the single clip-thumbnail atlas texture the UI samples
+    /// directly (section 24 5c, BUG-119). The caller must
     /// have already cleared `texture` once (Metal doesn't zero-init) — this
     /// is the atlas's ONE lifetime clear; every later write is `LoadAction::Load`.
     #[cfg(target_os = "macos")]
-    pub fn set_clip_atlas_texture(
-        &mut self,
-        texture: manifold_gpu::GpuTexture,
-        surface: Arc<crate::shared_texture::SharedAtlasSurface>,
-    ) {
+    pub fn set_clip_atlas_texture(&mut self, texture: manifold_gpu::GpuTexture) {
         self.clip_atlas_persistent = Some(texture);
-        self.clip_atlas_surface = Some(surface);
     }
 
     /// Set the clips that currently want a timeline thumbnail (deduped by the UI).
@@ -3684,10 +3669,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             .native_device
             .as_ref()
             .expect("native device required for workspace preview resize");
-        bridge.resize(width, height);
-        self.preview_textures = std::array::from_fn(|i| {
-            Some(unsafe { bridge.import_texture_native(native_device, i) })
-        });
+        bridge.resize(native_device, width, height);
+        self.preview_textures = std::array::from_fn(|i| Some(bridge.texture(i)));
         self.preview_generation = bridge.generation();
     }
 

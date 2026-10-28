@@ -167,16 +167,14 @@ impl SceneViewportCapture {
         if bridge.width() == width && bridge.height() == height {
             return;
         }
-        bridge.resize(width, height);
-        self.textures =
-            std::array::from_fn(|i| Some(unsafe { bridge.import_texture_native(device, i) }));
+        bridge.resize(device, width, height);
+        self.textures = std::array::from_fn(|i| Some(bridge.texture(i)));
         self.observations.frames.fill(None);
     }
 }
 
 impl ContentPipeline {
-    /// Install the IOSurface textures + bridge the viewport's frames travel
-    /// through.
+    /// Install the textures + bridge the viewport's frames travel through.
     #[cfg(target_os = "macos")]
     pub fn set_scene_viewport_textures(
         &mut self,

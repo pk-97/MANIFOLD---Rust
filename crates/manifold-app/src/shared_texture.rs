@@ -1,43 +1,33 @@
-//! Cross-device GPU texture sharing via IOSurface (macOS).
+//! Content-to-UI texture handoff.
 //!
-//! Both threads share the same underlying MTLDevice via manifold-gpu GpuDevice.
-//! IOSurface provides kernel-managed GPU memory that multiple MTLTextures
-//! (from any Device) can bind to — zero copy.
+//! The content and UI `GpuDevice`s are two wrappers on one native device,
+//! each with its own queue (`GpuDevice::sibling`), so a texture the content
+//! thread renders into is the same texture the UI thread samples — no copy.
 //!
-//! Architecture:
-//!   Content Device ──render──▶ IOSurface-backed texture ◀──read── UI Device
-//!                              (same kernel GPU memory)
-//!
-//! Note: `io_surface` crate is deprecated in favor of `objc2-io-surface`.
-//! Migration planned but deferred — too risky for this pass.
-#![allow(deprecated)]
+//!   Content queue ──render──▶ GpuTexture ◀──sample── UI queue
 
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use core_foundation::base::TCFType;
-use core_foundation::dictionary::CFMutableDictionary;
-use core_foundation::number::CFNumber;
-use core_foundation::string::CFString;
 use std::sync::atomic::AtomicBool;
 
-/// Number of IOSurface buffers (triple-buffered).
+/// Number of bridge surfaces (triple-buffered).
 /// 3 surfaces allow 2 content frames in flight while the UI reads a third.
 pub const SURFACE_COUNT: usize = 3;
 
-/// Shared state between content and UI threads for the IOSurface bridge.
+/// Shared state between content and UI threads for one texture handoff.
 /// Created once during init, Arc-shared between both threads.
 /// Uses interior mutability (RwLock) so resize works through Arc.
 ///
-/// Triple-buffered: three IOSurfaces allow the content thread to have 2 frames
+/// Triple-buffered: three surfaces allow the content thread to have 2 frames
 /// in flight while the UI thread reads a completed frame. An atomic front_index
-/// tracks which surface is safe to read. Combined with separate Metal command
+/// tracks which surface is safe to read. Combined with separate command
 /// queues (content + UI), this eliminates GPU starvation and
 /// synchronous poll stalls.
 pub struct SharedTextureBridge {
-    /// Three IOSurface kernel objects — triple-buffered for async pipeline.
-    /// Behind RwLock for resize (rare write, frequent read via import_texture).
-    io_surfaces: RwLock<[io_surface::IOSurface; SURFACE_COUNT]>,
+    /// The three surfaces. Behind RwLock for resize (rare write, frequent
+    /// read via `texture`).
+    textures: RwLock<[manifold_gpu::GpuTexture; SURFACE_COUNT]>,
     /// Pixel format of every surface: `Rgba16Float`, or `R8Unorm` for a
     /// selection mask.
     format: manifold_gpu::GpuTextureFormat,
@@ -91,23 +81,6 @@ impl BridgeReadLease {
     }
 }
 
-// SAFETY: IOSurface is a kernel-managed object safe to share across threads.
-unsafe impl Send for SharedTextureBridge {}
-unsafe impl Sync for SharedTextureBridge {}
-
-/// Bytes per pixel for Rgba16Float.
-const BPP: u32 = 8;
-
-/// The IOSurface layout of a bridge format: bytes per pixel and the
-/// CoreVideo pixel format code.
-fn surface_layout(format: manifold_gpu::GpuTextureFormat) -> (u32, i32) {
-    match format {
-        manifold_gpu::GpuTextureFormat::Rgba16Float => (BPP, PIXEL_FORMAT_RGBA16_FLOAT),
-        manifold_gpu::GpuTextureFormat::R8Unorm => (1, PIXEL_FORMAT_ONE_COMPONENT_8),
-        other => panic!("no IOSurface layout for {other:?}"),
-    }
-}
-
 /// A batch of bridge read leases held by one UI frame.
 pub(crate) type BridgeLeaseBatch = Vec<(std::sync::Arc<SharedTextureBridge>, BridgeReadLease)>;
 
@@ -154,56 +127,8 @@ pub(crate) fn retire_leases_via_marker(
     enc.commit();
 }
 
-/// FourCC for kCVPixelFormatType_64RGBAHalf ('RGhA').
-const PIXEL_FORMAT_RGBA16_FLOAT: i32 = 0x52476841u32 as i32;
-/// FourCC for kCVPixelFormatType_OneComponent8 ('L008').
-const PIXEL_FORMAT_ONE_COMPONENT_8: i32 = 0x4C303038u32 as i32;
-
-/// Create an IOSurface for Rgba16Float at the given dimensions (kernel-managed
-/// GPU memory). Shared by [`SharedTextureBridge`]'s triple buffer and
-/// [`SharedAtlasSurface`]'s single surface — same pixel format, same stride
-/// alignment requirement, just a different number of them.
-fn create_rgba16f_io_surface(width: u32, height: u32) -> io_surface::IOSurface {
-    create_io_surface(width, height, manifold_gpu::GpuTextureFormat::Rgba16Float)
-}
-
-fn create_io_surface(
-    width: u32,
-    height: u32,
-    format: manifold_gpu::GpuTextureFormat,
-) -> io_surface::IOSurface {
-    let (bpp, pixel_format) = surface_layout(format);
-    // Align bytes_per_row to 256 bytes — Metal validation rejects IOSurface-backed
-    // textures whose stride doesn't meet the GPU's minimum linear texture alignment.
-    let bytes_per_row = (width * bpp + 255) & !255;
-    let total_bytes = bytes_per_row * height;
-
-    let mut props = CFMutableDictionary::new();
-
-    unsafe {
-        let key_width = CFString::wrap_under_get_rule(io_surface::kIOSurfaceWidth);
-        let key_height = CFString::wrap_under_get_rule(io_surface::kIOSurfaceHeight);
-        let key_bytes_per_row = CFString::wrap_under_get_rule(io_surface::kIOSurfaceBytesPerRow);
-        let key_bytes_per_elem =
-            CFString::wrap_under_get_rule(io_surface::kIOSurfaceBytesPerElement);
-        let key_pixel_format = CFString::wrap_under_get_rule(io_surface::kIOSurfacePixelFormat);
-        let key_alloc_size = CFString::wrap_under_get_rule(io_surface::kIOSurfaceAllocSize);
-
-        props.set(key_width, CFNumber::from(width as i64));
-        props.set(key_height, CFNumber::from(height as i64));
-        props.set(key_bytes_per_row, CFNumber::from(bytes_per_row as i64));
-        props.set(key_bytes_per_elem, CFNumber::from(bpp as i64));
-        props.set(key_pixel_format, CFNumber::from(pixel_format as i64));
-        props.set(key_alloc_size, CFNumber::from(total_bytes as i64));
-
-        let surface_ref = io_surface::IOSurfaceCreate(props.as_concrete_TypeRef() as *mut _);
-        assert!(!surface_ref.is_null(), "IOSurfaceCreate failed");
-        TCFType::wrap_under_create_rule(surface_ref)
-    }
-}
-
-/// The slot-reuse condition, pure so the gate logic is testable without an
-/// IOSurface. A slot may be overwritten when no new read can start on it
+/// The slot-reuse condition, pure so the gate logic is testable without a
+/// GPU. A slot may be overwritten when no new read can start on it
 /// (never published, front moved off, or `quiet_bypass` — the bridge stopped
 /// publishing and every surface it holds is stale) AND no claimed read is
 /// still in flight on the GPU. Reads always gate: only the front-pin is
@@ -217,29 +142,51 @@ fn slot_reusable(
     (quiet_bypass || !published || !front_is_slot) && reads_in_flight == 0
 }
 
+/// One bridge surface: a 2D render target both queues use.
+fn create_surface(
+    device: &manifold_gpu::GpuDevice,
+    width: u32,
+    height: u32,
+    format: manifold_gpu::GpuTextureFormat,
+) -> manifold_gpu::GpuTexture {
+    device.create_texture(&manifold_gpu::GpuTextureDesc {
+        width,
+        height,
+        depth: 1,
+        format,
+        dimension: manifold_gpu::GpuTextureDimension::D2,
+        usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+        label: "Bridge surface",
+        mip_levels: 1,
+    })
+}
+
 impl SharedTextureBridge {
-    /// Create a new triple-buffered IOSurface bridge at the given dimensions.
-    pub fn new(width: u32, height: u32) -> Self {
-        Self::with_format(width, height, manifold_gpu::GpuTextureFormat::Rgba16Float)
+    /// A triple-buffered `Rgba16Float` bridge on `device`.
+    pub fn new(device: &manifold_gpu::GpuDevice, width: u32, height: u32) -> Self {
+        Self::with_format(
+            device,
+            width,
+            height,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+        )
     }
 
     /// A bridge of `format` surfaces (`Rgba16Float` or `R8Unorm`).
-    pub fn with_format(width: u32, height: u32, format: manifold_gpu::GpuTextureFormat) -> Self {
-        let [surface_a, surface_b, surface_c] =
-            std::array::from_fn(|_| create_io_surface(width, height, format));
-
+    pub fn with_format(
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+        format: manifold_gpu::GpuTextureFormat,
+    ) -> Self {
+        let textures = std::array::from_fn(|_| create_surface(device, width, height, format));
         log::info!(
-            "[SharedTextureBridge] created {}x IOSurface {}x{} {:?} ({} bytes each)",
-            SURFACE_COUNT,
-            width,
-            height,
-            format,
-            width * height * surface_layout(format).0,
+            "[SharedTextureBridge] created {SURFACE_COUNT}x {width}x{height} {format:?} surfaces"
         );
 
         Self {
             format,
-            io_surfaces: RwLock::new([surface_a, surface_b, surface_c]),
+            textures: RwLock::new(textures),
             width: AtomicU32::new(width),
             height: AtomicU32::new(height),
             front_index: AtomicU32::new(0),
@@ -255,75 +202,35 @@ impl SharedTextureBridge {
         }
     }
 
-    /// Create a `GpuTexture` backed by one of the IOSurfaces.
-    ///
-    /// `surface_index` selects which of the triple-buffered surfaces (0, 1, or 2).
-    ///
-    /// # Safety
-    /// The returned GpuTexture is backed by the IOSurface — caller must ensure
-    /// the bridge outlives the texture.
-    pub unsafe fn import_texture_native(
-        &self,
-        device: &manifold_gpu::GpuDevice,
-        surface_index: usize,
-    ) -> manifold_gpu::GpuTexture {
-        unsafe {
-            assert!(
-                surface_index < SURFACE_COUNT,
-                "surface_index must be 0..{SURFACE_COUNT}"
-            );
-            // Acquire the read lock BEFORE loading dimensions — resize()
-            // updates width/height under the write lock, so holding the read
-            // lock here guarantees we see dimensions that match the surfaces.
-            let io_surfaces_guard = self.io_surfaces.read();
-            let width = self.width.load(Ordering::Acquire);
-            let height = self.height.load(Ordering::Acquire);
-
-            let io_surface_ref =
-                io_surfaces_guard[surface_index].as_concrete_TypeRef() as *const std::ffi::c_void;
-            let texture = device.create_texture_from_io_surface(
-                io_surface_ref,
-                width,
-                height,
-                self.format,
-                manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-            );
-            drop(io_surfaces_guard);
-            texture
-        }
+    /// Surface `slot` (0, 1 or 2). Callers keep the clone until the next
+    /// generation bump, then take fresh ones.
+    pub fn texture(&self, slot: usize) -> manifold_gpu::GpuTexture {
+        self.textures.read()[slot].clone()
     }
 
-    /// Resize the bridge. Creates three new IOSurfaces at the new dimensions.
-    /// Both devices must re-import their textures after this call
-    /// (detected via generation counter).
-    pub fn resize(&self, width: u32, height: u32) {
-        let [surface_a, surface_b, surface_c] =
-            std::array::from_fn(|_| create_io_surface(width, height, self.format));
+    /// Resize the bridge to three new surfaces on `device`. Both sides take
+    /// fresh textures after this call (detected via the generation counter).
+    pub fn resize(&self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
+        let textures = std::array::from_fn(|_| create_surface(device, width, height, self.format));
         {
-            let mut guard = self.io_surfaces.write();
-            // Update dimensions while holding the write lock so that
-            // import_texture_native() (which reads width/height then acquires
-            // the read lock) never sees new surfaces with stale dimensions.
+            let mut guard = self.textures.write();
+            // Dimensions change under the write lock so a reader that holds
+            // the read lock never pairs new surfaces with stale dimensions.
             self.width.store(width, Ordering::Release);
             self.height.store(height, Ordering::Release);
-            *guard = [surface_a, surface_b, surface_c];
+            *guard = textures;
         }
         self.front_index.store(0, Ordering::Release);
         self.generation.fetch_add(1, Ordering::Release);
         // New surfaces, new contract: no read of a stale surface may gate a
-        // write to a fresh one (both sides re-import on the generation bump).
+        // write to a fresh one (both sides take fresh textures on the bump).
         for c in &self.reads_in_flight {
             c.store(0, Ordering::Release);
         }
         for p in &self.published {
             p.store(false, Ordering::Release);
         }
-        log::info!(
-            "[SharedTextureBridge] resized {}x IOSurface to {}x{}",
-            SURFACE_COUNT,
-            width,
-            height,
-        );
+        log::info!("[SharedTextureBridge] resized {SURFACE_COUNT}x surfaces to {width}x{height}");
     }
 
     /// Which surface index the UI thread should read from.
@@ -450,80 +357,6 @@ impl SharedTextureBridge {
     /// their last-seen generation to know when to re-import.
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
-    }
-
-    /// Get the raw IOSurfaceRef pointer for a surface index.
-    /// Used for direct CALayer display (zero-copy, pixel-perfect).
-    /// The returned pointer is valid as long as no resize occurs.
-    // Direct-CALayer display path isn't wired to this accessor yet; scoped
-    // allow so the rest of the module still trips dead-code.
-    #[allow(dead_code)]
-    pub fn raw_io_surface(&self, index: usize) -> *const std::ffi::c_void {
-        let guard = self.io_surfaces.read();
-        guard[index].as_concrete_TypeRef() as *const std::ffi::c_void
-    }
-}
-
-/// A single IOSurface shared verbatim by both threads — content thread blits
-/// into it, UI thread samples it directly. No rotation, no `front_index`, no
-/// publish step: the surface itself IS the published state at every instant.
-///
-/// Built for the clip-thumbnail atlas (BUG-119 root fix), which replaced a
-/// [`SharedTextureBridge`] triple buffer here: the atlas is persistent,
-/// slowly-changing data (cells only ever grow or get re-painted in place), so
-/// there is no "stale frame" problem for a ring to solve — and the ring's
-/// periodic full-surface publish copy (`clear=true`) was itself the bug, since
-/// it could clear the surface the UI thread was concurrently sampling.
-///
-/// Fixed dimensions for its lifetime — the callers that use this (constant
-/// atlas geometry, never resized) each import exactly one `GpuTexture` per
-/// side at startup, unlike `SharedTextureBridge`'s per-resize re-import dance.
-pub struct SharedAtlasSurface {
-    io_surface: io_surface::IOSurface,
-    width: u32,
-    height: u32,
-}
-
-// SAFETY: IOSurface is a kernel-managed object safe to share across threads.
-unsafe impl Send for SharedAtlasSurface {}
-unsafe impl Sync for SharedAtlasSurface {}
-
-impl SharedAtlasSurface {
-    /// Create a new single-surface bridge at the given dimensions.
-    pub fn new(width: u32, height: u32) -> Self {
-        let io_surface = create_rgba16f_io_surface(width, height);
-        log::info!(
-            "[SharedAtlasSurface] created single IOSurface {}x{} Rgba16Float ({} bytes)",
-            width,
-            height,
-            width * height * BPP,
-        );
-        Self {
-            io_surface,
-            width,
-            height,
-        }
-    }
-
-    /// Create a `GpuTexture` backed by this IOSurface.
-    ///
-    /// # Safety
-    /// The returned GpuTexture is backed by the IOSurface — caller must ensure
-    /// `self` outlives the texture.
-    pub unsafe fn import_texture_native(
-        &self,
-        device: &manifold_gpu::GpuDevice,
-    ) -> manifold_gpu::GpuTexture {
-        unsafe {
-            let io_surface_ref = self.io_surface.as_concrete_TypeRef() as *const std::ffi::c_void;
-            device.create_texture_from_io_surface(
-                io_surface_ref,
-                self.width,
-                self.height,
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-            )
-        }
     }
 }
 

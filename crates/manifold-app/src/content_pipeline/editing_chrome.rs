@@ -72,11 +72,8 @@ mod outline {
             output: Arc<SharedTextureBridge>,
             viewport: Arc<SharedTextureBridge>,
         ) {
-            let Some(device) = self.native_device.clone() else {
-                return;
-            };
-            self.outline.output_masks.install(&device, output);
-            self.outline.viewport_masks.install(&device, viewport);
+            self.outline.output_masks.install(output);
+            self.outline.viewport_masks.install(viewport);
         }
     }
 

@@ -3,7 +3,7 @@
 
 bridge-probe (crates/manifold-app/src/bridge_probe.rs, perf-soak feature) is the
 red/green harness for BUG-xaw4 (presentation-transport audit): a writer thread
-and a reader thread hammer a SharedTextureBridge on two MTLDevices, counting
+and a reader thread hammer a SharedTextureBridge from two queues, counting
 reads that sampled a surface mid-write.
 
 Probabilistic-LIVENESS, strict-SAFETY semantics:

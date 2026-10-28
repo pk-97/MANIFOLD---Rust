@@ -2387,10 +2387,9 @@ impl Application {
             }
         }
 
-        let gpu = match &self.gpu {
-            Some(g) => g,
-            None => return,
-        };
+        if self.gpu.is_none() {
+            return;
+        }
 
         // Advance the UI frame fence once per frame, before any ring-owning
         // encoder below (present_all_windows' layer/clip/UI passes) claims a
@@ -2399,21 +2398,17 @@ impl Application {
             fence.advance();
         }
 
-        // Workspace preview via IOSurface (dual device, zero GPU copy).
+        // Workspace preview through the bridge (one device, zero GPU copy).
         #[cfg(target_os = "macos")]
         {
-            // Detect preview bridge resize (generation changed) and re-import workspace textures.
+            // Detect preview bridge resize (generation changed) and take the fresh surfaces.
             if let Some(ref bridge) = self.preview_texture_bridge {
                 let bridge_gen = bridge.generation();
                 if bridge_gen != self.last_preview_bridge_generation {
                     self.last_preview_bridge_generation = bridge_gen;
-                    let ui_textures: [manifold_gpu::GpuTexture;
-                        crate::shared_texture::SURFACE_COUNT] = std::array::from_fn(|i| unsafe {
-                        bridge.import_texture_native(&gpu.device, i)
-                    });
-                    self.ui_preview_textures = ui_textures.map(Some);
+                    self.ui_preview_textures = std::array::from_fn(|i| Some(bridge.texture(i)));
                     log::info!(
-                        "[UI] re-imported {} workspace preview IOSurface textures after resize (gen={})",
+                        "[UI] took {} fresh workspace preview surfaces after resize (gen={})",
                         crate::shared_texture::SURFACE_COUNT,
                         bridge_gen
                     );

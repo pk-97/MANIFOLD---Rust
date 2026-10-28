@@ -130,7 +130,7 @@ fn build(device: &std::sync::Arc<GpuDevice>) -> PresetRuntime {
 #[test]
 fn the_mask_crosses_the_bridge_under_its_generation_stamp() {
     let content = std::sync::Arc::new(GpuDevice::new_queued("d102 transport content"));
-    let ui = GpuDevice::new_queued("d102 transport ui");
+    let ui = content.sibling();
     let mut runtime = build(&content);
     let picture = target(&content, "d102 transport picture");
     for frame in 0..2 {
@@ -145,12 +145,13 @@ fn the_mask_crosses_the_bridge_under_its_generation_stamp() {
     assert!(drawn.iter().any(|&v| v > 200), "the panel is in the mask");
 
     let bridge = std::sync::Arc::new(crate::shared_texture::SharedTextureBridge::with_format(
+        &content,
         64,
         64,
         GpuTextureFormat::R8Unorm,
     ));
     let mut masks = super::OutlineMasks::default();
-    masks.install(&content, bridge.clone());
+    masks.install(bridge.clone());
     let slot = 2;
     let mut enc = content.create_encoder("d102 transport write");
     let stamp = masks
@@ -164,21 +165,21 @@ fn the_mask_crosses_the_bridge_under_its_generation_stamp() {
     );
 
     let mut pane = crate::texture_pane::TexturePane::bridged(bridge.clone());
-    let read = super::leased_mask(Some(&mut pane), &ui, slot, Some(stamp))
-        .expect("the stamped surface reads");
+    let read =
+        super::leased_mask(Some(&mut pane), slot, Some(stamp)).expect("the stamped surface reads");
     assert_eq!(
         readback_r8(&ui, &read),
         drawn,
         "the UI reads the mask the scene drew"
     );
     assert!(
-        super::leased_mask(Some(&mut pane), &ui, slot, None).is_none(),
+        super::leased_mask(Some(&mut pane), slot, None).is_none(),
         "a frame with no mask reads none"
     );
 
-    bridge.resize(32, 32);
+    bridge.resize(&content, 32, 32);
     assert!(
-        super::leased_mask(Some(&mut pane), &ui, slot, Some(stamp)).is_none(),
+        super::leased_mask(Some(&mut pane), slot, Some(stamp)).is_none(),
         "a stamp from before a resize reads none"
     );
 }

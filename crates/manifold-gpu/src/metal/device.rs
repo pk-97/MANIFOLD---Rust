@@ -230,6 +230,19 @@ impl GpuDevice {
         // This crate's own unit tests are dev-only by construction.
         #[cfg(test)]
         crate::queue::acquire_for_process("manifold-gpu unit tests");
+        let device = objc2_metal::MTLCreateSystemDefaultDevice().expect("No Metal device found");
+        Self::on_device(device)
+    }
+
+    /// Another wrapper on this wrapper's native device, with its own queue,
+    /// caches and resource scope (D16). Textures one wrapper allocates can be
+    /// used by the other; nothing on the GPU orders work across the two
+    /// queues, so the caller fences cross-queue reads and writes itself.
+    pub fn sibling(&self) -> Self {
+        Self::on_device(self.device.clone())
+    }
+
+    fn on_device(device: Retained<ProtocolObject<dyn MTLDevice>>) -> Self {
         static NEXT_RESOURCE_SCOPE: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(1);
         let resource_scope_id = NEXT_RESOURCE_SCOPE
@@ -239,7 +252,6 @@ impl GpuDevice {
                 |id| id.checked_add(1),
             )
             .expect("GPU resource scope identifiers exhausted");
-        let device = objc2_metal::MTLCreateSystemDefaultDevice().expect("No Metal device found");
         let queue = device
             .newCommandQueue()
             .expect("Failed to create command queue");

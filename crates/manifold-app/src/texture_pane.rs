@@ -2,17 +2,17 @@
 //!
 //! The present pass blits several live GPU textures into reserved UI rects
 //! (node-output preview, master-out monitor, video thumbnails). Today each is a
-//! hand-rolled block that imports a texture from an IOSurface bridge, tracks the
-//! bridge's generation to re-import after a window resize, and emits a
+//! hand-rolled block that takes a bridge's textures, tracks the bridge's
+//! generation to take fresh ones after a resize, and emits a
 //! `draw_fullscreen_viewport`. The generation check is correctness-by-
-//! convention: a consumer that forgets it samples a texture whose IOSurface was
-//! freed by a resize — a GPU fault.
+//! convention: a consumer that forgets it samples a surface the bridge has
+//! replaced, so it shows a frozen frame.
 //!
 //! `TexturePane` is the typed home for that pattern. It unifies the two ways a
 //! panel surfaces a texture — a UI-device-produced texture ([`PaneSource::Local`])
-//! and a cross-device IOSurface bridge ([`PaneSource::Bridged`]) — behind one
+//! and a content-thread bridge ([`PaneSource::Bridged`]) — behind one
 //! [`TexturePane::current`] accessor that **owns** the generation-driven
-//! re-import. The accessor never hands out a cached texture, so a caller
+//! refresh. The accessor never hands out a cached texture, so a caller
 //! physically cannot retain one across a resize. Local panes need no bridge, no
 //! triple-buffer, and no fence discipline; they are the simple, first-class case
 //! (the audio spectrogram is one).
@@ -24,7 +24,7 @@
 use std::sync::Arc;
 
 use manifold_gpu::{
-    GpuBinding, GpuDevice, GpuEncoder, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuTexture,
+    GpuBinding, GpuEncoder, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuTexture,
 };
 
 use crate::shared_texture::{SURFACE_COUNT, SharedTextureBridge};
@@ -35,18 +35,18 @@ pub enum PaneSource {
     /// cross-device fence, no generation tracking. The producer renders into it
     /// (via [`TexturePane::local_target`]) and the present pass blits it.
     Local(GpuTexture),
-    /// A cross-device IOSurface bridge. Holds the per-surface imported textures
-    /// plus the last-seen generation; [`TexturePane::current`] re-imports every
-    /// surface on a generation change (resize) and returns the published front;
+    /// A content-thread bridge. Holds the bridge's surfaces plus the last-seen
+    /// generation; [`TexturePane::current`] takes fresh surfaces on a
+    /// generation change (resize) and returns the published front;
     /// [`TexturePane::leased`] does the same for a read lease's slot. The
     /// scene viewport's frames are the first bridged consumer.
     Bridged {
         bridge: Arc<SharedTextureBridge>,
-        /// One imported texture per IOSurface (`len == SURFACE_COUNT`). `None`
-        /// until first imported / after an invalidation.
+        /// One texture per bridge surface (`len == SURFACE_COUNT`). `None`
+        /// until first taken.
         imported: Vec<Option<GpuTexture>>,
-        /// Last bridge generation these imports were built against. `None` forces
-        /// an import on first `current()`.
+        /// Last bridge generation these textures came from. `None` forces a
+        /// refresh on first `current()`.
         last_generation: Option<u64>,
     },
 }
@@ -64,7 +64,7 @@ impl TexturePane {
         }
     }
 
-    /// A pane backed by a cross-device IOSurface bridge.
+    /// A pane backed by a content-thread bridge.
     pub fn bridged(bridge: Arc<SharedTextureBridge>) -> Self {
         Self {
             source: PaneSource::Bridged {
@@ -79,27 +79,27 @@ impl TexturePane {
     ///
     /// - **Local:** the owned texture.
     /// - **Bridged:** if the bridge's generation changed since the last call
-    ///   (i.e. a resize replaced the IOSurfaces), re-import every surface, then
+    ///   (i.e. a resize replaced the surfaces), take the fresh ones, then
     ///   return the published front surface.
     ///
     /// The returned borrow is bounded to the call site, so a caller cannot hold
     /// a texture across a resize — invalidation lives here, not in a per-consumer
     /// generation check.
-    pub fn current(&mut self, ui_device: &GpuDevice) -> Option<&GpuTexture> {
+    pub fn current(&mut self) -> Option<&GpuTexture> {
         let front = match &self.source {
             PaneSource::Local(_) => 0,
             PaneSource::Bridged { bridge, .. } => bridge.front_index() as usize,
         };
-        self.surface(ui_device, front)
+        self.surface(front)
     }
 
-    /// The bridged surface a read lease pinned (`lease.slot()`), re-imported
+    /// The bridged surface a read lease pinned (`lease.slot()`), refreshed
     /// on a generation change like [`Self::current`]. The caller holds the
     /// lease until the sampling GPU work retires. `None` for a local pane.
-    pub fn leased(&mut self, ui_device: &GpuDevice, slot: usize) -> Option<&GpuTexture> {
+    pub fn leased(&mut self, slot: usize) -> Option<&GpuTexture> {
         match self.source {
             PaneSource::Local(_) => None,
-            PaneSource::Bridged { .. } => self.surface(ui_device, slot),
+            PaneSource::Bridged { .. } => self.surface(slot),
         }
     }
 
@@ -111,7 +111,7 @@ impl TexturePane {
         }
     }
 
-    fn surface(&mut self, ui_device: &GpuDevice, slot: usize) -> Option<&GpuTexture> {
+    fn surface(&mut self, slot: usize) -> Option<&GpuTexture> {
         match &mut self.source {
             PaneSource::Local(tex) => Some(tex),
             PaneSource::Bridged {
@@ -122,10 +122,7 @@ impl TexturePane {
                 let generation = bridge.generation();
                 if *last_generation != Some(generation) {
                     for (i, surface) in imported.iter_mut().enumerate() {
-                        // SAFETY: the bridge outlives this pane (held by `Arc`),
-                        // so the IOSurface backing each imported texture stays
-                        // alive at least as long as the texture.
-                        *surface = Some(unsafe { bridge.import_texture_native(ui_device, i) });
+                        *surface = Some(bridge.texture(i));
                     }
                     *last_generation = Some(generation);
                 }
@@ -167,7 +164,6 @@ impl TexturePane {
 #[allow(clippy::too_many_arguments)]
 pub fn blit_texture_pane(
     pane: &mut TexturePane,
-    ui_device: &GpuDevice,
     encoder: &mut GpuEncoder,
     pipeline: &GpuRenderPipeline,
     sampler: &GpuSampler,
@@ -176,7 +172,7 @@ pub fn blit_texture_pane(
     scale: f32,
     label: &str,
 ) {
-    let Some(texture) = pane.current(ui_device) else {
+    let Some(texture) = pane.current() else {
         return;
     };
     let (x, y, w, h) = rect_logical;

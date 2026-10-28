@@ -71,6 +71,7 @@ const LAYERS: &[Layer] = &[
             "manifold-compositor",
             "manifold-core",
             "manifold-editing",
+            "manifold-foundation",
             "manifold-gpu",
             "manifold-io",
             "manifold-led",

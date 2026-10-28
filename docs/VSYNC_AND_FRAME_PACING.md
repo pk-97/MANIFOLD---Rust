@@ -102,20 +102,20 @@ Tested and rejected. Without display sync, presents land at arbitrary times rela
 
 Lightweight CVDisplayLink (the only remaining display link): sets `AtomicBool` + calls `CFRunLoopWakeUp()`. The winit event loop checks `vsync_ready()` in `about_to_wait()` to decide when to render UI. Retargets when the primary window moves between displays.
 
-## IOSurface Triple Buffer (Workspace Preview Only)
+## Bridge Triple Buffer (Workspace Preview Only)
 
 **File:** `manifold-app/src/shared_texture.rs`
 
-The workspace preview (small inset in the editor) uses an IOSurface triple buffer for content → UI frame transport. The output window does NOT use this — it uses direct present.
+The workspace preview (small inset in the editor) uses a triple buffer for content → UI frame transport. The output window does NOT use this — it uses direct present.
 
-- 3 IOSurface buffers (zero-copy kernel memory, Rgba16Float)
+- 3 plain `GpuTexture`s (Rgba16Float) on the one native device both threads share; the content device is the UI device's `sibling`, with its own queue
 - Atomic `front_index` tracks which surface is safe to read
 - GPU completion handler publishes `front_index` when content GPU work finishes
 - UI thread reads latest `front_index` for preview display
 
 ### Read fence (BUG-xaw4 (presentation-transport audit), 2026-08-01)
 
-Content and UI use **separate MTLDevice instances** (each `GpuDevice::new()` calls `MTLCreateSystemDefaultDevice`), so MTLSharedEvent cannot order the UI's reads against the content thread's writes. The fence is CPU-side atomics on the bridge (`acquire_read` / `retire_read` / `is_reusable`):
+Content and UI submit on **separate queues**, and nothing on the GPU orders work across them, so the UI's reads are fenced against the content thread's writes by CPU-side atomics on the bridge (`acquire_read` / `retire_read` / `is_reusable`):
 
 - The UI claims a per-slot in-flight lease before encoding any sample of a bridge surface (4 sites: main present, graph editor ×3, perform mode), revalidates front after claiming, and retires the lease from the completion handler of the present encoder ordered after the sampling encoder (marker encoder on resize/drawable early returns). Retirement wakes the content thread with `SurfaceReady`.
 - Content's `is_surface_ready` requires both halves before reusing a slot: its own write completed (shared event) AND the slot reusable (front moved off it — or never published — and zero reads in flight). When false, the content thread stalls in `wait_for_surface_draining_commands` instead of tearing.
@@ -175,7 +175,7 @@ One CVDisplayLink callback doing content notification + presenter blit + UI sign
 | `manifold-app/src/frame_timer.rs` | Mach policy conversion/refresh, mach_wait_until + spin, EWMA FPS |
 | `manifold-app/src/content_pipeline.rs` | Direct present path (nextDrawable → blit → present) |
 | `manifold-app/src/display_link.rs` | `UiDisplayLink` (CVDisplayLink for UI thread only) |
-| `manifold-app/src/shared_texture.rs` | IOSurface triple buffer + read fence (workspace preview only) |
+| `manifold-app/src/shared_texture.rs` | Triple buffer + read fence (workspace preview only) |
 | `manifold-gpu/src/metal/surface.rs` | `GpuSurface` (CAMetalLayer), `GpuDrawable`, displaySyncEnabled |
 | `manifold-gpu/src/metal/encoder.rs` | `present_drawable()`, `commit()` |
 | `manifold-core/src/settings.rs` | `frame_rate` project setting |

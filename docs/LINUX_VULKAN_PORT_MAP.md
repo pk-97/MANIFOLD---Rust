@@ -78,8 +78,8 @@ Every row below exists on Metal and is missing on Vulkan. Phases are the design 
 | Draws | About 20 forms becoming one draw descriptor (section 11); `begin_render_pass`/`draw_in_render_pass`/`end_render_pass`, `set_scissor_rect` (7); types `DepthMsaaDraw`, `DepthMsaaPassDesc`, `AuxColorAttachment`, `DrawCount` | P2 |
 | Profiling | Whatever the GPU-timing consolidation leaves (section 11), on timestamp query pools | P2 (D17) |
 | Presentation | `GpuSurface` (`create_surface`, `next_drawable`, `present`, `resize`, `set_maximum_drawable_count`), `GpuDrawable`, `set_presented_observer`; `configure_edr`, window level, gravity and `set_presents_with_transaction` report "not supported" | P3 (D15) |
-| Shared textures | `create_io_surface_bgra8`, `create_texture_from_io_surface` go away with the bridge change (section 11) | Before P3 |
-| Metal-only, stay Metal | `raw_device`, `raw_device_ptr`, `raw_cmd_buf`, `raw_ptr`, `mtl4_bridge`, `metalfx`, `metalfx_m4`, `defer_drop`, `dispatch_compute_with_accel` | never |
+| Device sharing | `sibling` (a second wrapper on the same native device with its own queue, D16) | P1 |
+| Metal-only, stay Metal | `raw_device`, `raw_device_ptr`, `raw_cmd_buf`, `raw_ptr`, `mtl4_bridge`, `metalfx`, `metalfx_m4`, `defer_drop`, `dispatch_compute_with_accel`; `create_io_surface_bgra8` and `create_texture_from_io_surface`, used only by the analyzer plugin and `tv-led-mirror` | never |
 
 **Shared already.** The frame fence, drop retirement, texture pool and ray-tracing data types (`raytrace_types/`) live outside `metal/`; a backend supplies `RetiredResource`, `PoolAllocator` and `submissions_ignored`, and re-exports `raytrace_types` from its `raytrace` module.
 
@@ -212,7 +212,7 @@ The overnight run does steps 2 to 8 with buffer use after step 5, then the P4 pi
 3. **Folders and tools.** Done 28 Oct (`manifold_foundation::AppDirs`, `find_tool`).
 4. **Hoist neutral logic.** Done 28 Oct.
 5. **Shrink the GPU API**, overnight subset, one batch each: the render-pipeline descriptor, the draw descriptor, commit forms, the upload merge, `current_value` → `encoded_value`. The descriptor specs name presets that use each changed form, and the batch renders those stills. Buffer use and GPU timing are not overnight (section 11).
-6. **Frame bridge on one device** (section 11), proven with `bridge-probe`; the headless subcommands then boot the normal pipeline. Daytime, with the live app run after it.
+6. **Frame bridge on one device.** Done 28 Oct: the content device is the UI device's `sibling` and the bridge holds plain `GpuTexture`s. The headless subcommands booting the normal pipeline is still open (section 11).
 7. **Vulkan skeleton.**
    - Every section 3 row exists in `vulkan/` with the Metal signature and a `todo!("vulkan P1")` or `todo!("vulkan P2")` body. The stub's design contradictions go: the sizes-buffer slot (D9), the owned instance (D16), the MoltenVK naming (D21), and a `SlotKind` that cannot tell uniform from storage buffers or sampled from storage images (D2).
    - Ray tracing, the denoiser, the upscaler and the FFT exist as unavailable capabilities; one unit test asserts each is available on Metal.
@@ -283,7 +283,6 @@ Every API the Vulkan backend copies gets built twice and tested twice. So shrink
 | Dead: `UniformArena` (`node-engine/gpu/uniform_arena.rs`: reset and flushed every frame, never written; plumbing in `generator_renderer.rs`, `gpu_encoder.rs`, `scene_viewport.rs`) | Delete | Build | Overnight |
 
 **Bigger cuts**
-- **Frame bridge on one device.** The content→UI handoff stores frames in IOSurfaces so two `GpuDevice`s can share them, and that drives about 200 of the app's Mac gates. Both devices call `MTLCreateSystemDefaultDevice` (`metal/device.rs:242`), so they are the same GPU. If both wrappers share one native device, each creating its own queue as `new()` does today (`clone_queue` returns the main queue, so it is not the tool), the bridge can hold plain `GpuTexture`s and keep its slot and lease logic. Publishing already waits for GPU completion. It is also design D16's shape for Vulkan, so IOSurface goes and the bridge is the same code on both backends. Prove it with `bridge-probe` (zero torn reads) before cutting over. Daytime.
 - **Headless harness.** `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `export-repro` boot through a Mac-only harness that duplicates app setup. After the bridge change they boot the normal content pipeline.
 - **One text engine.** The UI (2,172 lines) and the Text generator (689 lines) are two separate CoreText implementations. One cosmic-text module serves both.
 - **MetalFX and denoiser wrappers** reach into raw Metal handles from `manifold-compositor` and `manifold-nodes-scene`. They move into `manifold-gpu` behind the upscaler and denoiser capabilities (design 6.2), and those crates lose all raw-handle code.

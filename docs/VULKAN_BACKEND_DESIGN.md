@@ -79,12 +79,11 @@ Metal runs commands on a queue in order; every caller in MANIFOLD relies on that
 
 These change Metal-side and app code too, so they come before the app can run on Vulkan.
 
-### 6.1 Shared textures (the IOSurface bridge)
+### 6.1 Shared textures (the frame bridge)
 
-`SharedTextureBridge` (`manifold-app/src/shared_texture.rs`) keeps three surfaces, an atomic `front_index`, per-slot read leases retired by completion handlers, and a generation counter. That logic has nothing to do with Metal; only the IOSurface storage and import do. Publishing already waits for GPU completion, so plain textures shared through one device are enough on both backends.
+`SharedTextureBridge` (`manifold-app/src/shared_texture.rs`) keeps three plain `GpuTexture`s, an atomic `front_index`, per-slot read leases retired by completion handlers, and a generation counter. Content and UI share one native device, the content wrapper made by `GpuDevice::sibling` with its own queue (D16). Nothing in it is Metal-specific.
 
-- Content and UI share one native device, each wrapper with its own queue (D16). The bridge holds plain `GpuTexture`s and keeps its slot and lease logic; IOSurface goes. The `shared_texture.rs:61` comment that the two devices are separate `MTLDevice`s is corrected with it.
-- Prove it on Metal with `bridge-probe` (zero torn reads) before cutting over; on Vulkan it depends on D8 lifetime and the `GENERAL` layout.
+- On Vulkan the bridge depends on D8 lifetime and the `GENERAL` layout; `bridge-probe` must show zero torn reads there too.
 - The bridge and every pane on it lose their `cfg(target_os = "macos")` gates, about 200 sites in `content_pipeline.rs`, `app.rs`, `frame/present.rs`, `editor_bridge.rs`, `scene_viewport_capture.rs`, `selection_outline.rs`, `perform_mode/render.rs` and the rest.
 
 ### 6.2 Metal-only features become capabilities

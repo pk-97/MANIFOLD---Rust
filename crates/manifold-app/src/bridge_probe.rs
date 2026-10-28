@@ -1,10 +1,10 @@
 //! `bridge-probe` — headless tear detector for `SharedTextureBridge`
 //! (BUG-xaw4, presentation-transport audit).
 //!
-//! Replicates the production topology with no app: TWO GpuDevices (writer =
-//! content, reader = UI — MTLSharedEvent cannot cross MTLDevice instances,
-//! which is exactly why the bridge's read side needs CPU-side fencing), one
-//! real `SharedTextureBridge`, a writer thread writing per-frame solid
+//! Replicates the production topology with no app: TWO GpuDevice wrappers on
+//! one native device (writer = content, reader = UI, each with its own queue;
+//! nothing on the GPU orders the two queues, which is why the bridge's read
+//! side needs CPU-side fencing), one real `SharedTextureBridge`, a writer thread writing per-frame solid
 //! colours into surfaces as EIGHT band render passes (the production shape:
 //! a frame is many passes, the surface is "written" across the whole frame
 //! interval), and a reader thread sampling `front_index()` surfaces through
@@ -137,8 +137,8 @@ pub fn run(args: &[String]) -> ! {
     );
 
     let writer_dev = Arc::new(manifold_gpu::GpuDevice::new_queued("bridge-probe"));
-    let reader_dev = Arc::new(manifold_gpu::GpuDevice::new_queued("bridge-probe"));
-    let bridge = Arc::new(SharedTextureBridge::new(W, H));
+    let reader_dev = Arc::new(writer_dev.sibling());
+    let bridge = Arc::new(SharedTextureBridge::new(&writer_dev, W, H));
 
     if args.iter().any(|a| a == "--selftest") {
         let fill = writer_dev.create_render_pipeline(
@@ -150,7 +150,7 @@ pub fn run(args: &[String]) -> ! {
             )
             .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None),
         );
-        let tex = unsafe { bridge.import_texture_native(&writer_dev, 0) };
+        let tex = bridge.texture(0);
         let params_buf = writer_dev.create_buffer_shared(24);
         let colour = frame_colour(7);
         let params = [colour[0], colour[1], colour[2], colour[3], 0.0, 1.0];
@@ -207,13 +207,9 @@ pub fn run(args: &[String]) -> ! {
     );
     let writer_heavy = writer_dev.create_compute_pipeline(HEAVY_WGSL, "heavy", "probe-heavy-w");
 
-    // SAFETY: bridge outlives all imported textures (Arc held to the end).
-    let writer_tex: Vec<manifold_gpu::GpuTexture> = (0..SURFACE_COUNT)
-        .map(|i| unsafe { bridge.import_texture_native(&writer_dev, i) })
-        .collect();
-    let reader_tex: Vec<manifold_gpu::GpuTexture> = (0..SURFACE_COUNT)
-        .map(|i| unsafe { bridge.import_texture_native(&reader_dev, i) })
-        .collect();
+    let writer_tex: Vec<manifold_gpu::GpuTexture> =
+        (0..SURFACE_COUNT).map(|i| bridge.texture(i)).collect();
+    let reader_tex = writer_tex.clone();
 
     let stop = Arc::new(AtomicBool::new(false));
     let reads_done = Arc::new(AtomicU64::new(0));

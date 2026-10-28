@@ -228,11 +228,9 @@ pub struct Application {
     /// The editor mini-timeline, rebuilt only when its key moves.
     pub(crate) mini_timeline: crate::app_render::MiniTimelineCache,
     pub(crate) editor_graph: crate::editor_graph_cache::EditorGraphCache,
-    /// Single shared IOSurface + the UI-side texture imported from it for the
-    /// clip-thumbnail atlas (section 24 5c, BUG-119: one surface, no rotation — see
-    /// `crate::shared_texture::SharedAtlasSurface`).
-    #[cfg(target_os = "macos")]
-    pub(crate) clip_atlas_surface: Option<Arc<crate::shared_texture::SharedAtlasSurface>>,
+    /// The clip-thumbnail atlas texture both threads use (section 24 5c,
+    /// BUG-119: one surface, no rotation). The content thread blits cells
+    /// into it; the UI samples it.
     #[cfg(target_os = "macos")]
     pub(crate) ui_clip_atlas_texture: Option<manifold_gpu::GpuTexture>,
     /// Last clip-thumbnail visible set sent — dedups `SetClipAtlasVisible`.
@@ -625,7 +623,6 @@ impl Application {
             mini_timeline: Default::default(),
             editor_graph: Default::default(),
             #[cfg(target_os = "macos")]
-            clip_atlas_surface: None,
             #[cfg(target_os = "macos")]
             ui_clip_atlas_texture: None,
             last_clip_atlas_visible_sent: Vec::new(),
@@ -1433,43 +1430,59 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             );
             self.workspace_preview_size = initial_preview_size;
 
-            // Create IOSurface bridge for workspace preview (downscaled).
-            // The main output path uses direct-to-drawable present from the
-            // content thread — no full-resolution IOSurface bridge needed.
+            // The content device is the UI device's sibling: the same native
+            // device with its OWN queue, so the content thread never starves UI
+            // submissions, and the bridges below hold plain textures both
+            // threads use. Created before the renderers so they can build
+            // pipelines, and before the bridges, which allocate on it.
+            let native_device = Arc::new(gpu.device.sibling());
+            // Load pipeline binary archive — subsequent pipeline creation calls
+            // automatically use it for near-instant cache hits.
+            if let Some(dirs) = manifold_foundation::AppDirs::current() {
+                let cache_dir = dirs.cache;
+                std::fs::create_dir_all(&cache_dir).ok();
+                native_device.load_pipeline_archive(&cache_dir.join("pipeline_cache.metallib"));
+                native_device.load_msl_cache(&cache_dir.join("msl_cache"));
+            }
+            log::info!("[GPU] Content thread: own queue on the UI's device (manifold-gpu)");
+
+            // Bridge for the workspace preview (downscaled). The main output
+            // path presents straight to the drawable from the content thread,
+            // so it needs no full-resolution bridge.
             #[cfg(target_os = "macos")]
             {
-                let preview_bridge = crate::shared_texture::SharedTextureBridge::new(
+                let preview_bridge = Arc::new(crate::shared_texture::SharedTextureBridge::new(
+                    &native_device,
                     initial_preview_size.0,
                     initial_preview_size.1,
-                );
-                let preview_bridge = Arc::new(preview_bridge);
-                let preview_textures: [manifold_gpu::GpuTexture;
-                    crate::shared_texture::SURFACE_COUNT] = std::array::from_fn(|i| unsafe {
-                    preview_bridge.import_texture_native(&gpu.device, i)
-                });
-                self.ui_preview_textures = preview_textures.map(Some);
+                ));
+                self.ui_preview_textures = std::array::from_fn(|i| Some(preview_bridge.texture(i)));
                 self.preview_texture_bridge = Some(Arc::clone(&preview_bridge));
 
                 // Node-output preview bridge — fixed small size (the editor
                 // pane is small and the content thread downscales into it).
-                let node_bridge =
-                    Arc::new(crate::shared_texture::SharedTextureBridge::new(480, 270));
-                let node_textures: [manifold_gpu::GpuTexture;
-                    crate::shared_texture::SURFACE_COUNT] = std::array::from_fn(|i| unsafe {
-                    node_bridge.import_texture_native(&gpu.device, i)
-                });
-                self.ui_node_preview_textures = node_textures.map(Some);
+                let node_bridge = Arc::new(crate::shared_texture::SharedTextureBridge::new(
+                    &native_device,
+                    480,
+                    270,
+                ));
+                self.ui_node_preview_textures =
+                    std::array::from_fn(|i| Some(node_bridge.texture(i)));
                 self.node_preview_texture_bridge = Some(Arc::clone(&node_bridge));
 
                 // Scene viewport frames: sized from the first request.
-                let viewport_bridge =
-                    Arc::new(crate::shared_texture::SharedTextureBridge::new(64, 64));
+                let viewport_bridge = Arc::new(crate::shared_texture::SharedTextureBridge::new(
+                    &native_device,
+                    64,
+                    64,
+                ));
                 self.scene_viewport_pane =
                     Some(crate::texture_pane::TexturePane::bridged(viewport_bridge));
 
                 // Selection outline masks, sized by the content thread to each mask.
                 let mask_bridge = || {
                     Arc::new(crate::shared_texture::SharedTextureBridge::with_format(
+                        &native_device,
                         64,
                         64,
                         manifold_gpu::GpuTextureFormat::R8Unorm,
@@ -1483,48 +1496,34 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // Per-node thumbnail atlas bridge — one big cell-grid texture of
                 // 16:9 cells (not square), so thumbnails keep a video aspect.
                 let atlas_bridge = Arc::new(crate::shared_texture::SharedTextureBridge::new(
+                    &native_device,
                     crate::content_pipeline::ATLAS_W,
                     crate::content_pipeline::ATLAS_H,
                 ));
-                let atlas_textures: [manifold_gpu::GpuTexture;
-                    crate::shared_texture::SURFACE_COUNT] = std::array::from_fn(|i| unsafe {
-                    atlas_bridge.import_texture_native(&gpu.device, i)
-                });
-                self.ui_node_atlas_textures = atlas_textures.map(Some);
+                self.ui_node_atlas_textures =
+                    std::array::from_fn(|i| Some(atlas_bridge.texture(i)));
                 self.node_atlas_texture_bridge = Some(Arc::clone(&atlas_bridge));
 
-                // Clip-thumbnail FILMSTRIP atlas surface (section 24 5c-2, BUG-119) — its own
+                // Clip-thumbnail FILMSTRIP atlas (section 24 5c-2, BUG-119) — its own
                 // smaller cell-grid geometry (many narrow bar cells), independent
-                // lifecycle (always-on in the timeline vs editor-only). A SINGLE
-                // shared IOSurface, not a triple-buffer bridge: the atlas is
+                // lifecycle (always-on in the timeline vs editor-only). ONE texture
+                // both threads use, not a triple-buffer bridge: the atlas is
                 // persistent, slowly-changing data with no "stale frame" to solve,
                 // and the old ring's periodic publish-with-clear was itself the bug
                 // (it could clear the surface the UI thread
                 // was concurrently sampling).
-                let clip_atlas_surface = Arc::new(crate::shared_texture::SharedAtlasSurface::new(
-                    crate::content_pipeline::CLIP_ATLAS_W,
-                    crate::content_pipeline::CLIP_ATLAS_H,
-                ));
-                let ui_clip_atlas_texture =
-                    unsafe { clip_atlas_surface.import_texture_native(&gpu.device) };
-                self.ui_clip_atlas_texture = Some(ui_clip_atlas_texture);
-                self.clip_atlas_surface = Some(Arc::clone(&clip_atlas_surface));
+                self.ui_clip_atlas_texture =
+                    Some(native_device.create_texture(&manifold_gpu::GpuTextureDesc {
+                        width: crate::content_pipeline::CLIP_ATLAS_W,
+                        height: crate::content_pipeline::CLIP_ATLAS_H,
+                        depth: 1,
+                        format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                        dimension: manifold_gpu::GpuTextureDimension::D2,
+                        usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+                        label: "Clip Atlas",
+                        mip_levels: 1,
+                    }));
             }
-
-            // Create native Metal device BEFORE renderers so they can build native pipelines.
-            // This gives the content thread its OWN MTLCommandQueue, completely separate
-            // from the UI thread's queue. Metal interleaves GPU work from both queues,
-            // preventing the content thread from starving UI submissions.
-            let native_device = Arc::new(manifold_gpu::GpuDevice::new());
-            // Load pipeline binary archive — subsequent pipeline creation calls
-            // automatically use it for near-instant cache hits.
-            if let Some(dirs) = manifold_foundation::AppDirs::current() {
-                let cache_dir = dirs.cache;
-                std::fs::create_dir_all(&cache_dir).ok();
-                native_device.load_pipeline_archive(&cache_dir.join("pipeline_cache.metallib"));
-                native_device.load_msl_cache(&cache_dir.join("msl_cache"));
-            }
-            log::info!("[GPU] Content thread: native MTLCommandQueue (manifold-gpu)");
 
             let gen_format = manifold_gpu::GpuTextureFormat::Rgba16Float;
 
@@ -1580,35 +1579,31 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             native_device.install_device_capture_scope();
             // Transfer native device ownership to content pipeline.
             content_pipeline.set_native_gpu(native_device);
-            // Give the content pipeline preview IOSurface textures for the workspace.
+            // The content side of each bridge.
             #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.preview_texture_bridge {
-                let native_dev = content_pipeline.native_device().unwrap();
-                let preview_textures: [manifold_gpu::GpuTexture;
-                    crate::shared_texture::SURFACE_COUNT] =
-                    std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
-                content_pipeline.set_preview_textures(preview_textures, Arc::clone(bridge));
+                content_pipeline.set_preview_textures(
+                    std::array::from_fn(|i| bridge.texture(i)),
+                    Arc::clone(bridge),
+                );
             }
-            // Content-side import of the node-output preview IOSurfaces.
             #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.node_preview_texture_bridge {
-                let native_dev = content_pipeline.native_device().unwrap();
-                let node_textures: [manifold_gpu::GpuTexture;
-                    crate::shared_texture::SURFACE_COUNT] =
-                    std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
-                content_pipeline.set_node_preview_textures(node_textures, Arc::clone(bridge));
+                content_pipeline.set_node_preview_textures(
+                    std::array::from_fn(|i| bridge.texture(i)),
+                    Arc::clone(bridge),
+                );
             }
-            // Content-side import of the scene viewport IOSurfaces.
             #[cfg(target_os = "macos")]
             if let Some(bridge) = self
                 .scene_viewport_pane
                 .as_ref()
                 .and_then(|pane| pane.bridge())
             {
-                let native_dev = content_pipeline.native_device().unwrap();
-                let textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
-                    std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
-                content_pipeline.set_scene_viewport_textures(textures, Arc::clone(bridge));
+                content_pipeline.set_scene_viewport_textures(
+                    std::array::from_fn(|i| bridge.texture(i)),
+                    Arc::clone(bridge),
+                );
             }
             #[cfg(target_os = "macos")]
             if let (Some(output), Some(viewport)) = (
@@ -1621,30 +1616,27 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             ) {
                 content_pipeline.set_outline_bridges(Arc::clone(output), Arc::clone(viewport));
             }
-            // Content-side import of the thumbnail-atlas IOSurfaces.
             #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.node_atlas_texture_bridge {
-                let native_dev = content_pipeline.native_device().unwrap();
-                let atlas_textures: [manifold_gpu::GpuTexture;
-                    crate::shared_texture::SURFACE_COUNT] =
-                    std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
-                content_pipeline.set_node_atlas_textures(atlas_textures, Arc::clone(bridge));
+                content_pipeline.set_node_atlas_textures(
+                    std::array::from_fn(|i| bridge.texture(i)),
+                    Arc::clone(bridge),
+                );
             }
-            // Content-side import of the single shared clip-thumbnail atlas
-            // surface (section 24 5c, BUG-119), plus its one-time init clear — Metal
+            // The single clip-thumbnail atlas texture (section 24 5c, BUG-119),
+            // plus its one-time init clear — Metal
             // doesn't zero-init, and this is the ONLY clear the atlas ever gets:
             // every cell blit after this uses `LoadAction::Load` (see
             // `fill_clip_atlas`/`restore_clip_atlas` in content_pipeline.rs). The
             // clear is waited-out synchronously so the surface is guaranteed
             // transparent before either thread's first real frame.
             #[cfg(target_os = "macos")]
-            if let Some(ref surface) = self.clip_atlas_surface {
+            if let Some(ref clip_atlas_tex) = self.ui_clip_atlas_texture {
                 let native_dev = content_pipeline.native_device().unwrap();
-                let clip_atlas_tex = unsafe { surface.import_texture_native(native_dev) };
                 let mut clear_enc = native_dev.create_encoder("Clip Atlas Init Clear");
-                clear_enc.clear_texture(&clip_atlas_tex, 0.0, 0.0, 0.0, 0.0);
+                clear_enc.clear_texture(clip_atlas_tex, 0.0, 0.0, 0.0, 0.0);
                 clear_enc.commit_and_wait_completed();
-                content_pipeline.set_clip_atlas_texture(clip_atlas_tex, Arc::clone(surface));
+                content_pipeline.set_clip_atlas_texture(clip_atlas_tex.clone());
             }
             self.content_pipeline_output = Some(content_pipeline.shared_output());
 
@@ -1749,7 +1741,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             self.content_tx = Some(cmd_tx);
             self.state_rx = Some(state_rx);
             self.content_thread_handle = Some(handle);
-            log::info!("[ContentThread] spawned (dual device + triple-buffered IOSurface bridge)");
+            log::info!("[ContentThread] spawned (own queue + triple-buffered bridges)");
 
             // Step 10: start the preset hot-reload watcher alongside the
             // content thread. Detached background thread, off the render

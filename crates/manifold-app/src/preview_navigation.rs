@@ -243,7 +243,6 @@ impl PreviewNavigation {
 pub(crate) fn lease_navigated_frame(
     nav: &mut PreviewNavigation,
     pane: Option<&mut crate::texture_pane::TexturePane>,
-    device: &manifold_gpu::GpuDevice,
     frames: &SceneViewportFrames,
     leases: &mut crate::shared_texture::BridgeLeaseBatch,
 ) -> Option<(manifold_gpu::GpuTexture, usize, Option<u64>)> {
@@ -252,7 +251,7 @@ pub(crate) fn lease_navigated_frame(
         return None;
     };
     let Some((frame, texture, slot)) =
-        crate::scene_viewport::lease_frame(pane, device, frames, &request, leases)
+        crate::scene_viewport::lease_frame(pane, frames, &request, leases)
     else {
         nav.show(None);
         return None;

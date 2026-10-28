@@ -33,10 +33,8 @@ pub(crate) struct OutlineMasks {
 
 #[cfg(target_os = "macos")]
 impl OutlineMasks {
-    pub fn install(&mut self, device: &GpuDevice, bridge: Arc<SharedTextureBridge>) {
-        // SAFETY: `self.bridge` keeps the IOSurfaces alive as long as the textures.
-        self.textures =
-            std::array::from_fn(|i| Some(unsafe { bridge.import_texture_native(device, i) }));
+    pub fn install(&mut self, bridge: Arc<SharedTextureBridge>) {
+        self.textures = std::array::from_fn(|i| Some(bridge.texture(i)));
         self.bridge = Some(bridge);
     }
 
@@ -52,10 +50,8 @@ impl OutlineMasks {
     ) -> Option<u64> {
         let (mask, bridge) = (mask?, self.bridge.as_ref()?);
         if bridge.width() != mask.width || bridge.height() != mask.height {
-            bridge.resize(mask.width, mask.height);
-            // SAFETY: as in `install`.
-            self.textures =
-                std::array::from_fn(|i| Some(unsafe { bridge.import_texture_native(device, i) }));
+            bridge.resize(device, mask.width, mask.height);
+            self.textures = std::array::from_fn(|i| Some(bridge.texture(i)));
         }
         enc.copy_texture_to_texture(
             mask,
@@ -302,7 +298,6 @@ fn slots_on<'a>(request: Option<&'a OutlineSlots>, layer: &manifold_core::LayerI
 #[cfg(target_os = "macos")]
 pub(crate) fn leased_mask(
     pane: Option<&mut crate::texture_pane::TexturePane>,
-    device: &GpuDevice,
     slot: usize,
     outline: Option<u64>,
 ) -> Option<GpuTexture> {
@@ -310,7 +305,7 @@ pub(crate) fn leased_mask(
     if pane.bridge()?.generation() != outline? {
         return None;
     }
-    pane.leased(device, slot).cloned()
+    pane.leased(slot).cloned()
 }
 
 impl crate::app::Application {

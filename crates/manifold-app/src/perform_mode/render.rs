@@ -115,7 +115,7 @@ impl Application {
         }
 
         // Blit compositor output preview into the right column, vertically
-        // centered. Reads the latest frame from the preview IOSurface bridge
+        // centered. Reads the latest frame from the preview bridge
         // (same source the workspace viewport uses). Zero extra GPU work —
         // the frame is already rendered by the content thread.
         #[cfg(target_os = "macos")]
@@ -126,15 +126,11 @@ impl Application {
             &self.blit_pipeline,
             &self.blit_sampler,
         ) {
-            // Re-import textures on bridge resize (rare).
+            // Take fresh surfaces on bridge resize (rare).
             let bridge_gen = bridge.generation();
             if bridge_gen != self.last_preview_bridge_generation {
                 self.last_preview_bridge_generation = bridge_gen;
-                let textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
-                    std::array::from_fn(|i| unsafe {
-                        bridge.import_texture_native(&gpu.device, i)
-                    });
-                self.ui_preview_textures = textures.map(Some);
+                self.ui_preview_textures = std::array::from_fn(|i| Some(bridge.texture(i)));
             }
             let lease = bridge.acquire_read();
             let front = lease.slot();

@@ -162,7 +162,6 @@ impl SceneViewportNavigation {
 #[cfg(target_os = "macos")]
 pub(crate) fn lease_frame(
     pane: &mut crate::texture_pane::TexturePane,
-    device: &manifold_gpu::GpuDevice,
     frames: &SceneViewportFrames,
     request: &SceneViewportRequest,
     leases: &mut crate::shared_texture::BridgeLeaseBatch,
@@ -176,7 +175,7 @@ pub(crate) fn lease_frame(
     });
     let texture = matched
         .filter(|frame| frame.has_image())
-        .and_then(|_| pane.leased(device, lease.slot()).cloned());
+        .and_then(|_| pane.leased(lease.slot()).cloned());
     if texture.is_some() {
         leases.push((bridge, lease));
     } else {
