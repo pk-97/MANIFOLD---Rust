@@ -577,7 +577,7 @@ impl GpuEncoder {
     pub fn begin_replay(&mut self, device: &GpuDevice, mut cache: GpuReplayCache) {
         debug_assert!(self.replay.is_none(), "replay spans never nest");
         let enabled = self.profile.is_none()
-            && !super::gpu_fault::diagnostics_enabled()
+            && !crate::gpu_fault::diagnostics_enabled()
             && replay_allowed_by_env();
         let entry = if enabled { cache.enter(device) } else { None };
         let copy_kernel = entry.is_some().then(|| device.replay_copy_kernel().clone());

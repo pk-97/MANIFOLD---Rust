@@ -9,7 +9,10 @@
 use objc2_metal::MTLSharedEvent;
 
 use super::*;
-use crate::{GpuBinding, template_chunks};
+use crate::{
+    GpuBinding, GpuFrameProfile, GpuProfiledSpan, ProfileGranularity, TemplateRanges,
+    template_chunks,
+};
 
 const N: usize = 4096;
 const GROUPS: [u32; 3] = [N as u32 / 64, 1, 1];

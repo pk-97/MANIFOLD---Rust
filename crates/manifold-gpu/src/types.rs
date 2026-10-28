@@ -426,3 +426,23 @@ impl GpuBinding<'_> {
         }
     }
 }
+
+/// The transform a [`GpuFft`](crate::GpuFft) plan computes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FftKind {
+    /// Real input → half spectrum (interleaved complex), unscaled.
+    RealToHermitean,
+    /// Half spectrum → real output, inverse sign, scaled by 1 / volume.
+    HermiteanToReal,
+    /// Interleaved complex input and output, unscaled.
+    ComplexToComplex { inverse: bool },
+}
+
+/// A copy of the manager's accounting, safe to pass across thread boundaries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GpuResidencyStats {
+    pub allocation_count: usize,
+    pub allocated_bytes: u64,
+    pub budget_bytes: u64,
+    pub requested: bool,
+}

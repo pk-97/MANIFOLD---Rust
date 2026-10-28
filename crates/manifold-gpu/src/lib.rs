@@ -28,7 +28,10 @@ pub use trace_planner::*;
 // buffers; that store lifts this allow.
 #[cfg_attr(feature = "vulkan", allow(dead_code))]
 mod replay;
-pub use replay::{GATED_RANGE_BYTES, GpuReplayStats, REPLAY_RING, chunk_rounds, template_chunks};
+pub use replay::{
+    GATED_RANGE_BYTES, GpuReplayStats, GpuTemplateStats, REPLAY_RING, TemplateRanges,
+    chunk_rounds, template_chunks,
+};
 
 /// Point-in-time device memory values used by resource admission. The
 /// snapshot is deliberately plain data so callers can capture it once at an
@@ -76,9 +79,16 @@ use vulkan as backend;
 #[cfg(feature = "vulkan")]
 pub use vulkan::*;
 
+// GPU fault counters and kinds; each backend decodes its own errors into them.
+pub mod gpu_fault;
+mod gpu_profile;
+pub use gpu_profile::*;
+mod draw_types;
+pub use draw_types::*;
+
 // Backend-neutral frame lifetime: the frame fence, fence-stamped drop
 // retirement and the texture pool. Each backend supplies small hooks
-// (`RetiredResource`, `PoolAllocator`, `submissions_ignored`).
+// (`RetiredResource`, `PoolAllocator`).
 mod frame_fence;
 pub use frame_fence::FrameFence;
 mod retire;

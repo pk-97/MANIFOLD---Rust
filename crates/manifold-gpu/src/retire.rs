@@ -229,7 +229,7 @@ impl RetireQueue {
         // A blacklisted queue never signals again (BUG-665r — the driver
         // ignores submissions after a GPU error): no wait can complete, and
         // the process is already on its way out. Release without waiting.
-        if !crate::backend::submissions_ignored() {
+        if !crate::gpu_fault::submissions_ignored() {
             for item in &self.pending {
                 let target = item.stamp.min(item.event.encoded_value());
                 item.event.wait_until_done(target);

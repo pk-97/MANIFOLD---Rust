@@ -1371,7 +1371,7 @@ pub(crate) fn encode_accel_update(
     let mut slot_total = 0u32;
     let mut blas_builds = 0u32;
     let mut blas_refits = 0u32;
-    if super::super::gpu_fault::diagnostics_enabled() {
+    if crate::gpu_fault::diagnostics_enabled() {
         for (i, o) in objects.iter().enumerate() {
             log_geometry_health(i, o);
         }
@@ -1648,11 +1648,11 @@ fn add_ready_completion_handler<T: Send + 'static>(
                 let (code, desc) = match unsafe { cb.error() } {
                     None => (-1i64, String::from("(nil)")),
                     Some(err) => {
-                        super::super::gpu_fault::log_error_diagnostics(&err, label);
+                        super::super::fault_decode::log_error_diagnostics(&err, label);
                         (err.code() as i64, err.localizedDescription().to_string())
                     }
                 };
-                super::super::gpu_fault::record_fault(code, &desc);
+                super::super::fault_decode::record_fault(code, &desc);
                 log::error!("[GPU] Command buffer '{label}' error (code={code}): {desc}");
                 // BUG-84fv: a failed build/refit must NOT flip ready — tracing
                 // a structure the GPU faulted while writing sends hardware

@@ -18,9 +18,9 @@ pub mod metalfx_m4; // RAYTRACING_DESIGN.md section 17.7 DN-K
 pub mod defer_drop;
 mod device;
 mod encoder;
+mod fault_decode;
 pub mod firmware_reports;
 mod format;
-pub mod gpu_fault;
 mod msl_cache;
 mod profiling;
 pub mod raytrace;
@@ -47,19 +47,14 @@ mod workgroup_zeroing_tests;
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
 pub(crate) use device::PoolAllocator;
-pub use encoder::{AuxColorAttachment, DepthMsaaDraw, DepthMsaaPassDesc, DrawCount, GpuEncoder};
-pub use fft::{FftKind, GpuFft};
-pub(crate) use gpu_fault::submissions_ignored;
-pub use profiling::{
-    GpuFrameProfile, GpuProfiledSpan, GpuTimestampSampler, GpuWorkKind, ProfileGranularity,
-};
+pub use encoder::GpuEncoder;
+pub use fft::GpuFft;
+pub use profiling::GpuTimestampSampler;
 pub use replay::GpuReplayCache;
-pub use residency::{GpuResidencyManager, GpuResidencyStats};
+pub use residency::GpuResidencyManager;
 pub use span_timer::GpuSpanTimer;
 pub use surface::{GpuDrawable, GpuSurface, set_presented_observer};
-pub use template::{
-    GatedRecorder, GpuTemplateStats, GpuTemplateStore, TemplateRanges, TemplateTicket,
-};
+pub use template::{GatedRecorder, GpuTemplateStore, TemplateTicket};
 pub(crate) use types::RetiredResource;
 pub use types::{
     GpuBuffer, GpuComputePipeline, GpuDepthStencilState, GpuEvent, GpuFenceWaiter,

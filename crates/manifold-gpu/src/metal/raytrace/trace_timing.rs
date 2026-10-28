@@ -87,7 +87,7 @@ impl TraceTiming {
             next_pending: 0,
             dispatches: 0,
             seen_restart_epoch: RESTART_EPOCH.load(Ordering::Acquire),
-            seen_fault_count: super::super::gpu_fault::fault_count(),
+            seen_fault_count: crate::gpu_fault::fault_count(),
             report: TraceTimingReport::default(),
         }
     }
@@ -109,7 +109,7 @@ impl TraceTiming {
     /// slot for a dispatch of shape `key`. Returns the slot and its limits.
     pub(crate) fn begin(&mut self, key: u64) -> (usize, TraceWorkLimits) {
         let epoch = RESTART_EPOCH.load(Ordering::Acquire);
-        let faults = super::super::gpu_fault::fault_count();
+        let faults = crate::gpu_fault::fault_count();
         if epoch != self.seen_restart_epoch || faults != self.seen_fault_count {
             self.seen_restart_epoch = epoch;
             self.seen_fault_count = faults;

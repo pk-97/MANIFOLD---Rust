@@ -16,6 +16,7 @@ use objc2_metal::{
 };
 
 use super::device::GpuDevice;
+use crate::GpuResidencyStats;
 
 #[derive(Clone)]
 pub(crate) struct ResidencySender {
@@ -58,15 +59,6 @@ impl Drop for GpuResidencyLease {
             key: self.key,
         });
     }
-}
-
-/// A copy of the manager's accounting, safe to pass across thread boundaries.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct GpuResidencyStats {
-    pub allocation_count: usize,
-    pub allocated_bytes: u64,
-    pub budget_bytes: u64,
-    pub requested: bool,
 }
 
 /// The one mutable residency-set owner for a Metal device.

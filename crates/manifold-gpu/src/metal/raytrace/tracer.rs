@@ -1281,7 +1281,7 @@ impl MetalShadowRayTracer {
 
     fn with_pipelines(device: &GpuDevice, p: &RtPipelines) -> Self {
         let dummy_alpha_tex = create_dummy_alpha_texture(device);
-        let enabled = super::super::gpu_fault::diagnostics_enabled();
+        let enabled = crate::gpu_fault::diagnostics_enabled();
         if enabled {
             log::info!(
                 "[RT-DIAG] stages:0=primary,1=shadow/sun,2=AO,3=GI,4=emissive-shadow,5=reflection; invalid rays replaced only in diagnostic mode; records retain first incident per fixed slot"
@@ -2282,7 +2282,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             params.refl_spp <= MAX_RT_REFLECTION_SPP,
             "reflection spp exceeds the supported quality ladder maximum"
         );
-        let diagnostic_slot = if super::super::gpu_fault::diagnostics_enabled() {
+        let diagnostic_slot = if crate::gpu_fault::diagnostics_enabled() {
             self.rt_diagnostics.busy.iter().position(|busy| {
                 busy.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
                     .is_ok()
@@ -2334,12 +2334,12 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                         );
                     }
                     pool.busy[slot].store(false, Ordering::Release);
-                    super::super::gpu_fault::complete_submission();
+                    crate::gpu_fault::complete_submission();
                 },
             );
             Some(block)
         } else {
-            if super::super::gpu_fault::diagnostics_enabled() {
+            if crate::gpu_fault::diagnostics_enabled() {
                 log::warn!("[RT-DIAG] validation=unavailable all diagnostic slots in flight");
             }
             None
@@ -2541,7 +2541,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
                     continue;
                 }
                 let pipeline = &self.trace_pipelines[pass as usize][usize::from(has_translucency)];
-                let diagnostic_label = super::super::gpu_fault::diagnostics_enabled().then(|| {
+                let diagnostic_label = crate::gpu_fault::diagnostics_enabled().then(|| {
                     format!(
                         "{label} {} tile origin={},{} extent={}x{}",
                         pipeline.label,
@@ -2576,7 +2576,7 @@ impl ShadowRayTracer for MetalShadowRayTracer {
             if regions.peek().is_none()
                 && let Some(block) = diagnostic_callback.take()
             {
-                super::super::gpu_fault::begin_submission();
+                crate::gpu_fault::begin_submission();
                 unsafe {
                     encoder
                         .cmd_buf

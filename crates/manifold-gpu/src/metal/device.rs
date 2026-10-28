@@ -1465,14 +1465,14 @@ impl GpuDevice {
         let cmd_buf = unsafe { queue.commandBufferWithDescriptor(&descriptor) }
             .expect("Failed to acquire command buffer");
         unsafe { cmd_buf.setLabel(Some(label)) };
-        if super::gpu_fault::diagnostics_enabled() {
+        if crate::gpu_fault::diagnostics_enabled() {
             log::info!(
                 "[GPU-DIAG] device={:?} queue={:p} allocated_bytes={} buffer={label}",
                 self.raw_device().name(),
                 queue,
                 self.raw_device().currentAllocatedSize()
             );
-            super::gpu_fault::trace_buffer(&cmd_buf);
+            super::fault_decode::trace_buffer(&cmd_buf);
         }
         cmd_buf
     }

@@ -34,16 +34,7 @@ use std::sync::Mutex;
 
 use super::GpuBuffer;
 use super::encoder::GpuEncoder;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FftKind {
-    /// Real input → half spectrum (interleaved complex), unscaled.
-    RealToHermitean,
-    /// Half spectrum → real output, inverse sign, scaled by 1 / volume.
-    HermiteanToReal,
-    /// Interleaved complex input and output, unscaled.
-    ComplexToComplex { inverse: bool },
-}
+use crate::FftKind;
 
 /// Compiled FFT plan. Build once, encode many times.
 pub struct GpuFft {

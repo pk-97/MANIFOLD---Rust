@@ -29,7 +29,10 @@ use super::SIZES_BUFFER_BINDING;
 use super::device::GpuDevice;
 use super::encoder::{EncoderState, GpuEncoder, MAX_BUFFER_SLOTS, collect_buffer_sizes};
 use super::types::{GpuBuffer, GpuComputePipeline};
-use crate::replay::{BYTES_ALIGN, GATED_RANGE_BYTES, MAX_KEY_BINDINGS, template_chunks};
+use crate::replay::{
+    BYTES_ALIGN, GATED_RANGE_BYTES, GpuTemplateStats, MAX_KEY_BINDINGS, TemplateRanges,
+    template_chunks,
+};
 use crate::types::GpuBinding;
 
 /// Kernel buffer slots an indirect compute command can set (Metal's limit).
@@ -44,41 +47,6 @@ const IDLE_SLOTS_KEPT: usize = 4;
 
 /// Store ids, so a ticket from one store is refused by another.
 static NEXT_STORE: AtomicU64 = AtomicU64::new(0);
-
-/// Where a template's rounds run: grouped into executes of one round for
-/// the first `singles`, then up to `chunk` (`crate::template_chunks`),
-/// execute j by range entry
-/// `first + j * stride` of `ranges` (`GATED_RANGE_BYTES` per entry), which
-/// the GPU writes as {0, rounds · commands} while live and {0, 0} once the
-/// work is done. Rounds of an execute that run after the GPU decided to
-/// stop must write nothing: the caller's kernels guard themselves.
-#[derive(Clone, Copy)]
-pub struct TemplateRanges<'a> {
-    pub ranges: &'a GpuBuffer,
-    pub first: u32,
-    pub stride: u32,
-    pub chunk: u32,
-    pub singles: u32,
-}
-
-/// What a template store did, summed over its life.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct GpuTemplateStats {
-    /// Body walks: one per prepare that ran its body.
-    pub walks: u64,
-    /// Prepares that found a slot with an equal key.
-    pub hits: u64,
-    /// Slots built (cold, or a changed key).
-    pub builds: u64,
-    /// Indirect commands written, every replica counted.
-    pub command_writes: u64,
-    /// Slots appended because no idle slot was free.
-    pub grown: u64,
-    /// Execute calls.
-    pub executes: u64,
-    /// Prepares refused (`Err`), nothing touched.
-    pub refused: u64,
-}
 
 /// What a template body can do: issue gated dispatches into the store's
 /// provisional round, nothing else.
@@ -644,7 +612,7 @@ impl GpuEncoder {
         let per_execute = self
             .profile
             .as_ref()
-            .is_some_and(|p| p.granularity == super::ProfileGranularity::Dispatch);
+            .is_some_and(|p| p.granularity == crate::ProfileGranularity::Dispatch);
         let mut enc: Option<Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>> = None;
         for j in 0..ticket.executes {
             if enc.is_none() || per_execute {

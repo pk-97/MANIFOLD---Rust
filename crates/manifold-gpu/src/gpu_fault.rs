@@ -7,34 +7,7 @@
 //! timeouts with no signal distinguishable from a slow GPU unless it can
 //! ASK. `submissions_ignored` is that ask.
 
-use objc2_foundation::NSError;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-
-/// Emit Metal's encoder execution diagnostics attached to an NSError.
-pub(crate) fn log_error_diagnostics(err: &NSError, buffer: &str) {
-    use objc2::{msg_send, rc::Retained, runtime::AnyObject};
-    use objc2_foundation::{NSArray, NSString};
-    use objc2_metal::{MTLCommandBufferEncoderInfoErrorKey, MTLCommandEncoderErrorState};
-    let user_info = err.userInfo();
-    let Some(infos) = user_info.objectForKey(unsafe { MTLCommandBufferEncoderInfoErrorKey }) else {
-        emit_diagnostic(format_args!(
-            "[GPU] buffer {buffer}: Metal supplied no per-encoder execution details"
-        ));
-        return;
-    };
-    // Metal documents this key as NSArray<MTLCommandBufferEncoderInfo>.
-    let count: usize = unsafe { msg_send![&*infos, count] };
-    for index in 0..count {
-        let info: *mut AnyObject = unsafe { msg_send![&*infos, objectAtIndex: index] };
-        let label: Option<Retained<NSString>> = unsafe { msg_send![info, label] };
-        let state: MTLCommandEncoderErrorState = unsafe { msg_send![info, errorState] };
-        let signposts: Option<Retained<NSArray<NSString>>> =
-            unsafe { msg_send![info, debugSignposts] };
-        emit_diagnostic(format_args!(
-            "[GPU] buffer {buffer} encoder[{index}] label={label:?} state={state:?} signposts={signposts:?}"
-        ));
-    }
-}
 
 /// Headless proof binaries may not install a logger; don't discard their fault evidence.
 pub(crate) fn emit_diagnostic(args: std::fmt::Arguments<'_>) {
@@ -52,20 +25,6 @@ static SUBMISSIONS_IGNORED: AtomicBool = AtomicBool::new(false);
 // callback threads and may be invoked while the process is tearing down.
 static IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
 static COMPLETED: AtomicU64 = AtomicU64::new(0);
-
-/// True for the driver's queue-blacklist error description. The blacklist
-/// signature has no stable numeric code exposed to us, so match the
-/// description text — it is the only observable the logs carry. The
-/// observed text (BUG-84fv, 2026-08-02 incident) is "Ignored (for causing
-/// prior/excessive GPU errors)
-/// (00000004:kIOGPUCommandBufferCallbackErrorSubmissionsIgnored)" — BUG-665r
-/// shipped matching "Ignored for causing prior", which the parenthesis in
-/// the real string defeats, so the wedge guard never fired in the field.
-/// Match the two fragments that survive Apple's punctuation: the reason
-/// clause and the kIOGPU code.
-fn is_blacklist_desc(desc: &str) -> bool {
-    desc.contains("for causing prior") || desc.contains("SubmissionsIgnored")
-}
 
 /// What a failed command buffer was, decided once where the error is read.
 /// Hosts branch on this instead of parsing log text.
@@ -110,34 +69,6 @@ impl FaultKind {
             FaultKind::SubmissionsIgnored => "GPU queue blacklisted by the driver",
             FaultKind::InnocentVictim => "GPU work discarded after another fault",
             FaultKind::Other => "GPU error",
-        }
-    }
-}
-
-/// Classify a command-buffer error. The kIOGPU token in the description is
-/// the stable identifier (its hex prefix is IOGPU's own numbering, which
-/// differs from `NSError::code`); the public Metal codes cover errors that
-/// carry no token.
-pub(crate) fn classify_fault(code: i64, desc: &str) -> FaultKind {
-    if is_blacklist_desc(desc) {
-        FaultKind::SubmissionsIgnored
-    } else if desc.contains("ErrorHang") || desc.contains("ErrorImpactingInteractivity") {
-        FaultKind::Hang
-    } else if desc.contains("ErrorPageFault") {
-        FaultKind::PageFault
-    } else if desc.contains("InnocentVictim") {
-        FaultKind::InnocentVictim
-    } else if desc.contains("ErrorDeviceRemoved") {
-        FaultKind::DeviceLost
-    } else if desc.contains("kIOGPU") {
-        FaultKind::Other
-    } else {
-        // MTLCommandBufferError: Timeout 2, PageFault 3, DeviceRemoved 11.
-        match code {
-            2 => FaultKind::Hang,
-            3 => FaultKind::PageFault,
-            11 => FaultKind::DeviceLost,
-            _ => FaultKind::Other,
         }
     }
 }
@@ -227,9 +158,9 @@ pub fn mark() -> FaultMark {
     }
 }
 
-/// Called from command-buffer completion handlers on `Error` status.
-pub(crate) fn record_fault(code: i64, desc: &str) {
-    let kind = classify_fault(code, desc);
+/// Called from command-buffer completion handlers on `Error` status, with
+/// the kind the backend decoded from its error.
+pub(crate) fn record_fault(kind: FaultKind) {
     KIND_COUNTS[kind.index()].fetch_add(1, Ordering::Release);
     FAULT_COUNT.fetch_add(1, Ordering::Relaxed);
     if kind == FaultKind::SubmissionsIgnored {
@@ -271,8 +202,8 @@ pub(crate) fn reset_submission_counters_for_test() {
 }
 
 /// Total command-buffer faults observed this process. This is an observation
-/// count, not a positive attribution of the originating encoder: Metal also
-/// reports innocent victims after a prior fault.
+/// count, not a positive attribution of the originating encoder: the driver
+/// also reports innocent victims after a prior fault.
 pub fn fault_count() -> u64 {
     FAULT_COUNT.load(Ordering::Relaxed)
 }
@@ -292,91 +223,12 @@ pub fn diagnostics_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("MANIFOLD_GPU_DIAGNOSTICS").as_deref() == Ok("1"))
 }
 
-/// Correlate every buffer, including asynchronous AS builds, without retaining
-/// command buffers after completion. Missing completion means unknown, not hung.
-pub(crate) fn trace_buffer(cb: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandBuffer>) {
-    if !diagnostics_enabled() {
-        return;
-    }
-    use block2::RcBlock;
-    use objc2_metal::MTLCommandBuffer;
-    use std::ptr::NonNull;
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    let id = NEXT.fetch_add(1, Ordering::Relaxed);
-    let started = std::time::Instant::now();
-    let label = unsafe { cb.label() };
-    let tagged = objc2_foundation::NSString::from_str(&format!(
-        "diag#{id} {}",
-        label.as_ref().map(|v| v.to_string()).unwrap_or_default()
-    ));
-    unsafe {
-        cb.setLabel(Some(&tagged));
-    }
-    log::info!("[GPU-DIAG] created id={id} label={label:?}");
-    let scheduled = RcBlock::new(
-        move |_cb: NonNull<objc2::runtime::ProtocolObject<dyn MTLCommandBuffer>>| {
-            log::info!(
-                "[GPU-DIAG] scheduled id={id} elapsed_us={}",
-                started.elapsed().as_micros()
-            );
-        },
-    );
-    let complete = RcBlock::new(
-        move |ptr: NonNull<objc2::runtime::ProtocolObject<dyn MTLCommandBuffer>>| {
-            let cb = unsafe { ptr.as_ref() };
-            let status = unsafe { cb.status() };
-            let start = unsafe { cb.GPUStartTime() };
-            let end = unsafe { cb.GPUEndTime() };
-            let gpu_ms = if start > 0.0 && end >= start {
-                Some((end - start) * 1000.0)
-            } else {
-                None
-            };
-            log::info!(
-                "[GPU-DIAG] completed id={id} label={label:?} status={status:?} elapsed_us={} gpu_ms={gpu_ms:?}",
-                started.elapsed().as_micros()
-            );
-        },
-    );
-    unsafe {
-        cb.addScheduledHandler(RcBlock::as_ptr(&scheduled));
-        cb.addCompletedHandler(RcBlock::as_ptr(&complete));
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    // The exact description strings the driver produced in the BUG-84fv
-    // incident log (2026-08-02) — pinning the REAL text, not a remembered
-    // paraphrase, is what the BUG-665r original lacked.
     use super::{
-        FaultKind, FaultKinds, begin_submission, classify_fault, complete_submission,
-        drain_completions, is_blacklist_desc, reset_submission_counters_for_test,
+        FaultKind, FaultKinds, begin_submission, complete_submission, drain_completions,
+        reset_submission_counters_for_test,
     };
-
-    #[test]
-    fn real_descriptions_classify_by_kind() {
-        let hang = "Caused GPU Hang Error (00000003:kIOGPUCommandBufferCallbackErrorHang)";
-        let page =
-            "Caused GPU Address Fault Error (0000000b:kIOGPUCommandBufferCallbackErrorPageFault)";
-        let victim = "Discarded (victim of GPU error/recovery) (00000005:kIOGPUCommandBufferCallbackErrorInnocentVictim)";
-        let ignored = "Ignored (for causing prior/excessive GPU errors) (00000004:kIOGPUCommandBufferCallbackErrorSubmissionsIgnored)";
-        let interactivity = "Impacting Interactivity (0000000e:kIOGPUCommandBufferCallbackErrorImpactingInteractivity)";
-        // NSError::code is deliberately wrong here: the token decides.
-        assert_eq!(classify_fault(1, hang), FaultKind::Hang);
-        assert_eq!(classify_fault(1, page), FaultKind::PageFault);
-        assert_eq!(classify_fault(1, victim), FaultKind::InnocentVictim);
-        assert_eq!(classify_fault(1, ignored), FaultKind::SubmissionsIgnored);
-        assert_eq!(classify_fault(1, interactivity), FaultKind::Hang);
-        assert!(
-            FaultKinds::default()
-                .with(classify_fault(1, interactivity))
-                .is_recoverable_hang()
-        );
-        assert_eq!(classify_fault(8, "Insufficient Memory"), FaultKind::Other);
-        assert_eq!(classify_fault(2, "Execution timed out"), FaultKind::Hang);
-        assert_eq!(classify_fault(11, "Device removed"), FaultKind::DeviceLost);
-    }
 
     #[test]
     fn recovery_policy_follows_the_worst_kind() {
@@ -395,29 +247,6 @@ mod tests {
         assert!(hang.with(FaultKind::SubmissionsIgnored).is_fatal());
         assert!(!hang.with(FaultKind::Other).is_recoverable_hang());
         assert!(!FaultKinds::default().with(FaultKind::Other).is_fatal());
-    }
-
-    #[test]
-    fn blacklist_description_matches() {
-        assert!(is_blacklist_desc(
-            "Ignored (for causing prior/excessive GPU errors) \
-             (00000004:kIOGPUCommandBufferCallbackErrorSubmissionsIgnored)"
-        ));
-    }
-
-    #[test]
-    fn incident_sessions_other_faults_do_not_match() {
-        assert!(!is_blacklist_desc(
-            "Discarded (victim of GPU error/recovery) \
-             (00000005:kIOGPUCommandBufferCallbackErrorInnocentVictim)"
-        ));
-        assert!(!is_blacklist_desc(
-            "Caused GPU Hang Error (00000003:kIOGPUCommandBufferCallbackErrorHang)"
-        ));
-        assert!(!is_blacklist_desc(
-            "Caused GPU Address Fault Error \
-             (0000000b:kIOGPUCommandBufferCallbackErrorPageFault)"
-        ));
     }
 
     #[test]
