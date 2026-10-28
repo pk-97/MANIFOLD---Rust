@@ -110,6 +110,14 @@ impl Map {
             .collect()
     }
 
+    /// The texels a touch at (x, z) stamps: the 3 x 3 round the one under it.
+    fn stamp_at(&self, x: f32, z: f32) -> Vec<[u32; 2]> {
+        let [u, v] = self.texel_at(x, z);
+        let mut texels: Vec<[u32; 2]> = (0..9).map(|k| [u + k % 3 - 1, v + k / 3 - 1]).collect();
+        texels.sort_by_key(|t| (t[1], t[0]));
+        texels
+    }
+
     /// The texel under (x, z), as the shader finds it.
     fn texel_at(&self, x: f32, z: f32) -> [u32; 2] {
         let h = self.header();
@@ -210,7 +218,7 @@ const ON_THE_FLOOR: &Held = &[([1, 0, 2], 0)];
 const BY_THE_WALL: &Held = &[([-1, 0, 0], 0), ([0, 0, 0], 1)];
 
 #[test]
-fn a_particle_on_a_solid_marks_its_texel_and_one_above_marks_nothing() {
+fn a_particle_on_a_solid_stamps_round_its_contact_and_one_above_marks_nothing() {
     let mut rig = Rig::new();
     // A centimetre above the floor: it stamps the floor under it.
     let on = [1.003, 0.01, 2.004];
@@ -226,14 +234,15 @@ fn a_particle_on_a_solid_marks_its_texel_and_one_above_marks_nothing() {
     assert_eq!(header.texel, base_texel(SIM_CELL));
     assert_eq!((header.side, header.now, header.drying), (SIDE, 3.0, 2.0));
     let touched = map.touched();
-    assert_eq!(touched.len(), 1, "{touched:?}");
-    let (texel, [touch, low, high, _]) = touched[0];
-    assert_eq!(texel, map.texel_at(on[0], on[2]));
-    assert_eq!(touch, touch_key(3.0));
-    // The floor's height, to float noise.
-    for (key, what) in [(!low, "lowest"), (high, "highest")] {
-        let y = height_of(key);
-        assert!(y.abs() < 1e-6, "{what} height {y}");
+    let texels: Vec<[u32; 2]> = touched.iter().map(|&(texel, _)| texel).collect();
+    assert_eq!(texels, map.stamp_at(on[0], on[2]));
+    for (_, [touch, low, high, _]) in touched {
+        assert_eq!(touch, touch_key(3.0));
+        // The floor's height, to float noise.
+        for (key, what) in [(!low, "lowest"), (high, "highest")] {
+            let y = height_of(key);
+            assert!(y.abs() < 1e-6, "{what} height {y}");
+        }
     }
 }
 
@@ -245,17 +254,19 @@ fn a_touch_lands_on_the_face_and_stays_while_the_water_is_gone() {
     let first = rig.run(BY_THE_WALL, wall, &[particle(at)], 2.0, 0.0);
     let later = rig.run(BY_THE_WALL, wall, &none(), 7.0, 0.0);
     let bin = 2.0 * base_texel(SIM_CELL);
-    let mark = (
-        first.texel_at(WALL_FACE, at[2]),
-        [
-            touch_key(2.0),
-            !height_key(0.31),
-            height_key(0.31),
-            height_bit(0.31, bin),
-        ],
-    );
-    assert_eq!(first.touched(), vec![mark]);
-    assert_eq!(later.touched(), vec![mark]);
+    let words = [
+        touch_key(2.0),
+        !height_key(0.31),
+        height_key(0.31),
+        height_bit(0.31, bin, false),
+    ];
+    let marks: Vec<_> = first
+        .stamp_at(WALL_FACE, at[2])
+        .into_iter()
+        .map(|texel| (texel, words))
+        .collect();
+    assert_eq!(first.touched(), marks);
+    assert_eq!(later.touched(), marks);
     assert_eq!(later.header().origin, first.header().origin);
     assert_eq!(later.header().now, 7.0);
 }
@@ -268,7 +279,7 @@ fn a_new_epoch_or_time_running_back_clears_the_map() {
         rig.run(BY_THE_WALL, wall, &[particle(at)], 2.0, 0.0)
             .touched()
             .len(),
-        1
+        9
     );
     assert!(
         rig.run(BY_THE_WALL, wall, &none(), 3.0, 1.0)
@@ -279,7 +290,7 @@ fn a_new_epoch_or_time_running_back_clears_the_map() {
         rig.run(BY_THE_WALL, wall, &[particle(at)], 5.0, 1.0)
             .touched()
             .len(),
-        1
+        9
     );
     assert!(
         rig.run(BY_THE_WALL, wall, &none(), 4.0, 1.0)
@@ -298,7 +309,7 @@ fn water_leaving_the_map_places_it_again_and_clears_it() {
         1.0,
         0.0,
     );
-    assert_eq!(first.touched().len(), 1);
+    assert_eq!(first.touched().len(), 9);
     let far: &Held = &[([100, 0, 2], 0)];
     let moved = rig.run(far, floor, &none(), 2.0, 0.0);
     assert!(moved.touched().is_empty());
@@ -327,5 +338,5 @@ fn a_spread_wider_than_the_map_takes_a_coarser_texel() {
         "{} against {want}",
         header.texel
     );
-    assert_eq!(map.touched().len(), 1);
+    assert_eq!(map.touched().len(), 9);
 }

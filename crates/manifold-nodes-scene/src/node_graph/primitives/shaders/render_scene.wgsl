@@ -854,7 +854,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // Water on the surface darkens it and smooths it, keyed on world
     // position because materials are shared. After the cutout test, which
     // stays on the material's own alpha.
-    let wet = look_wet_surface(in.world_pos, albedo.rgb, mr.x);
+    let wet = look_wet_surface(in.world_pos, geometric_N, albedo.rgb, mr.x);
     albedo = vec4<f32>(wet.albedo, albedo.a);
     let roughness = wet.roughness;
     let metallic = mr.y;

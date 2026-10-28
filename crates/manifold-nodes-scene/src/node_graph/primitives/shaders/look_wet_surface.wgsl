@@ -42,29 +42,25 @@ const WATER_INNER_REFLECTANCE: f32 = 1.0 - (1.0 - WATER_DIFFUSE_REFLECTANCE) / (
 // The smallest roughness `resolve_mr` hands the GGX terms, which divide by it.
 const WET_MIN_ROUGHNESS: f32 = 0.01;
 
-// One texel's wetness at height y and whether it counts: a texel off the
-// map, never touched, or touched only at other heights does not.
-fn wet_texel(t: vec2<i32>, side: u32, y: f32, now: f32, drying: f32, margin: f32) -> vec2<f32> {
+// One texel's wetness at height y: 0 off the map or never touched, else its
+// drying wetness times how much it speaks for that height.
+fn wet_texel(t: vec2<i32>, side: u32, y: f32, up: bool, now: f32, drying: f32, margin: f32) -> f32 {
     if any(t < vec2<i32>(0)) || any(t >= vec2<i32>(i32(side))) {
-        return vec2<f32>(0.0);
+        return 0.0;
     }
     let word = wm_texel_word(vec2<u32>(t), side);
     let touch = wet_map[word];
-    let low = wet_map[word + 1u];
-    let high = wet_map[word + 2u];
-    let bins = wet_map[word + 3u];
-    if !wm_counts(touch, low, high, bins, y, margin) {
-        return vec2<f32>(0.0);
+    if touch == 0u {
+        return 0.0;
     }
-    return vec2<f32>(wm_wetness(touch, now, drying), 1.0);
+    let reach = wm_height_weight(wet_map[word + 1u], wet_map[word + 2u], wet_map[word + 3u], y, margin, up);
+    return reach * wm_wetness(touch, now, drying);
 }
 
-// The wetness at a world position, 0 to 1: the four texels round it, each
-// weighted bilinearly, over the ones that count. A wall's face lies on the
-// texels its water stamped and the ones inside it, which never are, so only
-// the stamped ones speak for it. 0 with no map bound, before the map is
-// placed, off it, or where no texel round it counts.
-fn wetness_at(world_pos: vec3<f32>) -> f32 {
+// The wetness at a world position on a surface with world normal `normal`,
+// 0 to 1, bilinear between the four texels round it; 0 with no map bound,
+// before the map is placed, or off it.
+fn wetness_at(world_pos: vec3<f32>, normal: vec3<f32>) -> f32 {
     if wet.bound.x == 0u {
         return 0.0;
     }
@@ -87,18 +83,16 @@ fn wetness_at(world_pos: vec3<f32>) -> f32 {
     let drying = bitcast<f32>(wet_map[WM_DRYING]);
     let margin = WM_HEIGHT_MARGIN_TEXELS * texel;
     let y = local.y;
-    let sum = (1.0 - f.x) * (1.0 - f.y) * wet_texel(t, side, y, now, drying, margin)
-        + f.x * (1.0 - f.y) * wet_texel(t + vec2<i32>(1, 0), side, y, now, drying, margin)
-        + (1.0 - f.x) * f.y * wet_texel(t + vec2<i32>(0, 1), side, y, now, drying, margin)
-        + f.x * f.y * wet_texel(t + vec2<i32>(1, 1), side, y, now, drying, margin);
-    if !(sum.y > 0.0) {
-        return 0.0;
-    }
-    return clamp(sum.x / sum.y, 0.0, 1.0);
+    let up = normalize((wet.world_to_local * vec4<f32>(normal, 0.0)).xyz).y > WM_UP_FACING;
+    let w00 = wet_texel(t, side, y, up, now, drying, margin);
+    let w10 = wet_texel(t + vec2<i32>(1, 0), side, y, up, now, drying, margin);
+    let w01 = wet_texel(t + vec2<i32>(0, 1), side, y, up, now, drying, margin);
+    let w11 = wet_texel(t + vec2<i32>(1, 1), side, y, up, now, drying, margin);
+    return clamp(mix(mix(w00, w10, f.x), mix(w01, w11, f.x), f.y), 0.0, 1.0);
 }
 
-fn look_wet_surface(world_pos: vec3<f32>, albedo: vec3<f32>, roughness: f32) -> WetSurface {
-    let w = wetness_at(world_pos);
+fn look_wet_surface(world_pos: vec3<f32>, normal: vec3<f32>, albedo: vec3<f32>, roughness: f32) -> WetSurface {
+    let w = wetness_at(world_pos, normal);
     if w <= 0.0 {
         return WetSurface(albedo, roughness);
     }

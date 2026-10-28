@@ -107,7 +107,7 @@ WET_PROBE_KERNEL = """@group(0) @binding(91) var<storage, read> probe_in: array<
 @group(0) @binding(90) var<storage, read_write> probe_out: array<vec4<f32>>;
 @compute @workgroup_size(64)
 fn cs_probe(@builtin(global_invocation_id) id: vec3<u32>) {
-    let surface = look_wet_surface(probe_in[id.x].xyz, vec3<f32>(0.2, 0.5, 0.8), 0.6);
+    let surface = look_wet_surface(probe_in[id.x].xyz, vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.2, 0.5, 0.8), 0.6);
     probe_out[id.x] = vec4<f32>(surface.albedo, surface.roughness);
 }
 """

@@ -8,9 +8,9 @@
 //             the clear's group count (none when the map stays put)
 //   cs_clear  indirect, a thread a texel: every texel untouched
 //   cs_mark   a thread a particle: a particle within two radii of a solid
-//             stamps the texel of the surface point it touches with the
-//             display time, widens the texel's touched heights and sets
-//             their bin
+//             stamps the texels round the surface point it touches with the
+//             display time, widens their touched heights and sets the
+//             height's bin for a wall or an up-facing surface
 // Drying is computed where the map is read, from the age of the last touch,
 // so nothing runs over the map while the water is still.
 
@@ -170,20 +170,34 @@ fn cs_mark(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     // The point of the surface the particle touches: back along the solid's
     // normal by its distance. A wall's face is one line of texels seen from
-    // above, so the stamp lands on it, not a particle's width in front.
+    // above, so the stamp lands on it, not a particle's width in front, and
+    // covers the texels either side of it.
     let steep = length(near.gradient);
     var contact = p.xyz;
+    var up = false;
     if steep > 0.0 {
-        contact = p.xyz - near.distance * near.gradient / steep;
+        let normal = near.gradient / steep;
+        contact = p.xyz - near.distance * normal;
+        up = normal.y > WM_UP_FACING;
     }
     let origin = vec2<f32>(wet_header_f32(WM_ORIGIN_X), wet_header_f32(WM_ORIGIN_Z));
-    let t = floor((contact.xz - origin) / texel);
-    if any(t < vec2<f32>(0.0)) || any(t >= vec2<f32>(f32(params.side))) {
-        return;
+    let home = vec2<i32>(floor((contact.xz - origin) / texel));
+    let touch = wm_touch_key(params.now);
+    let low = ~wm_height_key(contact.y);
+    let high = wm_height_key(contact.y);
+    let bit = wm_height_bit(contact.y, WM_HEIGHT_MARGIN_TEXELS * texel, up);
+    let side = i32(params.side);
+    for (var dz = 0; dz < WM_STAMP; dz = dz + 1) {
+        for (var dx = 0; dx < WM_STAMP; dx = dx + 1) {
+            let t = home + vec2<i32>(dx, dz) - vec2<i32>(WM_STAMP / 2);
+            if any(t < vec2<i32>(0)) || any(t >= vec2<i32>(side)) {
+                continue;
+            }
+            let word = wm_texel_word(vec2<u32>(t), params.side);
+            atomicMax(&map[word], touch);
+            atomicMax(&map[word + 1u], low);
+            atomicMax(&map[word + 2u], high);
+            atomicOr(&map[word + 3u], bit);
+        }
     }
-    let word = wm_texel_word(vec2<u32>(t), params.side);
-    atomicMax(&map[word], wm_touch_key(params.now));
-    atomicMax(&map[word + 1u], ~wm_height_key(contact.y));
-    atomicMax(&map[word + 2u], wm_height_key(contact.y));
-    atomicOr(&map[word + 3u], wm_height_bit(contact.y, WM_HEIGHT_MARGIN_TEXELS * texel));
 }

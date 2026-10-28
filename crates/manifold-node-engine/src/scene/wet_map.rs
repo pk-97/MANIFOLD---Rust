@@ -39,10 +39,10 @@ pub fn height_key(y: f32) -> u32 {
     }
 }
 
-/// The bit of height `y`'s bin, bins `bin` metres tall wrapping every 32, as
-/// the shader sets it.
-pub fn height_bit(y: f32, bin: f32) -> u32 {
-    1 << (((y / bin).floor() as i32) & 31)
+/// The bit of height `y`'s bin, bins `bin` metres tall wrapping every 16, in
+/// the high half for a touch on an up-facing surface, as the shader sets it.
+pub fn height_bit(y: f32, bin: f32, up: bool) -> u32 {
+    (1 << (((y / bin).floor() as i32) & 15)) << if up { 16 } else { 0 }
 }
 
 #[cfg(test)]

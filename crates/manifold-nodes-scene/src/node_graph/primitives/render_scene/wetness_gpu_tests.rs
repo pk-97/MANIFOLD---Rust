@@ -1,8 +1,8 @@
 //! GPU proofs for the wet-surface look: the blend of albedo and roughness
 //! against the closed form of Lekner and Dorf, read from a wet map; the
-//! drying by the age of the last touch, the touched heights, an edge read
-//! from the touched texels only, and that a point off the map, under an unplaced map or in a scene
-//! without one is left alone.
+//! drying by the age of the last touch, the touched heights, a soft edge,
+//! and that a point off the map, under an unplaced map or in a scene without
+//! one is left alone.
 use super::water_march_gpu_tests::shared_buffer;
 use super::wetness::{WetUniforms, wet_uniforms};
 use super::{FieldObject, model_matrix};
@@ -30,15 +30,18 @@ const WET_KERNEL: &str = "\n\
 fn cs_probe(@builtin(global_invocation_id) id: vec3<u32>) {\n\
     let i = id.x;\n\
     if i >= arrayLength(&probe_out) { return; }\n\
-    let surface = look_wet_surface(probe_in[i].xyz, vec3<f32>(0.2, 0.5, 0.8), 0.6);\n\
+    let normal = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), probe_in[i].w > 0.5);\n\
+    let surface = look_wet_surface(probe_in[i].xyz, normal, vec3<f32>(0.2, 0.5, 0.8), 0.6);\n\
     probe_out[i] = vec4<f32>(surface.albedo, surface.roughness);\n\
 }\n";
 
-/// One touched texel: when, and the heights touched.
+/// One touched texel: when, the heights touched, and whether on a surface
+/// facing up.
 struct Touch {
     texel: [u32; 2],
     at: f32,
     heights: &'static [f32],
+    up: bool,
 }
 
 /// A map's words as `node.wet_map` writes them, placed at `ORIGIN` with
@@ -69,7 +72,7 @@ fn map_words(texel: f32, now: f32, drying: f32, touches: &[Touch]) -> Vec<u32> {
         words[at + 3] = touch
             .heights
             .iter()
-            .fold(0, |bins, &y| bins | height_bit(y, 2.0 * texel));
+            .fold(0, |bins, &y| bins | height_bit(y, 2.0 * texel, touch.up));
     }
     words
 }
@@ -79,6 +82,7 @@ const DOWN_THE_WALL: Touch = Touch {
     texel: [4, 2],
     at: 10.0,
     heights: &[0.1, 0.13, 0.16, 0.19, 0.22, 0.25, 0.28, 0.3],
+    up: false,
 };
 
 /// A splash at a wall's foot and one at its top, nothing between.
@@ -86,6 +90,15 @@ const FOOT_AND_TOP: Touch = Touch {
     texel: [2, 5],
     at: 10.0,
     heights: &[0.1, 0.4],
+    up: false,
+};
+
+/// Water lying on a floor at height 0.
+const ON_THE_FLOOR: Touch = Touch {
+    texel: [6, 6],
+    at: 10.0,
+    heights: &[0.0],
+    up: true,
 };
 
 /// The model of the test water: moved by (2, 0, -1).
@@ -93,12 +106,18 @@ fn water_model() -> [[f32; 4]; 4] {
     model_matrix([2.0, 0.0, -1.0], [0.0; 3], [1.0; 3])
 }
 
-/// The world point at height `y` over texel coordinate (`u`, `v`) of the test
-/// map, in texels from its low corner.
+/// The world point of a wall at height `y` over texel coordinate (`u`, `v`)
+/// of the test map, in texels from its low corner.
 fn over(u: f32, v: f32, y: f32) -> [f32; 4] {
     let x = ORIGIN[0] + u * TEXEL;
     let z = ORIGIN[1] + v * TEXEL;
     [2.0 + x, y, -1.0 + z, 0.0]
+}
+
+/// The same point on a surface facing up (the probe's w).
+fn on_floor(u: f32, v: f32, y: f32) -> [f32; 4] {
+    let [x, y, z, _] = over(u, v, y);
+    [x, y, z, 1.0]
 }
 
 /// The look at `points` with `uniforms`, reading the wet map `map`.
@@ -215,23 +234,26 @@ fn a_touched_texel_is_wet_between_its_heights_and_dry_elsewhere() {
     let device = manifold_gpu::testkit::test_device();
     let map = shared_buffer(
         &device,
-        &map_words(TEXEL, 15.0, 1.0, &[DOWN_THE_WALL, FOOT_AND_TOP]),
+        &map_words(
+            TEXEL,
+            15.0,
+            1.0,
+            &[DOWN_THE_WALL, FOOT_AND_TOP, ON_THE_FLOOR],
+        ),
     );
     let on = bound(&device, &map);
     let off = wet_uniforms(None).expect("off is not an error");
     let five_seconds = (-5.0 / DRY_SECONDS).exp();
     let wet = [
-        // The texel's centre, halfway up the run, and just inside the two
-        // texels of margin above and below it.
+        // The texel's centre, halfway up the run.
         over(4.5, 2.5, 0.2),
-        over(4.5, 2.5, 0.3 + 1.5 * TEXEL),
-        over(4.5, 2.5, 0.1 - 1.5 * TEXEL),
         // The foot and the top of a wall splashed at both.
         over(2.5, 5.5, 0.1),
         over(2.5, 5.5, 0.4),
+        // The floor the water lay on.
+        on_floor(6.5, 6.5, 0.0),
     ];
-    // Halfway to the untouched texel beside it: only the touched one counts,
-    // as on a wall's face.
+    // Halfway to the untouched texel beside it: half as wet, a soft edge.
     let edge = over(5.0, 2.5, 0.2);
     let dry = [
         // Above and below the run.
@@ -239,6 +261,9 @@ fn a_touched_texel_is_wet_between_its_heights_and_dry_elsewhere() {
         over(4.5, 2.5, 0.1 - 2.5 * TEXEL),
         // Halfway up the wall splashed only at its foot and top.
         over(2.5, 5.5, 0.25),
+        // A wall's face just under the floor water's height: water on top
+        // of a box leaves the face under its edge dry.
+        over(6.5, 6.5, -0.005),
         // An untouched texel, and off the map.
         over(6.5, 2.5, 0.2),
         over(-2.0, 2.5, 0.2),
@@ -249,7 +274,7 @@ fn a_touched_texel_is_wet_between_its_heights_and_dry_elsewhere() {
     for (i, &point) in looks.iter().take(wet.len()).enumerate() {
         assert_wetness(point, five_seconds, &format!("wet point {i}"));
     }
-    assert_wetness(looks[wet.len()], five_seconds, "the edge");
+    assert_wetness(looks[wet.len()], 0.5 * five_seconds, "the edge");
     let unchanged = [ALBEDO[0], ALBEDO[1], ALBEDO[2], ROUGHNESS].map(f32::to_bits);
     for (i, point) in looks.iter().enumerate().skip(wet.len() + 1) {
         assert_eq!(point.map(f32::to_bits), unchanged, "dry point {i}");
