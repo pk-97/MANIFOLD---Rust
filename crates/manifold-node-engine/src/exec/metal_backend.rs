@@ -138,6 +138,10 @@ pub struct MetalBackend {
     /// [`Backend::clear_skip_aliases`]. Holds slots, not buffer clones, so a
     /// read sees the source exactly as it is bound now, buffer and extent.
     array_aliases: AHashMap<Slot, Slot>,
+    /// Array slots bound with no buffer of their own (passthrough switch
+    /// outputs) and the bytes [`Backend::own_array`] gives one if its node
+    /// ever has to run instead of passing through.
+    unowned_arrays: AHashMap<Slot, u64>,
 
     /// Real `GpuTexture` backing for [`PortType::Texture3D`] slots.
     /// Pre-bound by the chain build at dimensions computed from each
@@ -235,6 +239,7 @@ impl MetalBackend {
             scalars: AHashMap::default(),
             buffers_array: AHashMap::default(),
             array_aliases: AHashMap::default(),
+            unowned_arrays: AHashMap::default(),
             textures_3d: AHashMap::default(),
             cameras: AHashMap::default(),
             lights: AHashMap::default(),
@@ -274,6 +279,7 @@ impl MetalBackend {
             scalars: AHashMap::default(),
             buffers_array: AHashMap::default(),
             array_aliases: AHashMap::default(),
+            unowned_arrays: AHashMap::default(),
             textures_3d: AHashMap::default(),
             cameras: AHashMap::default(),
             lights: AHashMap::default(),
@@ -495,12 +501,31 @@ impl MetalBackend {
         self.pinned.insert(dst);
     }
 
+    /// Bind an array `ResourceId` to a fresh slot that owns no buffer. Reads
+    /// of it see nothing until [`Backend::alias_array`] points it at another
+    /// slot's buffer for the frame (a passthrough switch output), or
+    /// [`Backend::own_array`] gives it `bytes` of its own.
+    pub fn bind_unowned_array(&mut self, id: ResourceId, bytes: u64) -> Slot {
+        let slot = Slot(self.next_slot);
+        self.next_slot += 1;
+        self.bound.insert(id, slot);
+        self.pinned.insert(id);
+        self.unowned_arrays.insert(slot, bytes);
+        slot
+    }
+
     /// Borrow the `GpuBuffer` bound to an [`PortType::Array`] slot, if
     /// any. Mirrors [`Self::render_target_2d`]. Primitives read this
     /// through the [`Backend::array_buffer`] trait method via the
     /// effect-node context.
     pub fn array_buffer(&self, slot: Slot) -> Option<&GpuBuffer> {
         self.buffers_array.get(&self.array_source(slot))
+    }
+
+    /// Whether `slot` was bound with no buffer of its own and has not been
+    /// given one yet ([`Self::bind_unowned_array`]).
+    pub fn is_unowned_array(&self, slot: Slot) -> bool {
+        self.unowned_arrays.contains_key(&slot)
     }
 
     /// The slot an array read of `slot` resolves to this frame.
@@ -616,6 +641,7 @@ impl MetalBackend {
             scalars: AHashMap::default(),
             buffers_array: self.buffers_array.clone(),
             array_aliases: AHashMap::default(),
+            unowned_arrays: AHashMap::default(),
             textures_3d: self.textures_3d.clone(),
             cameras: AHashMap::default(),
             lights: AHashMap::default(),
@@ -1146,12 +1172,30 @@ impl Backend for MetalBackend {
         let src = self.array_source(src_slot);
         if src == dst_slot
             || !self.buffers_array.contains_key(&src)
-            || !self.buffers_array.contains_key(&dst_slot)
+            || dst_slot.0 >= self.next_slot
         {
             return false;
         }
         self.array_aliases.insert(dst_slot, src);
         true
+    }
+
+    fn own_array(&mut self, slot: Slot) -> Result<(), String> {
+        if self.unowned_arrays.is_empty() {
+            return Ok(());
+        }
+        let Some(&bytes) = self.unowned_arrays.get(&slot) else {
+            return Ok(());
+        };
+        let device = self
+            .device
+            .as_ref()
+            .ok_or("an array switch output has no buffer and no device to make one")?;
+        let buffer = device.try_create_buffer(bytes, manifold_gpu::BufferUse::Upload)?;
+        buffer.zero_fill();
+        self.unowned_arrays.remove(&slot);
+        self.buffers_array.insert(slot, buffer);
+        Ok(())
     }
 
     fn clear_skip_aliases(&mut self) {
@@ -1713,5 +1757,34 @@ mod alias_tests {
         b.clear_skip_aliases();
         assert_eq!(b.array_buffer(dst).unwrap().identity_key(), dst_key);
         assert_eq!(b.live_extent(dst).map(|e| e.bound), Some(0));
+    }
+
+    /// A switch output bound with no buffer reads its chosen input by alias,
+    /// and gets a zeroed buffer of its own only when the switch has to run.
+    #[test]
+    fn an_unowned_array_aliases_then_owns_a_zeroed_buffer() {
+        let (device, mut b) = make_backend();
+        let src = b.pre_bind_array(
+            ResourceId(0),
+            device.create_buffer(64, manifold_gpu::BufferUse::Upload),
+        );
+        let out = b.bind_unowned_array(ResourceId(1), 96);
+        assert!(b.array_buffer(out).is_none());
+        assert!(b.alias_array(src, out));
+        assert_eq!(
+            b.array_buffer(out).unwrap().identity_key(),
+            b.array_buffer(src).unwrap().identity_key()
+        );
+        b.clear_skip_aliases();
+        b.own_array(out).unwrap();
+        let owned = b.array_buffer(out).expect("its own buffer");
+        assert_eq!(owned.size, 96);
+        let ptr = owned.mapped_ptr().expect("upload buffers are mapped");
+        // SAFETY: a mapped 96-byte buffer with no GPU work queued.
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, 96) };
+        assert!(bytes.iter().all(|&byte| byte == 0));
+        assert!(!b.is_unowned_array(out));
+        b.own_array(src).unwrap();
+        assert_eq!(b.array_buffer(src).unwrap().size, 64, "an owned slot is untouched");
     }
 }

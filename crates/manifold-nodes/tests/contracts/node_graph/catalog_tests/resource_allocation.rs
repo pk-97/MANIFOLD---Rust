@@ -71,7 +71,9 @@ fn array_allocation_plan_reuses_four_temporary_wave_stages() {
         .iter()
         .filter_map(|action| match action {
             ArrayAllocationAction::Allocate(allocation) => Some(allocation),
-            ArrayAllocationAction::Reuse { .. } | ArrayAllocationAction::Alias { .. } => None,
+            ArrayAllocationAction::Reuse { .. }
+            | ArrayAllocationAction::Alias { .. }
+            | ArrayAllocationAction::Unowned { .. } => None,
         })
         .collect();
     // The held cube and the final carried geometry stay dedicated; only
@@ -296,7 +298,9 @@ fn array_allocation_plan_alias_shares_physical_root() {
     assert_eq!(planned.actions.len(), 2);
     let (resource, input) = match planned.actions[1] {
         ArrayAllocationAction::Alias { resource, input } => (resource, input),
-        ArrayAllocationAction::Allocate(_) | ArrayAllocationAction::Reuse { .. } => {
+        ArrayAllocationAction::Allocate(_)
+        | ArrayAllocationAction::Reuse { .. }
+        | ArrayAllocationAction::Unowned { .. } => {
             panic!("alias output allocated separately")
         }
     };

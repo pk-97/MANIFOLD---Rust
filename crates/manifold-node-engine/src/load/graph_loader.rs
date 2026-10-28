@@ -1565,6 +1565,9 @@ fn pre_allocate_array_buffers(
                     .expect("array plan only aliases known storage");
                 backend.alias_array_resource(resource, slot);
             }
+            ArrayAllocationAction::Unowned { resource, bytes } => {
+                backend.bind_unowned_array(resource, bytes);
+            }
         }
     }
     Ok(())
@@ -1662,10 +1665,11 @@ fn audit_array_resource_bindings(
         };
 
         let has_slot = backend.slot_for(res_id).is_some();
-        let has_buffer = backend
-            .slot_for(res_id)
-            .and_then(|s| backend.array_buffer(s))
-            .is_some();
+        // A passthrough switch output owns no buffer by design: each frame
+        // it reads its chosen input's.
+        let has_buffer = backend.slot_for(res_id).is_some_and(|s| {
+            backend.array_buffer(s).is_some() || backend.is_unowned_array(s)
+        });
         if has_slot && has_buffer {
             continue;
         }

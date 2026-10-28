@@ -332,12 +332,23 @@ pub trait Backend: Send {
     /// The array twin of [`Self::alias_2d`]: until the next
     /// [`Self::clear_skip_aliases`], reads of `dst_slot`'s buffer and live
     /// extent resolve to `src_slot`'s. Nothing is copied and `dst_slot`'s own
-    /// buffer is untouched. The executor only asks when the plan allows it
+    /// buffer, if it has one, is untouched; a slot bound with no buffer is a
+    /// valid destination. The executor only asks when the plan allows it
     /// ([`ExecutionPlan::array_passthrough`](crate::exec::execution_plan::ExecutionPlan::array_passthrough)).
     ///
     /// Default: no-op (mock backends).
     fn alias_array(&mut self, _src_slot: Slot, _dst_slot: Slot) -> bool {
         false
+    }
+
+    /// Give `slot` its own zeroed buffer when it was bound with none (a
+    /// passthrough switch output) and its node has to run this frame instead
+    /// of passing through, as a switch whose choice is unwired does. Any
+    /// other slot is left as it is.
+    ///
+    /// Default: no-op (mock backends).
+    fn own_array(&mut self, _slot: Slot) -> Result<(), String> {
+        Ok(())
     }
 
     /// Clear every transient slot alias installed by [`Self::alias_2d`]

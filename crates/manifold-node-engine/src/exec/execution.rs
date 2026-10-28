@@ -2810,6 +2810,13 @@ impl Executor {
                     self.live_extent_write_scratch.clear();
                     self.object_write_scratch.clear();
                     self.error_scratch.clear();
+                    // A passthrough switch output bound with no buffer gets one
+                    // the first time its switch runs instead of passing through.
+                    for &(_, slot) in &self.output_scratch {
+                        if let Err(error) = self.backend.own_array(slot) {
+                            self.error_scratch.push(error);
+                        }
+                    }
                     let error_object: Option<u32>;
                     {
                         let backend_ref: &dyn Backend = &*self.backend;

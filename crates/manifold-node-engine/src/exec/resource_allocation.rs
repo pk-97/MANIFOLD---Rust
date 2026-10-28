@@ -245,6 +245,12 @@ pub enum ArrayAllocationAction {
         resource: ResourceId,
         input: ResourceId,
     },
+    /// A passthrough switch output that owns no storage: its slot has no
+    /// buffer and the executor points it at the chosen input's buffer every
+    /// frame. `bytes` is the buffer it gets if the switch ever has to run
+    /// instead (its choice changed to an unwired input); `storage` records
+    /// the same capacity for downstream sizing.
+    Unowned { resource: ResourceId, bytes: u64 },
 }
 
 /// Complete pure result of array resource planning.
@@ -380,7 +386,7 @@ pub fn plan_array_allocations(
     }
     let mut reusable: ReusableBuckets = AHashMap::default();
 
-    for step in plan.steps() {
+    for (step_index, step) in plan.steps().iter().enumerate() {
         let Some(node_inst) = graph.get_node(step.node) else {
             continue;
         };
@@ -421,6 +427,20 @@ pub fn plan_array_allocations(
                 })?;
             input_capacities.push((*port_name, count));
         }
+
+        // The variadic passthrough output that this graph's wiring and params
+        // always alias: the plan allows the alias and the chosen input is wired.
+        let passthrough_out = node_inst
+            .node
+            .variadic_skip_passthrough_out()
+            .filter(|_| plan.array_passthrough(step_index))
+            .filter(|&out| {
+                let wired: Vec<&str> = step.inputs.iter().map(|&(name, _)| name).collect();
+                node_inst
+                    .node
+                    .skip_passthrough(&node_inst.params, &wired)
+                    .is_some_and(|(_, output)| output == out)
+            });
 
         let mut current_output_roots = AHashSet::default();
         for (port_name, resource) in &step.outputs {
@@ -549,6 +569,25 @@ pub fn plan_array_allocations(
                     step.node,
                     "array output resolves to zero bytes",
                 ));
+            }
+            // A switch the executor will always pass through by alias reads
+            // its chosen input's buffer, so its output owns none. The storage
+            // entry keeps the capacity for downstream sizing.
+            if passthrough_out == Some(*port_name) {
+                actions.push(ArrayAllocationAction::Unowned {
+                    resource: *resource,
+                    bytes,
+                });
+                storage.insert(
+                    *resource,
+                    ArrayStorage {
+                        root: *resource,
+                        bytes,
+                    },
+                );
+                current_output_roots.insert(*resource);
+                excluded_roots.insert(*resource);
+                continue;
             }
             if let Some(existing) = prebound.get(resource)
                 && existing.bytes == bytes
@@ -754,6 +793,8 @@ mod tests {
         root: bool,
         /// May alias any wired array input onto `out`, like the array switches.
         passthrough: bool,
+        /// With `passthrough`, always passes the wired `in_0` through.
+        chooses_in_0: bool,
         /// A substep boundary over `capture`, like the particle state nodes.
         region: Option<crate::exec::substeps::SubstepBoundaryPorts>,
         capture: &'static [&'static str],
@@ -778,6 +819,7 @@ mod tests {
                 follows: None,
                 root: false,
                 passthrough: false,
+                chooses_in_0: false,
                 region: None,
                 capture: &[],
                 publisher: false,
@@ -822,6 +864,14 @@ mod tests {
 
         fn variadic_skip_passthrough_out(&self) -> Option<&'static str> {
             self.passthrough.then_some("out")
+        }
+
+        fn skip_passthrough(
+            &self,
+            _: &ParamValues,
+            wired: &[&str],
+        ) -> Option<(&'static str, &'static str)> {
+            (self.chooses_in_0 && wired.contains(&"in_0")).then_some(("in_0", "out"))
         }
 
         fn state_capture_input_ports(&self) -> &[&str] {
@@ -1013,6 +1063,63 @@ mod tests {
                     "control: a later stage takes the freed producer storage"
                 );
             }
+        }
+    }
+
+    /// A switch that always passes its wired `in_0` through owns no buffer, but
+    /// its capacity still sizes what follows. Choosing an unwired input keeps
+    /// a real output.
+    #[test]
+    fn a_passthrough_switch_output_owns_no_storage() {
+        let array = PortType::Array(ArrayType::of::<u32>());
+        for wired in [true, false] {
+            let mut graph = Graph::new();
+            let producer = graph.add_node(Box::new(FixedArrayNode::new(
+                "test.producer",
+                vec![],
+                vec![mock_port("out", array, PortKind::Output, false)],
+                6,
+            )));
+            let mut switch = FixedArrayNode::new(
+                "test.switch",
+                vec![
+                    mock_port("in_0", array, PortKind::Input, false),
+                    mock_port("in_1", array, PortKind::Input, false),
+                ],
+                vec![mock_port("out", array, PortKind::Output, false)],
+                6,
+            );
+            switch.passthrough = true;
+            switch.chooses_in_0 = true;
+            let switch = graph.add_node(Box::new(switch));
+            let sink = graph.add_node(Box::new(FixedArrayNode::new(
+                "test.sink",
+                vec![mock_port("in", array, PortKind::Input, true)],
+                vec![],
+                4,
+            )));
+            // The unwired case wires only `in_1`, so the chosen `in_0` is unwired.
+            let port = if wired { "in_0" } else { "in_1" };
+            graph.connect((producer, "out"), (switch, port)).unwrap();
+            graph.connect((switch, "out"), (sink, "in")).unwrap();
+            let plan = compile(&graph).unwrap();
+            let planned =
+                plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
+            let out = plan
+                .steps()
+                .iter()
+                .find(|step| step.node == switch)
+                .unwrap()
+                .outputs[0]
+                .1;
+            let unowned = planned.actions.iter().any(|action| {
+                matches!(action, ArrayAllocationAction::Unowned { resource, .. } if *resource == out)
+            });
+            let allocated = planned.actions.iter().any(|action| {
+                matches!(action, ArrayAllocationAction::Allocate(a) if a.resource == out)
+            });
+            assert_eq!((unowned, allocated), (wired, !wired));
+            assert_eq!(planned.storage[&out].bytes, 24, "capacity still sizes readers");
         }
     }
 
