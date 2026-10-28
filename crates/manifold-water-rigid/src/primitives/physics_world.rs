@@ -688,11 +688,12 @@ impl EffectNode for PhysicsWorldNode {
                 .set_scalar("physics_ms", ParamValue::Float(self.simulation.physics_ms));
         }
         let names = &self.names;
-        for (port, pose) in names.pose.iter().zip(&self.simulation.poses) {
+        let shown = self.simulation.shown();
+        for (port, pose) in names.pose.iter().zip(&shown.poses) {
             ctx.outputs.set_transform(port, *pose);
         }
         for (group, upload) in self.uploads.iter_mut().enumerate() {
-            let copies = self.simulation.group_poses(group);
+            let copies = shown.group(group);
             ctx.outputs.set_scalar(
                 &names.active_count[group],
                 ParamValue::Float(copies.len() as f32),

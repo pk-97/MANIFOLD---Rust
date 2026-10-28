@@ -2124,6 +2124,43 @@ fn sim_rate_rigid_export_matches_live() {
 }
 
 #[test]
+fn sim_rate_shown_body_moves_every_frame_between_ticks() {
+    // 30 Hz ticks under 60 fps: the settled pose moves every other frame,
+    // the shown pose on every frame, always between the two settled ticks.
+    let interval = Seconds(manifold_physics::SimRate::Hz30.interval());
+    let mut simulation = RigidSimulation::default().with_step(SimStep::live(interval));
+    let bodies = one_body([0.0, 8.0, 0.0]);
+    let (mut settled_moves, mut shown_moves) = (0, 0);
+    let mut last = None;
+    for frame in 0..48 {
+        simulation
+            .advance(
+                &bodies,
+                GRAVITY,
+                PlayedTime::from_played(frame as f64 / 60.0),
+                1.0,
+                0.0,
+            )
+            .unwrap();
+        let settled = simulation.poses[0].pos[1];
+        let shown = simulation.shown().poses[0].pos[1];
+        assert!(
+            shown >= settled - 1e-6,
+            "frame {frame}: shown {shown} below settled {settled}"
+        );
+        if let Some((last_settled, last_shown)) = last
+            && frame > 12
+        {
+            settled_moves += usize::from(settled != last_settled);
+            shown_moves += usize::from(shown < last_shown);
+        }
+        last = Some((settled, shown));
+    }
+    assert_eq!(shown_moves, 35);
+    assert!(settled_moves <= 18, "settled moved {settled_moves} times");
+}
+
+#[test]
 fn live_endpoint_has_no_backlog_and_reset_clears_state() {
     let bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default().with_step(live_step());

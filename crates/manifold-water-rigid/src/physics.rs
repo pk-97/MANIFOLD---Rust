@@ -721,6 +721,13 @@ pub struct RigidSimulation {
     group_identities: Vec<u64>,
     /// Each group's share of the copy pool ([`copy_pool`]), reused.
     pool_made: Vec<usize>,
+    /// This frame's settled poses, bodies then copies, as a presentation
+    /// frame; `presented` says whether a clock frame blended it.
+    settled: crate::coupled_frame::CoupledRigidFrame,
+    /// The bodies as drawn: the two newest settled ticks blended at the
+    /// clock's display time, so motion stays smooth between Sim Rate updates.
+    presentation: crate::coupled_frame::RigidPresentation,
+    presented: bool,
 }
 
 impl Default for RigidSimulation {
@@ -747,6 +754,9 @@ impl Default for RigidSimulation {
             authored_bodies: PackedRows::new(None),
             targeted_fields: TargetedFieldHistory::default(),
             reset_count: None,
+            settled: crate::coupled_frame::CoupledRigidFrame::default(),
+            presentation: crate::coupled_frame::RigidPresentation::default(),
+            presented: false,
             poses: Vec::new(),
             physics_ms: 0.0,
             pending_time: Seconds::ZERO,
@@ -814,6 +824,17 @@ impl RigidSimulation {
         self.groups
             .get(group)
             .map_or(&[], |state| &state.poses[..state.shown])
+    }
+
+    /// The bodies and copies to draw: blended between the two newest ticks
+    /// at the display time when the last advance had a clock frame, else
+    /// the settled poses.
+    pub fn shown(&self) -> &crate::coupled_frame::CoupledRigidFrame {
+        if self.presented {
+            self.presentation.shown(&self.settled)
+        } else {
+            &self.settled
+        }
     }
 
     /// Copy group `group`'s active copies.
@@ -1514,6 +1535,7 @@ impl RigidSimulation {
         self.reset_count = Some(reset_count);
         self.descriptions.clone_from_slice(bodies);
         self.publish_poses(bodies, groups)?;
+        self.present(clock_frame.as_ref());
         self.physics_ms = physics_start.elapsed().as_secs_f32() * 1000.0;
         if !self.step.offline() {
             if let Some(frame) = &clock_frame {
@@ -2216,6 +2238,30 @@ impl RigidSimulation {
         }
         self.pool_made = made;
         Ok(())
+    }
+
+    /// Gather the settled poses into one frame and blend it at the clock
+    /// frame's display time.
+    fn present(&mut self, frame: Option<&manifold_physics::clock::ClockFrame>) {
+        let settled = &mut self.settled;
+        settled.poses.clone_from(&self.poses);
+        settled.copies.clear();
+        settled.group_copies.clear();
+        for state in &self.groups {
+            settled
+                .copies
+                .extend_from_slice(&state.poses[..state.shown]);
+            settled.group_copies.push(state.shown);
+        }
+        self.presented = frame.is_some();
+        if let Some(frame) = frame {
+            settled.stamp = manifold_physics::TickStamp {
+                epoch: u64::from(frame.epoch),
+                tick: self.clock.ticks_done(),
+            };
+            self.presentation
+                .present(frame.simulation_time, settled, frame.display_time);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
