@@ -358,6 +358,28 @@ impl<'d> Builder<'d> {
         self.bindings.extend(followed);
     }
 
+    /// Scale node `id`'s `param`, and every card binding that writes it, by
+    /// `factor`: the row's value stays the user's, the node gets it times
+    /// `factor`, live edits included.
+    pub(crate) fn scale_param(&mut self, id: u32, param: &str, factor: f32) {
+        let Some((node_id, value)) = self
+            .node_mut(id)
+            .map(|node| (node.node_id.clone(), node.params.get(param).cloned()))
+        else {
+            return;
+        };
+        if let Some(value) = value {
+            self.set_number(id, param, number(&value) * factor);
+        }
+        for binding in &mut self.bindings {
+            if matches!(&binding.target, BindingTarget::Node { node_id: n, param: p } if *n == node_id && p == param)
+            {
+                binding.scale *= factor;
+                binding.offset *= factor;
+            }
+        }
+    }
+
     /// Make the card param `id` a whole number from 0 to `last` with no
     /// labels of its own: the panel names its values from the document.
     pub(crate) fn pick_range(&mut self, id: &str, last: f32) {

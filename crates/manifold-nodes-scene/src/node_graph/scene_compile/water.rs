@@ -143,6 +143,9 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
         b.add(owner, "surface_detail", "node.value");
     }
     b.rows(item);
+    if let ItemFields::Water(water) = &item.fields {
+        b.scale_param(cell_size, "value", water.quality.cell_scale());
+    }
     if let Some(detail) = b.id(owner, "surface_detail") {
         for target in SURFACE_DETAIL_NODES {
             if let Some(target) = b.id(owner, target) {

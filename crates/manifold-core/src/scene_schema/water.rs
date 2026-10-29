@@ -27,7 +27,7 @@ use super::fields::{
 use super::{Exposure, PropertyRow, Reach, follows, perform, row, setup};
 use crate::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
 use crate::fluid_domain::{CELL_SIZE_METRES, DEFAULT_CELL_SIZE, MIN_DOMAIN_SIDE_METRES};
-use crate::scene_doc::{ItemFields, ItemKind, WaterDraw};
+use crate::scene_doc::{ItemFields, ItemKind, WaterDraw, WaterQuality};
 
 /// The water family the scene compiler splices for each Water: the solver,
 /// its display and its looks, with no source and no host wiring.
@@ -267,7 +267,7 @@ pub(super) const FRONT_WALL: PropertyRow = row("closed_pos_z", DOMAIN, Domain, s
 pub(super) const CELL_SIZE_ROW: PropertyRow = row("cell_size", CELL_SIZE, Domain, setup())
     .param("value")
     .name("Cell Size")
-    .tip("The simulation's grid cell in metres. Smaller cells show finer detail but cost far more: half the size holds eight times as many cells")
+    .tip("The simulation's grid cell in metres; a Water's Quality scales it, Low by 1.5, High by ¾, Extra High by ½. Smaller cells show finer detail but cost far more: half the size holds eight times as many cells")
     .unit(Unit::Metres)
     .default(DEFAULT_CELL_SIZE)
     .limit(HardLimit::Between(CELL_SIZE_METRES.0, CELL_SIZE_METRES.1));
@@ -544,8 +544,66 @@ pub(super) const DRAW_FIELD: FieldRow = FieldRow {
     },
 };
 
-pub static WATER_FIELDS: [FieldRow; 4] = [
+const QUALITIES: &[Choice] = &[
+    Choice {
+        key: "low",
+        label: "Low",
+    },
+    Choice {
+        key: "medium",
+        label: "Medium",
+    },
+    Choice {
+        key: "high",
+        label: "High",
+    },
+    Choice {
+        key: "extra_high",
+        label: "Extra High",
+    },
+];
+
+const QUALITY_KEYS: [(WaterQuality, &str); 4] = [
+    (WaterQuality::Low, "low"),
+    (WaterQuality::Medium, "medium"),
+    (WaterQuality::High, "high"),
+    (WaterQuality::ExtraHigh, "extra_high"),
+];
+
+pub static WATER_FIELDS: [FieldRow; 5] = [
     BOUNDS_FIELD,
+    // Quality scales the Cell Size (WaterQuality::cell_scale).
+    FieldRow {
+        id: "quality",
+        label: "Quality",
+        section: ControlGroup::Domain,
+        control: FieldControl::Closed(QUALITIES),
+        applies: always,
+        disabled: enabled,
+        read: |fields| {
+            let key = match fields {
+                ItemFields::Water(w) => QUALITY_KEYS
+                    .iter()
+                    .find(|(quality, _)| *quality == w.quality)
+                    .map_or("", |(_, key)| key),
+                _ => "",
+            };
+            FieldValue::Choice(key.to_owned())
+        },
+        write: |fields, value| {
+            let FieldValue::Choice(key) = value else {
+                return Err(wrong_value("quality", value));
+            };
+            let Some((quality, _)) = QUALITY_KEYS.iter().find(|(_, k)| *k == key.as_str()) else {
+                return Err(wrong_value("quality", value));
+            };
+            match fields {
+                ItemFields::Water(w) => w.quality = *quality,
+                _ => return Err(wrong_value("quality", value)),
+            }
+            Ok(())
+        },
+    },
     FieldRow {
         id: "narrow_band",
         label: "Narrow Band",

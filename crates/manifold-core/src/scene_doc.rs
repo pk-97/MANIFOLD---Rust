@@ -524,6 +524,34 @@ pub struct WaterFields {
     /// GPU FLIP Narrow Band: particles only near the surface and the solids,
     /// the deep water held on the grid.
     pub narrow_band: bool,
+    /// How finely the water simulates: the Cell Size times this level's
+    /// [`WaterQuality::cell_scale`].
+    pub quality: WaterQuality,
+}
+
+/// A Water's quality level, from live on a light machine to overnight
+/// exports: each scales the Cell Size, so the finer levels hold more cells
+/// and a finer surface, and move differently.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WaterQuality {
+    Low,
+    #[default]
+    Medium,
+    High,
+    ExtraHigh,
+}
+
+impl WaterQuality {
+    /// What the level multiplies the Cell Size by.
+    pub fn cell_scale(self) -> f32 {
+        match self {
+            Self::Low => 1.5,
+            Self::Medium => 1.0,
+            Self::High => 0.75,
+            Self::ExtraHigh => 0.5,
+        }
+    }
 }
 
 /// Sand and soil on Matter (MLS-MPM): a domain like a Water's, filled by its
