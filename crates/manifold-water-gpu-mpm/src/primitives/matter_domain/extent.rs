@@ -9,12 +9,12 @@ use manifold_physics::force_lattice::FORCE_LATTICE_RESERVE;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
 use manifold_water_liquid::bounds::{NO_KILL_HEIGHT, bounds_outputs, closed_faces, face_masks};
-use manifold_water_liquid::extent::walked_roles;
+use manifold_water_liquid::extent::walked_fill;
 use manifold_water_liquid::fields::FieldFrame;
 use std::mem::size_of;
 
 fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let (fill, _) = walked_roles(x, "Matter")?;
+    let fill = walked_fill(x, "Matter")?;
     let geometry = matter_geometry(
         |name, default| x.scalar(name, default),
         x.params(),

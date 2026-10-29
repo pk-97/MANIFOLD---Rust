@@ -1196,6 +1196,51 @@ pub(crate) fn fold_surface_weights(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// A saved liquid state takes the inflows' most births a tick from the GPU
+/// FLIP domain that feeds its `epoch`, so its storage grows ahead of them.
+/// Idempotent.
+pub(crate) fn wire_state_emit_sites(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    let kind = |id: u32| {
+        def.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.type_id.as_str())
+    };
+    let wired = |node: u32, port: &str| {
+        def.wires
+            .iter()
+            .find(|w| w.to_node == node && w.to_port == port)
+            .map(|w| w.from_node)
+    };
+    let added: Vec<EffectGraphWire> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.liquid_state" && wired(n.id, "emit_sites").is_none())
+        .filter_map(|n| {
+            let domain = wired(n.id, "epoch")?;
+            (kind(domain) == Some(GPU_FLIP_DOMAIN_TYPE_ID)).then(|| EffectGraphWire {
+                from_node: domain,
+                from_port: "region_site_total".into(),
+                to_node: n.id,
+                to_port: "emit_sites".into(),
+            })
+        })
+        .collect();
+    let changed = !added.is_empty();
+    def.wires.extend(added);
+    changed
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "wire_state_emit_sites",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 480,
+        apply: wire_state_emit_sites,
+    }
+}
+
 inventory::submit! {
     manifold_node_engine::load::migration::GraphMigration {
         name: "fold_surface_weights",

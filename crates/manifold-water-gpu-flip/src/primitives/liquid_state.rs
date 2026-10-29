@@ -13,6 +13,7 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::exec::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::particles::FluidParticle;
+use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_node_engine::primitive::Primitive;
 use manifold_water_liquid::primitives::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use manifold_water_liquid::primitives::particle_identity::{
@@ -118,6 +119,8 @@ pub struct ReadbackSlot {
     epoch: u32,
     pending: bool,
     endpoint: f64,
+    /// The epoch's ticks done when this slot was written.
+    ticks: u64,
 }
 
 /// Whether `node` is a liquid state whose last read tick had an inflow or a
@@ -157,6 +160,11 @@ pub fn retire_stats_for_test(
         .last_stats = Some(stats);
 }
 
+/// Ticks of the last read tick's refused births the particle storage keeps
+/// room for beyond what the inflows can emit: a sheet or a reseed has no
+/// bound of its own, and the read lags the GPU by a few frames.
+const REFUSED_LOOKAHEAD_TICKS: u64 = 32;
+
 fn admit_buffer(device: &GpuDevice, bytes: u64, usage: BufferUse) -> Result<GpuBuffer, String> {
     manifold_node_engine::load::expand::admit_world_bytes(device.modifier_memory_snapshot(), bytes)
         .map_err(|error| error.to_string())
@@ -170,7 +178,7 @@ fn admit_buffer(device: &GpuDevice, bytes: u64, usage: BufferUse) -> Result<GpuB
 manifold_node_engine::primitive! {
     name: LiquidState,
     type_id: "node.liquid_state",
-    purpose: "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats escape with them. Live GPU FLIP non-finite values report an error and reseed particles without stopping the show or resetting simulation time.",
+    purpose: "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The particle storage starts at the seed's count and grows ahead of what the frame's ticks can fill: the last read slots in use, plus emit_sites (the most births the inflows make a tick) for every tick since that read, plus room for the births the last read tick was refused. It grows by at least half each time and never shrinks within an epoch. The region's last particles become the state, and its last stats escape with them. Live GPU FLIP non-finite values report an error and reseed particles without stopping the show or resetting simulation time.",
     inputs: {
         seed: Array(FluidParticle) required,
         in: Array(FluidParticle) required,
@@ -187,6 +195,7 @@ manifold_node_engine::primitive! {
         interior_in: Array(f32) optional,
         interior_tiles_in: Array(u32) optional,
         count: ScalarF32 optional,
+        emit_sites: ScalarF32 optional,
         whitewater_capacity: ScalarF32 optional,
         ticks: ScalarF32 optional,
         simulation_time: ScalarF32 optional,
@@ -215,7 +224,7 @@ manifold_node_engine::primitive! {
     },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "The tick boundary of a particle liquid. seed and count come from the fill; ticks and epoch from the liquid's domain (the region's clock owner). The body is one tick: every step of the solver from out, then node.liquid_stats over the tick's last particles, closing back into in and stats_in. out and stats escape to node.liquid_frame. With GPU FLIP Narrow Band on, wire the step's interior and tiles into interior_in and interior_tiles_in: the display reads them from interior and interior_tiles, each the size the step's pool gives it.",
+    composition_notes: "The tick boundary of a particle liquid. seed and count come from the fill; ticks, epoch and emit_sites (region_site_total) from the liquid's domain (the region's clock owner). The body is one tick: every step of the solver from out, then node.liquid_stats over the tick's last particles, closing back into in and stats_in. out and stats escape to node.liquid_frame. With GPU FLIP Narrow Band on, wire the step's interior and tiles into interior_in and interior_tiles_in: the display reads them from interior and interior_tiles, each the size the step's pool gives it.",
     examples: [],
     picker: { label: "Liquid State", category: Atom },
     summary: "Keeps a particle liquid between frames and runs one pass of its simulation per tick.",
@@ -224,6 +233,9 @@ manifold_node_engine::primitive! {
     aliases: ["liquid state", "tick loop", "particle state"],
     boundary_reason: CrossFrameState,
     extra_fields: {
+        particles: Option<GpuBuffer> = None,
+        // The newest read's (ticks done, slots in use) this epoch.
+        read_end: Option<(u64, u32)> = None,
         identity: Option<GpuBuffer> = None,
         identity_ops: ParticleIdentity = ParticleIdentity::default(),
         record_copy: Option<RecordCopy> = None,
@@ -336,6 +348,8 @@ impl LiquidState {
             return false;
         };
         let mut newest: Option<(u64, LiquidTickStats, f64, bool, bool)> = None;
+        // The newest read's (ticks done, slots in use).
+        let mut newest_end = None;
         for slot in self.readback.iter_mut().filter(|s| s.pending) {
             if !clock.is_none_or(|c| c.is_complete(slot.stamp)) {
                 continue;
@@ -361,7 +375,7 @@ impl LiquidState {
                 .mapped_ptr()
                 .expect("liquid identity slot must be CPU-visible");
             // SAFETY: identity metadata is copied under the same retired fence.
-            let identity = unsafe { std::slice::from_raw_parts(identity_ptr.cast::<u32>(), 4) };
+            let identity = unsafe { std::slice::from_raw_parts(identity_ptr.cast::<u32>(), 8) };
             self.identity_reset |= identity[3] != 0;
             let status_ptr = slot
                 .clock_status
@@ -377,11 +391,13 @@ impl LiquidState {
                 slot.endpoint, status[6], f32::from_bits(status[2]), stats.max_speed,
                 stats.live, stats.nonfinite, stats.kinetic, stats.pressure_iterations, stats.density_iterations,
                 stats.unconverged, stats.unresolved_pockets, stats.reach_removed, stats.push_refused);
-            if newest.is_none_or(|(stamp, _, _, _, _)| slot.stamp >= stamp) {
+            if newest.is_none_or(|(stamp, ..)| slot.stamp >= stamp) {
                 newest = Some((slot.stamp, stats, slot.endpoint, cap_hit, nonfinite));
+                newest_end = Some((slot.ticks, identity[7]));
             }
         }
         if let Some((_, stats, endpoint, cap_hit, nonfinite)) = newest {
+            self.read_end = newest_end;
             return self.accept_retired_stats(stats, endpoint, cap_hit, nonfinite, live_recovery);
         }
         false
@@ -412,6 +428,62 @@ impl LiquidState {
         self.cap_hit = false;
         self.clock_nonfinite = false;
         self.last_stats = None;
+        self.read_end = None;
+    }
+
+    /// Make the particle storage hold `most` slots. A new epoch takes exactly
+    /// that; otherwise storage that is too small grows by at least half,
+    /// carrying the slots in use (the identity's count, in encoder order).
+    /// When the World cannot give the larger size it tries `most` alone; when
+    /// it cannot give that either the storage stays as it is and the births
+    /// past it wait, which the step reports.
+    fn hold_particles(
+        &mut self,
+        gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
+        most: u64,
+        epoch_reset: bool,
+    ) -> Result<(), String> {
+        let record = std::mem::size_of::<FluidParticle>() as u64;
+        let most = most.clamp(1, u64::from(EXACT_F32_COUNT));
+        let slots = self.particles.as_ref().map_or(0, |b| b.size / record);
+        let target = if epoch_reset {
+            if slots == most {
+                return Ok(());
+            }
+            most
+        } else if most <= slots {
+            return Ok(());
+        } else {
+            most.max(slots + slots / 2).min(u64::from(EXACT_F32_COUNT))
+        };
+        let grown = admit_buffer(gpu.device, target * record, BufferUse::Gpu).or_else(|error| {
+            if target > most {
+                admit_buffer(gpu.device, most * record, BufferUse::Gpu)
+            } else {
+                Err(error)
+            }
+        });
+        let grown = match grown {
+            Ok(grown) => grown,
+            // An epoch's seed must land somewhere: without storage the water
+            // cannot start.
+            Err(error) if epoch_reset || self.particles.is_none() => return Err(error),
+            Err(error) => {
+                log::warn!("Liquid State: particle storage stays at {slots} slots: {error}");
+                return Ok(());
+            }
+        };
+        if !epoch_reset
+            && let (Some(old), Some(identity), Some(copy)) =
+                (&self.particles, &self.identity, &self.record_copy)
+        {
+            gpu.native_enc.compute_memory_barrier_buffers();
+            copy.encode(gpu.native_enc, identity, old, &grown);
+            gpu.native_enc.compute_memory_barrier_buffers();
+        }
+        // The old storage retires behind the frames still reading it.
+        self.particles = Some(grown);
+        Ok(())
     }
 }
 
@@ -473,7 +545,8 @@ impl Primitive for LiquidState {
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(
             port,
-            "identity"
+            "out"
+                | "identity"
                 | "whitewater_pool"
                 | "whitewater_state"
                 | "whitewater_counts"
@@ -488,6 +561,7 @@ impl Primitive for LiquidState {
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
         match port {
+            "out" => self.particles.as_ref(),
             "identity" => self.identity.as_ref(),
             "whitewater_pool" => self.whitewater_pool.as_ref(),
             "whitewater_state" => self.whitewater_state.as_ref(),
@@ -510,20 +584,16 @@ impl Primitive for LiquidState {
         &self,
         port_name: &str,
         _params: &manifold_node_engine::exec::effect_node::ParamValues,
-        input_capacities: &[(&str, u32)],
+        _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         match port_name {
-            "out" => input_capacities
-                .iter()
-                .find(|(p, _)| *p == "seed")
-                .map(|&(_, n)| n),
             "stats" => Some(LIQUID_STATS_WORDS),
             "identity" => Some((IDENTITY_BYTES / 4) as u32),
             "clock_status" => Some(8),
             // Provided storage: a one-record hint, sized at run time.
-            "whitewater_pool" | "whitewater_state" | "whitewater_counts" | "foam_particles"
-            | "bubble_particles" | "spray_particles" | "dust_particles" | "interior"
-            | "interior_tiles" => Some(1),
+            "out" | "whitewater_pool" | "whitewater_state" | "whitewater_counts"
+            | "foam_particles" | "bubble_particles" | "spray_particles" | "dust_particles"
+            | "interior" | "interior_tiles" => Some(1),
             _ => None,
         }
     }
@@ -531,6 +601,7 @@ impl Primitive for LiquidState {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let whole = |v: f32| v.round().max(0.0) as u32;
         let count = whole(ctx.scalar_or_param("count", 0.0));
+        let emit_sites = u64::from(whole(ctx.scalar_or_param("emit_sites", 0.0)));
         let capacity = ctx
             .scalar_or_param("whitewater_capacity", WHITEWATER_DEFAULT_CAPACITY as f32)
             .round();
@@ -554,7 +625,6 @@ impl Primitive for LiquidState {
         let dropped_seconds = f64::from(ctx.scalar_or_param("dropped_seconds", 0.0));
         let epoch = whole(ctx.scalar_or_param("epoch", 0.0));
         let seed = ctx.inputs.array("seed");
-        let out = ctx.outputs.array("out");
         let stats = ctx.outputs.array("stats");
         let mut refused = None;
         let whitewater_active: [bool; WHITEWATER_RESULT_COUNT] = std::array::from_fn(|i| {
@@ -605,9 +675,29 @@ impl Primitive for LiquidState {
         if epoch_reset {
             self.reset_epoch(epoch);
         }
-        let identity = self
-            .identity
-            .get_or_insert_with(|| gpu.device.create_buffer(IDENTITY_BYTES, BufferUse::Gpu));
+        if self.identity.is_none() {
+            self.identity = Some(gpu.device.create_buffer(IDENTITY_BYTES, BufferUse::Gpu));
+        }
+        // The most slots this frame's ticks can leave in use: the last read
+        // count (the seed's at the epoch's start), every inflow site on each
+        // tick since, and room for the refused births of the last read tick.
+        let (read_ticks, read_slots) = match self.read_end {
+            Some(end) => end,
+            None => (0, count),
+        };
+        let wanting = self.last_stats.map_or(0, |s| {
+            u64::from(s.inflow_refused) + u64::from(s.sheet_refused) + u64::from(s.reseed_refused)
+        });
+        let most = u64::from(read_slots)
+            + emit_sites * (self.ticks_done + u64::from(ticks)).saturating_sub(read_ticks)
+            + wanting * REFUSED_LOOKAHEAD_TICKS;
+        if let Err(error) = self.hold_particles(gpu, most, epoch_reset) {
+            refused = Some(format!(
+                "Liquid State: the particles could not be held: {error}"
+            ));
+        }
+        let out = self.particles.as_ref();
+        let identity = self.identity.as_ref().expect("identity allocated above");
         if epoch_reset {
             if let (Some(seed), Some(out)) = (seed, out) {
                 let bytes = (u64::from(count) * std::mem::size_of::<FluidParticle>() as u64)
@@ -766,7 +856,7 @@ impl Primitive for LiquidState {
     fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // A body that writes fresh storage is accepted by copy. The particles
         // copy only the slots in use, which the captured identity counts.
-        if let (Some(candidate), Some(state)) = (ctx.inputs.array("in"), ctx.outputs.array("out"))
+        if let (Some(candidate), Some(state)) = (ctx.inputs.array("in"), self.particles.as_ref())
             && !candidate.ptr_eq(state)
         {
             let record = ctx
@@ -864,6 +954,7 @@ impl Primitive for LiquidState {
                     epoch,
                     pending: false,
                     endpoint: 0.0,
+                    ticks: 0,
                 });
                 self.readback.len() - 1
             }
@@ -888,6 +979,7 @@ impl Primitive for LiquidState {
         slot.epoch = epoch;
         slot.pending = true;
         slot.endpoint = self.submitted_time;
+        slot.ticks = self.ticks_done;
     }
 }
 

@@ -78,32 +78,17 @@ pub fn particle_values(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("out", x.items("particles").unwrap_or(0) * 4)
 }
 
-/// A liquid domain's role wires as the walk resolves them: the box its
-/// Initial Fill places ([`crate::fluid_role::initial_fill`], the node's own
-/// rule) and every role's kind. `solver` names the liquid in a refusal.
-pub fn walked_roles(
+/// The box a liquid domain's Initial Fill places, as the walk resolves its
+/// role wires ([`crate::fluid_role::initial_fill`], the node's own rule).
+/// `solver` names the liquid in a refusal.
+pub fn walked_fill(
     x: &AtomExtent<'_>,
     solver: &str,
-) -> Result<
-    (
-        Option<manifold_node_engine::scene::transform::Transform>,
-        Vec<crate::fluid_role::FluidRoleKind>,
-    ),
-    Verdict,
-> {
+) -> Result<Option<manifold_node_engine::scene::transform::Transform>, Verdict> {
     use crate::fluid_role::{FluidRoleKind, initial_fill};
-    let objects: Vec<_> = (0..crate::role_count(x.params()))
+    let fills = (0..crate::role_count(x.params()))
         .filter_map(|index| x.object(&format!("role_{index}")))
-        .collect();
-    let kinds: Vec<_> = objects
-        .iter()
-        .filter_map(|(kind, _)| FluidRoleKind::from_index(*kind))
-        .collect();
-    let fills = objects
-        .iter()
         .filter(|(kind, _)| *kind == FluidRoleKind::InitialFill.index())
-        .map(|(_, placed)| *placed);
-    let fill =
-        initial_fill(fills).map_err(|reason| Verdict::Refused(format!("{solver}: {reason}")))?;
-    Ok((fill, kinds))
+        .map(|(_, placed)| placed);
+    initial_fill(fills).map_err(|reason| Verdict::Refused(format!("{solver}: {reason}")))
 }

@@ -65,11 +65,14 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers_if_bound("clock_status_in", 32)?;
     x.covers_if_bound("clock_status", 32)?;
     x.publish("tick_index", 0.0);
-    let records = u64::from(x.count("count", 0.0)?) * PARTICLE;
-    // A new epoch copies the fill into the state; each tick's capture copies
+    let records = u64::from(x.count("count", 0.0)?).max(1) * PARTICLE;
+    // The state's own storage starts at the fill's count and grows at run
+    // time. A new epoch copies the fill into it; each tick's capture copies
     // the tick's particles and stats back (written later in the plan: the
     // second pass sees them).
-    for port in ["seed", "out", "in"] {
+    x.provide("out", records);
+    x.hold(records);
+    for port in ["seed", "in"] {
         x.covers(port, records)?;
     }
     x.covers("stats", stats)?;

@@ -11,20 +11,18 @@ use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
 use manifold_water_liquid::bounds::{NO_KILL_HEIGHT, bounds_outputs, face_masks};
 use manifold_water_liquid::coupling::REACTION_FLOATS;
-use manifold_water_liquid::extent::walked_roles;
+use manifold_water_liquid::extent::walked_fill;
 use manifold_water_liquid::fields::FieldFrame;
 use std::mem::size_of;
 
 fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let (fill, kinds) = walked_roles(x, "GPU FLIP")?;
+    let fill = walked_fill(x, "GPU FLIP")?;
     let geometry = gpu_flip_geometry(
         geometry_read(x.params(), |name, default| x.scalar(name, default)),
         x.transform("domain"),
         fill,
     )
-    .map_err(Verdict::Refused)?
-    // The pool the allocator gets: room for an inflow when a role is one.
-    .sized_for(kinds);
+    .map_err(Verdict::Refused)?;
     for (name, value) in geometry.outputs() {
         x.publish(name, value);
     }

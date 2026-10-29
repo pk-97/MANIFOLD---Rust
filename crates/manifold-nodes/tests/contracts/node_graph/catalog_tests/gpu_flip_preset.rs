@@ -119,47 +119,6 @@ fn gpu_flip_tick_region_is_the_tick() {
     );
 }
 
-/// The pool the domain gives an inflow costs the rendered water about
-/// 1 GB (BUG-3zq4r, inflow runs out): each slot's bytes across every
-/// particle buffer, from two pools the walk sizes. The domain sizes the
-/// pool, so the walk takes the fill's own count with its wire cut.
-#[test]
-fn gpu_flip_auto_inflow_pool_is_about_a_gigabyte() {
-    use manifold_water_gpu_flip::primitives::gpu_flip_domain::AUTO_INFLOW_SLOTS;
-    fn set_slots(nodes: &mut [EffectGraphNode], wires: &mut Vec<EffectGraphWire>, slots: i32) {
-        let fills: Vec<u32> = nodes
-            .iter()
-            .filter(|node| node.type_id == "node.liquid_fill")
-            .map(|node| node.id)
-            .collect();
-        wires
-            .retain(|wire| !(fills.contains(&wire.to_node) && wire.to_port == "particle_capacity"));
-        for node in nodes {
-            if node.type_id == "node.liquid_fill" {
-                node.params.insert(
-                    "particle_capacity".into(),
-                    serde_json::from_value(json!({"type": "Int", "value": slots})).unwrap(),
-                );
-            }
-            if let Some(group) = node.group.as_mut() {
-                set_slots(&mut group.nodes, &mut group.wires, slots);
-            }
-        }
-    }
-    let bytes = |slots: i32| {
-        let mut def = render_def(WaterScene::dam_break(64));
-        set_slots(&mut def.nodes, &mut def.wires, slots);
-        walked(&def, false, "pool slots").scene_bytes
-    };
-    let per_slot = (bytes(3_000_000) - bytes(1_000_000)) as f64 / 2_000_000.0;
-    let pool = per_slot * f64::from(AUTO_INFLOW_SLOTS);
-    println!(
-        "GPU FLIP auto inflow pool: {per_slot:.0} bytes a slot, {:.2} GB",
-        pool / 1e9
-    );
-    assert!((0.5e9..1.5e9).contains(&pool), "{pool} bytes");
-}
-
 /// Cell Size is a card: the graph built at 64 cells across the tank runs at
 /// any cell size, odd and uneven counts included, because every lattice
 /// node reads the domain's wires and the step's faces follow them.

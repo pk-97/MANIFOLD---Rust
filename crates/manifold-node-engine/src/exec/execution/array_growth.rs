@@ -9,8 +9,9 @@ impl Executor {
         graph: &Graph,
         plan: &ExecutionPlan,
         step: &ExecutionStep,
-        device: &manifold_gpu::GpuDevice,
+        gpu: &mut GpuEncoder<'_>,
     ) -> Result<(), String> {
+        let device = gpu.device;
         if !step
             .outputs
             .iter()
@@ -71,7 +72,9 @@ impl Executor {
             crate::load::expand::admit_candidate_bytes(device.modifier_memory_snapshot(), bytes)
                 .map_err(|error| error.to_string())?;
             let buffer = device.try_create_buffer(bytes, BufferUse::Upload)?;
-            buffer.zero_fill();
+            // Zeroed on the GPU in encoder order: a CPU memset of a large
+            // array stalls the content thread mid-show.
+            gpu.native_enc.clear_buffer(&buffer);
             if !self.backend.install_array_buffer(slot, buffer) {
                 return Err("Backend cannot replace array storage".into());
             }

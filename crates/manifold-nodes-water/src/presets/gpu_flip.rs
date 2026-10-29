@@ -541,9 +541,9 @@ const WALL_VELOCITY_WIRES: [&str; 6] = [
     "wall_velocity_hi_z",
 ];
 
-/// The colliders and the shaped fill's region the fill seeds around, and the
-/// pool it seeds into, as the domain publishes them.
-pub(crate) const FILL_SHAPE_WIRES: [&str; 10] = [
+/// The colliders and the shaped fill's region the fill seeds around, as the
+/// domain publishes them.
+pub(crate) const FILL_SHAPE_WIRES: [&str; 9] = [
     "bodies",
     "shapes",
     "atlas",
@@ -553,7 +553,6 @@ pub(crate) const FILL_SHAPE_WIRES: [&str; 10] = [
     "fill_region",
     "body_count",
     "epoch",
-    "particle_capacity",
 ];
 
 /// The fill's sites, as the domain publishes them.
@@ -660,6 +659,8 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire((fill, "particles"), state, "seed");
     b.wire((fill, "count"), state, "count");
     b.wires(domain, state, &["ticks", "epoch", "simulation_time", "target_time", "dropped_seconds"]);
+    // The inflows' most births a tick: the state's storage grows ahead of them.
+    b.wire((domain, "region_site_total"), state, "emit_sites");
     let particles: Port = (state, "out");
     let step = water_step(&mut b, scene, (domain, state));
     if scene.narrow_band {

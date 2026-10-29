@@ -9,8 +9,7 @@
 // [box_x0, x1) × [max(box_y0, pool), y1) × [box_z0, z1). Each particle is
 // jittered by up to jitter / 4 cells each way by a hash of (seed, slot) and
 // starts at rest; the radius is that of a sphere of an eighth of a cell;
-// id = slot + 1. Slots past the fill, up to particle_capacity, start dead
-// (all zero) for sources to emit into. The box starts at fill_min (metres)
+// id = slot + 1. The box starts at fill_min (metres)
 // and has fill_cells cells per axis. A site the engine's solid holds when the epoch starts keeps its slot and id
 // with radius 0, dead: the engine seeds a site only where the solid distance
 // is positive (_addNewFluidCellsAABB). That distance is the Bounds box's Wall
@@ -125,7 +124,6 @@ fn body(
     seed: i32,
     body_count: i32,
     epoch: i32,
-    particle_capacity: i32,
     closed_faces: i32,
     bounds_lo_x: f32,
     bounds_lo_y: f32,

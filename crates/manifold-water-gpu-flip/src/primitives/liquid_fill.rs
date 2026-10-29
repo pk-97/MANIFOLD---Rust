@@ -128,13 +128,6 @@ pub(crate) fn fill_of(read: impl Fn(&str, f32) -> f32) -> (u32, [[u32; 2]; 3]) {
     (pool, sites)
 }
 
-/// Particle slots the pool holds: the live sites, or `capacity` when larger
-/// (0 means the live sites). Slots past the fill start dead; sources emit
-/// into them.
-pub(crate) fn pool_slots(placed: u64, capacity: f32) -> u64 {
-    placed.max(capacity.round().max(0.0) as u64)
-}
-
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -157,7 +150,6 @@ struct FillUniforms {
     seed: i32,
     body_count: i32,
     epoch: i32,
-    particle_capacity: i32,
     closed_faces: i32,
     bounds_lo_x: f32,
     bounds_lo_y: f32,
@@ -172,7 +164,7 @@ struct FillUniforms {
 manifold_node_engine::primitive! {
     name: LiquidFill,
     type_id: "node.liquid_fill",
-    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the box node.gpu_flip_domain places on whole world cells (fill_min_x/y/z its first corner in metres, fill_cells_x/y/z its cells per axis; site j at (1/4 + j/2) cells along each axis from the box's first cell, 2 sites per cell, so a site sits at the same world position whatever the box): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site the FLIP engine's solid holds when the epoch starts is left dead, radius 0: the solid is the Wall faces of the Bounds box (bounds_lo/hi in metres as placed, closed_faces the Wall bits −X +X −Y +Y −Z +Z; none by default) and the first body_count bodies at their poses, the smaller of the two at each node of a grid 1.5 cells outside the box, read trilinearly from that grid's nodes. With fill_region at or above 0 the box is a shaped fill's: a site outside region row fill_region of regions (its shape in shapes and atlas, its pose at the epoch's start) is left dead too, so the fill takes the shape. Only the live sites are kept, in site order, ids unchanged. particle_capacity is the whole pool, the live sites included (0 = the live sites): the storage holds the larger of the two, and count is the live sites, the slots a liquid starts with. Every slot past them starts dead and is free for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
+    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the box node.gpu_flip_domain places on whole world cells (fill_min_x/y/z its first corner in metres, fill_cells_x/y/z its cells per axis; site j at (1/4 + j/2) cells along each axis from the box's first cell, 2 sites per cell, so a site sits at the same world position whatever the box): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site the FLIP engine's solid holds when the epoch starts is left dead, radius 0: the solid is the Wall faces of the Bounds box (bounds_lo/hi in metres as placed, closed_faces the Wall bits −X +X −Y +Y −Z +Z; none by default) and the first body_count bodies at their poses, the smaller of the two at each node of a grid 1.5 cells outside the box, read trilinearly from that grid's nodes. With fill_region at or above 0 the box is a shaped fill's: a site outside region row fill_region of regions (its shape in shapes and atlas, its pose at the epoch's start) is left dead too, so the fill takes the shape. Only the live sites are kept, in site order, ids unchanged, in storage of exactly their count; count is the live sites, the slots a liquid starts with (node.liquid_state grows its own storage for sources). A fill past the 16,777,216 particles a count carries exactly is refused.",
     inputs: {
         fill_min_x: ScalarF32 optional, fill_min_y: ScalarF32 optional, fill_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -190,7 +182,6 @@ manifold_node_engine::primitive! {
         fill_region: ScalarF32 optional,
         body_count: ScalarF32 optional,
         epoch: ScalarF32 optional,
-        particle_capacity: ScalarF32 optional,
         closed_faces: ScalarF32 optional,
         bounds_lo_x: ScalarF32 optional, bounds_lo_y: ScalarF32 optional, bounds_lo_z: ScalarF32 optional,
         bounds_hi_x: ScalarF32 optional, bounds_hi_y: ScalarF32 optional, bounds_hi_z: ScalarF32 optional,
@@ -218,7 +209,6 @@ manifold_node_engine::primitive! {
         int_param!("seed", "Seed", 0.0, 0.0, 16_777_215.0),
         int_param!("body_count", "Bodies", 0.0, 0.0, MAX_LIQUID_BODIES as f32),
         int_param!("epoch", "Epoch", 0.0, 0.0, 16_777_215.0),
-        int_param!("particle_capacity", "Max Particles", 0.0, 0.0, 16_777_216.0),
         int_param!("closed_faces", "Closed Faces (bits −X +X −Y +Y −Z +Z)", 0.0, 0.0, 63.0),
         float_param!("bounds_lo_x", "Bounds Min X", 0.0, -1.0e4, 1.0e4),
         float_param!("bounds_lo_y", "Bounds Min Y", 0.0, -1.0e4, 1.0e4),
@@ -242,7 +232,7 @@ manifold_node_engine::primitive! {
     wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH, LIQUID_FILL_SHAPE],
     extra_fields: {
         buffer: Option<GpuBuffer> = None,
-        filled: Option<([u32; 27], usize)> = None,
+        filled: Option<([u32; 26], usize)> = None,
         // The live sites the last fill kept.
         live: u32 = 0,
         compact: Option<(GpuComputePipeline, GpuComputePipeline)> = None,
@@ -311,22 +301,15 @@ impl Primitive for LiquidFill {
         } else {
             0
         };
-        let requested = ctx.scalar_or_param("particle_capacity", 0.0);
-        if !requested.is_finite() || requested < 0.0 {
-            ctx.error("Liquid Fill: particle_capacity must be 0 or a positive count".to_string());
-            return;
-        }
         let filled = filled_sites(cells, pool, sites);
-        let most = pool_slots(filled, requested);
-        if most > u64::from(EXACT_F32_COUNT) {
+        if filled > u64::from(EXACT_F32_COUNT) {
             ctx.outputs.set_scalar("count", ParamValue::Float(0.0));
             ctx.error(format!(
-                "Liquid Fill: the pool holds {most} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly"
+                "Liquid Fill: the fill holds {filled} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly"
             ));
             return;
         }
         let filled = filled as u32;
-        let capacity = requested.round() as u32;
         let colliders = (
             ctx.inputs.array("bodies"),
             ctx.inputs.array("shapes"),
@@ -397,7 +380,6 @@ impl Primitive for LiquidFill {
             seed,
             body_count as u32,
             epoch,
-            capacity,
             closed_faces as u32,
             bounds[0].to_bits(),
             bounds[1].to_bits(),
@@ -435,7 +417,6 @@ impl Primitive for LiquidFill {
             seed: clamp(seed),
             body_count,
             epoch: clamp(epoch),
-            particle_capacity: clamp(filled),
             closed_faces,
             bounds_lo_x: bounds[0],
             bounds_lo_y: bounds[1],
@@ -492,7 +473,7 @@ impl Primitive for LiquidFill {
             [filled.max(1).div_ceil(256), 1, 1],
             "node.liquid_fill",
         );
-        match self.keep_live(gpu, &all_sites, filled, capacity) {
+        match self.keep_live(gpu, &all_sites, filled) {
             Ok(kept) => {
                 self.filled = Some((key, kept));
                 ctx.outputs
@@ -509,8 +490,8 @@ impl Primitive for LiquidFill {
 
 impl LiquidFill {
     /// Keep the live ones of the `filled` sites' particles in `all_sites`,
-    /// in site order, in storage of the larger of their count and
-    /// `capacity`, the slots past them dead. The count is read back at once:
+    /// in site order, in storage of exactly their count. The count is read
+    /// back at once:
     /// the frame's work so far is committed and waited on, once per fill.
     /// Returns the storage's identity.
     fn keep_live(
@@ -518,7 +499,6 @@ impl LiquidFill {
         gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
         all_sites: &GpuBuffer,
         filled: u32,
-        capacity: u32,
     ) -> Result<usize, String> {
         let device = gpu.device;
         let (flag, scatter) = self.compact.get_or_insert_with(|| {
@@ -577,7 +557,7 @@ impl LiquidFill {
             unsafe { source.add(n - 1).read() }
         };
         self.live = live;
-        let slots = live.max(capacity).max(1);
+        let slots = live.max(1);
         let bytes = u64::from(slots) * std::mem::size_of::<FluidParticle>() as u64;
         if self.buffer.as_ref().is_none_or(|b| b.size != bytes) {
             manifold_node_engine::load::expand::admit_world_bytes(

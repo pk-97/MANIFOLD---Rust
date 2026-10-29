@@ -2,7 +2,6 @@
 use crate::primitives::liquid_fill::fill_frame;
 use crate::primitives::liquid_fill::fill_of;
 use crate::primitives::liquid_fill::filled_sites;
-use crate::primitives::liquid_fill::pool_slots;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_water_liquid::extent::PARTICLE;
@@ -12,14 +11,13 @@ fn liquid_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         .map_err(|reason| Verdict::Refused(format!("Liquid Fill: {reason}")))?;
     let (pool, sites) = fill_of(|name, default| x.scalar(name, default));
     let filled = filled_sites(cells, pool, sites);
-    let placed = pool_slots(filled, x.scalar("particle_capacity", 0.0));
-    if placed > u64::from(EXACT_F32_COUNT) {
+    if filled > u64::from(EXACT_F32_COUNT) {
         return Err(Verdict::Refused(format!(
-            "Liquid Fill: the pool holds {placed} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly"
+            "Liquid Fill: the fill holds {filled} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly"
         )));
     }
     x.publish("count", filled as f32);
-    let bytes = placed.max(1) * PARTICLE;
+    let bytes = filled.max(1) * PARTICLE;
     x.provide("particles", bytes);
     x.hold(bytes);
     Ok(())

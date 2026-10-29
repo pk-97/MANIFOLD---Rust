@@ -263,9 +263,10 @@ pub static RETIRED_PARAMS: &[(&str, &str)] = &[
     ("node.scene_object", "min_pixel_radius"),
     // GPU FLIP matches the native engine's RK3, which never caps a stage.
     ("node.gpu_flip_step", "top_speed"),
-    // The GPU FLIP pool sizes itself: the fill's count, plus room for an
-    // inflow up to a memory budget (`GpuFlipGeometry::with_inflow`).
+    // The GPU FLIP pool sizes itself: the fill keeps its live sites and the
+    // liquid state grows its storage ahead of the inflows.
     ("node.gpu_flip_domain", "particle_capacity"),
+    ("node.liquid_fill", "particle_capacity"),
     // GPU FLIP always publishes the native padded grid; old graphs' solid
     // producers are rewired at load (graph_loader `wire_gpu_flip_grid`).
     ("node.liquid_frame", "native_mesh_grid"),

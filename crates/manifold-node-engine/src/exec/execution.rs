@@ -2427,7 +2427,7 @@ impl Executor {
 
             // Capacity follows growing upstream arrays before encoding consumers.
             if let Some(gpu) = gpu.as_deref_mut()
-                && let Err(error) = self.grow_step_arrays(graph, plan, step, gpu.device)
+                && let Err(error) = self.grow_step_arrays(graph, plan, step, gpu)
             {
                 log::error!("[graph] array growth at {:?}: {error}", step.node);
                 gpu.merge_frame_status(crate::runtime::frame_status::FrameRenderStatus::Failed(

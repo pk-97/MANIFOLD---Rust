@@ -270,3 +270,6 @@ mod tests {
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
     }
 }
+
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+mod extent;
