@@ -35,7 +35,7 @@ pub(super) fn compile_wgsl_to_spirv_compute(
         .unwrap_or_else(|| panic!("{label}: entry point '{entry_point}' not found in module"))
         .workgroup_size;
 
-    let spirv = compile_to_optimized_spirv(&module, &info, label);
+    let spirv = compile_to_optimized_spirv(&module, &info, None, label);
     (slot_map, spirv, workgroup_size)
 }
 
@@ -57,7 +57,7 @@ pub(super) fn compile_wgsl_to_spirv_render(
         None => (module, info),
     };
     let slot_map = build_slot_map_render(&module, vs_entry, fs_entry);
-    let spirv = compile_to_optimized_spirv(&module, &info, label);
+    let spirv = compile_to_optimized_spirv(&module, &info, None, label);
     (slot_map, spirv)
 }
 

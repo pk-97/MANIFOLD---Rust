@@ -533,19 +533,27 @@ impl RenderScene {
     /// sanctioned "compile pipelines ahead of the hot path" mechanism used
     /// for the bundled JSON generator presets.
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
-        for kind in [MaterialKind::Unlit, MaterialKind::Pbr, MaterialKind::Cel] {
-            // The Blend-material pipeline
-            // variants (BUG-037 discipline — a live project's first glass
-            // draw must be a cache hit, not a first-use compile stall).
-            // RAYTRACING_DESIGN.md section 12 AM1 adds the ao_mask aux
-            // dimension — same lazy-compile-stall argument: every import
-            // graph wires ao_mask, so its variants must be warm. The
-            // solid-surface variants (never blend) are the common case for
-            // opaque geometry. All compiles below are on-disk-cache hits
-            // after the first launch.
-            Self::create_pass_b_pipeline(device, kind);
-            for (blend, opaque_fast) in [(false, false), (false, true), (true, false)] {
-                for (emit_velocity, emit_ao_mask, emit_denoise_feed) in [
+        // The Blend-material pipeline variants (BUG-037 discipline — a live
+        // project's first glass draw must be a cache hit, not a first-use
+        // compile stall). RAYTRACING_DESIGN.md section 12 AM1 adds the
+        // ao_mask aux dimension — same lazy-compile-stall argument: every
+        // import graph wires ao_mask, so its variants must be warm. The
+        // solid-surface variants (never blend) are the common case for
+        // opaque geometry. All compiles below are on-disk-cache hits after
+        // the first launch.
+        //
+        // After an edit to the scene shader every variant is a cold compile
+        // costing seconds of spirv-opt, so they compile in parallel. One job
+        // per distinct shader source: the blend and Pass B pipelines share
+        // their source with the plain variant, so they run after it in the
+        // same job and reuse its cached MSL instead of compiling it again.
+        // PBR jobs go first because they are the slow ones. Each cold PBR
+        // compile holds over 2 GB inside spirv-opt, so the worker count is
+        // capped to keep a cold start near 10 GB.
+        let mut jobs = Vec::new();
+        for kind in [MaterialKind::Pbr, MaterialKind::Cel, MaterialKind::Unlit] {
+            for opaque_fast in [false, true] {
+                for aux in [
                     (false, false, false),
                     (true, false, false),
                     (false, true, false),
@@ -555,18 +563,39 @@ impl RenderScene {
                     (false, true, true),
                     (true, true, true),
                 ] {
-                    Self::create_variant(
-                        device,
-                        kind,
-                        emit_velocity,
-                        emit_ao_mask,
-                        emit_denoise_feed,
-                        blend,
-                        opaque_fast,
-                    );
+                    jobs.push((kind, aux, opaque_fast));
                 }
             }
         }
+        let next_job = std::sync::atomic::AtomicUsize::new(0);
+        const WORKERS: usize = 4;
+        std::thread::scope(|scope| {
+            for _ in 0..WORKERS {
+                scope.spawn(|| {
+                    while let Some(&(kind, (velocity, ao_mask, denoise), opaque_fast)) =
+                        jobs.get(next_job.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+                    {
+                        Self::create_variant(
+                            device,
+                            kind,
+                            velocity,
+                            ao_mask,
+                            denoise,
+                            false,
+                            opaque_fast,
+                        );
+                        if !opaque_fast {
+                            Self::create_variant(
+                                device, kind, velocity, ao_mask, denoise, true, false,
+                            );
+                            if !(velocity || ao_mask || denoise) {
+                                Self::create_pass_b_pipeline(device, kind);
+                            }
+                        }
+                    }
+                });
+            }
+        });
 
         // The
         // shadow depth-only pipeline (`ensure_shadow_pass`) and the three

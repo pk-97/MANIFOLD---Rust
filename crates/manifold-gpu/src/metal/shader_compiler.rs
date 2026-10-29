@@ -40,7 +40,7 @@ pub(super) fn compile_wgsl_to_msl(
     let workgroup_size = module.entry_points[entry_idx].workgroup_size;
 
     // Step 5: WGSL → SPIR-V → spirv-opt → SPIRV-Cross → MSL
-    let optimized_spirv = compile_to_optimized_spirv(&module, &info, label);
+    let optimized_spirv = compile_to_optimized_spirv(&module, &info, None, label);
     let msl_source = compile_spirv_entry_to_msl(
         &optimized_spirv,
         &module,
@@ -93,13 +93,25 @@ pub(super) fn compile_wgsl_to_msl_render(
     let (unified_slot_map, _resources_vs, _resources_fs) =
         build_slot_map_render(&module, vs_entry, fs_entry);
 
-    // WGSL → SPIR-V → spirv-opt (shared) — render pipelines always use f32
-    let optimized_spirv = compile_to_optimized_spirv(&module, &info, label);
+    // WGSL → SPIR-V → spirv-opt (shared) — render pipelines always use f32.
+    // One SPIR-V module per stage: spirv-opt then optimises only the code
+    // that entry reaches, never the file's other fragment entries.
+    let vs_spirv = compile_to_optimized_spirv(
+        &module,
+        &info,
+        Some((naga::ShaderStage::Vertex, vs_entry)),
+        label,
+    );
+    let fs_spirv = compile_to_optimized_spirv(
+        &module,
+        &info,
+        Some((naga::ShaderStage::Fragment, fs_entry)),
+        label,
+    );
 
-    // Compile vertex and fragment entry points to MSL separately.
     // SPIRV-Cross's MSL backend emits one entry point per compile() call.
     let vs_msl = compile_spirv_entry_to_msl(
-        &optimized_spirv,
+        &vs_spirv,
         &module,
         &unified_slot_map,
         vs_entry,
@@ -107,7 +119,7 @@ pub(super) fn compile_wgsl_to_msl_render(
         label,
     );
     let fs_msl = compile_spirv_entry_to_msl(
-        &optimized_spirv,
+        &fs_spirv,
         &module,
         &unified_slot_map,
         fs_entry,

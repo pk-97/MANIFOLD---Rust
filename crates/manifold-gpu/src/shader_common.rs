@@ -116,9 +116,14 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 ///   1. zero workgroup memory from every invocation (`workgroup_zeroing`)
 ///   2. naga Module → SPIR-V (via `naga::back::spv`)
 ///   3. SPIR-V → optimised SPIR-V (via `spirv-tools` optimiser)
+///
+/// `entry` writes only that entry point and the functions and globals it
+/// reaches, so spirv-opt never optimises the other entries of a shader with
+/// several; `None` writes every entry point.
 pub(crate) fn compile_to_optimized_spirv(
     module: &naga::Module,
     info: &naga::valid::ModuleInfo,
+    entry: Option<(naga::ShaderStage, &str)>,
     label: &str,
 ) -> Vec<u32> {
     let zeroed = crate::workgroup_zeroing::with_workgroup_zeroing(module, label)
@@ -132,8 +137,16 @@ pub(crate) fn compile_to_optimized_spirv(
         zero_initialize_workgroup_memory: naga::back::spv::ZeroInitializeWorkgroupMemoryMode::None,
         ..Default::default()
     };
-    let spv_words = naga::back::spv::write_vec(module, info, &spv_options, None)
-        .unwrap_or_else(|e| panic!("{label}: naga SPIR-V output error: {e}"));
+    let pipeline_options =
+        entry.map(
+            |(shader_stage, entry_point)| naga::back::spv::PipelineOptions {
+                shader_stage,
+                entry_point: entry_point.to_string(),
+            },
+        );
+    let spv_words =
+        naga::back::spv::write_vec(module, info, &spv_options, pipeline_options.as_ref())
+            .unwrap_or_else(|e| panic!("{label}: naga SPIR-V output error: {e}"));
 
     optimize_spirv(&spv_words, label)
 }

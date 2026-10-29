@@ -1600,55 +1600,43 @@ impl GpuDevice {
             }
         }
 
-        let mut archive_guard = self.archive.lock().unwrap();
-        let state = if let Some(ref mut arch) = *archive_guard {
-            unsafe {
-                let archives =
-                    objc2_foundation::NSArray::from_retained_slice(&[arch.raw_archive().clone()]);
-                desc.setBinaryArchives(Some(&archives));
-            }
-
-            let state = unsafe {
-                self.device
-                    .newRenderPipelineStateWithDescriptor_error(&desc)
-            }
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{label}: MTL render PSO error: {}",
+        // The archive lock guards only our bookkeeping. Building the state is
+        // Metal's backend compile, over a second for the scene shader, so
+        // holding the lock through it would serialise a parallel prewarm.
+        let archive = self
+            .archive
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|arch| arch.raw_archive().clone());
+        if let Some(archive) = archive {
+            let archives = objc2_foundation::NSArray::from_retained_slice(&[archive]);
+            unsafe { desc.setBinaryArchives(Some(&archives)) };
+        }
+        let state = unsafe {
+            self.device
+                .newRenderPipelineStateWithDescriptor_error(&desc)
+        }
+        .unwrap_or_else(|e| {
+            panic!(
+                "{label}: MTL render PSO error: {}",
+                e.localizedDescription()
+            )
+        });
+        if let Some(ref mut arch) = *self.archive.lock().unwrap()
+            && !arch.was_added(hash)
+        {
+            match unsafe {
+                arch.raw_archive()
+                    .addRenderPipelineFunctionsWithDescriptor_error(&desc)
+            } {
+                Ok(()) => arch.mark_added(hash),
+                Err(e) => log::warn!(
+                    "{label}: failed to add render PSO to binary archive: {}",
                     e.localizedDescription()
-                )
-            });
-
-            if !arch.was_added(hash) {
-                match unsafe {
-                    arch.raw_archive()
-                        .addRenderPipelineFunctionsWithDescriptor_error(&desc)
-                } {
-                    Ok(()) => {
-                        arch.mark_added(hash);
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "{label}: failed to add render PSO to binary archive: {}",
-                            e.localizedDescription()
-                        );
-                    }
-                }
+                ),
             }
-            state
-        } else {
-            unsafe {
-                self.device
-                    .newRenderPipelineStateWithDescriptor_error(&desc)
-            }
-            .unwrap_or_else(|e| {
-                panic!(
-                    "{label}: MTL render PSO error: {}",
-                    e.localizedDescription()
-                )
-            })
-        };
-        drop(archive_guard);
+        }
 
         let needs_sizes_buffer = slot_map.get(SIZES_BUFFER_BINDING).is_some();
         let pipeline = GpuRenderPipeline {
