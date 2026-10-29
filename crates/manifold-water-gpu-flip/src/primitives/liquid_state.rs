@@ -131,8 +131,9 @@ pub fn births_held_back(node: &dyn manifold_node_engine::exec::effect_node::Effe
         .is_some_and(|stats| stats.inflow_refused > 0 || stats.sheet_refused > 0)
 }
 
-/// How many particles `node`'s last read tick removed because their tile got
-/// no pool slot, 0 when `node` is not a liquid state or has read no tick. The
+/// How many particles `node`'s last read tick removed because their tile, or
+/// a tile within the water's reach of it, got no pool slot, 0 when `node` is
+/// not a liquid state or has read no tick. The
 /// water runtime puts it on the domain's setup report.
 pub fn particles_removed_for_tiles(
     node: &dyn manifold_node_engine::exec::effect_node::EffectNode,
@@ -140,7 +141,7 @@ pub fn particles_removed_for_tiles(
     node.as_any()
         .downcast_ref::<LiquidState>()
         .and_then(|state| state.last_stats)
-        .map_or(0, |stats| stats.tile_removed)
+        .map_or(0, |stats| stats.tile_removed + stats.reach_removed)
 }
 
 /// Leaves `stats` on a liquid state as its last retired tick, for tests of
@@ -377,10 +378,10 @@ impl LiquidState {
             let cap_hit = status[4] != 0;
             let nonfinite = status[5] != 0;
             log::debug!(target: "gpu_flip::schedule",
-                "endpoint={} steps={} remaining={} maximum={} cap={cap_hit} nonfinite={nonfinite} live={} bad_particles={} kinetic={} pressure={} density={} unconverged={} pockets={} speed_capped={} push_refused={}",
+                "endpoint={} steps={} remaining={} maximum={} cap={cap_hit} nonfinite={nonfinite} live={} bad_particles={} kinetic={} pressure={} density={} unconverged={} pockets={} reach_removed={} push_refused={}",
                 slot.endpoint, status[6], f32::from_bits(status[2]), stats.max_speed,
                 stats.live, stats.nonfinite, stats.kinetic, stats.pressure_iterations, stats.density_iterations,
-                stats.unconverged, stats.unresolved_pockets, stats.speed_capped, stats.push_refused);
+                stats.unconverged, stats.unresolved_pockets, stats.reach_removed, stats.push_refused);
             if newest.is_none_or(|(stamp, _, _, _, _)| slot.stamp >= stamp) {
                 newest = Some((slot.stamp, stats, slot.endpoint, cap_hit, nonfinite));
             }
@@ -748,12 +749,6 @@ impl Primitive for LiquidState {
                 ctx.error(format!(
                     "Water: the pressure solve did not converge on {} solves last tick",
                     stats.unconverged
-                ));
-            }
-            if stats.speed_capped > 0 {
-                ctx.error(format!(
-                    "Water: {} particles hit the speed cap last tick",
-                    stats.speed_capped
                 ));
             }
             if stats.push_refused > 0 {

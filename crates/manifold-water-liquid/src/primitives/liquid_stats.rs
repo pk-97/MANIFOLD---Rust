@@ -81,8 +81,10 @@ pub struct LiquidTickStats {
     pub mass: f32,
     pub momentum: [f32; 3],
     pub kinetic: f32,
-    /// Solver-reported clipped stages; native GPU FLIP reports zero (direct RK3).
-    pub speed_capped: u32,
+    /// Particles removed this tick because a tile within reach of theirs had
+    /// no slot after the pool ran short: the water's edge where memory ran
+    /// out (`lost_reach` in the step's move).
+    pub reach_removed: u32,
     /// Solid push-outs the solver refused as too far this tick.
     pub push_refused: u32,
     /// Pressure solve iterations this tick, every substep.
@@ -127,7 +129,7 @@ impl LiquidTickStats {
             mass: f(3),
             momentum: [f(4), f(5), f(6)],
             kinetic: f(7),
-            speed_capped: w[8],
+            reach_removed: w[8],
             push_refused: w[9],
             pressure_iterations: w[10],
             density_iterations: w[11],
@@ -446,7 +448,7 @@ mod tests {
                 mass: 0.25,
                 momentum: [1.0, -2.0, 0.0],
                 kinetic: 3.0,
-                speed_capped: 4,
+                reach_removed: 4,
                 push_refused: 1,
                 pressure_iterations: 40,
                 density_iterations: 12,

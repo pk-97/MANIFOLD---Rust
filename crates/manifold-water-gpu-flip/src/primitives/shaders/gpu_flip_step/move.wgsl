@@ -191,9 +191,38 @@ fn beyond_open(x: vec3<f32>) -> bool {
     return false;
 }
 
+// tiles.rs CELL_REACH: the step's cell passes hold every cell this close to
+// a particle's cell.
+const MOVE_CELL_REACH: i32 = 2;
+// world_tiles.rs POOL_SHORT, in the build's exhausted bits (tile_counts word
+// ring_max + 4, world_tiles.rs `exhausted_word`).
+const MOVE_POOL_SHORT: u32 = 1u;
+
+// Whether the particle in cell `lo` has lost the water's reach: after a build
+// that ran out of slots, a tile within MOVE_CELL_REACH cells of `lo` has none.
+// A face there has nowhere to keep its velocity, so the solve read it as a
+// closed wall; the particle is removed instead and counted, and the water
+// stops at its edge with Water memory is full rather than stacking against
+// walls it cannot see. The box is under a tile across, so its tiles are its
+// corners'. Costs one word while the pool holds every wanted tile.
+fn lost_reach(lo: vec3<i32>) -> bool {
+    if (tile_counts[u.ring_max + 4u] & MOVE_POOL_SHORT) == 0u {
+        return false;
+    }
+    for (var c = 0u; c < 8u; c = c + 1u) {
+        let side = vec3<bool>((c & 1u) != 0u, (c & 2u) != 0u, (c & 4u) != 0u);
+        let corner = lo + select(vec3<i32>(-MOVE_CELL_REACH), vec3<i32>(MOVE_CELL_REACH), side);
+        if ts_cell_at(corner) == ts_canon() {
+            return true;
+        }
+    }
+    return false;
+}
+
 // One thread per slot in use (`slot_record`), `sorted` to `particles_out`. A
 // live particle (radius > 0) whose own tile has no slot (an exhausted pool;
-// `tiles_tally` counts them) is removed. Any other at q blends FLIP and PIC, flip · (v + new(q) − old(q)) +
+// `tiles_tally` counts them) is removed, and so is one that has lost the
+// water's reach (`lost_reach`, counted in its first `capped` word). Any other at q blends FLIP and PIC, flip · (v + new(q) − old(q)) +
 // (1 − flip) · new(q), then moves by RK3 through the new faces (stages at ½
 // and ¾ of step_dt, weights 2/9, 3/9, 4/9), plus the density
 // projection's move. The solid collision sequence is shared by wall-only and
@@ -216,7 +245,6 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     var out = particle;
     let first = u.step_in_tick == 0;
     let push_before = select(capped[2u * idx + 1u], 0u, first);
-    // Native RK3 never clips stage velocities; retain the public stats word.
     capped[2u * idx] = 0u;
     capped[2u * idx + 1u] = push_before;
     if !(particle.position_radius.w > 0.0) {
@@ -228,6 +256,12 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let own = ts_cell_at(lo);
     ts_home(own);
     if finite(x0) && own == ts_canon() {
+        out.position_radius.w = 0.0;
+        particles_out[idx] = out;
+        return;
+    }
+    if finite(x0) && lost_reach(lo) {
+        capped[2u * idx] = 1u;
         out.position_radius.w = 0.0;
         particles_out[idx] = out;
         return;

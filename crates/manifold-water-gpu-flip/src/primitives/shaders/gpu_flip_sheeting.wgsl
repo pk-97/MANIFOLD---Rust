@@ -455,8 +455,11 @@ fn site_key(b: vec3<i32>, in_bucket: u32, o: u32) -> u32 {
 }
 
 // One half-cell site (8 · the cell's pool index + offset): candidate test,
-// plane projection, mask and opposite-neighbour test. Deterministic, so
-// resolve recomputes a claimant's projection instead of storing it.
+// plane projection, mask and opposite-neighbour test. The seed sits at a
+// point of its site drawn from the site's world position, the tick and the
+// substep, not at the site's centre: centres on a flat sheet project to a
+// grid and show as rows of drops. Deterministic, so resolve recomputes a
+// claimant's projection instead of storing it.
 fn evaluate(site: u32) -> Evaluation {
     var e = Evaluation(0u, vec3<f32>(0.0), 0u);
     let c = site / 8u;
@@ -467,7 +470,8 @@ fn evaluate(site: u32) -> Evaluation {
     let d = vec3<i32>(i32((o >> 2u) & 1u), i32((o >> 1u) & 1u), i32(o & 1u));
     let s = 2 * q + d;
     // (f32)s · sub_dx + sub_dx/2 in f64 is exact, so one f32 rounding matches.
-    let seed = fma(vec3<f32>(s), vec3<f32>(u.sub_dx), vec3<f32>(0.5 * u.sub_dx));
+    let centre = fma(vec3<f32>(s), vec3<f32>(u.sub_dx), vec3<f32>(0.5 * u.sub_dx));
+    let seed = centre + u.sub_dx * (site_offset(vec3<u32>(s)) - vec3<f32>(0.5));
     let value = sample(seed);
     if value >= 0.0 || value < -u.max_seed_depth { return e; }
     e.state = 1u;
@@ -661,6 +665,17 @@ fn pcg(v: u32) -> u32 {
     let s = v * 747796405u + 2891336453u;
     let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
     return (w >> 22u) ^ w;
+}
+
+// Where in its half-cell site `s` (world half cells) a seed sits, each axis
+// uniform in [0, 1) at 24 bits: a pure function of the site, the tick and
+// the substep, as the fill-rate draw.
+fn site_offset(s: vec3<u32>) -> vec3<f32> {
+    let t = pcg(u.tick ^ pcg(u.substep ^ 0x0ff5e7u));
+    let hx = pcg(s.x ^ pcg(s.y ^ pcg(s.z ^ t)));
+    let hy = pcg(hx);
+    let hz = pcg(hy);
+    return vec3<f32>(vec3<u32>(hx, hy, hz) >> vec3<u32>(8u)) * (1.0 / 16777216.0);
 }
 
 // The fill-rate draw, uniform in [0, 1) at 24 bits. A pure function of the

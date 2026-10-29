@@ -646,7 +646,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
                 ("box_y1", int(sites[1][1] as usize)),
                 ("box_z0", int(sites[2][0] as usize)),
                 ("box_z1", int(sites[2][1] as usize)),
-                ("jitter", float(0.0)),
+                ("jitter", float(SEED_JITTER)),
                 ("seed", int(0)),
             ],
         ),
@@ -1519,6 +1519,11 @@ fn seeded(scene: &WaterScene, wires: &[&str], extra: &[(&str, Value)]) -> Value 
     params
 }
 
+/// How far a Fill or an inflow moves each new particle off its half-cell
+/// site, as a fraction of the most (a quarter cell each way): off the grid,
+/// so the water starts without rows or stripes.
+const SEED_JITTER: f64 = 1.0;
+
 /// The tick's water:
 /// one node.gpu_flip_step of `scene.steps` substeps on the domain's lattice, gravity,
 /// fields and bodies, and the state's tick index. The caller wires its
@@ -1540,6 +1545,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
                     iterations(scene.pressure.iterations, PRESSURE_ITERATIONS as u32),
                 ),
                 ("ghost_fluid", int(usize::from(scene.ghost_fluid))),
+                ("inflow_jitter", float(SEED_JITTER)),
                 (
                     "volume_projection",
                     int(usize::from(scene.volume_projection)),

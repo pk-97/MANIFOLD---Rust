@@ -716,6 +716,7 @@ impl StepState {
                 buffer(36, step.regions),
                 buffer(46, step.clock_plan),
                 buffer(51, table),
+                buffer(30, tiles.counts()),
                 buffer(42, record),
                 buffer(67, band_distance),
                 // The band's interior, which the move's test never reads;

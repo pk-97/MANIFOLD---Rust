@@ -25,7 +25,7 @@ struct Partial {
     momentum_y: f32,
     momentum_z: f32,
     kinetic: f32,
-    speed_capped: u32,
+    reach_removed: u32,
     push_refused: u32,
 }
 
@@ -81,7 +81,7 @@ fn combine(a: Partial, b: Partial) -> Partial {
         a.momentum_y + b.momentum_y,
         a.momentum_z + b.momentum_z,
         a.kinetic + b.kinetic,
-        a.speed_capped + b.speed_capped,
+        a.reach_removed + b.reach_removed,
         a.push_refused + b.push_refused,
     );
 }
@@ -136,7 +136,7 @@ fn particles_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocatio
         if i < n {
             var r = record_partial(particles[i]);
             if params.has_capped != 0u {
-                r.speed_capped = capped[2u * i];
+                r.reach_removed = capped[2u * i];
                 r.push_refused = capped[2u * i + 1u];
             }
             acc = combine(acc, r);
@@ -171,7 +171,7 @@ fn finish_main(@builtin(local_invocation_id) lid: vec3<u32>) {
         stats[5] = bitcast<u32>(s.momentum_y);
         stats[6] = bitcast<u32>(s.momentum_z);
         stats[7] = bitcast<u32>(s.kinetic);
-        stats[8] = s.speed_capped;
+        stats[8] = s.reach_removed;
         stats[9] = s.push_refused;
         for (var w = 0u; w < SOLVER_WORDS; w = w + 1u) {
             stats[SOLVER_STATS_START + w] = 0u;
