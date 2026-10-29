@@ -99,7 +99,8 @@ pub const WEIGHT_FADE_END: f32 = 0.54;
 
 /// Film: water lying on a solid as thin as a one-particle sheet (a blob with
 /// fewer neighbours than [`WEIGHT_FADE_END`] of the bulk count, its centre
-/// within [`FILM_REACH_CELLS`] simulation cells of the solid). Its blob is
+/// within [`FILM_REACH_CELLS`] simulation cells of a solid that faces up;
+/// on a wall it stays a drop). Its blob is
 /// drawn as a flat disc centred on the solid's surface, up to
 /// [`FILM_WIDE_CELLS`] across it and [`FILM_HALF_CELLS`] along its normal,
 /// instead of its own ellipsoid, so the film's discs blend into one flat sheet
