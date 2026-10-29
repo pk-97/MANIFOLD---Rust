@@ -29,6 +29,8 @@ pub(crate) enum DialogAction {
     ExportPreset,
     ReplaceAudio,
     NodeFile,
+    /// A Material's texture: a material file or a picture.
+    MaterialFile,
     NodeFolder,
 }
 
@@ -144,6 +146,13 @@ impl DialogAction {
                 &[],
                 "MANIFOLD_DialogPath_NodeFile",
                 true,
+                H::None,
+            ),
+            Self::MaterialFile => (
+                "Choose Material or Picture",
+                &[],
+                "MANIFOLD_DialogPath_MaterialFile",
+                false,
                 H::None,
             ),
             Self::NodeFolder => (
@@ -360,6 +369,11 @@ fn build(action: DialogAction, host: DialogHost, prefs: &UserPrefs) -> rfd::File
     let remembered = Some(prefs.get_string(spec.pref_key, ""))
         .filter(|s| !s.is_empty())
         .map(|s| memory_dir(action, Path::new(&s)));
+    // A material pick with nothing remembered opens the starter library.
+    let remembered = match action {
+        DialogAction::MaterialFile => remembered.or_else(starter_materials),
+        _ => remembered,
+    };
     let home = std::env::var_os("HOME").map(PathBuf::from);
     if let Some(dir) = start_dir(
         action,
@@ -388,6 +402,13 @@ fn remember(action: DialogAction, picked: &Path, prefs: &mut UserPrefs) {
 /// place: an untitled project saved into one would become a version of the
 /// old show (D3), so its parent is remembered instead.
 fn memory_dir(action: DialogAction, dir: &Path) -> PathBuf {
+    // A material's own folder: the next pick starts in the library holding it.
+    if action == DialogAction::MaterialFile
+        && let Some(Ok(_)) = crate::scene_edit::material_file_of(dir)
+        && let Some(parent) = dir.parent()
+    {
+        return parent.to_path_buf();
+    }
     if action == DialogAction::SaveProjectAs
         && manifold_io::project_folder::is_project_folder(dir)
         && let Some(parent) = dir.parent()
@@ -395,6 +416,19 @@ fn memory_dir(action: DialogAction, dir: &Path) -> PathBuf {
         return parent.to_path_buf();
     }
     dir.to_path_buf()
+}
+
+/// The starter material library, `assets/materials`: beside the app, in the
+/// repository a cargo build runs from, or in the working folder.
+fn starter_materials() -> Option<PathBuf> {
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    [
+        exe_dir.join("assets/materials"),
+        exe_dir.join("../../assets/materials"),
+        PathBuf::from("assets/materials"),
+    ]
+    .into_iter()
+    .find_map(|dir| dir.canonicalize().ok().filter(|dir| dir.is_dir()))
 }
 
 /// The folder a dialog opens in. Pure, so the fallback rules are testable.
@@ -446,7 +480,7 @@ fn start_dir(
 mod tests {
     use super::*;
 
-    const ALL: [DialogAction; 12] = [
+    const ALL: [DialogAction; 13] = [
         DialogAction::OpenProject,
         DialogAction::SaveProjectAs,
         DialogAction::ExportVideo,
@@ -458,6 +492,7 @@ mod tests {
         DialogAction::ExportPreset,
         DialogAction::ReplaceAudio,
         DialogAction::NodeFile,
+        DialogAction::MaterialFile,
         DialogAction::NodeFolder,
     ];
 

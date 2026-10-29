@@ -300,8 +300,13 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                     );
                     return DispatchResult::handled();
                 }
+                let action = if field == "texture_file" {
+                    crate::file_dialogs::DialogAction::MaterialFile
+                } else {
+                    crate::file_dialogs::DialogAction::NodeFile
+                };
                 let picked = crate::file_dialogs::pick_file_of(
-                    crate::file_dialogs::DialogAction::NodeFile,
+                    action,
                     ctx.dialogs,
                     ctx.user_prefs,
                     extensions,

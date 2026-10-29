@@ -2017,7 +2017,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 } else if ext == "json" || ext == "manifold" {
                     // Project files → load project
                     self.open_project_from_path(path.clone());
-                } else if let Some(file) = crate::scene_edit::dropped_material_file(&path) {
+                } else if let Some(file) = crate::scene_edit::material_file_of(&path) {
                     // A material file, or the folder holding one, lands on
                     // the Material selected in the Scene panel (or the
                     // selected Object's), as picking it on the card does.

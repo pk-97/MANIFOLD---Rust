@@ -96,10 +96,19 @@ pub(crate) struct ModelFile {
     pub radius: f32,
     /// By file node path.
     pub nodes: HashMap<String, NodeFacts>,
-    /// A material file's tile size in metres: its textures are seamless
-    /// tiles, so its material starts box mapped with repeats broken. `None`
-    /// for a model file, whose textures are laid out for its own UVs.
-    pub tiles: Option<f32>,
+    /// A material file's tiling: its textures are seamless tiles, so its
+    /// material starts box mapped. `None` for a model file, whose textures
+    /// are laid out for its own UVs.
+    pub tiles: Option<Tiles>,
+}
+
+/// How a material file's textures tile.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Tiles {
+    /// Metres one repeat covers.
+    pub size: f32,
+    /// The file hex-tiles its colour picture, so its repeats start broken.
+    pub hex: bool,
 }
 
 impl ModelFile {

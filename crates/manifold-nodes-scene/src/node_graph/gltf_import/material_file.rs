@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use manifold_core::materialx::{self, MapSlot, Material};
 use manifold_core::scene_doc::ModelFacts;
 
-use super::model_file::ModelFile;
+use super::model_file::{ModelFile, Tiles};
 use crate::node_graph::gltf_load::{self, GltfMaterialInfo};
 
 /// One texture of a material file.
@@ -159,7 +159,10 @@ pub(crate) fn read_facts(path: &Path) -> Result<(ModelFacts, Vec<String>), Strin
         radius: 1e-3,
         nodes: HashMap::new(),
         // A file that gives no real-world size tiles once a metre.
-        tiles: Some(material.tile_size.unwrap_or(1.0)),
+        tiles: Some(Tiles {
+            size: material.tile_size.unwrap_or(1.0),
+            hex: material.hex_tiled,
+        }),
     };
     Ok((ModelFacts::new(facts), material.warnings))
 }
@@ -202,6 +205,7 @@ mod tests {
             normal_scale: 1.0,
             emission: [0.0; 3],
             tile_size: None,
+            hex_tiled: false,
             warnings: Vec::new(),
         }
     }

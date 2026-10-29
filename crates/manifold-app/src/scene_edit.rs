@@ -653,10 +653,9 @@ pub(crate) fn set_field(
     }))
 }
 
-/// The material file a drop names: the `.mtlx` itself, or the one `.mtlx`
-/// in a dropped folder, as material downloads unpack. `None` when the drop
-/// holds no material file.
-pub(crate) fn dropped_material_file(
+/// The material file `path` names: the `.mtlx` itself, or the one `.mtlx` in
+/// a folder, as material downloads unpack. `None` when there is none.
+pub(crate) fn material_file_of(
     path: &std::path::Path,
 ) -> Option<Result<std::path::PathBuf, String>> {
     let is_materialx =
@@ -1567,13 +1566,13 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/materials");
         let file = materials.join("Bricks090/Bricks090_2K-JPG.mtlx");
         assert_eq!(
-            dropped_material_file(&materials.join("Bricks090")),
+            material_file_of(&materials.join("Bricks090")),
             Some(Ok(file.clone()))
         );
-        assert_eq!(dropped_material_file(&materials), None);
-        assert_eq!(dropped_material_file(&file), Some(Ok(file.clone())));
+        assert_eq!(material_file_of(&materials), None);
+        assert_eq!(material_file_of(&file), Some(Ok(file.clone())));
         assert_eq!(
-            dropped_material_file(&materials.join("Bricks090/Bricks090_2K-JPG_Color.jpg")),
+            material_file_of(&materials.join("Bricks090/Bricks090_2K-JPG_Color.jpg")),
             None
         );
     }
@@ -1623,9 +1622,10 @@ mod tests {
             1.0,
             "the picture carries the roughness"
         );
-        assert!(
-            row(&project, "break_repeats") > 0.0,
-            "its repeats start broken"
+        assert_eq!(
+            row(&project, "break_repeats"),
+            0.0,
+            "a brick file is not hex-tiled, so its rows stay whole"
         );
         assert_eq!(
             row(&project, "metallic"),

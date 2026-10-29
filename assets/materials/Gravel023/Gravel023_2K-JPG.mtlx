@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<materialx version="1.39" fileprefix="./">
+  <open_pbr_surface type="surfaceshader" ypos="-1.879310" xpos="6.159420" name="Gravel023_2K_JPG_OpenPbrSurface">
+    <input type="color3" nodename="Gravel023_2K_JPG_Color" name="base_color" />
+    <input type="vector3" nodename="NormalMap" name="geometry_normal" />
+    <input type="float" nodename="Gravel023_2K_JPG_Roughness" name="specular_roughness" />
+  </open_pbr_surface>
+  <surfacematerial type="material" ypos="0.000000" xpos="8.695652" name="Gravel023_2K_JPG">
+    <input type="surfaceshader" nodename="Gravel023_2K_JPG_OpenPbrSurface" name="surfaceshader" />
+    <input type="displacementshader" nodename="displacement" name="displacementshader" />
+  </surfacematerial>
+  <hextiledimage type="color3" ypos="-3.103448" xpos="3.623188" name="Gravel023_2K_JPG_Color">
+    <input value="Gravel023_2K-JPG_Color.jpg" type="filename" colorspace="srgb_texture" name="file" />
+    <input value="1.0, 1.0" type="vector2" name="tiling" />
+    <input name="realworldimagesize" type="vector2" value="1.5, 1.5" unit="meter" unittype="distance" />
+  </hextiledimage>
+  <tiledimage type="float" ypos="5.163793" xpos="3.623188" name="Gravel023_2K_JPG_Displacement">
+    <input value="Gravel023_2K-JPG_Displacement.jpg" type="filename" name="file" />
+    <input value="1.0, 1.0" type="vector2" name="uvtiling" />
+  </tiledimage>
+  <displacement type="displacementshader" ypos="1.879310" xpos="6.159420" name="displacement">
+    <input type="float" nodename="Gravel023_2K_JPG_Displacement" name="displacement" />
+    <input value="1.0" type="float" name="scale" />
+  </displacement>
+  <tiledimage type="vector3" ypos="0.879310" xpos="1.086957" name="Gravel023_2K_JPG_NormalGL">
+    <input value="Gravel023_2K-JPG_NormalGL.jpg" type="filename" name="file" />
+    <input value="1.0, 1.0" type="vector2" name="uvtiling" />
+  </tiledimage>
+  <normalmap type="vector3" ypos="3.586207" xpos="3.623188" name="NormalMap">
+    <input type="vector3" nodename="Gravel023_2K_JPG_NormalGL" name="in" />
+    <input value="1.0" type="float" name="scale" />
+  </normalmap>
+  <tiledimage type="float" ypos="-0.413793" xpos="3.623188" name="Gravel023_2K_JPG_Roughness">
+    <input value="Gravel023_2K-JPG_Roughness.jpg" type="filename" name="file" />
+    <input value="1.0, 1.0" type="vector2" name="uvtiling" />
+  </tiledimage>
+</materialx>

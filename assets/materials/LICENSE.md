@@ -1,0 +1,61 @@
+# Starter materials: licence
+
+Every material in this folder comes from [ambientCG](https://ambientcg.com)
+and is released under the
+[Creative Commons CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+licence. That covers the pictures, the `.mtlx` files and the preview renders.
+
+What CC0 allows, from ambientCG's licence page
+(<https://docs.ambientcg.com/license/>):
+
+- Copy, change, share and use the files for any purpose, commercial
+  included, without asking.
+- Ship the raw files inside an app, as MANIFOLD does here.
+- No credit is required. ambientCG asks for it as a courtesy, so we give it
+  below.
+
+Nothing here limits how MANIFOLD, its shows or its renders are used.
+
+## What we changed
+
+From each 2K-JPG download we kept the `.mtlx`, the pictures it names and the
+preview. We dropped the DirectX normal map, the ambient occlusion picture and
+the Blender, USD and Godot files. In each `.mtlx`, the colour picture gains a
+`realworldimagesize` (metres one repeat covers). For natural materials it
+becomes a `hextiledimage`, so they start with Break Repeats on. Sizes come
+from ambientCG where it lists one. Where it doesn't, we estimated from the
+picture (marked *est.* below).
+
+## Credits
+
+Created using the following materials from ambientCG.com, licensed under the
+Creative Commons CC0 1.0 Universal License.
+
+| Material | Size (m) | Repeats | Source |
+|---|---|---|---|
+| Bricks090 | 1.5 | kept | <https://ambientcg.com/a/Bricks090> |
+| Tiles141 | 2.0 | kept | <https://ambientcg.com/a/Tiles141> |
+| PavingStones128 | 3.5 | kept | <https://ambientcg.com/a/PavingStones128> |
+| WoodFloor051 | 1.8 | kept | <https://ambientcg.com/a/WoodFloor051> |
+| Wood051 | 0.8 | kept | <https://ambientcg.com/a/Wood051> |
+| MetalPlates006 | 2.0 *est.* | kept | <https://ambientcg.com/a/MetalPlates006> |
+| DiamondPlate009 | 1.0 *est.* | kept | <https://ambientcg.com/a/DiamondPlate009> |
+| Fabric061 | 0.4 | kept | <https://ambientcg.com/a/Fabric061> |
+| Rock064 | 2.0 *est.* | kept | <https://ambientcg.com/a/Rock064> |
+| Bark014 | 1.2 | kept | <https://ambientcg.com/a/Bark014> |
+| Concrete046 | 2.4 | broken | <https://ambientcg.com/a/Concrete046> |
+| Ground106 | 2.5 | broken | <https://ambientcg.com/a/Ground106> |
+| Grass004 | 1.4 | broken | <https://ambientcg.com/a/Grass004> |
+| Gravel023 | 1.5 | broken | <https://ambientcg.com/a/Gravel023> |
+| Asphalt033 | 2.5 | broken | <https://ambientcg.com/a/Asphalt033> |
+| ScatteredLeaves009 | 1.7 | broken | <https://ambientcg.com/a/ScatteredLeaves009> |
+| Moss002 | 1.0 *est.* | broken | <https://ambientcg.com/a/Moss002> |
+| Marble012 | 1.5 *est.* | broken | <https://ambientcg.com/a/Marble012> |
+| Plaster007 | 2.0 *est.* | broken | <https://ambientcg.com/a/Plaster007> |
+| Snow010A | 2.0 *est.* | broken | <https://ambientcg.com/a/Snow010A> |
+
+## Adding more
+
+Only add materials whose source states CC0 (ambientCG, Poly Haven). Add a row
+above for each one. Anything under another licence (CC-BY, store assets)
+needs its own terms checked and noted here before it ships.

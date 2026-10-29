@@ -66,6 +66,9 @@ pub struct Material {
     /// Metres one repeat of the base colour picture covers, from its
     /// `realworldimagesize`, when the file gives one.
     pub tile_size: Option<f32>,
+    /// Whether the base colour picture is a `hextiledimage`: the file asks
+    /// for its repeats to be broken up.
+    pub hex_tiled: bool,
     /// What the file asks for that this reader cannot honour, one plain line each.
     pub warnings: Vec<String>,
 }
@@ -212,6 +215,7 @@ struct Reader<'a, 'i> {
     warnings: Vec<String>,
     normal_scale: f32,
     tile_size: Option<f32>,
+    hex_tiled: bool,
     read: Vec<&'static str>,
 }
 
@@ -251,7 +255,7 @@ impl<'a, 'i> Reader<'a, 'i> {
     fn follow(&mut self, link: Node<'a, 'i>, slot: MapSlot) -> Result<(), String> {
         let node = self.target(link)?;
         match node.tag_name().name() {
-            "image" | "tiledimage" => self.image(node, slot),
+            "image" | "tiledimage" | "hextiledimage" => self.image(node, slot),
             "normalmap" => {
                 if slot == MapSlot::Normal
                     && let Some(s) = input_value(node, "scale")
@@ -315,8 +319,16 @@ impl<'a, 'i> Reader<'a, 'i> {
                 )),
             }
         }
-        if node.tag_name().name() == "tiledimage"
-            && let Some(t) = input_value(node, "uvtiling")
+        let tag = node.tag_name().name();
+        if slot == MapSlot::BaseColor && tag == "hextiledimage" {
+            self.hex_tiled = true;
+        }
+        let tiling = match tag {
+            "tiledimage" => input_value(node, "uvtiling"),
+            "hextiledimage" => input_value(node, "tiling"),
+            _ => None,
+        };
+        if let Some(t) = tiling
             && let [u, v, ..] = t[..]
             && (u != 1.0 || v != 1.0)
         {
@@ -416,6 +428,7 @@ pub fn parse(text: &str, folder: &Path) -> Result<Material, String> {
         warnings: Vec::new(),
         normal_scale: 1.0,
         tile_size: None,
+        hex_tiled: false,
         read: Vec::new(),
     };
 
@@ -532,6 +545,7 @@ pub fn parse(text: &str, folder: &Path) -> Result<Material, String> {
         normal_scale: r.normal_scale,
         emission,
         tile_size: r.tile_size,
+        hex_tiled: r.hex_tiled,
         maps: r.maps,
         warnings: r.warnings,
     })
@@ -714,5 +728,51 @@ mod tests {
     fn file_without_a_known_shader_is_an_error() {
         let text = r#"<materialx><constant name="c" type="float" /></materialx>"#;
         assert!(parse(text, Path::new("/lib")).is_err());
+    }
+
+    /// Every starter material reads whole: nothing dropped, colour, normal,
+    /// roughness and height pictures that are there, and a real-world size.
+    /// Some are hex-tiled and some keep their rows.
+    #[test]
+    fn every_starter_material_reads_whole() {
+        let library = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/materials");
+        let mut hex = [0, 0];
+        for folder in std::fs::read_dir(&library).unwrap() {
+            let folder = folder.unwrap().path();
+            if !folder.is_dir() {
+                continue;
+            }
+            let file = std::fs::read_dir(&folder)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .find(|p| is_materialx(&p.to_string_lossy()))
+                .unwrap_or_else(|| panic!("{} has a material file", folder.display()));
+            let m = read(&file).unwrap();
+            assert!(
+                m.warnings.is_empty(),
+                "{}: {:?}",
+                file.display(),
+                m.warnings
+            );
+            for slot in [
+                MapSlot::BaseColor,
+                MapSlot::Normal,
+                MapSlot::Roughness,
+                MapSlot::Height,
+            ] {
+                let map = m
+                    .map(slot)
+                    .unwrap_or_else(|| panic!("{}: {slot:?}", file.display()));
+                assert!(map.path.is_file(), "{} is there", map.path.display());
+            }
+            assert!(m.tile_size.is_some_and(|s| s > 0.1), "{}", file.display());
+            hex[usize::from(m.hex_tiled)] += 1;
+        }
+        assert!(
+            hex[0] > 0 && hex[1] > 0,
+            "rows kept {}, broken {}",
+            hex[0],
+            hex[1]
+        );
     }
 }

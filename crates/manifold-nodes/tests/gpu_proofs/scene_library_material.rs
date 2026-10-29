@@ -251,6 +251,44 @@ fn a_materialx_brick_material_draws_its_pictures() {
         let mut broken = mirror.to_vec();
         broken.push(("cube-material.break_repeats", 0.5));
         render(brick_doc(true), &broken, "brick_break_rt", 90);
+        // `SCENE_MATERIAL_LIBRARY=1` adds a still of every starter material
+        // at its file's size and repeats, as picking it starts them.
+        if std::env::var("SCENE_MATERIAL_LIBRARY").is_ok() {
+            let library = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/materials");
+            for folder in std::fs::read_dir(library).unwrap() {
+                let folder = folder.unwrap().path();
+                let Some(Ok(file)) = std::fs::read_dir(&folder).ok().and_then(|mut entries| {
+                    entries.find_map(|e| {
+                        let path = e.ok()?.path();
+                        (path.extension()? == "mtlx").then_some(Ok::<_, ()>(path))
+                    })
+                }) else {
+                    continue;
+                };
+                let m = manifold_core::materialx::read(&file).unwrap();
+                let doc = scene(
+                    TextureSource::Model {
+                        file: file.to_string_lossy().into_owned(),
+                        material: Some(0),
+                    },
+                    false,
+                );
+                let rows = [
+                    ("cube-material.mapping", 1.0),
+                    ("cube-material.tile_size", m.tile_size.unwrap()),
+                    (
+                        "cube-material.break_repeats",
+                        if m.hex_tiled { 0.5 } else { 0.0 },
+                    ),
+                ];
+                render(
+                    doc,
+                    &rows,
+                    &folder.file_name().unwrap().to_string_lossy(),
+                    4,
+                );
+            }
+        }
     }
     let plain = render(scene(TextureSource::None, false), &[], "plain", 4);
     let (brick, plain) = (face_spread(&brick), face_spread(&plain));
