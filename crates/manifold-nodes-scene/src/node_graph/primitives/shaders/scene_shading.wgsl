@@ -201,6 +201,9 @@ struct Uniforms {
     // Identity in Object space; the object's own transform in Group space.
     instance_inner: mat4x4<f32>,
     prev_instance_inner: mat4x4<f32>,
+    // x: metres the height picture (the normal map's alpha) carves a
+    // box-mapped surface, 0 for none (parallax in begin_box). yzw unused.
+    relief: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;

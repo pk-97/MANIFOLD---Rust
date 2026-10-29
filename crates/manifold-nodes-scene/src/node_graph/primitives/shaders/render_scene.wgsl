@@ -629,14 +629,93 @@ fn box_side(st: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, t: vec3<f32>, b: vec3<f
     return side;
 }
 
+// Side `a`'s texture coordinate of the box point `p`, the side facing where
+// `s` points along the object's x, y or z. Linear, so it maps screen
+// gradients of `p` the same way.
+fn box_side_st(p: vec3<f32>, s: vec3<f32>, a: u32) -> vec2<f32> {
+    if a == 0u {
+        return vec2<f32>(-s.x * p.z, -p.y);
+    }
+    if a == 1u {
+        return vec2<f32>(s.y * p.x, p.z);
+    }
+    return vec2<f32>(s.z * p.x, -p.y);
+}
+
+// Parallax: the height picture (the normal map's alpha, 1 at the surface)
+// carves the surface `u.relief.x` metres deep. The view ray `v` (box frame,
+// towards the eye) marches into the height on the strongest side's
+// strongest tile and stops where it meets it; the box point moves there, so
+// every map, side and tile reads the carved spot. Steps follow the shift in
+// pixels, and a shift under half a pixel returns at once.
+fn box_parallax(p: vec3<f32>, px: vec3<f32>, py: vec3<f32>, n: vec3<f32>, s: vec3<f32>, v: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
+    let vn = dot(v, n);
+    if vn < 0.05 {
+        return p;
+    }
+    let depth = u.relief.x * u.surface.z;
+    let reach = depth * length(v - n * vn) / vn;
+    let pixel_size = max(length(px), length(py));
+    if reach < 0.5 * pixel_size {
+        return p;
+    }
+    var a = 0u;
+    if box_weights.y > box_weights[a] {
+        a = 1u;
+    }
+    if box_weights.z > box_weights[a] {
+        a = 2u;
+    }
+    let st = box_side_st(p, s, a);
+    let dx = box_side_st(px, s, a);
+    let dy = box_side_st(py, s, a);
+    let tiles = box_side(st, dx, dy, vec3<f32>(0.0), vec3<f32>(0.0));
+    var k = 0u;
+    if tiles.blend.y > tiles.blend[k] {
+        k = 1u;
+    }
+    if tiles.blend.z > tiles.blend[k] {
+        k = 2u;
+    }
+    // The tile maps a side coordinate as turn(st) + shift.
+    let r = tiles.turn[k];
+    let shift = tiles.st[k] - box_turn(st, r);
+    let gx = box_turn(dx, r);
+    let gy = box_turn(dy, r);
+    let down = -v * (depth / vn);
+    let steps = clamp(ceil(reach / pixel_size), 4.0, 32.0);
+    // Interleaved gradient noise staggers the first step per pixel, so the
+    // steps leave grain rather than bands.
+    let stagger = fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
+    // gap = how far below the height the ray is; it starts at or above it.
+    var prev_d = 0.0;
+    var prev_gap = textureSampleGrad(normal_map, normal_sampler, tiles.st[k], gx, gy).a - 1.0;
+    var d = 0.0;
+    var gap = prev_gap;
+    for (var i = 0u; i < 33u; i++) {
+        d = min((f32(i) + stagger) / steps, 1.0);
+        let q = box_side_st(p + down * d, s, a);
+        gap = d + textureSampleGrad(normal_map, normal_sampler, box_turn(q, r) + shift, gx, gy).a - 1.0;
+        if gap >= 0.0 || d >= 1.0 {
+            break;
+        }
+        prev_d = d;
+        prev_gap = gap;
+    }
+    // The height crosses the ray between the last step above it and this one.
+    let span = gap - prev_gap;
+    let t = select(-prev_gap / span, 0.0, span <= 0.0);
+    return p + down * mix(prev_d, d, t);
+}
+
 // Set this fragment's box frame. Every fragment entry calls it first, in
 // uniform control flow, since it takes screen derivatives. The mip bias
 // scales the gradients as textureSampleBias would.
-fn begin_box(box_pos: vec3<f32>, box_normal: vec3<f32>, ax: vec3<f32>, ay: vec3<f32>, az: vec3<f32>) {
+fn begin_box(box_pos: vec3<f32>, box_normal: vec3<f32>, ax: vec3<f32>, ay: vec3<f32>, az: vec3<f32>, world_pos: vec3<f32>, pixel: vec2<f32>) {
     if u.surface.y < 0.5 {
         return;
     }
-    let p = box_pos * u.surface.z;
+    var p = box_pos * u.surface.z;
     let bias = exp2(u.render_mode.y);
     let px = dpdx(p) * bias;
     let py = dpdy(p) * bias;
@@ -646,27 +725,14 @@ fn begin_box(box_pos: vec3<f32>, box_normal: vec3<f32>, ax: vec3<f32>, ay: vec3<
     w = select(w, vec3<f32>(0.0), w < vec3<f32>(0.02));
     box_weights = w / (w.x + w.y + w.z);
     let s = select(vec3<f32>(-1.0), vec3<f32>(1.0), n >= vec3<f32>(0.0));
-    box_sides[0] = box_side(
-        vec2<f32>(-s.x * p.z, -p.y),
-        vec2<f32>(-s.x * px.z, -px.y),
-        vec2<f32>(-s.x * py.z, -py.y),
-        -s.x * az,
-        ay,
-    );
-    box_sides[1] = box_side(
-        vec2<f32>(s.y * p.x, p.z),
-        vec2<f32>(s.y * px.x, px.z),
-        vec2<f32>(s.y * py.x, py.z),
-        s.y * ax,
-        -az,
-    );
-    box_sides[2] = box_side(
-        vec2<f32>(s.z * p.x, -p.y),
-        vec2<f32>(s.z * px.x, -px.y),
-        vec2<f32>(s.z * py.x, -py.y),
-        s.z * ax,
-        ay,
-    );
+    if u.relief.x > 0.0 && u.texture_flags.x > 0.5 {
+        let view = normalize(u.camera_pos.xyz - world_pos);
+        let v = vec3<f32>(dot(view, ax), dot(view, ay), dot(view, az));
+        p = box_parallax(p, px, py, n, s, v, pixel);
+    }
+    box_sides[0] = box_side(box_side_st(p, s, 0u), box_side_st(px, s, 0u), box_side_st(py, s, 0u), -s.x * az, ay);
+    box_sides[1] = box_side(box_side_st(p, s, 1u), box_side_st(px, s, 1u), box_side_st(py, s, 1u), s.y * ax, -az);
+    box_sides[2] = box_side(box_side_st(p, s, 2u), box_side_st(px, s, 2u), box_side_st(py, s, 2u), s.z * ax, ay);
 }
 
 fn box_sample(tex: texture_2d<f32>, samp: sampler) -> vec4<f32> {
@@ -1127,7 +1193,7 @@ fn sand_grain(world_pos: vec3<f32>, n: vec3<f32>, albedo: vec3<f32>, roughness: 
 // light loop (matches render_3d_mesh.wgsl exactly).
 @fragment
 fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
-    begin_box(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z);
+    begin_box(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z, in.world_pos, in.clip_pos.xy);
     let albedo = resolve_albedo(in.uv, in.vertex_color);
     if appearance_discard(in.appearance_weight) {
         discard;
@@ -1152,7 +1218,7 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
 // and the only well-defined choice when light_count can be 0.
 @fragment
 fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
-    begin_box(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z);
+    begin_box(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z, in.world_pos, in.clip_pos.xy);
     if u.volume_optics.x > 0.5 {
         let nearest = textureLoad(volume_nearest, vec2<i32>(in.clip_pos.xy), 0);
         if in.clip_pos.z < nearest - max(nearest * 0.00001, 0.0000001) { discard; }
@@ -1184,7 +1250,14 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     }
     let wet = look_wet_surface(in.clip_pos.xy, grain.albedo, grain.roughness);
     albedo = vec4<f32>(wet.albedo, albedo.a);
-    let roughness = wet.roughness;
+    // Specular anti-aliasing (Kaplanyan 2016, with Filament's constants):
+    // normal detail finer than a pixel widens the highlight instead of
+    // sparkling.
+    let dn_x = dpdx(N);
+    let dn_y = dpdy(N);
+    let alpha = wet.roughness * wet.roughness;
+    let kernel = min(0.3 * (dot(dn_x, dn_x) + dot(dn_y, dn_y)), 0.2);
+    let roughness = sqrt(sqrt(clamp(alpha * alpha + kernel, 0.0, 1.0)));
     let metallic = mr.y;
     // (sheenColor.rgb, sheenRoughness). The default zero colour zeroes every
     // sheen term.
@@ -1317,7 +1390,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 // every wired light; ambient + emission added exactly once.
 @fragment
 fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
-    begin_box(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z);
+    begin_box(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z, in.world_pos, in.clip_pos.xy);
     let albedo = resolve_albedo(in.uv, in.vertex_color);
     if appearance_discard(in.appearance_weight) {
         discard;

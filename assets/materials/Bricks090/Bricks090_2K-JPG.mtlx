@@ -20,7 +20,7 @@
   </tiledimage>
   <displacement ypos="1.879310" xpos="6.159420" name="displacement" type="displacementshader">
     <input nodename="Bricks090_2K_JPG_Displacement" name="displacement" type="float" />
-    <input value="1.0" name="scale" type="float" />
+    <input name="scale" type="float" value="0.02" unit="meter" unittype="distance" />
   </displacement>
   <tiledimage ypos="0.879310" xpos="1.086957" name="Bricks090_2K_JPG_NormalGL" type="vector3">
     <input value="Bricks090_2K-JPG_NormalGL.jpg" name="file" type="filename" />

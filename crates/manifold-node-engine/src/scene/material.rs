@@ -214,6 +214,9 @@ pub struct Material {
     /// How strongly box-mapped textures are shifted and turned in random
     /// patches, 0 for none.
     pub break_repeats: f32,
+    /// Metres the height picture (the normal map's alpha) carves a
+    /// box-mapped surface, 0 for none: parallax.
+    pub depth: f32,
 
     // ---- Cel-specific. Inert when `kind != Cel`. ----
     /// Number of quantization bands `[2, 16]`.
@@ -397,6 +400,7 @@ impl Material {
             box_mapping: false,
             tile_size: 1.0,
             break_repeats: 0.0,
+            depth: 0.0,
             cel_bands: 4,
             band_low: 0.08,
             band_high: 1.0,

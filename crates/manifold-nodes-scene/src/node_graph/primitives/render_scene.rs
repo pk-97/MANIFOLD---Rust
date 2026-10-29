@@ -927,30 +927,14 @@ struct RenderSceneUniforms {
     instance_inner: [[f32; 4]; 4],
     /// Last frame's `instance_inner`, the velocity pair of `prev_model`.
     prev_instance_inner: [[f32; 4]; 4],
+    /// x: metres the height picture carves a box-mapped surface, 0 for
+    /// none (parallax in render_scene.wgsl's `begin_box`). yzw unused.
+    relief: [f32; 4],
 }
 
-// 800 = 50 × 16 → the naga 16-byte uniform-size rule holds. Was 480 before
-// `pbr_specular_tint` + five per-map
-// `*_uv_m`/`*_uv_t` pairs (+176 bytes, eleven new vec4s —
-// `ior`/`specular_factor` rode existing reserved slots on
-// `pbr_metallic_roughness` instead of growing the struct). Still 656 after
-// G-P5/D5: `clearcoat`/`clearcoat_roughness` rode `alpha_params`'s two
-// reserved slots — no struct growth. Was 736 after
-// Five new vec4s
-// (`sheen_params`/`iridescence_params`/`anisotropy_dispersion_params`/
-// `transmission_volume_params`/`volume_attenuation_color`, +80 bytes) —
-// ONE migration sized for all five families this doc's phases add, per
-// D2 (never grown again per-family). Now 752 after RAYTRACING_DESIGN.md section 9
-// RD9: `rt_flags` (+16) — an RT feature flag word, not a glTF family.
-// 768 after the velocity jitter-exclusion quad (D-64's MetalFX audit).
-// 784 after RAYTRACING_DESIGN.md section 16 TL7: diffuse_transmission_params
-// (+16 bytes, one new vec4).
-// 816 after SCENE_RENDER_MODE_DESIGN.md D8: `render_mode` (+16) — the
-// Points mode point-size slot, appended at the tail so every existing
-// field keeps its offset (appending is the byte-identical contract).
-// 848 after optional closed-volume optics and scattering colour (+32).
-// 976 after the instance-space pair `instance_inner`/`prev_instance_inner` (+128).
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 976);
+// A whole number of vec4s, naga's uniform-size rule. New fields append at the
+// tail so every existing offset holds.
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 992);
 
 /// Per-map sampling metadata. Core maps retain hardware anisotropic
 /// samplers; extension maps use these settings within Metal sampler limits.
@@ -2652,6 +2636,7 @@ fn build_uniforms(
         // Object space; frame setup writes the Group-space pair.
         instance_inner: IDENTITY_M4,
         prev_instance_inner: IDENTITY_M4,
+        relief: [material.depth, 0.0, 0.0, 0.0],
     }
 }
 

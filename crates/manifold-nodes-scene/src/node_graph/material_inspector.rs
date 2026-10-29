@@ -37,7 +37,7 @@ pub fn material_param_role(type_id: &str, param_name: &str) -> Option<MaterialPa
     let scalar_group = match param_name {
         "color_a" | "alpha_mode" | "alpha_cutoff" => Some(MaterialGroup::Opacity),
         "color_r" | "color_g" | "color_b" | "metallic" | "roughness" | "mapping"
-        | "tile_size" | "break_repeats" => Some(MaterialGroup::Surface),
+        | "tile_size" | "break_repeats" | "depth" => Some(MaterialGroup::Surface),
         "ambient" | "specular" | "baked_look" | "normal_scale" | "occlusion_strength" => {
             Some(MaterialGroup::Advanced)
         }

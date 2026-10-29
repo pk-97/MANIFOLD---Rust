@@ -20,7 +20,7 @@
   </tiledimage>
   <displacement xpos="6.159420" type="displacementshader" ypos="1.879310" name="displacement">
     <input type="float" nodename="Marble012_2K_JPG_Displacement" name="displacement" />
-    <input value="1.0" type="float" name="scale" />
+    <input name="scale" type="float" value="0.001" unit="meter" unittype="distance" />
   </displacement>
   <tiledimage xpos="1.086957" type="vector3" ypos="0.879310" name="Marble012_2K_JPG_NormalGL">
     <input value="Marble012_2K-JPG_NormalGL.jpg" type="filename" name="file" />

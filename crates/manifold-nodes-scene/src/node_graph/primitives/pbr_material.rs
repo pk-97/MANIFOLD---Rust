@@ -287,6 +287,14 @@ manifold_node_engine::primitive! {
             enum_values: &[],
         },
         ParamDef {
+            name: Cow::Borrowed("depth"),
+            label: "Depth (cm)",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 10.0)),
+            enum_values: &[],
+        },
+        ParamDef {
             name: Cow::Borrowed("emission_r"),
             label: "Emission R",
             ty: ParamType::Float,
@@ -1308,6 +1316,7 @@ impl Primitive for PbrMaterial {
         };
         let tile_size = ctx.scalar_or_param("tile_size", 1.0).clamp(0.05, 20.0);
         let break_repeats = ctx.scalar_or_param("break_repeats", 0.0).clamp(0.0, 1.0);
+        let depth = ctx.scalar_or_param("depth", 0.0).clamp(0.0, 10.0);
         let mut emission_r = ctx.scalar_or_param("emission_r", 0.0);
         let mut emission_g = ctx.scalar_or_param("emission_g", 0.0);
         let mut emission_b = ctx.scalar_or_param("emission_b", 0.0);
@@ -1870,6 +1879,7 @@ impl Primitive for PbrMaterial {
         material.box_mapping = box_mapping;
         material.tile_size = tile_size;
         material.break_repeats = break_repeats;
+        material.depth = depth * 0.01;
         material.clearcoat = clearcoat;
         material.clearcoat_roughness = clearcoat_roughness;
         material.sheen_color_factor = [sheen_color_r, sheen_color_g, sheen_color_b];

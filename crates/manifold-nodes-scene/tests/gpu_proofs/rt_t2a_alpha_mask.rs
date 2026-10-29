@@ -221,6 +221,7 @@ fn run_fixture_on(
     let material_attributes = RtMaterialAttributes {
         uv1_offset: UV1_OFFSET,
         color_offset: COLOR_OFFSET,
+        box_mapping: [0.0; 2],
         sampling: [
             [uv_set, wrap[0], wrap[1], u32::from(linear)],
             [0, 1, 1, 1],

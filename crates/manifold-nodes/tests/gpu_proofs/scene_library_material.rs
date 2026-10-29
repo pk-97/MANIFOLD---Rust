@@ -280,13 +280,17 @@ fn a_materialx_brick_material_draws_its_pictures() {
                         "cube-material.break_repeats",
                         if m.hex_tiled { 0.5 } else { 0.0 },
                     ),
+                    ("cube-material.depth", m.depth.unwrap() * 100.0),
                 ];
-                render(
-                    doc,
-                    &rows,
-                    &folder.file_name().unwrap().to_string_lossy(),
-                    4,
-                );
+                let name = folder.file_name().unwrap().to_string_lossy().into_owned();
+                render(doc.clone(), &rows, &name, 4);
+                // Close up, with the parallax and without it.
+                let close = [("camera.distance", 3.5), ("camera.tilt", 0.2)];
+                let carved: Vec<_> = rows.iter().chain(&close).copied().collect();
+                render(doc.clone(), &carved, &format!("{name}_close"), 4);
+                let mut flat = carved.clone();
+                flat.push(("cube-material.depth", 0.0));
+                render(doc, &flat, &format!("{name}_close_flat"), 4);
             }
         }
     }

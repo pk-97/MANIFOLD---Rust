@@ -20,7 +20,7 @@
   </tiledimage>
   <displacement type="displacementshader" ypos="1.879310" xpos="6.159420" name="displacement">
     <input type="float" nodename="Gravel023_2K_JPG_Displacement" name="displacement" />
-    <input value="1.0" type="float" name="scale" />
+    <input name="scale" type="float" value="0.03" unit="meter" unittype="distance" />
   </displacement>
   <tiledimage type="vector3" ypos="0.879310" xpos="1.086957" name="Gravel023_2K_JPG_NormalGL">
     <input value="Gravel023_2K-JPG_NormalGL.jpg" type="filename" name="file" />

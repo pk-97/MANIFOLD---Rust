@@ -41,6 +41,7 @@ pub(crate) fn emit(
     if let Some(tiles) = model.tiles {
         b.set_number(surface, "mapping", 1.0);
         b.set_number(surface, "tile_size", tiles.size);
+        b.set_number(surface, "depth", tiles.depth * 100.0);
         if tiles.hex {
             b.set_number(surface, "break_repeats", TILE_BREAK_REPEATS);
         }

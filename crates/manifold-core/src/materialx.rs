@@ -69,6 +69,10 @@ pub struct Material {
     /// Whether the base colour picture is a `hextiledimage`: the file asks
     /// for its repeats to be broken up.
     pub hex_tiled: bool,
+    /// Metres the height picture's full range spans, from the displacement's
+    /// `scale` when it carries a distance unit. A unitless scale is no real
+    /// depth, so the reader leaves it out.
+    pub depth: Option<f32>,
     /// What the file asks for that this reader cannot honour, one plain line each.
     pub warnings: Vec<String>,
 }
@@ -510,12 +514,30 @@ pub fn parse(text: &str, folder: &Path) -> Result<Material, String> {
         }
         _ => 1.0,
     };
+    let mut depth = None;
     if let Some(d) = displacement {
         let node = r.target(d)?;
         if is_tag(&node, "displacement")
             && let Some(inp) = input(node, "displacement").filter(is_connected)
         {
             r.follow(inp, MapSlot::Height)?;
+            if let Some(scale) = input(node, "scale")
+                && let Some(unit) = scale.attribute("unit")
+                && let Some(&value) = scale
+                    .attribute("value")
+                    .map(floats)
+                    .as_deref()
+                    .and_then(<[f32]>::first)
+            {
+                match unit {
+                    "meter" => depth = Some(value),
+                    "centimeter" => depth = Some(value * 0.01),
+                    "millimeter" => depth = Some(value * 0.001),
+                    unit => r
+                        .warnings
+                        .push(format!("the height's depth is in {unit}, which isn't read")),
+                }
+            }
         }
     }
     for inp in shader.children().filter(|c| is_tag(c, "input")) {
@@ -546,6 +568,7 @@ pub fn parse(text: &str, folder: &Path) -> Result<Material, String> {
         emission,
         tile_size: r.tile_size,
         hex_tiled: r.hex_tiled,
+        depth,
         maps: r.maps,
         warnings: r.warnings,
     })
@@ -731,7 +754,8 @@ mod tests {
     }
 
     /// Every starter material reads whole: nothing dropped, colour, normal,
-    /// roughness and height pictures that are there, and a real-world size.
+    /// roughness and height pictures that are there, a real-world size and
+    /// a real depth.
     /// Some are hex-tiled and some keep their rows.
     #[test]
     fn every_starter_material_reads_whole() {
@@ -766,6 +790,11 @@ mod tests {
                 assert!(map.path.is_file(), "{} is there", map.path.display());
             }
             assert!(m.tile_size.is_some_and(|s| s > 0.1), "{}", file.display());
+            assert!(
+                m.depth.is_some_and(|d| d > 0.0 && d < 0.1),
+                "{}",
+                file.display()
+            );
             hex[usize::from(m.hex_tiled)] += 1;
         }
         assert!(

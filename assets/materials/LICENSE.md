@@ -22,7 +22,9 @@ From each 2K-JPG download we kept the `.mtlx`, the pictures it names and the
 preview. We dropped the DirectX normal map, the ambient occlusion picture and
 the Blender, USD and Godot files. In each `.mtlx`, the colour picture gains a
 `realworldimagesize` (metres one repeat covers). For natural materials it
-becomes a `hextiledimage`, so they start with Break Repeats on. Sizes come
+becomes a `hextiledimage`, so they start with Break Repeats on. The
+displacement's `scale` gains a real depth in metres, which parallax carves
+the surface by (our estimate of each material's relief). Sizes come
 from ambientCG where it lists one. Where it doesn't, we estimated from the
 picture (marked *est.* below).
 

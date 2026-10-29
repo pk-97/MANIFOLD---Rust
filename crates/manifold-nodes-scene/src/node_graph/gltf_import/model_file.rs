@@ -109,6 +109,9 @@ pub(crate) struct Tiles {
     pub size: f32,
     /// The file hex-tiles its colour picture, so its repeats start broken.
     pub hex: bool,
+    /// Metres the height picture carves the surface, 0 with no height
+    /// picture.
+    pub depth: f32,
 }
 
 impl ModelFile {

@@ -83,8 +83,16 @@ pub(crate) fn textures(material: &Material) -> (Vec<StackedTexture>, GltfMateria
         });
     }
 
-    if let Some(normal) = picture(MapSlot::Normal) {
-        info.normal_texture = add(StackedTexture::whole(normal));
+    // The height picture rides in the normal map's alpha, so parallax reads
+    // both from one texture; with no normal picture it sits under a flat one.
+    let normal = picture(MapSlot::Normal);
+    let height = picture(MapSlot::Height);
+    if normal.is_some() || height.is_some() {
+        info.normal_texture = add(StackedTexture {
+            whole: normal,
+            fill: [128, 128, 255, 255],
+            channels: height.into_iter().map(|path| (path, 3)).collect(),
+        });
         info.normal_scale = material.normal_scale;
     }
 
@@ -162,6 +170,13 @@ pub(crate) fn read_facts(path: &Path) -> Result<(ModelFacts, Vec<String>), Strin
         tiles: Some(Tiles {
             size: material.tile_size.unwrap_or(1.0),
             hex: material.hex_tiled,
+            // A height picture with no real depth in the file starts 2 cm
+            // deep, a typical relief for walls and ground.
+            depth: if material.map(MapSlot::Height).is_some() {
+                material.depth.unwrap_or(0.02)
+            } else {
+                0.0
+            },
         }),
     };
     Ok((ModelFacts::new(facts), material.warnings))
@@ -206,6 +221,7 @@ mod tests {
             emission: [0.0; 3],
             tile_size: None,
             hex_tiled: false,
+            depth: None,
             warnings: Vec::new(),
         }
     }
