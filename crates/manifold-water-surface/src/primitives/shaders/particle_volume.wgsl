@@ -24,14 +24,16 @@
 // surface and `film_half` along its normal, so the film's discs blend into
 // one flat sheet `film_half` high with the rest of the water's look, where
 // their own ellipsoids would leave holes and bumps. A node that gathers less
-// than PV_MIN_WEIGHT reads its distance to the nearest blob whose box visits
-// it, (|q| - r) / g for that blob alone, at most 3 * blob_reach: the blend
+// than PV_MIN_WEIGHT reads its distance to the nearest blob that visits it,
+// (|q| - r) / g for that blob alone, at most 3 * blob_reach: the blend
 // reaches only half a short axis past a flattened blob's surface, often less
 // than a node, and a far value there would pull every surface crossing
 // toward the node below it, a step at every layer of nodes on a gentle
-// slope. A blob visits the nodes of its
-// inclusive floor(c - R')..floor(c + R')+1 grid box, R' = R times its
-// weight's reach (shape_diagonal.w).
+// slope. A blob visits, in each row along x of its inclusive
+// floor(c - R')..floor(c + R')+1 grid box (R' = R times its weight's reach,
+// shape_diagonal.w), the nodes its weight reaches and those one step along
+// an axis past it: the nodes a surface crossing next to the weight reads.
+// The rest of the box is past every crossing the blob takes part in.
 //
 // The same blend gives each node how much the field smoothing moves it and
 // the water's velocity there: `weights` fades the weighted mean of the
@@ -358,9 +360,35 @@ fn cs_main(
             // neighbours, where the smoothing's weight is full.
             let count = mix(counts[b], params.fade_end, film) * PV_FIXED_COUNT;
             let moving = sorted[b].velocity * PV_FIXED_VELOCITY;
+            // Each row visits only its nodes within one step along an axis
+            // of the weight (|A y| < blend / size, widened by the longest of
+            // h A e_x, h A e_y, h A e_z): the nodes a surface crossing next
+            // to the weight reads. Along x, A y = q0 - nx h A e_x, so the
+            // span solves a quadratic.
+            let step_q = h * vec3<f32>(diag.x, off.x, off.y);
+            let stretch = sqrt(max(
+                dot(step_q, step_q),
+                max(
+                    dot(vec3<f32>(off.x, diag.y, off.z), vec3<f32>(off.x, diag.y, off.z)),
+                    dot(vec3<f32>(off.y, off.z, diag.z), vec3<f32>(off.y, off.z, diag.z)),
+                ) * h * h,
+            ));
+            let shell = blend / max(size, 1.0e-6) + stretch;
+            let aa = dot(step_q, step_q);
             for (var nz = lo_node.z; nz <= hi_node.z; nz = nz + 1) {
                 for (var ny = lo_node.y; ny <= hi_node.y; ny = ny + 1) {
-                    for (var nx = lo_node.x; nx <= hi_node.x; nx = nx + 1) {
+                    let q0 = pv_apply(diag, off, centre - (vec3<f32>(0.0, f32(ny), f32(nz)) - vec3<f32>(0.5)) * h);
+                    let bb = -2.0 * dot(q0, step_q);
+                    let cc = dot(q0, q0) - shell * shell;
+                    let disc = bb * bb - 4.0 * aa * cc;
+                    if disc < 0.0 {
+                        continue;
+                    }
+                    let mid = -bb / (2.0 * aa);
+                    let half_span = sqrt(disc) / (2.0 * aa);
+                    let x_lo = max(lo_node.x, i32(floor(mid - half_span)));
+                    let x_hi = min(hi_node.x, i32(ceil(mid + half_span)));
+                    for (var nx = x_lo; nx <= x_hi; nx = nx + 1) {
                         let node = vec3<i32>(nx, ny, nz);
                         let p = (vec3<f32>(node) - vec3<f32>(0.5)) * h;
                         let q = pv_apply(diag, off, centre - p);

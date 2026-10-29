@@ -106,20 +106,32 @@ struct Level {
 }
 
 /// Whether a round blob centred at `c` with weight radius `blend` visits
-/// world node `node`: the shader's grid box, floor((c - R)/H + 1/2) through
-/// floor((c + R)/H + 1/2) + 1 on each axis.
+/// world node `node`: in the shader's grid box, floor((c - R)/H + 1/2)
+/// through floor((c + R)/H + 1/2) + 1 on each axis, the row's nodes within
+/// blend + H of the centre, the span rounded out to whole nodes.
 fn visits(c: [f32; 3], blend: f32, node: [i32; 3]) -> bool {
-    (0..3).all(|a| {
+    let in_box = (0..3).all(|a| {
         let first = ((c[a] - blend) / H + 0.5).floor() as i32;
         let last = ((c[a] + blend) / H + 0.5).floor() as i32 + 1;
         (first..=last).contains(&node[a])
-    })
+    });
+    let p = |a: usize| (f64::from(node[a]) - 0.5) * f64::from(H);
+    let shell = f64::from(blend) + f64::from(H);
+    let rest = shell * shell
+        - (f64::from(c[1]) - p(1)).powi(2)
+        - (f64::from(c[2]) - p(2)).powi(2);
+    if !in_box || rest < 0.0 {
+        return false;
+    }
+    let mid = (f64::from(c[0]) + 0.5 * f64::from(H)) / f64::from(H);
+    let half = rest.sqrt() / f64::from(H);
+    ((mid - half).floor() as i32..=(mid + half).ceil() as i32).contains(&node[0])
 }
 
 /// The blended-sphere rule at world node `node` over every blob, R half the
 /// band, and inside the solid at least the node's depth in it. A node no
-/// blob's weight reaches reads its distance to the nearest round blob whose
-/// box visits it, at most the band.
+/// blob's weight reaches reads its distance to the nearest round blob that
+/// visits it, at most the band.
 fn dense_level(blobs: &[[f32; 4]], node: [i32; 3], band: f32, solid: f32) -> Level {
     let p: [f64; 3] = std::array::from_fn(|a| (f64::from(node[a]) - 0.5) * f64::from(H));
     let blend = 0.5 * f64::from(band);
