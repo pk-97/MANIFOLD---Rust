@@ -610,6 +610,7 @@ pub struct Pipelines {
     /// The kernels that write the solid field, built with the solids only.
     solids_static: Option<GpuComputePipeline>,
     solids: Option<GpuComputePipeline>,
+    fill_solids: Option<GpuComputePipeline>,
 }
 
 impl Pipelines {
@@ -633,6 +634,7 @@ impl Pipelines {
             clear: make("cs_clear"),
             solids_static: solids.then(|| make("cs_solids_static")),
             solids: solids.then(|| make("cs_solids")),
+            fill_solids: solids.then(|| make("cs_fill_solids")),
         }
     }
 }
@@ -1373,6 +1375,9 @@ impl GasVolume {
                 face_groups,
                 "node.gas_volume.project",
             );
+            if let Some(fill) = &pipelines.fill_solids {
+                pass(enc, fill, &working, groups, "node.gas_volume.fill_solids");
+            }
             last = b;
             self.sim_time += f64::from(step.dt);
         }
@@ -1605,6 +1610,7 @@ mod tests {
                 "cs_clear",
                 "cs_solids_static",
                 "cs_solids",
+                "cs_fill_solids",
             ] {
                 assert!(
                     module.entry_points.iter().any(|point| point.name == entry),

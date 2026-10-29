@@ -24,6 +24,11 @@
 // Planck radiator colours: rgb at luminance 1, w luminance relative to 1500 K.
 @group(0) @binding(85) var<storage, read> blackbody_table: array<vec4<f32>>;
 @group(0) @binding(86) var opaque_depth: texture_depth_2d;
+// Gas pressed against a solid looks the sun's shadow map up this many cells
+// toward the sun: on the solid's own surface the depth test flickers between
+// lit and shadowed and stripes the gas (shadow acne), and the shadow map's
+// depth bias is sized for surfaces, not for a point in the air beside one.
+const SHADOW_LIFT_CELLS: f32 = 2.0;
 // Tileable gradient noise, one octave, 0 to 1.
 @group(0) @binding(87) var detail_noise_tex: texture_3d<f32>;
 @group(0) @binding(88) var detail_sampler: sampler;
@@ -334,7 +339,7 @@ fn fs_gas(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
             if has_sun {
                 var visibility = 1.0;
                 if scene_shadows {
-                    visibility = scene_sun_visibility(p);
+                    visibility = scene_sun_visibility(p + sun_dir * (SHADOW_LIFT_CELLS * cell));
                 }
                 var falloff = exp(-optical.x);
                 var weight = 1.0;

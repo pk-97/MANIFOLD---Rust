@@ -1135,6 +1135,42 @@ fn cs_project(@builtin(global_invocation_id) gid: vec3<u32>) {
     vel_a[f] = v;
 }
 
+// ---- Solid fill (on R, with solids) --------------------------------------------
+
+// Each solid cell takes the mean gas of its open neighbours, so the next
+// advection reads the face's own gas at a face, not the solid's zero (which
+// left a clear layer against every face and striped it). Only solid cells
+// are written and only open ones read, so the pass is race free; the
+// renderer stops at the solid's surface, so the fill never shows.
+@compute @workgroup_size(4, 4, 4)
+fn cs_fill_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !inside(gid) {
+        return;
+    }
+    let i = cell_index(gid);
+    if !is_solid(i) {
+        return;
+    }
+    let c = vec3<i32>(gid);
+    var sum = vec4<f32>(0.0);
+    var count = 0.0;
+    for (var axis = 0u; axis < 3u; axis++) {
+        for (var side = -1; side <= 1; side += 2) {
+            var n = c;
+            n[axis] += side;
+            if any(n < vec3<i32>(0)) || any(n >= vec3<i32>(params.dims)) {
+                continue;
+            }
+            let j = cell_index(vec3<u32>(n));
+            if !is_solid(j) {
+                sum += state_a[j];
+                count += 1.0;
+            }
+        }
+    }
+    state_a[i] = sum / max(count, 1.0);
+}
+
 // ---- Publishing (on R) --------------------------------------------------------
 
 fn pack_half(a: f32, b: f32) -> u32 {
