@@ -97,6 +97,24 @@ impl Transform {
         self.world_with_rotation(self.rot_euler)
     }
 
+    /// The axis-aligned box this transform places in the world, for the
+    /// solvers that take no rotation: its centre carried through the parent
+    /// frame, each world side the extent of the box as the frame turns and
+    /// scales it, and no parent. A quarter turn swaps the sides.
+    pub fn world_box(self) -> Transform {
+        let parent = self.parent;
+        Transform {
+            pos: transform_point(&parent, self.pos),
+            scale: std::array::from_fn(|world| {
+                (0..3)
+                    .map(|local| parent[local][world].abs() * self.scale[local])
+                    .sum()
+            }),
+            parent: Transform::default().parent,
+            ..self
+        }
+    }
+
     /// [`Self::world`] with `rot_euler` in place of the stored rotation: a
     /// billboard's rotation is known only once the camera is.
     pub fn world_with_rotation(&self, rot_euler: [f32; 3]) -> Mat4 {
@@ -199,6 +217,55 @@ impl From<manifold_core::fluid_domain::DomainBox> for Transform {
 
 #[cfg(test)]
 mod tests {
+    use super::Transform;
+
+    /// Under a group turned a quarter turn about Y with scale (2, 1, 3), a
+    /// box 4 x 1 x 1 has its local X along world Z: 8 deep and 3 wide.
+    #[test]
+    fn a_quarter_turned_group_swaps_the_box_sides() {
+        let (s, c) = std::f32::consts::FRAC_PI_2.sin_cos();
+        // Column-major: local X maps to world -Z, local Z to world X.
+        let parent = [
+            [2.0 * c, 0.0, -2.0 * s, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [3.0 * s, 0.0, 3.0 * c, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let world = Transform {
+            scale: [4.0, 1.0, 1.0],
+            parent,
+            ..Transform::default()
+        }
+        .world_box();
+        let expected = [3.0, 1.0, 8.0];
+        assert!(
+            (0..3).all(|axis| (world.scale[axis] - expected[axis]).abs() < 1e-5),
+            "{:?}",
+            world.scale
+        );
+    }
+
+    #[test]
+    fn the_box_follows_its_parent_frame() {
+        // A parent that doubles everything and moves it 10 m along x.
+        let parent = [
+            [2.0, 0.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0, 0.0],
+            [0.0, 0.0, 2.0, 0.0],
+            [10.0, 0.0, 0.0, 1.0],
+        ];
+        let world = Transform {
+            pos: [1.0, 0.0, 0.0],
+            scale: [2.0, 1.0, 3.0],
+            parent,
+            ..Transform::default()
+        }
+        .world_box();
+        assert_eq!(world.pos, [12.0, 0.0, 0.0]);
+        assert_eq!(world.scale, [4.0, 2.0, 6.0]);
+        assert_eq!(world.parent, Transform::default().parent);
+    }
+
     /// Numerically verifies [`quat_to_render_scene_euler`]'s derivation:
     /// composing the returned Euler triple through the SAME `Rz*Ry_used*Rx`
     /// formula `render_scene::model_matrix` uses must reproduce the

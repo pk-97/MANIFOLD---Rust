@@ -20,7 +20,7 @@ use manifold_node_engine::primitive::{Primitive, PrimitiveSpec};
 use manifold_node_engine::scene::blackbody::{
     BLACKBODY_ENTRIES, BLACKBODY_MAX_KELVIN, BLACKBODY_MIN_KELVIN, blackbody_table,
 };
-use manifold_node_engine::scene::transform::{Transform, transform_point};
+use manifold_node_engine::scene::transform::Transform;
 
 /// Most cells along one axis of the box.
 const MAX_AXIS_CELLS: u32 = 512;
@@ -122,19 +122,6 @@ impl GasGeometry {
     }
 }
 
-/// The box a Transform places: its centre carried through the parent frame,
-/// each world side the extent of the box as the frame turns and scales it. The
-/// box stays axis-aligned: the solver takes no rotation.
-fn world_box(domain: Transform) -> ([f32; 3], [f32; 3]) {
-    let centre = transform_point(&domain.parent, domain.pos);
-    let size = std::array::from_fn(|world| {
-        (0..3)
-            .map(|local| domain.parent[local][world].abs() * domain.scale[local])
-            .sum::<f32>()
-    });
-    (centre, size)
-}
-
 /// The grid from the node's wires and params (`read` is `scalar_or_param`):
 /// dims = ceil(size / h) per axis, at least [`MIN_AXIS_CELLS`], from an origin
 /// on whole cells of h at or below the box's corner. The node and the extent
@@ -151,7 +138,8 @@ fn gas_geometry(
         ));
     }
     let domain = domain.ok_or("Gas Volume: wire a domain Transform, the box the gas fills")?;
-    let (centre, size) = world_box(domain);
+    let world = domain.world_box();
+    let (centre, size) = (world.pos, world.scale);
     if !centre.iter().all(|v| v.is_finite()) || !size.iter().all(|&s| s.is_finite() && s > 0.0) {
         return Err(format!(
             "Gas Volume: the domain box must be finite with every side above 0, got {size:?} m at {centre:?}"
@@ -1157,25 +1145,6 @@ mod tests {
         }
         let flat = read_with(boxed([0.0; 3], [1.0, 0.0, 1.0]), 0.0625).unwrap_err();
         assert!(flat.contains("above 0"), "{flat}");
-    }
-
-    #[test]
-    fn the_box_follows_its_parent_frame() {
-        // A parent that doubles everything and moves it 10 m along x.
-        let parent = [
-            [2.0, 0.0, 0.0, 0.0],
-            [0.0, 2.0, 0.0, 0.0],
-            [0.0, 0.0, 2.0, 0.0],
-            [10.0, 0.0, 0.0, 1.0],
-        ];
-        let (centre, size) = world_box(Transform {
-            pos: [1.0, 0.0, 0.0],
-            scale: [2.0, 1.0, 3.0],
-            parent,
-            ..Transform::default()
-        });
-        assert_eq!(centre, [12.0, 0.0, 0.0]);
-        assert_eq!(size, [4.0, 2.0, 6.0]);
     }
 
     #[test]

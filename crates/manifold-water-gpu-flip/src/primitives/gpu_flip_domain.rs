@@ -244,7 +244,7 @@ pub fn gpu_flip_geometry(
     let bounds = read("bounds", 1.0) != 0.0;
     let cell_size = read("cell_metres", DEFAULT_CELL_SIZE);
     let domain_size = read("domain_size", 4.0);
-    let world = domain.map(manifold_water_liquid::world_pose::world_domain_box);
+    let world = domain.map(Transform::world_box);
     let seed = match bounds {
         true => world.map(Into::into),
         false => Some(unbounded_seed(
