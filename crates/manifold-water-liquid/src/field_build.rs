@@ -5,7 +5,7 @@
 //! Break at 64 and 128 (GPU_FLIP_END_GAME_DESIGN.md D2, "The field build,
 //! settled by prototype").
 
-/// [1 2 1] smoothing steps per axis (D2 step 3).
+/// Field smoothing steps (D2 step 3), each a mean along the surface.
 pub const FIELD_SMOOTH_STEPS: u32 = 3;
 
 /// How far smoothing may move the field from the particles' splat, in
@@ -17,8 +17,8 @@ pub const FIELD_LEASH_CELLS: f32 = 0.5;
 /// `FIELD_LEASH_CELLS`.
 pub const FIELD_SMOOTHNESS_MAX: f32 = 2.0;
 
-/// The field's band in cells: the smoothing's reach (one cell per [1 2 1]
-/// step) plus the leash, rounded up, so every node smoothing can move lies
+/// The field's band in cells: the smoothing's reach (about a cell per step,
+/// its ring's radius) plus the leash, rounded up, so every node smoothing can move lies
 /// inside it. The weights, the leash and the carry into solids work within
 /// it. The leash term is the largest leash the Smoothness slider reaches.
 pub const FIELD_BAND_CELLS: f32 =

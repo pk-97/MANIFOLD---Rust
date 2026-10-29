@@ -932,10 +932,12 @@ defaults. **Built (2026-09-30).**
   atom smooths an `Array(f32)` lattice. `node.blur_3d_separable` is `Texture3D`-only
   (D8), `node.neighbor_smooth` works on instance arrays, the rest are 2D. New.
 - **Atom.** `node.field_smooth_blend`: one smoothing step, one workgroup per tile. It
-  stages the tile and its halo, applies [1, 2, 1] / 4 along x, y and z in workgroup
-  memory (then again a simulation cell apart above stride 1), and takes out the part of
-  that smoothing across the surface, so the surface flattens along itself as surface
-  tension flattens it, without thinning sheets. Thin and lone water (low weight) moves
+  stages the tile and its halo and moves each node toward the mean of the field on a
+  ring of six points square to the normal (the ring's radius grows with the stride), so
+  the surface flattens along itself as surface tension flattens it, without thinning
+  sheets. Every weight is positive, so a step never makes a bump. In a sheet's or gap's
+  middle, where the gradient is under half, the normal is the direction the field bends
+  most, so the ring lies along the sheet. Thin and lone water (low weight) moves
   half as far; a sheet's middle never rises past half way to the surface; the result is
   held within a leash of the splat. The Liquid Surface group chains three steps after
   the volume. A tap in a tile the table does not hold reads the far value.

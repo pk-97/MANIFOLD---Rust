@@ -1,10 +1,10 @@
 //! `node.field_smooth_blend`: one step of the water field build's smoothing
-//! over the nodes of a world-tile pool. A step smooths the field with the
-//! [1 2 1] / 4 filter along x, y and z (and again a simulation cell apart
-//! when the display is finer), eases the result back toward the field by the
-//! node's weight and holds it within a leash of the reference.
-//! One workgroup per tile slot stages the tile and one node round it
-//! (`shaders/field_smooth_blend.wgsl`).
+//! over the nodes of a world-tile pool. A step moves each node toward the
+//! mean of the field along the surface through it (the node and a ring of
+//! six points square to the normal, all weights positive, so it can only
+//! flatten), eases that by the node's weight and holds it within a leash of
+//! the reference. One workgroup per tile slot stages the tile and stride + 1
+//! nodes round it (`shaders/field_smooth_blend.wgsl`).
 use crate::field_build::{
     FIELD_BAND_CELLS, FIELD_SMOOTHNESS_MAX, MAX_DISPLAY_STRIDE, display_stride,
 };
@@ -17,23 +17,15 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
 use std::borrow::Cow;
 
-/// The kernel after the world-tile read side, its workgroup arrays sized for
-/// `stride`: the staged region of side 8 + 2 · halo, and that less its two
-/// end columns.
+/// The kernel after the world-tile read side, its staged region (side 8 + 2
+/// · (stride + 1)) sized for `stride`.
 fn body(stride: u32) -> String {
-    let halo = if stride == 1 { 1 } else { stride + 1 };
-    let side = 8 + 2 * halo;
-    let source = include_str!("shaders/field_smooth_blend.wgsl")
-        .replacen(
-            "const FS_A_LEN: u32 = 4096u;",
-            &format!("const FS_A_LEN: u32 = {}u;", side * side * side),
-            1,
-        )
-        .replacen(
-            "const FS_B_LEN: u32 = 3584u;",
-            &format!("const FS_B_LEN: u32 = {}u;", (side - 2) * side * side),
-            1,
-        );
+    let side = 8 + 2 * (stride + 1);
+    let source = include_str!("shaders/field_smooth_blend.wgsl").replacen(
+        "const FS_A_LEN: u32 = 4096u;",
+        &format!("const FS_A_LEN: u32 = {}u;", side * side * side),
+        1,
+    );
     format!("{READ_SIDE}\n{source}")
 }
 
@@ -54,7 +46,7 @@ struct Uniforms {
 manifold_node_engine::primitive! {
     name: FieldSmoothBlend,
     type_id: "node.field_smooth_blend",
-    purpose: "One step of the water field's smoothing, per node of a world-tile pool: prior smoothed with the [1, 2, 1] / 4 filter along x, then y, then z, blended back toward prior by the node's weight and held within a leash of the reference. Node arrays on the world tiles of a pool, one element per pooled node, all read at the same pool index. cell_size is one lattice cell in metres and sim_cell_size the simulation's cell, a whole number (1 to 3) of lattice cells: above 1, each axis filter is followed by the same filter between nodes a simulation cell apart, so the smoothing reaches as far at every Surface Detail. Where |reference| is at least band_cells simulation cells the prior passes through unchanged. Elsewhere the output is prior + weight · (smoothed - prior), clamped to reference ± smoothness × FIELD_LEASH_CELLS (half a simulation cell). A node in a tile the table does not hold reads prior's canonical element, and each filter pass leaves it at the far value, 3 cells. The canonical element and free slots hold the far value.",
+    purpose: "One step of the water field's smoothing, per node of a world-tile pool: prior moved toward its mean along the surface through the node (the node at 1/4 and six trilinear samples at 1/8 each on a ring square to the normal, from central differences a simulation cell apart or, where that gradient is under half (a sheet's or a gap's middle), the direction the field bends most; every weight positive, so a step only flattens and a flat surface stays put), by the node's weight, and held within a leash of the reference. Node arrays on the world tiles of a pool, one element per pooled node, all read at the same pool index. cell_size is one lattice cell in metres and sim_cell_size the simulation's cell, a whole number (1 to 3) of lattice cells; the ring's radius grows with it, so the smoothing reaches as far at every Surface Detail. Where |reference| is at least band_cells simulation cells the prior passes through unchanged. Elsewhere the output is prior + mix(1/2, 1, weight) · (mean - prior), clamped to reference ± mix(1, 2, weight) · smoothness × FIELD_LEASH_CELLS (half a simulation cell). A node in a tile the table does not hold reads prior's canonical element. The canonical element and free slots hold the far value, 3 cells.",
     inputs: {
         prior: Array(f32) required,
         weights: Array(f32) required,
@@ -217,7 +209,7 @@ mod cpu_tests {
             .unwrap_or_else(|error| panic!("{error:?}"));
         }
         assert!(
-            body(3).contains("FS_A_LEN: u32 = 4096u") && body(1).contains("FS_A_LEN: u32 = 1000u")
+            body(3).contains("FS_A_LEN: u32 = 4096u") && body(1).contains("FS_A_LEN: u32 = 1728u")
         );
         assert_eq!(std::mem::size_of::<Uniforms>(), 32);
     }
