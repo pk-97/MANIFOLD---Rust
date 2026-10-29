@@ -18,13 +18,14 @@
 // of each second derivative along the surface at s display nodes per
 // simulation cell (1/4 at stride 1), so the smoothing reaches as far in
 // metres at every Surface Detail. The normal comes from central differences
-// a simulation cell apart, except in the middle of a sheet or of a gap, where
-// the gradient is under half and points along the sheet: there it is the
-// direction the field bends most, so the ring lies along the sheet instead of
-// across it. A node
-// inside the water with water on both sides of it along the normal is a
-// sheet's middle: it rises at most half way to the surface, so a step never
-// opens a sheet.
+// a simulation cell apart. With keep_sheets (water), in the middle of a sheet
+// or of a gap, where the gradient is under half and points along the sheet,
+// it is the direction the field bends most, so the ring lies along the sheet
+// instead of across it, and a node inside the water with water on both sides
+// of it along the normal is a sheet's middle: it rises at most half way to
+// the surface, so a step never opens a sheet. Without it (Matter), a thin
+// bump of a few stray particles melts back into the surface instead of
+// standing as a fin.
 //
 // The workgroup stages its tile and `halo` nodes round it (stride + 1)
 // through its 27 neighbour tiles, then reads each band node's normal and
@@ -41,7 +42,8 @@ struct Params {
     // Display nodes per simulation cell along an axis, 1 to 3.
     stride: u32,
     sim_cell_size: f32,
-    _pad: u32,
+    // 1 keeps thin sheets whole (water), 0 lets them melt (Matter).
+    keep_sheets: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -247,7 +249,7 @@ fn cs_main(
             // nothing in a sheet's or a gap's middle, where it points along
             // the sheet; under half, the bend gives the normal instead.
             var normal = grad;
-            if length(grad) < FS_WEAK_GRADIENT * 2.0 * f32(s) * h {
+            if params.keep_sheets != 0u && length(grad) < FS_WEAK_GRADIENT * 2.0 * f32(s) * h {
                 normal = fs_bend_axis(low, node, st, before);
             }
             let gl = length(normal);
@@ -273,11 +275,13 @@ fn cs_main(
                 let along = 0.25 * before + 0.125 * ring;
                 let w = weights[e];
                 var delta = mix(0.5, 1.0, w) * (along - before);
-                let half = 0.5 * f32(s);
-                let middle = fs_staged_trilinear(low, q + nrm * half) > before
-                    && fs_staged_trilinear(low, q - nrm * half) > before;
-                if before < 0.0 && middle {
-                    delta = min(delta, -0.5 * before);
+                if params.keep_sheets != 0u && before < 0.0 {
+                    let half = 0.5 * f32(s);
+                    let middle = fs_staged_trilinear(low, q + nrm * half) > before
+                        && fs_staged_trilinear(low, q - nrm * half) > before;
+                    if middle {
+                        delta = min(delta, -0.5 * before);
+                    }
                 }
                 let reach = mix(1.0, 2.0, w) * leash;
                 out = clamp(before + delta, anchor - reach, anchor + reach);

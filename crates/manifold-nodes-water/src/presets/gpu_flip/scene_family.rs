@@ -45,6 +45,8 @@ pub(super) fn particles_draw(b: &mut Builder) {
 /// (node.matter_grains), drawn as faceted solids.
 fn grains_draw(b: &mut Builder) {
     let grains = b.node("sand_grains", "node.matter_grains", json!({}));
+    let domain = b.id("domain");
+    b.wires(domain, grains, &["cell_size", "points_per_cell"]);
     instanced_draw(b, grains, (grains, "count"), OCTAHEDRON);
 }
 
@@ -183,6 +185,26 @@ fn sand_material(b: &mut Builder) {
     }
 }
 
+/// Matter holds no one-particle sheets, so its smoothing lets thin bumps of
+/// stray particles melt back into the surface instead of keeping them as
+/// fins (node.field_smooth_blend's Keep Sheets).
+fn solid_surface(b: &mut Builder, surface: usize) {
+    let group = b
+        .nodes
+        .iter_mut()
+        .find(|node| node.id as usize == surface)
+        .and_then(|node| node.group.as_mut())
+        .expect("the surface group");
+    for node in &mut group.nodes {
+        if node.type_id.as_str() == "node.field_smooth_blend" {
+            node.params.insert(
+                "keep_sheets".to_owned(),
+                manifold_core::effect_graph_def::SerializedParamValue::Bool { value: false },
+            );
+        }
+    }
+}
+
 /// The Matter solver with the shared surface build, drawn as sand.
 fn mpm(draw: WaterDraw, _narrow_band: bool) -> WaterFamily {
     let solver: EffectGraphDef =
@@ -192,6 +214,7 @@ fn mpm(draw: WaterDraw, _narrow_band: bool) -> WaterFamily {
     let [domain, frame] = ["domain", "frame"].map(|name| b.id(name));
     let scene = WaterScene::dam_break(64);
     let (surface, level_set) = surface(&mut b, scene, frame);
+    solid_surface(&mut b, surface);
     let water = display_head(&mut b, frame, surface);
     display_dots(&mut b, frame, (surface, (surface, level_set)), water);
     feed_intervals(&b.nodes, &mut b.wires, domain as u32);

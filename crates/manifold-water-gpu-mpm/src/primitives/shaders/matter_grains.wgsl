@@ -13,9 +13,10 @@
 //     move, so the full grains reach two steps in and each switch happens
 //     under them, out of sight.
 // A surface point of radius r draws n = ceil(2 r² / g²) grains of Grain Size
-// g, about one and a half times its patch's area, at most K. Past K the grains
-// grow to r · sqrt(2 / K) instead of leaving gaps, so a coarse cell with a
-// small Grain Size costs at most K grains a point.
+// g, about one and a half times its patch's area, at most K, which the host
+// sets from Grain Size and the rest radius (so any Cell Size reaches any
+// Grain Size) within its slot budget. Past K the grains grow to
+// r · sqrt(2 / K) instead of leaving gaps.
 // Copy p·K + j is grain j of point p: a sand grain at a hashed offset in the
 // point's cube (spread · radius each way), scaled to its size times a hashed
 // 0.7 to 1.3, each hash keyed on the point's id and j, so a grain keeps its

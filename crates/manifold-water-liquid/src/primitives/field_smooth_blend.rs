@@ -40,13 +40,13 @@ struct Uniforms {
     entries: u32,
     stride: u32,
     sim_cell_size: f32,
-    _pad: u32,
+    keep_sheets: u32,
 }
 
 manifold_node_engine::primitive! {
     name: FieldSmoothBlend,
     type_id: "node.field_smooth_blend",
-    purpose: "One step of the water field's smoothing, per node of a world-tile pool: prior moved toward its mean along the surface through the node (the node at 1/4 and six trilinear samples at 1/8 each on a ring square to the normal, from central differences a simulation cell apart or, where that gradient is under half (a sheet's or a gap's middle), the direction the field bends most; every weight positive, so a step only flattens and a flat surface stays put), by the node's weight, and held within a leash of the reference. Node arrays on the world tiles of a pool, one element per pooled node, all read at the same pool index. cell_size is one lattice cell in metres and sim_cell_size the simulation's cell, a whole number (1 to 3) of lattice cells; the ring's radius grows with it, so the smoothing reaches as far at every Surface Detail. Where |reference| is at least band_cells simulation cells the prior passes through unchanged. Elsewhere the output is prior + mix(1/2, 1, weight) · (mean - prior), clamped to reference ± mix(1, 2, weight) · smoothness × FIELD_LEASH_CELLS (half a simulation cell). A node in a tile the table does not hold reads prior's canonical element. The canonical element and free slots hold the far value, 3 cells.",
+    purpose: "One step of the water field's smoothing, per node of a world-tile pool: prior moved toward its mean along the surface through the node (the node at 1/4 and six trilinear samples at 1/8 each on a ring square to the normal, from central differences a simulation cell apart or, with Keep Sheets where that gradient is under half (a sheet's or a gap's middle), the direction the field bends most; every weight positive, so a step only flattens and a flat surface stays put), by the node's weight, and held within a leash of the reference. With Keep Sheets (water) a node inside with the field higher half a simulation cell either way along the normal, a sheet's middle, rises at most half way to zero, so a thin sheet stays whole; without it (Matter) a thin bump of stray particles rounds off into the surface instead of standing as a fin. Node arrays on the world tiles of a pool, one element per pooled node, all read at the same pool index. cell_size is one lattice cell in metres and sim_cell_size the simulation's cell, a whole number (1 to 3) of lattice cells; the ring's radius grows with it, so the smoothing reaches as far at every Surface Detail. Where |reference| is at least band_cells simulation cells the prior passes through unchanged. Elsewhere the output is prior + mix(1/2, 1, weight) · (mean - prior), clamped to reference ± mix(1, 2, weight) · smoothness × FIELD_LEASH_CELLS (half a simulation cell). A node in a tile the table does not hold reads prior's canonical element. The canonical element and free slots hold the far value, 3 cells.",
     inputs: {
         prior: Array(f32) required,
         weights: Array(f32) required,
@@ -64,6 +64,7 @@ manifold_node_engine::primitive! {
         float_param!("smoothness", "Smoothness", 1.0, 0.0, FIELD_SMOOTHNESS_MAX),
         float_param!("band_cells", "Band Cells", FIELD_BAND_CELLS, 0.0, 16.0),
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
+        ParamDef { name: Cow::Borrowed("keep_sheets"), label: "Keep Sheets", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "Chain FIELD_SMOOTH_STEPS (3) of these after node.particle_volume: prior is the field the step starts from (the splat, then the step before), reference is node.particle_volume's level set, weights come from node.particle_volume, all pooled node arrays on the same tiles, with tiles, pool_tiles and cell_size from the same world tiles (node.surface_tiles for the display) and sim_cell_size from the domain. Smoothness 1 is the tuned surface (the field build's half-cell leash), 0 returns the reference, 2 doubles the leash; band defaults to the field build's constant. It reads the nodes round each tile, so it is a graph fusion boundary.",
@@ -159,7 +160,7 @@ impl Primitive for FieldSmoothBlend {
             entries: table_entries(pool.pool_tiles),
             stride,
             sim_cell_size,
-            _pad: 0,
+            keep_sheets: u32::from(!matches!(ctx.params.get("keep_sheets"), Some(ParamValue::Bool(false)))),
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = self.smooth_pipelines[stride as usize - 1].get_or_insert_with(|| {

@@ -2,6 +2,7 @@ use super::FieldSmoothBlend;
 use crate::field_build::{FIELD_BAND_CELLS, FIELD_LEASH_CELLS, FIELD_SMOOTH_STEPS};
 use crate::testkit::world_box::{BoxTable, from_pool_under, table_words_of};
 use manifold_node_engine::exec::effect_node::ParamValues;
+use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::scene::world_tiles::{TILE_CELLS, pool_len};
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 
@@ -129,12 +130,14 @@ fn bits(v: &[f32]) -> Vec<u32> {
     v.iter().map(|x| x.to_bits()).collect()
 }
 
-fn blend_params(placed: &Placed, smoothness: f32) -> ParamValues {
-    placed.params(&[
+fn blend_params(placed: &Placed, smoothness: f32, keep_sheets: bool) -> ParamValues {
+    let mut params = placed.params(&[
         ("smoothness", smoothness),
         ("band_cells", BAND_CELLS),
         ("sim_cell_size", CELL),
-    ])
+    ]);
+    params.insert("keep_sheets".into(), ParamValue::Bool(keep_sheets));
+    params
 }
 
 /// One step over the three dense fields placed in `placed`, as a pooled
@@ -144,6 +147,7 @@ fn blend(
     placed: &Placed,
     [prior, weights, reference]: [&[f32]; 3],
     smoothness: f32,
+    keep_sheets: bool,
 ) -> Vec<f32> {
     let len = placed.len();
     // Every free-slot element holds water-like junk the step must not copy.
@@ -161,7 +165,7 @@ fn blend(
             ("tiles", tiles),
         ],
         &[("field", out)],
-        &blend_params(placed, smoothness),
+        &blend_params(placed, smoothness, keep_sheets),
     );
     assert!(errors.is_empty(), "{errors:?}");
     read::<f32>(&out_buf, len)
@@ -175,11 +179,12 @@ fn steps(
     weights: &[f32],
     reference: &[f32],
     smoothness: f32,
+    keep_sheets: bool,
 ) -> Vec<f32> {
     let mut h = Harness::new();
     let mut field = prior.to_vec();
     for _ in 0..FIELD_SMOOTH_STEPS {
-        let pooled = blend(&mut h, placed, [&field, weights, reference], smoothness);
+        let pooled = blend(&mut h, placed, [&field, weights, reference], smoothness, keep_sheets);
         assert_eq!(placed.free_not(&pooled, FAR), 0);
         field = placed.dense(&pooled);
     }
@@ -200,7 +205,7 @@ fn a_straight_distance_field_stays_put() {
             (n[0] * p[0] + n[1] * p[1] + n[2] * p[2]) / len - 1.4
         })
         .collect();
-    let got = steps(&placed, &plane, &weights(), &plane, 2.0);
+    let got = steps(&placed, &plane, &weights(), &plane, 2.0, true);
     let band = BAND_CELLS * CELL;
     let mut checked = 0;
     for i in (0..node_count()).filter(|&i| interior(i) && plane[i].abs() < band) {
@@ -235,7 +240,7 @@ fn bumps_on_a_sphere_flatten() {
             r - 0.63 - 0.4 * CELL * (6.0 * u[0]).sin() * (5.0 * u[1]).sin() * (4.0 * u[2]).cos(),
         );
     }
-    let got = steps(&placed, &bumpy, &vec![1.0; node_count()], &bumpy, 2.0);
+    let got = steps(&placed, &bumpy, &vec![1.0; node_count()], &bumpy, 2.0, true);
     let near: Vec<usize> = (0..node_count())
         .filter(|&i| interior(i) && exact[i].abs() < 1.5 * CELL)
         .collect();
@@ -278,7 +283,7 @@ fn a_thin_film_stays_whole() {
             (p[1] - middle).abs() - 0.3 * CELL
         })
         .collect();
-    let got = steps(&placed, &film, &vec![1.0; node_count()], &film, 2.0);
+    let got = steps(&placed, &film, &vec![1.0; node_count()], &film, 2.0, true);
     let mut columns = 0;
     for z in REACH..NODES[2] - REACH {
         for x in REACH..NODES[0] - REACH {
@@ -289,6 +294,33 @@ fn a_thin_film_stays_whole() {
         }
     }
     assert!(columns > 100);
+}
+
+/// A ball 1.5 cells across sitting half sunk in a flat surface, as a few
+/// stray particles poke out of clay: without Keep Sheets three steps melt at
+/// least a third of what stands above the surface back into it.
+#[test]
+fn a_lone_bump_melts_without_keep_sheets() {
+    let placed = Placed::new(ORIGIN, NODES);
+    let (floor, centre) = (7.0 * CELL, [11.0 * CELL, 8.0 * CELL, 13.0 * CELL]);
+    let field: Vec<f32> = (0..node_count())
+        .map(|i| {
+            let p = node_at(i).map(|v| v as f32 * CELL);
+            let d: [f32; 3] = std::array::from_fn(|a| p[a] - centre[a]);
+            let ball = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() - 1.5 * CELL;
+            (p[1] - floor).min(ball)
+        })
+        .collect();
+    let standing = |f: &[f32]| {
+        (0..node_count())
+            .filter(|&i| interior(i) && node_at(i)[1] as f32 * CELL > floor + 0.5 * CELL)
+            .map(|i| (-f[i]).max(0.0))
+            .sum::<f32>()
+    };
+    let got = steps(&placed, &field, &vec![1.0; node_count()], &field, 2.0, false);
+    let (before, after) = (standing(&field), standing(&got));
+    assert!(before > 0.0);
+    assert!(after < 0.67 * before, "{after} vs {before}");
 }
 
 #[test]
@@ -303,7 +335,7 @@ fn out_of_band_keeps_the_prior_bit_for_bit_and_the_leash_holds() {
         .enumerate()
         .map(|(i, r)| r + 0.01 * ((i % 5) as f32 - 2.0) / 2.0)
         .collect();
-    let pooled = blend(&mut h, &placed, [&prior, &weights, &reference], 1.0);
+    let pooled = blend(&mut h, &placed, [&prior, &weights, &reference], 1.0, true);
     let got = placed.dense(&pooled);
     let (leash, band) = (FIELD_LEASH_CELLS * CELL, BAND_CELLS * CELL);
     let (mut held, mut in_band) = (0, 0);
@@ -342,7 +374,7 @@ fn zero_smoothness_returns_the_reference_inside_the_band() {
         .enumerate()
         .map(|(i, r)| r + 0.01 * ((i % 5) as f32 - 2.0) / 2.0)
         .collect();
-    let pooled = blend(&mut h, &placed, [&prior, &weights, &reference], 0.0);
+    let pooled = blend(&mut h, &placed, [&prior, &weights, &reference], 0.0, true);
     let got = placed.dense(&pooled);
     let band = BAND_CELLS * CELL;
     let mut in_band = 0;
@@ -409,7 +441,7 @@ fn missing_or_short_inputs_are_named_errors() {
             &mut blend,
             &inputs,
             &[("field", out_slot)],
-            &blend_params(&placed, 1.0),
+            &blend_params(&placed, 1.0, true),
         );
         assert!(
             errors.iter().any(|e| e.contains("Field Smooth Blend")),

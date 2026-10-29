@@ -14,8 +14,11 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 
-/// The most grains one point can carry.
-const MAX_GRAINS: f32 = 64.0;
+/// The most grains one point carries, however small Grain Size is.
+const MAX_GRAINS: u32 = 1024;
+/// The most grain slots a frame holds (32 bytes each, 128 MB): past it, a
+/// point's grains grow rather than leave gaps.
+const GRAIN_BUDGET: u32 = 1 << 22;
 
 const SHADER: &str = include_str!("shaders/matter_grains.wgsl");
 
@@ -40,10 +43,12 @@ pub struct GrainPipelines {
 manifold_node_engine::primitive! {
     name: MatterGrains,
     type_id: "node.matter_grains",
-    purpose: "Draw a matter frame as sand grains at its surface: each point carries up to Grains copy transforms, grain j at a hashed offset within Spread times the point's radius, turned by hashed angles and its rolling, Grain Size metres across (varied 0.7 to 1.3), all keyed on the point's id so a grain stays with its point. A surface point draws ceil(2 r² / Grain Size²) grains, at most Grains, the grains growing past that cap rather than leaving gaps. Occupancy cells are two point spacings: a point with an empty cell within two steps along an axis is near the surface, one with an empty cell three steps away draws one filler grain the point's size, and a deeper point only holes. Points past live_count, with radius 0 or with no id are holes. count publishes live_count × Grains, the instance count to draw.",
+    purpose: "Draw a matter frame as sand grains at its surface: each point carries up to Grains copy transforms, grain j at a hashed offset within Spread times the point's radius, turned by hashed angles and its rolling, Grain Size metres across (varied 0.7 to 1.3), all keyed on the point's id so a grain stays with its point. A surface point draws ceil(2 r² / Grain Size²) grains, r its radius; every point gets that many slots, K, from the rest radius RADIUS_SCALE · cell_size / cbrt(points_per_cell), at most MAX_GRAINS (1024) and at most what the slots hold (GRAIN_BUDGET, 4M, over the points), the grains growing past that cap rather than leaving gaps. So the grains cost follows Grain Size and the surface's area, not the Cell Size. Occupancy cells are two point spacings: a point with an empty cell within two steps along an axis is near the surface, one with an empty cell three steps away draws one filler grain the point's size, and a deeper point only holes. Points past live_count, with radius 0 or with no id are holes. count publishes live_count × K, the instance count to draw.",
     inputs: {
         particles: Array(FluidParticle) required,
         live_count: ScalarF32 optional,
+        cell_size: ScalarF32 optional,
+        points_per_cell: ScalarF32 optional,
     },
     outputs: {
         copies: Array(InstanceTransform),
@@ -51,12 +56,13 @@ manifold_node_engine::primitive! {
     },
     params: [
         ParamDef { name: Cow::Borrowed("live_count"), label: "Live Count", ty: ParamType::Float, default: ParamValue::Float(-1.0), range: Some((-1.0, 1.0e9)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("grains"), label: "Grains", ty: ParamType::Int, default: ParamValue::Float(16.0), range: Some((1.0, MAX_GRAINS)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("cell_size"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(0.0625), range: Some((0.0001, 100.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("points_per_cell"), label: "Points per Cell", ty: ParamType::Float, default: ParamValue::Float(8.0), range: Some((1.0, 64.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("grain_size"), label: "Grain Size", ty: ParamType::Float, default: ParamValue::Float(0.014), range: Some((0.002, 0.1)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("spread"), label: "Spread", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 2.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire particles and live_count from node.matter_frame (or the display's pushed-out particles and the frame's count_b); wire copies into a scene object's instances and count into its instance_count, with a small grain mesh as the vertices. A point's grains keep their slots, so the previous frame's copies line up for motion; the draw skips the holes. Output capacity is the particles' capacity times Grains, so changing Grains rebuilds the plan.",
+    composition_notes: "Wire particles and live_count from node.matter_frame (or the display's pushed-out particles and the frame's count_b); wire cell_size and points_per_cell from node.matter_domain; wire copies into a scene object's instances and count into its instance_count, with a small grain mesh as the vertices. A point's grains keep their slots, so the previous frame's copies line up for motion; the draw skips the holes. Output capacity is the particles' capacity times MAX_GRAINS, at most GRAIN_BUDGET slots.",
     examples: [],
     picker: { label: "Matter Grains", category: Atom },
     summary: "Turns each sand point at the surface into a handful of small turned grains to draw.",
@@ -71,11 +77,11 @@ manifold_node_engine::primitive! {
     },
 }
 
-fn grains(params: &ParamValues) -> u32 {
-    match params.get("grains") {
-        Some(ParamValue::Float(n)) => n.round().clamp(1.0, MAX_GRAINS) as u32,
-        _ => 16,
-    }
+/// Grains a point of `radius` needs to cover its patch at `grain_size`,
+/// ceil(2 r² / g²), at most MAX_GRAINS.
+fn grains_needed(radius: f32, grain_size: f32) -> u32 {
+    let n = (2.0 * radius * radius / (grain_size * grain_size).max(1e-12)).ceil();
+    n.clamp(1.0, MAX_GRAINS as f32) as u32
 }
 
 /// Table pairs for `points`: a power of two at least twice the points, so
@@ -88,14 +94,17 @@ impl Primitive for MatterGrains {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        params: &ParamValues,
+        _params: &ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         (port_name == "copies").then(|| {
             input_capacities
                 .iter()
                 .find(|(port, _)| *port == "particles")
-                .map_or(1, |&(_, n)| n.max(1).saturating_mul(grains(params)))
+                .map_or(1, |&(_, n)| {
+                    let n = n.max(1);
+                    n.saturating_mul(MAX_GRAINS).min(GRAIN_BUDGET.max(n))
+                })
         })
     }
 
@@ -117,8 +126,9 @@ impl Primitive for MatterGrains {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let k = grains(ctx.params);
         let grain_size = ctx.scalar_or_param("grain_size", 0.014);
+        let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
+        let points_per_cell = ctx.scalar_or_param("points_per_cell", 8.0).max(1.0);
         let spread = ctx.scalar_or_param("spread", 1.0);
         let (Some(particles), Some(copies)) =
             (ctx.inputs.array("particles"), ctx.outputs.array("copies"))
@@ -134,7 +144,9 @@ impl Primitive for MatterGrains {
         } else {
             points
         }
-        .min(slots / k);
+        .min(slots);
+        let radius = crate::matter::RADIUS_SCALE * cell_size / points_per_cell.cbrt();
+        let k = grains_needed(radius, grain_size).min(slots / live_points.max(1)).max(1);
         ctx.outputs
             .set_scalar("count", ParamValue::Float((live_points * k) as f32));
         if live_points == 0 {
@@ -220,6 +232,20 @@ mod tests {
         )
         .validate(&module)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
+    }
+
+    /// At a coarse 0.43 m cell a point is about 13 cm across: 1 cm grains
+    /// take a few hundred a point, and with that many the shader's floor
+    /// r · sqrt(2 / K) sits under the asked size, so the grains draw at it.
+    #[test]
+    fn grains_reach_their_size_at_coarse_cells() {
+        for (cell, ppc, size) in [(0.43f32, 8.0f32, 0.01f32), (0.0625, 8.0, 0.004), (0.15, 27.0, 0.008)] {
+            let radius = crate::matter::RADIUS_SCALE * cell / ppc.cbrt();
+            let k = grains_needed(radius, size);
+            assert!(k < MAX_GRAINS, "{cell} m cells, {size} m grains: {k}");
+            assert!(radius * (2.0 / k as f32).sqrt() <= size, "{cell} m cells, {size} m grains: {k}");
+        }
+        assert_eq!(grains_needed(0.0194, 0.014), 4);
     }
 
     #[test]

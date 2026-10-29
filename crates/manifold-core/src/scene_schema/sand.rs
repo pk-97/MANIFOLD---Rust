@@ -83,7 +83,7 @@ const fn thickness(property: &'static str, default: f32, range: (f32, f32)) -> P
         .range(range.0, range.1)
 }
 
-pub static SAND_ROWS: [PropertyRow; 50] = [
+pub static SAND_ROWS: [PropertyRow; 49] = [
     POS_X,
     POS_Y,
     POS_Z,
@@ -152,11 +152,7 @@ pub static SAND_ROWS: [PropertyRow; 50] = [
     row("grain_size", Reach::Own("sand_grains"), Surface, setup())
         .name("Grain Size")
         .unit(Unit::Metres)
-        .tip("How big each grain is, apart from the Cell Size. Smaller grains draw more of them at the surface, up to Grains per Point a particle; past that they grow instead of leaving gaps")
-        .when(grains),
-    row("grains", Reach::Own("sand_grains"), Surface, setup())
-        .name("Grains per Point")
-        .tip("The most grains one surface particle draws. Raise it to let Grain Size go smaller: 64 reaches a quarter of the size 16 does. Draw cost and memory grow with it, about 4× from 16 to 64")
+        .tip("How big each grain is, at any Cell Size. Halving it draws about four times as many grains at the surface, so the cost follows the grain size and the sand's surface area")
         .when(grains),
     FOLLOW_GRAVITY_X,
     FOLLOW_GRAVITY_Y,
