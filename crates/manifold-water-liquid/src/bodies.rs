@@ -1081,10 +1081,9 @@ impl LiquidBodies {
                 }
             } else {
                 let steps = scale_steps(scale);
-                match placed
-                    .iter()
-                    .find(|(known, known_steps, _)| Arc::ptr_eq(known, tree) && *known_steps == steps)
-                {
+                match placed.iter().find(|(known, known_steps, _)| {
+                    Arc::ptr_eq(known, tree) && *known_steps == steps
+                }) {
                     Some((_, _, shape)) => *shape,
                     None => {
                         let (origin, spacing, dims) = plan_lattice(bounds, cell_size, scale)
@@ -2096,7 +2095,10 @@ mod tests {
             bodies.prepare(&[], &hulls, 0.0625, false),
             Ok(BodiesStatus::Ready)
         );
-        assert_eq!(bodies.version, version, "an unchanged tree rebuilds nothing");
+        assert_eq!(
+            bodies.version, version,
+            "an unchanged tree rebuilds nothing"
+        );
     }
 
     /// Two roles sharing one geometry share its atlas block; a scale change

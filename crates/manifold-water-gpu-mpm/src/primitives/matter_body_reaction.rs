@@ -9,12 +9,12 @@ use super::matter_common::{COLLIDER_BVH, MATTER_BOUNDS, MATTER_TREE};
 use crate::matter::{MatterGridNode, REACTION_WORDS, grid_bytes, momentum_unit_fits};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_words};
 use manifold_nodes_physics::force_lattice::{FORCE_LATTICE, ForceLatticeBinding};
-use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 
 #[repr(C)]
@@ -229,8 +229,18 @@ impl Primitive for MatterBodyReaction {
         // The GPU is touched on every path so the aliased reaction array keeps
         // its place in the frame's hazard order.
         let gpu = ctx.gpu_encoder();
-        let (Some(grid), Some(tiles), (Some(bodies), Some(shapes), Some(atlas), Some(collider_nodes), Some(collider_triangles)), Some(reaction)) =
-            (grid, tiles, colliders, reaction)
+        let (
+            Some(grid),
+            Some(tiles),
+            (
+                Some(bodies),
+                Some(shapes),
+                Some(atlas),
+                Some(collider_nodes),
+                Some(collider_triangles),
+            ),
+            Some(reaction),
+        ) = (grid, tiles, colliders, reaction)
         else {
             return;
         };

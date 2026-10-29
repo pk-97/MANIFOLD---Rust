@@ -62,7 +62,12 @@ fn cube(n: usize, skip: Option<(usize, usize)>) -> TriangleMesh {
             };
             for i in 0..n {
                 for j in 0..n {
-                    let quad = [corner(i, j), corner(i + 1, j), corner(i + 1, j + 1), corner(i, j + 1)];
+                    let quad = [
+                        corner(i, j),
+                        corner(i + 1, j),
+                        corner(i + 1, j + 1),
+                        corner(i, j + 1),
+                    ];
                     for [a, b, c] in [[0, 1, 2], [0, 2, 3]] {
                         let (pa, mut pb, mut pc) = (quad[a], quad[b], quad[c]);
                         let e1: [f32; 3] = std::array::from_fn(|k| pb[k] - pa[k]);
@@ -177,18 +182,26 @@ fn gpu_queries_match_the_cpu_tree_across_concatenated_trees() {
     enc.commit_and_wait().expect("GPU work completes");
     let ptr = out.mapped_ptr().expect("a shared buffer");
     // SAFETY: a shared buffer of 3 f32 per point; its GPU work has completed.
-    let got: &[f32] = bytemuck::cast_slice(unsafe {
-        std::slice::from_raw_parts(ptr, points.len() * 12)
-    });
+    let got: &[f32] =
+        bytemuck::cast_slice(unsafe { std::slice::from_raw_parts(ptr, points.len() * 12) });
 
     let mut shells = 0;
     for (index, point) in points.iter().enumerate() {
         let tree = &trees[point[3] as usize];
         let p = [point[0], point[1], point[2]];
         let (nearest, winding, phi) = (got[3 * index], got[3 * index + 1], got[3 * index + 2]);
-        assert!((nearest - tree.nearest(p, band)).abs() < 1e-5, "{point:?}: nearest {nearest}");
-        assert!((winding - tree.winding(p)).abs() < 1e-3, "{point:?}: winding {winding}");
-        assert!((phi - cpu_phi(tree, p, band, shell)).abs() < 1e-5, "{point:?}: phi {phi}");
+        assert!(
+            (nearest - tree.nearest(p, band)).abs() < 1e-5,
+            "{point:?}: nearest {nearest}"
+        );
+        assert!(
+            (winding - tree.winding(p)).abs() < 1e-3,
+            "{point:?}: winding {winding}"
+        );
+        assert!(
+            (phi - cpu_phi(tree, p, band, shell)).abs() < 1e-5,
+            "{point:?}: phi {phi}"
+        );
         shells += usize::from((tree.winding(p).abs() - 0.5).abs() < 0.25);
     }
     // The open box puts points on its shell side of the rule, so both

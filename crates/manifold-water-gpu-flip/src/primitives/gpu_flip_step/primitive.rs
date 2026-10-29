@@ -302,31 +302,39 @@ impl Primitive for GpuFlipStep {
         let atlas_in = ctx.inputs.array("atlas");
         let nodes_in = ctx.inputs.array("collider_nodes");
         let triangles_in = ctx.inputs.array("collider_triangles");
-        let (bodies, shapes, atlas, collider_nodes, collider_triangles, body_count, rows, shapes_len) =
-            match (bodies_in, shapes_in, atlas_in, nodes_in, triangles_in) {
-                (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)) => {
-                    let held =
-                        (bodies.size / size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32;
-                    let shapes_len = (shapes.size / size_of::<LiquidShape>() as u64)
-                        .min(u64::from(u32::MAX)) as u32;
-                    // Rows are tick major: this tick's are the last of the prefix
-                    // the solid passes read.
-                    let through_tick = (tick_index - field.first_tick + 1)
-                        .max(1)
-                        .saturating_mul(body_count);
-                    (
-                        bodies,
-                        shapes,
-                        atlas,
-                        nodes,
-                        triangles,
-                        body_count,
-                        rows.min(held).min(through_tick),
-                        shapes_len,
-                    )
-                }
-                _ => (&zeros, &zeros, &zeros, &zeros, &zeros, 0, 0, 0),
-            };
+        let (
+            bodies,
+            shapes,
+            atlas,
+            collider_nodes,
+            collider_triangles,
+            body_count,
+            rows,
+            shapes_len,
+        ) = match (bodies_in, shapes_in, atlas_in, nodes_in, triangles_in) {
+            (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)) => {
+                let held =
+                    (bodies.size / size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32;
+                let shapes_len =
+                    (shapes.size / size_of::<LiquidShape>() as u64).min(u64::from(u32::MAX)) as u32;
+                // Rows are tick major: this tick's are the last of the prefix
+                // the solid passes read.
+                let through_tick = (tick_index - field.first_tick + 1)
+                    .max(1)
+                    .saturating_mul(body_count);
+                (
+                    bodies,
+                    shapes,
+                    atlas,
+                    nodes,
+                    triangles,
+                    body_count,
+                    rows.min(held).min(through_tick),
+                    shapes_len,
+                )
+            }
+            _ => (&zeros, &zeros, &zeros, &zeros, &zeros, 0, 0, 0),
+        };
         let reaction_in = ctx.inputs.array("reaction");
         let dynamic = body_count > 0 && ctx.scalar_or_param("dynamic_bodies", 0.0) > 0.0;
         if dynamic && let Some(reason) = body_refusal(body_count as u32, reaction_in) {

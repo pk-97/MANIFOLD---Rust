@@ -49,7 +49,10 @@ fn water_in_the_air_falls_at_g() {
                 "{label}: falls at {v} m/s after {TICKS} ticks, free fall is {}",
                 -fall
             );
-            let from = start.iter().find(|s| s.id == p.id).expect("the particle's start");
+            let from = start
+                .iter()
+                .find(|s| s.id == p.id)
+                .expect("the particle's start");
             let dropped = from.position_radius[1] - p.position_radius[1];
             assert!(
                 (dropped - drop).abs() <= 0.02 * drop,

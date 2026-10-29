@@ -343,7 +343,11 @@ impl Primitive for MatterState {
             }
         }
         self.poll_readbacks(clock.as_ref(), live_mode);
-        if live_mode && self.faulted && count > 0 && let Some(out) = out {
+        if live_mode
+            && self.faulted
+            && count > 0
+            && let Some(out) = out
+        {
             // Only the broken points go; the rest of the water keeps flowing.
             let pipeline = self
                 .remove_nonfinite

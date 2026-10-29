@@ -6,15 +6,15 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
+use super::matter_common::{COLLIDER_BVH, MATTER_TREE};
 use crate::matter::MatterPoint;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-use super::matter_common::{COLLIDER_BVH, MATTER_TREE};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
-use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 
 /// Most cells per axis the `fill_cells_*` wires may carry.
@@ -294,14 +294,21 @@ impl Primitive for MatterFill {
         let buffer = self.buffer.as_ref().expect("fill storage prepared");
         // Without all five collider arrays no body is read; the points buffer
         // fills their slots.
-        let (bodies, shapes, atlas, collider_nodes, collider_triangles, body_count) = match colliders
-        {
-            (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)) => {
-                let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64) as i32;
-                (bodies, shapes, atlas, nodes, triangles, body_count.min(rows))
-            }
-            _ => (buffer, buffer, buffer, buffer, buffer, 0),
-        };
+        let (bodies, shapes, atlas, collider_nodes, collider_triangles, body_count) =
+            match colliders {
+                (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)) => {
+                    let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64) as i32;
+                    (
+                        bodies,
+                        shapes,
+                        atlas,
+                        nodes,
+                        triangles,
+                        body_count.min(rows),
+                    )
+                }
+                _ => (buffer, buffer, buffer, buffer, buffer, 0),
+            };
         let key = [
             grid.min[0].to_bits(),
             grid.min[1].to_bits(),

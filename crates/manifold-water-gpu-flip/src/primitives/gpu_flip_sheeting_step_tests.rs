@@ -228,7 +228,18 @@ impl Splash {
             ("particles", self.particles.0),
             ("identity", self.identity.0),
         ];
-        if let Some([regions, sites, shapes, atlas, collider_nodes, collider_triangles, bodies]) = self.regions {
+        if let Some(
+            [
+                regions,
+                sites,
+                shapes,
+                atlas,
+                collider_nodes,
+                collider_triangles,
+                bodies,
+            ],
+        ) = self.regions
+        {
             values.extend([
                 ("region_count", self.region_count as f32),
                 ("region_site_total", self.site_total as f32),

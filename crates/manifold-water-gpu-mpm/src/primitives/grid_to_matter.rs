@@ -6,15 +6,15 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
+use super::matter_common::{COLLIDER_BVH, MATTER_TREE};
 use crate::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, grid_bytes, momentum_unit_fits};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-use super::matter_common::{COLLIDER_BVH, MATTER_TREE};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
+use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_words};
-use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 
 #[repr(C)]
@@ -224,14 +224,21 @@ impl Primitive for GridToMatter {
         }
         // Without all five collider arrays the body loop runs zero times over
         // the grid buffer bound in their slots.
-        let (bodies, shapes, atlas, collider_nodes, collider_triangles, body_count) = match colliders
-        {
-            (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)) => {
-                let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64) as i32;
-                (bodies, shapes, atlas, nodes, triangles, body_count.min(rows))
-            }
-            _ => (grid, grid, grid, grid, grid, 0),
-        };
+        let (bodies, shapes, atlas, collider_nodes, collider_triangles, body_count) =
+            match colliders {
+                (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)) => {
+                    let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64) as i32;
+                    (
+                        bodies,
+                        shapes,
+                        atlas,
+                        nodes,
+                        triangles,
+                        body_count.min(rows),
+                    )
+                }
+                _ => (grid, grid, grid, grid, grid, 0),
+            };
         // Reaction words are written only with a slot covering every body and
         // a momentum unit the words can hold; the grid stands in otherwise.
         let covered =

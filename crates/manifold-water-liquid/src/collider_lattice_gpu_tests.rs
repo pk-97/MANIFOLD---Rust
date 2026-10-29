@@ -112,7 +112,8 @@ fn gpu_lattice_matches_the_cpu_rule_at_every_node() {
     let (mut inside, mut outside) = (0, 0);
     for n in 0..nodes {
         let index = [n % dx, (n / dx) % dy, n / (dx * dy)];
-        let p: [f32; 3] = std::array::from_fn(|a| build.origin[a] + build.spacing * index[a] as f32);
+        let p: [f32; 3] =
+            std::array::from_fn(|a| build.origin[a] + build.spacing * index[a] as f32);
         let d = bvh.nearest(p, band);
         // A node on the surface sits on the rule's seam between inside and shell.
         if d < 1e-3 {

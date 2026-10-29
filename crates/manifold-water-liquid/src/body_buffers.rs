@@ -98,7 +98,9 @@ impl LiquidBodyBuffers {
     }
 
     pub fn collider_triangles(&self) -> Option<&GpuBuffer> {
-        self.stored.as_ref().map(|stored| &stored.collider_triangles)
+        self.stored
+            .as_ref()
+            .map(|stored| &stored.collider_triangles)
     }
 
     /// The provided buffer behind a domain's `bodies`, `regions`, `shapes`,
@@ -234,8 +236,11 @@ impl LiquidBodyBuffers {
             let stored = self.stored.as_ref().expect("allocated above");
             if !bodies.lattice_builds().is_empty() {
                 let pipeline = self.lattice.get_or_insert_with(|| {
-                    gpu.device
-                        .create_compute_pipeline(&lattice_shader(), "main", "collider_lattice")
+                    gpu.device.create_compute_pipeline(
+                        &lattice_shader(),
+                        "main",
+                        "collider_lattice",
+                    )
                 });
                 for build in bodies.lattice_builds() {
                     let params = LatticeParams {

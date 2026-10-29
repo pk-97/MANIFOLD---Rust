@@ -35,14 +35,14 @@ mod mesh_texture_weights;
 mod smooth_normals;
 mod subdivide_mesh;
 manifold_core::testkit_visible! { mod generate_cube_mesh; }
+#[cfg(test)]
+mod builtin_mesh_bounds_tests;
 mod generate_grid_mesh;
 mod generate_grid_uv;
 mod generate_instance_transforms;
 mod glitch_jitter;
 pub(crate) mod gltf_anim_shared;
 mod plane_mesh;
-#[cfg(test)]
-mod builtin_mesh_bounds_tests;
 pub mod render_mesh_diagram;
 mod sample_triangle_grid;
 mod sphere_mesh;
