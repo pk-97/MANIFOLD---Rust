@@ -7,13 +7,15 @@
 //! position (half cell J at (J/2 - 1/4)·h) whatever the box's corner; a
 //! site inside a collider or beyond a Wall face of the Bounds box is left
 //! dead (radius 0), as the engine seeds only where the solid distance is positive. A pure function of its params and
-//! wires, so it owns its storage, sized to exactly the sites it covers, and
-//! fills it once per change. A source atom on the codegen path.
+//! wires, so it fills once per change: every site into scratch, then only
+//! the live ones, in site order, into storage it owns. Their count comes back
+//! from the GPU at once, so a shaped fill holds only the water it places, not
+//! its whole box.
 
 use manifold_gpu::BufferUse;
 use std::borrow::Cow;
 
-use manifold_gpu::{GpuBinding, GpuBuffer};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
@@ -26,7 +28,14 @@ use manifold_water_liquid::bodies::{
     COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_FILL_SHAPE, LIQUID_POSE, LiquidBody, LiquidShape,
 };
 use manifold_water_liquid::float_param;
+use manifold_water_liquid::primitives::prefix_scan::{PrefixScan, ScanLabels};
 use manifold_water_liquid::primitives::sort_particles_into_cells::int_param;
+
+const COMPACT_SHADER: &str = include_str!("shaders/liquid_fill_compact.wgsl");
+const COMPACT_LABELS: ScanLabels = ScanLabels {
+    blocks: "node.liquid_fill.scan_blocks",
+    add: "node.liquid_fill.scan_add",
+};
 
 /// Sites per cell: two along each axis.
 pub(super) const SITES_PER_CELL: u32 = 8;
@@ -119,26 +128,8 @@ pub(crate) fn fill_of(read: impl Fn(&str, f32) -> f32) -> (u32, [[u32; 2]; 3]) {
     (pool, sites)
 }
 
-/// Particles the params place: the storage the plan starts from. Wires that
-/// move the fill resize it at run time.
-fn planned_particles(params: &ParamValues) -> u32 {
-    let read = |name: &str, default: f32| match params.get(name) {
-        Some(ParamValue::Float(v)) => *v,
-        _ => default,
-    };
-    let Ok((_, cells, _)) = fill_frame(read) else {
-        return 1;
-    };
-    let (pool, sites) = fill_of(read);
-    pool_slots(
-        filled_sites(cells, pool, sites),
-        read("particle_capacity", 0.0),
-    )
-    .clamp(1, u64::from(EXACT_F32_COUNT)) as u32
-}
-
-/// Particle slots the pool holds: the filled sites, or `capacity` when larger (0
-/// means the filled sites). Slots past the fill start dead; sources emit
+/// Particle slots the pool holds: the live sites, or `capacity` when larger
+/// (0 means the live sites). Slots past the fill start dead; sources emit
 /// into them.
 pub(crate) fn pool_slots(placed: u64, capacity: f32) -> u64 {
     placed.max(capacity.round().max(0.0) as u64)
@@ -181,7 +172,7 @@ struct FillUniforms {
 manifold_node_engine::primitive! {
     name: LiquidFill,
     type_id: "node.liquid_fill",
-    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the box node.gpu_flip_domain places on whole world cells (fill_min_x/y/z its first corner in metres, fill_cells_x/y/z its cells per axis; site j at (1/4 + j/2) cells along each axis from the box's first cell, 2 sites per cell, so a site sits at the same world position whatever the box): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site the FLIP engine's solid holds when the epoch starts is left dead, radius 0: the solid is the Wall faces of the Bounds box (bounds_lo/hi in metres as placed, closed_faces the Wall bits −X +X −Y +Y −Z +Z; none by default) and the first body_count bodies at their poses, the smaller of the two at each node of a grid 1.5 cells outside the box, read trilinearly from that grid's nodes. With fill_region at or above 0 the box is a shaped fill's: a site outside region row fill_region of regions (its shape in shapes and atlas, its pose at the epoch's start) is left dead too, so the fill takes the shape. particle_capacity is the whole pool, the filled sites included (0 = the sites covered): the storage holds the larger of the two, and count is the filled sites, the slots a liquid starts with. Every slot past them starts dead and is free for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
+    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the box node.gpu_flip_domain places on whole world cells (fill_min_x/y/z its first corner in metres, fill_cells_x/y/z its cells per axis; site j at (1/4 + j/2) cells along each axis from the box's first cell, 2 sites per cell, so a site sits at the same world position whatever the box): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site the FLIP engine's solid holds when the epoch starts is left dead, radius 0: the solid is the Wall faces of the Bounds box (bounds_lo/hi in metres as placed, closed_faces the Wall bits −X +X −Y +Y −Z +Z; none by default) and the first body_count bodies at their poses, the smaller of the two at each node of a grid 1.5 cells outside the box, read trilinearly from that grid's nodes. With fill_region at or above 0 the box is a shaped fill's: a site outside region row fill_region of regions (its shape in shapes and atlas, its pose at the epoch's start) is left dead too, so the fill takes the shape. Only the live sites are kept, in site order, ids unchanged. particle_capacity is the whole pool, the live sites included (0 = the live sites): the storage holds the larger of the two, and count is the live sites, the slots a liquid starts with. Every slot past them starts dead and is free for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
     inputs: {
         fill_min_x: ScalarF32 optional, fill_min_y: ScalarF32 optional, fill_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -252,6 +243,9 @@ manifold_node_engine::primitive! {
     extra_fields: {
         buffer: Option<GpuBuffer> = None,
         filled: Option<([u32; 27], usize)> = None,
+        // The live sites the last fill kept.
+        live: u32 = 0,
+        compact: Option<(GpuComputePipeline, GpuComputePipeline)> = None,
     },
 }
 
@@ -269,10 +263,12 @@ impl Primitive for LiquidFill {
     fn array_output_capacity(
         &self,
         port: &str,
-        params: &ParamValues,
+        _params: &ParamValues,
         _inputs: &[(&str, u32)],
     ) -> Option<u32> {
-        (port == "particles").then(|| planned_particles(params))
+        // Provided storage: a one-record hint, sized to the live sites at run
+        // time.
+        (port == "particles").then_some(1)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -321,36 +317,16 @@ impl Primitive for LiquidFill {
             return;
         }
         let filled = filled_sites(cells, pool, sites);
-        let slots = pool_slots(filled, requested);
-        if slots > u64::from(EXACT_F32_COUNT) {
+        let most = pool_slots(filled, requested);
+        if most > u64::from(EXACT_F32_COUNT) {
             ctx.outputs.set_scalar("count", ParamValue::Float(0.0));
             ctx.error(format!(
-                "Liquid Fill: the pool holds {slots} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly"
+                "Liquid Fill: the pool holds {most} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly"
             ));
             return;
         }
-        let capacity = (slots as u32).max(1);
-        ctx.outputs
-            .set_scalar("count", ParamValue::Float(filled as f32));
-        let bytes = u64::from(capacity) * std::mem::size_of::<FluidParticle>() as u64;
-        if self.buffer.as_ref().is_none_or(|b| b.size != bytes) {
-            match ctx
-                .gpu_encoder()
-                .device
-                .try_create_buffer(bytes, BufferUse::Gpu)
-            {
-                Ok(buffer) => {
-                    self.buffer = Some(buffer);
-                    self.filled = None;
-                }
-                Err(error) => {
-                    ctx.error(format!(
-                        "Liquid Fill needs {bytes} bytes of GPU storage: {error}"
-                    ));
-                    return;
-                }
-            }
-        }
+        let filled = filled as u32;
+        let capacity = requested.round() as u32;
         let colliders = (
             ctx.inputs.array("bodies"),
             ctx.inputs.array("shapes"),
@@ -360,7 +336,18 @@ impl Primitive for LiquidFill {
         );
         let regions = ctx.inputs.array("regions");
         let gpu = ctx.gpu_encoder();
-        let buffer = self.buffer.as_ref().expect("fill storage prepared");
+        // Every filled site, live or dead, before the live ones are kept.
+        let bytes = u64::from(filled.max(1)) * std::mem::size_of::<FluidParticle>() as u64;
+        let all_sites = match gpu.device.try_create_buffer(bytes, BufferUse::Gpu) {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                ctx.error(format!(
+                    "Liquid Fill needs {bytes} bytes of GPU scratch: {error}"
+                ));
+                return;
+            }
+        };
+        let buffer = &all_sites;
         // Without all five collider arrays no body is read; the particle
         // buffer fills their slots.
         let (bodies, shapes, atlas, nodes, triangles, body_count) = match colliders {
@@ -420,7 +407,11 @@ impl Primitive for LiquidFill {
             bounds[5].to_bits(),
             fill_region as u32,
         ];
-        if self.filled == Some((key, buffer.identity_key())) {
+        if let Some(kept) = &self.buffer
+            && self.filled == Some((key, kept.identity_key()))
+        {
+            ctx.outputs
+                .set_scalar("count", ParamValue::Float(self.live as f32));
             return;
         }
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -444,7 +435,7 @@ impl Primitive for LiquidFill {
             seed: clamp(seed),
             body_count,
             epoch: clamp(epoch),
-            particle_capacity: clamp(capacity),
+            particle_capacity: clamp(filled),
             closed_faces,
             bounds_lo_x: bounds[0],
             bounds_lo_y: bounds[1],
@@ -453,7 +444,7 @@ impl Primitive for LiquidFill {
             bounds_hi_y: bounds[4],
             bounds_hi_z: bounds[5],
             fill_region,
-            dispatch_count: capacity,
+            dispatch_count: filled,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -498,10 +489,143 @@ impl Primitive for LiquidFill {
                     offset: 0,
                 },
             ],
-            [capacity.div_ceil(256), 1, 1],
+            [filled.max(1).div_ceil(256), 1, 1],
             "node.liquid_fill",
         );
-        self.filled = Some((key, buffer.identity_key()));
+        match self.keep_live(gpu, &all_sites, filled, capacity) {
+            Ok(kept) => {
+                self.filled = Some((key, kept));
+                ctx.outputs
+                    .set_scalar("count", ParamValue::Float(self.live as f32));
+            }
+            Err(error) => {
+                self.filled = None;
+                ctx.outputs.set_scalar("count", ParamValue::Float(0.0));
+                ctx.error(format!("Liquid Fill: {error}"));
+            }
+        }
+    }
+}
+
+impl LiquidFill {
+    /// Keep the live ones of the `filled` sites' particles in `all_sites`,
+    /// in site order, in storage of the larger of their count and
+    /// `capacity`, the slots past them dead. The count is read back at once:
+    /// the frame's work so far is committed and waited on, once per fill.
+    /// Returns the storage's identity.
+    fn keep_live(
+        &mut self,
+        gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
+        all_sites: &GpuBuffer,
+        filled: u32,
+        capacity: u32,
+    ) -> Result<usize, String> {
+        let device = gpu.device;
+        let (flag, scatter) = self.compact.get_or_insert_with(|| {
+            (
+                device.create_compute_pipeline(COMPACT_SHADER, "flag", "node.liquid_fill.flag"),
+                device.create_compute_pipeline(
+                    COMPACT_SHADER,
+                    "scatter",
+                    "node.liquid_fill.scatter",
+                ),
+            )
+        });
+        let n = filled as usize;
+        let mut scan = PrefixScan::default();
+        scan.prepare(device);
+        let params = [filled, 0, 0, 0];
+        let groups = [filled.max(1).div_ceil(256), 1, 1];
+        let live = if n == 0 {
+            0
+        } else {
+            scan.buffer(device, n)?;
+            let storage = scan.buffer_ref();
+            let enc = &mut *gpu.native_enc;
+            enc.compute_memory_barrier_buffers();
+            enc.dispatch_compute(
+                flag,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::cast_slice(&params),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: all_sites,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: storage,
+                        offset: 0,
+                    },
+                ],
+                groups,
+                "node.liquid_fill.flag",
+            );
+            enc.compute_memory_barrier_buffers();
+            scan.encode_labelled(enc, n, COMPACT_LABELS);
+            enc.commit_wait_and_continue(device);
+            let source = storage
+                .mapped_ptr()
+                .ok_or("the live count is not CPU-visible")?
+                .cast::<u32>()
+                .cast_const();
+            // SAFETY: shared storage of at least `n` words whose writers the
+            // wait above has retired.
+            unsafe { source.add(n - 1).read() }
+        };
+        self.live = live;
+        let slots = live.max(capacity).max(1);
+        let bytes = u64::from(slots) * std::mem::size_of::<FluidParticle>() as u64;
+        if self.buffer.as_ref().is_none_or(|b| b.size != bytes) {
+            manifold_node_engine::load::expand::admit_world_bytes(
+                device.modifier_memory_snapshot(),
+                bytes,
+            )
+            .map_err(|error| error.to_string())?;
+            self.buffer = Some(
+                device
+                    .try_create_buffer(bytes, BufferUse::Gpu)
+                    .map_err(|error| format!("{bytes} bytes of GPU storage: {error}"))?,
+            );
+        }
+        let kept = self.buffer.as_ref().expect("fill storage prepared");
+        let enc = &mut *gpu.native_enc;
+        enc.clear_buffer(kept);
+        if n > 0 {
+            let storage = scan.buffer_ref();
+            enc.compute_memory_barrier_buffers();
+            enc.dispatch_compute(
+                scatter,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::cast_slice(&params),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: all_sites,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: storage,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: kept,
+                        offset: 0,
+                    },
+                ],
+                groups,
+                "node.liquid_fill.scatter",
+            );
+            enc.compute_memory_barrier_buffers();
+        }
+        Ok(kept.identity_key())
     }
 }
 
