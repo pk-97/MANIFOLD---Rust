@@ -216,7 +216,9 @@ mod cpu_tests {
             .validate(&module)
             .unwrap_or_else(|error| panic!("{error:?}"));
         }
-        assert!(body(3).contains("FS_A_LEN: u32 = 4096u") && body(1).contains("FS_A_LEN: u32 = 1000u"));
+        assert!(
+            body(3).contains("FS_A_LEN: u32 = 4096u") && body(1).contains("FS_A_LEN: u32 = 1000u")
+        );
         assert_eq!(std::mem::size_of::<Uniforms>(), 32);
     }
 }

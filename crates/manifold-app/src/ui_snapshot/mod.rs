@@ -15,9 +15,9 @@ mod input_matrix;
 mod interact;
 #[cfg(test)]
 mod lookup_coverage;
+mod readback;
 #[cfg(test)]
 mod region_rebuild;
-mod readback;
 mod render;
 mod script;
 mod thumbs;

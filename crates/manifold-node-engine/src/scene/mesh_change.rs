@@ -74,9 +74,15 @@ impl<'a> MeshOutputRule<'a> {
     /// revises both aspects on every write.
     pub fn deformer(port: &str, topology: &'a [MeshDependency]) -> Self {
         if port == "out" {
-            return Self { topology: MeshRevisionRule::Dependencies(topology), positions: MeshRevisionRule::Written };
+            return Self {
+                topology: MeshRevisionRule::Dependencies(topology),
+                positions: MeshRevisionRule::Written,
+            };
         }
-        Self { topology: MeshRevisionRule::Written, positions: MeshRevisionRule::Written }
+        Self {
+            topology: MeshRevisionRule::Written,
+            positions: MeshRevisionRule::Written,
+        }
     }
 }
 

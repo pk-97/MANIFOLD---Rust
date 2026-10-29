@@ -146,6 +146,9 @@ mod tests {
         // A one-particle sheet at that density holds pi * 4 of them (four
         // particles per square cell), the fade's lower part.
         let sheet = std::f32::consts::PI * 4.0 / n;
-        assert!(sheet > WEIGHT_FADE_START && sheet < WEIGHT_FADE_END, "{sheet}");
+        assert!(
+            sheet > WEIGHT_FADE_START && sheet < WEIGHT_FADE_END,
+            "{sheet}"
+        );
     }
 }

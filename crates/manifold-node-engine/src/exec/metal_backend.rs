@@ -370,8 +370,12 @@ impl MetalBackend {
             return false;
         };
         let owned = &owned.texture;
-        if (owned.width, owned.height, owned.format, owned.mip_level_count())
-            != (host.width, host.height, host.format, host.mip_level_count())
+        if (
+            owned.width,
+            owned.height,
+            owned.format,
+            owned.mip_level_count(),
+        ) != (host.width, host.height, host.format, host.mip_level_count())
         {
             return false;
         }
@@ -1170,9 +1174,7 @@ impl Backend for MetalBackend {
     fn alias_array(&mut self, src_slot: Slot, dst_slot: Slot) -> bool {
         // Resolve first, so a switch reading another switch aliases the root.
         let src = self.array_source(src_slot);
-        if src == dst_slot
-            || !self.buffers_array.contains_key(&src)
-            || dst_slot.0 >= self.next_slot
+        if src == dst_slot || !self.buffers_array.contains_key(&src) || dst_slot.0 >= self.next_slot
         {
             return false;
         }
@@ -1387,7 +1389,10 @@ mod array_buffer_tests {
         let (device, mut b) = make_backend();
         let layout = particle_layout();
         let capacity = 1024u32;
-        let buffer = device.create_buffer(u64::from(layout.item_size) * u64::from(capacity), manifold_gpu::BufferUse::Gpu);
+        let buffer = device.create_buffer(
+            u64::from(layout.item_size) * u64::from(capacity),
+            manifold_gpu::BufferUse::Gpu,
+        );
         let buf_size = buffer.size;
 
         let slot = b.pre_bind_array(ResourceId(0), buffer);
@@ -1406,7 +1411,10 @@ mod array_buffer_tests {
         // back the pinned slot — not allocate a fresh one.
         let (device, mut b) = make_backend();
         let layout = particle_layout();
-        let buffer = device.create_buffer(u64::from(layout.item_size) * 256, manifold_gpu::BufferUse::Gpu);
+        let buffer = device.create_buffer(
+            u64::from(layout.item_size) * 256,
+            manifold_gpu::BufferUse::Gpu,
+        );
 
         let pinned = b.pre_bind_array(ResourceId(0), buffer);
         // Array slots ignore dims (pool_key normalizes them); pass
@@ -1425,7 +1433,10 @@ mod array_buffer_tests {
         // unpin it.
         let (device, mut b) = make_backend();
         let layout = particle_layout();
-        let buffer = device.create_buffer(u64::from(layout.item_size) * 64, manifold_gpu::BufferUse::Gpu);
+        let buffer = device.create_buffer(
+            u64::from(layout.item_size) * 64,
+            manifold_gpu::BufferUse::Gpu,
+        );
 
         let slot = b.pre_bind_array(ResourceId(0), buffer);
         b.release(ResourceId(0), PortType::Array(layout), None, (16, 16));
@@ -1550,7 +1561,10 @@ mod array_buffer_tests {
     fn drop_all_resources_clears_array_buffers() {
         let (device, mut b) = make_backend();
         let layout = particle_layout();
-        let buffer = device.create_buffer(u64::from(layout.item_size) * 32, manifold_gpu::BufferUse::Gpu);
+        let buffer = device.create_buffer(
+            u64::from(layout.item_size) * 32,
+            manifold_gpu::BufferUse::Gpu,
+        );
         let slot = b.pre_bind_array(ResourceId(0), buffer);
         assert!(b.array_buffer(slot).is_some());
 
@@ -1610,7 +1624,9 @@ mod alias_tests {
         // After alias, dst reads what src reads — same identity.
         assert!(b.alias_2d(src, dst), "alias should succeed");
         assert_eq!(
-            b.texture_2d(dst).expect("dst still readable").identity_key(),
+            b.texture_2d(dst)
+                .expect("dst still readable")
+                .identity_key(),
             pre_src_ptr,
             "dst should now shadow src's texture",
         );
@@ -1634,7 +1650,9 @@ mod alias_tests {
         // alias.
         b.clear_skip_aliases();
         assert_eq!(
-            b.texture_2d(dst).expect("dst still readable").identity_key(),
+            b.texture_2d(dst)
+                .expect("dst still readable")
+                .identity_key(),
             pre_dst_ptr,
             "after clear, dst reads its owned texture again",
         );
@@ -1681,7 +1699,9 @@ mod alias_tests {
         // clear only wipes runtime-installed aliases.
         b.clear_skip_aliases();
         assert_eq!(
-            b.texture_2d(dst).expect("dst still readable").identity_key(),
+            b.texture_2d(dst)
+                .expect("dst still readable")
+                .identity_key(),
             host_ptr,
             "clear_skip_aliases leaves host borrows alone",
         );
@@ -1785,6 +1805,10 @@ mod alias_tests {
         assert!(bytes.iter().all(|&byte| byte == 0));
         assert!(!b.is_unowned_array(out));
         b.own_array(src).unwrap();
-        assert_eq!(b.array_buffer(src).unwrap().size, 64, "an owned slot is untouched");
+        assert_eq!(
+            b.array_buffer(src).unwrap().size,
+            64,
+            "an owned slot is untouched"
+        );
     }
 }

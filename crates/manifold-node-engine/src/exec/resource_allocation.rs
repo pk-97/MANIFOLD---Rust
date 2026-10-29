@@ -250,7 +250,10 @@ pub enum ArrayAllocationAction {
     /// frame. `bytes` is the buffer it gets if the switch ever has to run
     /// instead (its choice changed to an unwired input); `storage` records
     /// the same capacity for downstream sizing.
-    Unowned { resource: ResourceId, bytes: u64 },
+    Unowned {
+        resource: ResourceId,
+        bytes: u64,
+    },
 }
 
 /// Complete pure result of array resource planning.
@@ -1115,11 +1118,14 @@ mod tests {
             let unowned = planned.actions.iter().any(|action| {
                 matches!(action, ArrayAllocationAction::Unowned { resource, .. } if *resource == out)
             });
-            let allocated = planned.actions.iter().any(|action| {
-                matches!(action, ArrayAllocationAction::Allocate(a) if a.resource == out)
-            });
+            let allocated = planned.actions.iter().any(
+                |action| matches!(action, ArrayAllocationAction::Allocate(a) if a.resource == out),
+            );
             assert_eq!((unowned, allocated), (wired, !wired));
-            assert_eq!(planned.storage[&out].bytes, 24, "capacity still sizes readers");
+            assert_eq!(
+                planned.storage[&out].bytes, 24,
+                "capacity still sizes readers"
+            );
         }
     }
 

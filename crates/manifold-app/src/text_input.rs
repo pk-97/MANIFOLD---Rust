@@ -909,7 +909,12 @@ mod parse_tests {
 
     #[test]
     fn resolution_parses_any_separator_and_clamps_to_even() {
-        for text in ["2560x1600", "2560 X 1600", "2560\u{00D7}1600", " 2560, 1600 "] {
+        for text in [
+            "2560x1600",
+            "2560 X 1600",
+            "2560\u{00D7}1600",
+            " 2560, 1600 ",
+        ] {
             assert_eq!(parse_resolution(text), Some((2560, 1600)), "{text}");
         }
         assert_eq!(parse_resolution("1921x1081"), Some((1920, 1080)));

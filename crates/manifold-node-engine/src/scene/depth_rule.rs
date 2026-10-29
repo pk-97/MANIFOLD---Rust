@@ -46,5 +46,4 @@ pub enum DepthRule {
 }
 
 #[cfg(test)]
-mod tests {
-}
+mod tests {}

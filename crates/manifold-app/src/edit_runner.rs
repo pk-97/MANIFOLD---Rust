@@ -241,7 +241,10 @@ mod tests {
             project
                 .timeline
                 .layers
-                .push(manifold_core::layer::Layer::new_video(format!("Video {i}"), i));
+                .push(manifold_core::layer::Layer::new_video(
+                    format!("Video {i}"),
+                    i,
+                ));
         }
         let id = project.timeline.layers[2].layer_id.clone();
         let mut service = EditingService::new();

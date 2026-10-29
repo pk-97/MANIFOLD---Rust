@@ -12,9 +12,9 @@
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 use manifold_water_liquid::fluid_particles::FaceSample;
+use manifold_water_liquid::whitewater::KnownValue;
 #[cfg(all(test, feature = "gpu-proofs"))]
 use manifold_water_liquid::whitewater::{CELL_AIR, CELL_LIQUID, CELL_SOLID};
-use manifold_water_liquid::whitewater::KnownValue;
 
 /// The canonical liquid distance for cells of `h` metres: air, three cells out.
 #[cfg(all(test, feature = "gpu-proofs"))]

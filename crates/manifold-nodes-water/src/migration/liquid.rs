@@ -1068,7 +1068,12 @@ pub(crate) fn wire_display_stride(def: &mut EffectGraphDef) -> bool {
     let added: Vec<EffectGraphWire> = def
         .nodes
         .iter()
-        .filter(|n| matches!(n.type_id.as_str(), "node.field_smooth_blend" | "node.field_close"))
+        .filter(|n| {
+            matches!(
+                n.type_id.as_str(),
+                "node.field_smooth_blend" | "node.field_close"
+            )
+        })
         .filter(|n| source(n.id, "sim_cell_size").is_none())
         .filter_map(|n| {
             let tiles = source(n.id, "tiles")?;
@@ -1092,7 +1097,13 @@ pub(crate) fn wire_display_stride(def: &mut EffectGraphDef) -> bool {
 /// Volume its blobs feed.
 pub(crate) fn wire_blob_neighbours(def: &mut EffectGraphDef) -> bool {
     use manifold_core::effect_graph_def::EffectGraphWire;
-    const PORTS: [&str; 5] = ["cell_ranges", "tiles", "pool_tiles", "cell_size", "sim_cell_size"];
+    const PORTS: [&str; 5] = [
+        "cell_ranges",
+        "tiles",
+        "pool_tiles",
+        "cell_size",
+        "sim_cell_size",
+    ];
     let source = |node: u32, port: &str| {
         def.wires
             .iter()

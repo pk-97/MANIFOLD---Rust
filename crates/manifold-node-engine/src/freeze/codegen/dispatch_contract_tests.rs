@@ -332,7 +332,8 @@ fn kernel_without_texel_input_has_no_texel_helper() {
         kind: PortKind::Output,
         required: false,
     }];
-    let body = "fn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {\n    return c;\n}";
+    let body =
+        "fn body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>) -> vec4<f32> {\n    return c;\n}";
     let generated = generate_standalone(&StandaloneKernelSpec {
         fusion_kind: FusionKind::Pointwise,
         body,

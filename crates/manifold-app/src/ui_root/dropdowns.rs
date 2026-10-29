@@ -1450,11 +1450,9 @@ impl UIRoot {
                         );
                     }
                 }
-                items.push(
-                    DropdownItem::new("Custom\u{2026}").with_action(PanelAction::Transport(
-                        TransportAction::CustomResolutionClicked,
-                    )),
-                );
+                items.push(DropdownItem::new("Custom\u{2026}").with_action(
+                    PanelAction::Transport(TransportAction::CustomResolutionClicked),
+                ));
 
                 self.open_dropdown_typed(items, trigger);
                 true

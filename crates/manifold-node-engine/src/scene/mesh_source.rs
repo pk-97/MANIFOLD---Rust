@@ -538,10 +538,10 @@ mod tests {
             },
         ]
         .into_iter()
-        .chain((0..PLATONIC_SHAPES.len() as u32).map(|shape| MeshSource::Platonic {
-            shape,
-            radius: 1.7,
-        }));
+        .chain(
+            (0..PLATONIC_SHAPES.len() as u32)
+                .map(|shape| MeshSource::Platonic { shape, radius: 1.7 }),
+        );
         for source in sources {
             let bounds = source.local_bounds().expect("analytic source");
             for vertex in source.load_vertices().unwrap() {

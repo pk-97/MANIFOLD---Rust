@@ -3499,7 +3499,6 @@ mod tests {
             "a panicking compile refuses (None), it doesn't propagate"
         );
     }
-
 }
 
 #[cfg(any(test, feature = "testkit"))]

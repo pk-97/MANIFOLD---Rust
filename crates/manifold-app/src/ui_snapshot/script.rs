@@ -3992,4 +3992,3 @@ fn effect_card_id(
             .map(|e| e.id.clone()),
     }
 }
-

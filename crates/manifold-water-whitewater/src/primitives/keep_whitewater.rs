@@ -16,7 +16,9 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
-use manifold_water_liquid::bodies::{COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::bodies::{
+    COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape,
+};
 use manifold_water_liquid::fluid_particles::CellRange;
 use manifold_water_liquid::tile_pool::tile_pool;
 use manifold_water_liquid::whitewater::{WHITEWATER_COMMON, WhitewaterParticle};
@@ -182,14 +184,27 @@ impl Primitive for KeepWhitewater {
             _pad0: 0,
         };
         if uniforms.region_count > 0.0 {
-            for name in ["regions", "shapes", "atlas", "collider_nodes", "collider_triangles"] {
+            for name in [
+                "regions",
+                "shapes",
+                "atlas",
+                "collider_nodes",
+                "collider_triangles",
+            ] {
                 if ctx.inputs.array(name).is_none() {
                     ctx.error(format!("Keep Whitewater: outflows require {name}"));
                     return;
                 }
             }
         }
-        let extra = ["regions", "shapes", "atlas", "collider_nodes", "collider_triangles"].map(|name| ctx.inputs.array(name).unwrap_or(solid));
+        let extra = [
+            "regions",
+            "shapes",
+            "atlas",
+            "collider_nodes",
+            "collider_triangles",
+        ]
+        .map(|name| ctx.inputs.array(name).unwrap_or(solid));
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             pipeline,
