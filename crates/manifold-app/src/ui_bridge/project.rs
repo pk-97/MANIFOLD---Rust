@@ -1,5 +1,5 @@
 //! Project-related dispatch: file operations, export, audio/percussion, resolution,
-//! MIDI note/channel, generator type, waveform/stem actions.
+//! MIDI note/channel, generator type, waveform actions.
 
 use manifold_core::LayerId;
 use manifold_core::PresetTypeId;

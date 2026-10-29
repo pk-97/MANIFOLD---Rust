@@ -28,7 +28,6 @@ impl<'a> PercussionTimelinePlanner<'a> {
     ) -> PercussionPlacementPlan {
         let mut plan = PercussionPlacementPlan::new();
         let events = &analysis.events;
-        plan.total_events = events.len() as i32;
 
         let mut accepted_placements: Vec<PercussionClipPlacement> =
             Vec::with_capacity(events.len());
@@ -47,21 +46,16 @@ impl<'a> PercussionTimelinePlanner<'a> {
                 video_clip_id,
             } = match self.binding_resolver.try_resolve(percussion_event) {
                 Some(b) => b,
-                None => {
-                    plan.skipped_unmapped += 1;
-                    continue;
-                }
+                None => continue,
             };
 
             if percussion_event.confidence < binding.minimum_confidence {
-                plan.skipped_low_confidence += 1;
                 continue;
             }
 
             let compensated_time =
                 Seconds(percussion_event.time_seconds as f64) + options.onset_compensation_seconds;
             let Some(source_beat) = options.clip_anchor.map_source_seconds(compensated_time) else {
-                plan.skipped_out_of_clip += 1;
                 continue;
             };
             let source_beat = source_beat.max(Beats::ZERO);
@@ -100,7 +94,6 @@ impl<'a> PercussionTimelinePlanner<'a> {
                     if placement.confidence > existing.confidence {
                         accepted_placements[existing_index] = placement;
                     }
-                    plan.skipped_by_quantized_dedup += 1;
                     continue;
                 }
 
@@ -183,7 +176,6 @@ mod tests {
             PercussionTimelinePlanner::new(Box::new(KickResolver)).build_plan(&analysis, &options);
 
         assert_eq!(plan.accepted_events(), 1, "one kick inside the clip window");
-        assert_eq!(plan.skipped_out_of_clip, 1, "one kick trimmed past the end");
         assert!((plan.placements()[0].start_beat.0 - 1.0).abs() < 1e-6);
     }
 }

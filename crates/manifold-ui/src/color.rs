@@ -696,11 +696,7 @@ pub const DEFAULT_TIMELINE_SPLIT_RATIO: f32 = 0.30;
 pub const MIN_TIMELINE_SPLIT_RATIO: f32 = 0.15;
 pub const MAX_TIMELINE_SPLIT_RATIO: f32 = 0.70;
 
-// ── Waveform / stem lane heights ───────────────────────────────────
-
-// ── Waveform lane colors (from UIConstants.cs lines 218-255, 300-301) ──
-
-// ── Stem lane background colors (subtle per-stem tints, UIConstants.cs lines 247-250) ──
+// ── Waveform colours ──
 
 // Three-band waveform: low outer body, mid body, high inner detail.
 pub const WAVEFORM_LOW: Color32 = Color32::new(66, 151, 225, 255);

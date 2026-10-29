@@ -21,14 +21,12 @@ use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::units::{Beats, Seconds};
 use manifold_editing::command::{Command, CompositeCommand};
-use manifold_editing::commands::clip::{
-    ChangeClipRecordedBpmCommand, DeleteClipCommand, MoveClipCommand,
-};
+use manifold_editing::commands::clip::{ChangeClipRecordedBpmCommand, MoveClipCommand};
 use manifold_editing::service::EditingService;
 
 use crate::audio_decoder::decode_audio_to_pcm;
 use crate::percussion_import::{
-    PercussionImportService, build_clip_detection_options, get_trigger_layer_name,
+    apply_placement_plan, build_clip_detection_options, get_trigger_layer_name, remove_triggers,
 };
 use crate::percussion_planner::PercussionTimelinePlanner;
 
@@ -282,46 +280,22 @@ impl PercussionImportOrchestrator {
         project: &mut Project,
         editing_service: &mut EditingService,
     ) {
-        let mut commands: Vec<Box<dyn Command>> = Vec::new();
-        for layer in project.timeline.layers.iter_mut() {
-            let layer_lid = layer.layer_id.clone();
-            let owned: Vec<_> = layer
-                .clips
-                .iter()
-                .filter(|c| c.detection_source.as_ref() == Some(&clip_id))
-                .cloned()
-                .collect();
-            for clip in owned {
-                commands.push(Box::new(DeleteClipCommand::new(
-                    clip.clone(),
-                    layer_lid.clone(),
-                )));
-                layer.remove_clip(&clip.id);
-            }
-        }
-
+        let commands = remove_triggers(project, &clip_id);
         if commands.is_empty() {
             self.set_status("No triggers to clear", COLOR_GREY, 2.0);
             return;
         }
-
-        project.timeline.mark_clip_lookup_dirty();
         let count = commands.len();
-        let command: Box<dyn Command> = if commands.len() == 1 {
-            commands.remove(0)
-        } else {
-            Box::new(manifold_editing::command::CompositeCommand::new(
-                commands,
-                "Clear clip triggers".to_string(),
-            ))
-        };
-        editing_service.record(command);
+        editing_service.record(Box::new(CompositeCommand::new(
+            commands,
+            "Clear clip triggers".to_string(),
+        )));
         self.set_status(&format!("Cleared {count} clips"), COLOR_GREEN, 3.0);
     }
 
     /// Cache `analysis` on the clip, build the clip-anchored options from its `DetectionConfig`, plan, and place
-    /// its triggers (tagged with the clip id, clearing only this clip's prior triggers). Shared by Detect and
-    /// Replan. Returns how many clips it placed.
+    /// its triggers in place of the clip's previous ones. Shared by Detect and Replan. Returns how many clips it
+    /// placed.
     fn plan_and_apply_for_clip(
         &mut self,
         clip_id: &ClipId,
@@ -363,23 +337,11 @@ impl PercussionImportOrchestrator {
             detection.last_counts = counts;
         }
 
-        if plan.accepted_events() == 0 {
-            return 0;
+        let (added, undo) = apply_placement_plan(project, &plan, &options, clip_id);
+        if let Some(undo) = undo {
+            editing_service.record(undo);
         }
-
-        let result = PercussionImportService::new().apply_placement_plan(
-            project,
-            Some(&plan),
-            Some(&options),
-            Some(clip_id),
-        );
-        if !result.success {
-            return 0;
-        }
-        if let Some(cmd) = result.undo_command {
-            editing_service.record(cmd);
-        }
-        result.added_clips.max(0) as usize
+        added
     }
 
     /// Sets the clip's source tempo from `grid` (a manual BPM stays; see `ChangeClipRecordedBpmCommand::new_detected`),

@@ -243,21 +243,10 @@ impl PercussionClipPlacement {
 
 // ─── PercussionPlacementPlan ───
 
-/// Port of Unity PercussionPlacementPlan class.
-/// Planner output with placement list and skip counters for diagnostics.
+/// The planner's output: the trigger clips to place, sorted by start beat.
 #[derive(Debug, Clone, Default)]
 pub struct PercussionPlacementPlan {
     placements: Vec<PercussionClipPlacement>,
-    pub total_events: i32,
-    pub skipped_unknown_type: i32,
-    pub skipped_invalid_timing: i32,
-    pub skipped_unmapped: i32,
-    pub skipped_low_confidence: i32,
-    pub skipped_by_quantized_dedup: i32,
-    pub skipped_low_energy: i32,
-    /// Events trimmed because they fall outside the clip's window (per-clip
-    /// detection only — before `in_point` or past the clip end).
-    pub skipped_out_of_clip: i32,
 }
 
 impl PercussionPlacementPlan {
@@ -278,12 +267,8 @@ impl PercussionPlacementPlan {
     }
 
     pub fn sort_placements(&mut self) {
-        self.placements.sort_by(|a, b| {
-            a.start_beat
-                .0
-                .partial_cmp(&b.start_beat.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        self.placements
+            .sort_by(|a, b| a.start_beat.0.total_cmp(&b.start_beat.0));
     }
 }
 
