@@ -1,5 +1,5 @@
 //! `node.gas_volume` — the gas solver of Smoke and Fire: a dense, axis-aligned
-//! box of cells advanced once a frame on the GPU (see
+//! box of cells advanced on the GPU once a tick of the World's clock (see
 //! docs/SMOKE_AND_FIRE_MAP.md). The kernels are in `shaders/gas_step.wgsl`.
 //!
 //! The box floor is a wall; the sides and top are open. The fields stay on
@@ -13,6 +13,7 @@ use std::sync::LazyLock;
 
 use manifold_core::fluid_domain::{CELL_SIZE_METRES, DEFAULT_CELL_SIZE};
 use manifold_gpu::{BufferUse, GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
+use manifold_node_engine::exec::effect_node::SimStep;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
@@ -21,6 +22,14 @@ use manifold_node_engine::scene::blackbody::{
     BLACKBODY_ENTRIES, BLACKBODY_MAX_KELVIN, BLACKBODY_MIN_KELVIN, blackbody_table,
 };
 use manifold_node_engine::scene::transform::Transform;
+use manifold_nodes_physics::force_lattice::{LatticeBuffers, LatticeUpload, felt_field};
+use manifold_nodes_physics::hits::{TakesHits, TakesHitsRegistration};
+use manifold_nodes_physics::tick_sampled::{TickSampled, TickSampledRegistration};
+use manifold_physics::clock::{LiveLoad, SimulationClock};
+use manifold_physics::force_lattice::{ForceLattice, TickForces};
+use manifold_physics::input::{AppliedEvent, EventStamp};
+use manifold_physics::tick_hits::TickHits;
+use manifold_physics::{FieldValue, PlayedTime, Seconds, TickStamp, VectorField};
 
 /// Most cells along one axis of the box.
 const MAX_AXIS_CELLS: u32 = 512;
@@ -317,12 +326,6 @@ fn up_and_gravity(gravity: [f32; 3]) -> ([f32; 3], f32) {
     }
 }
 
-/// This frame's step in seconds: the frame time times speed, never past
-/// [`MAX_STEP_SECONDS`]. Zero steps nothing.
-fn step_seconds(frame_delta: f32, speed: f32) -> f32 {
-    (frame_delta * speed).clamp(0.0, MAX_STEP_SECONDS)
-}
-
 // ---- Uniforms ------------------------------------------------------------
 
 /// Field order identical to the shader's `Params`; 16-byte rows.
@@ -355,10 +358,25 @@ struct GasUniforms {
     expansion: f32,
     ignition: f32,
     seed: u32,
+    force_min: [f32; 3],
+    force_spacing: f32,
+    force_nodes: [u32; 3],
+    forces_on: u32,
+    force_base: u32,
+    impulse_on: u32,
+    impulse_base: u32,
+    pad2: u32,
 }
 
 impl GasUniforms {
-    fn new(geometry: &GasGeometry, settings: &GasSettings, dt: f32, time: f32) -> Self {
+    fn new(
+        geometry: &GasGeometry,
+        settings: &GasSettings,
+        time: f32,
+        lattice: ForceLattice,
+        step: Step,
+    ) -> Self {
+        let nodes = lattice.node_count() as u32;
         let (up, g) = up_and_gravity(settings.gravity);
         Self {
             dims: geometry.dims,
@@ -367,7 +385,7 @@ impl GasUniforms {
             h: geometry.cell,
             up,
             g,
-            dt,
+            dt: step.dt,
             time,
             kind: settings.kind,
             pad: 0,
@@ -387,6 +405,14 @@ impl GasUniforms {
             expansion: settings.expansion,
             ignition: IGNITION,
             seed: settings.seed,
+            force_min: lattice.min(),
+            force_spacing: lattice.spacing(),
+            force_nodes: lattice.nodes(),
+            forces_on: u32::from(step.forces.is_some()),
+            force_base: step.forces.unwrap_or(0) * nodes,
+            impulse_on: u32::from(step.impulses.is_some()),
+            impulse_base: step.impulses.unwrap_or(0) * nodes,
+            pad2: 0,
         }
     }
 }
@@ -452,6 +478,8 @@ pub struct GasBuffers {
     velocity_out: GpuBuffer,
     lights: [GpuBuffer; RING],
     blackbody: GpuBuffer,
+    /// What the force binding holds while no scene force reaches the gas.
+    no_forces: GpuBuffer,
 }
 
 impl GasBuffers {
@@ -497,6 +525,7 @@ impl GasBuffers {
                 make(LIGHT_BYTES, BufferUse::Readback)?,
             ],
             blackbody,
+            no_forces: make(32, BufferUse::Gpu)?,
         })
     }
 }
@@ -568,7 +597,8 @@ fn binding_list<'a>(
     buffers: &'a GasBuffers,
     roles: Roles,
     light: &'a GpuBuffer,
-) -> [GpuBinding<'a>; 14] {
+    lattices: [&'a GpuBuffer; 2],
+) -> [GpuBinding<'a>; 16] {
     let bind = |binding: u32, buffer: &'a GpuBuffer| GpuBinding::Buffer {
         binding,
         buffer,
@@ -592,6 +622,8 @@ fn binding_list<'a>(
         bind(11, &buffers.velocity_out),
         bind(12, light),
         bind(13, &buffers.blackbody),
+        bind(14, lattices[0]),
+        bind(15, lattices[1]),
     ]
 }
 
@@ -682,13 +714,14 @@ pub struct LightSlot {
 manifold_node_engine::primitive! {
     name: GasVolume,
     type_id: "node.gas_volume",
-    purpose: "Simulate smoke or fire in an axis-aligned box of cells: the domain Transform is the box (its position the centre, its scale the size in metres; rotation is ignored) and cell_metres the cell size. The floor is a wall; the sides and top are open and fade what reaches them. A source at the floor's centre adds smoke density (Kind Smoke) or fuel that ignites past the ignition temperature (Kind Fire); hot gas rises against gravity, swirls, and expands where it burns. It steps once a frame by the frame time times speed, at most 1/20 s; a change of the reset value, a transport restart or a change of the box's cell counts clears it. Publishes state (two words per cell: density and temperature, then fuel and flame, each pair as two halves) and velocity (u and v, then w and 0, as halves) as arrays with cell (x, y, z) at index x + nx (y + ny z); the box's first corner as origin_x, origin_y, origin_z with cell_size and dims_x, dims_y, dims_z; and the flames' light read back two frames late: light_power (the emission sum, 0 for no flame), light_x, light_y, light_z (its centre in the world) and light_temperature (0 ambient, 1 a hot flame).",
+    purpose: "Simulate smoke or fire in an axis-aligned box of cells: the domain Transform is the box (its position the centre, its scale the size in metres; rotation is ignored) and cell_metres the cell size. The floor is a wall; the sides and top are open and fade what reaches them. A source at the floor's centre adds smoke density (Kind Smoke) or fuel that ignites past the ignition temperature (Kind Fire); hot gas rises against gravity, swirls, and expands where it burns. It steps once a tick of the World's fixed clock (each tick's length times speed, at most 1/20 s); scene forces on acceleration_field push it (Radial, Vortex, Uniform) or carry it (a wind is the air moving), laid on a lattice over the box at each tick's start, and a force's hit changes its velocity once on the tick it lands on. A reset edge, a transport restart, a backward seek or a change of the box's cell counts clears it. Publishes state (two words per cell: density and temperature, then fuel and flame, each pair as two halves) and velocity (u and v, then w and 0, as halves) as arrays with cell (x, y, z) at index x + nx (y + ny z); the box's first corner as origin_x, origin_y, origin_z with cell_size and dims_x, dims_y, dims_z; and the flames' light read back two frames late: light_power (the emission sum, 0 for no flame), light_x, light_y, light_z (its centre in the world) and light_temperature (0 ambient, 1 a hot flame).",
     inputs: {
         domain: Transform optional,
         cell_metres: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         speed: ScalarF32 optional,
         reset: ScalarF32 optional,
+        acceleration_field: VectorField optional,
     },
     outputs: {
         state: Array(u32),
@@ -734,15 +767,23 @@ manifold_node_engine::primitive! {
         pipelines: Option<Pipelines> = None,
         // Which of the three velocity and state buffers holds the last result.
         current: usize = 0,
-        previous_reset: Option<f32> = None,
-        // A transport restart asked for a clear on the next frame.
-        restart: bool = false,
+        // The World's fixed ticks: the gas steps once a tick, so a force or
+        // a hit lands on the same step at any frame rate, as water does.
+        clock: SimulationClock = SimulationClock::default(),
+        steps: Vec<Step> = Vec::new(),
         // Seconds stepped since the last clear: the source's noise clock.
         sim_time: f64 = 0.0,
         // Frames published since the last clear: the light ring's cursor.
         frames: u64 = 0,
         light_slots: [Option<LightSlot>; RING] = [None; RING],
         light: LightReadout = LightReadout::default(),
+        // The scene's forces laid at each tick's start on a lattice over the
+        // box, the hits landing on the frame's ticks, and their GPU copies.
+        forces: TickForces = TickForces::default(),
+        hits: TickHits<FieldValue> = TickHits::new("Smoke and Fire impulses"),
+        impulses: Vec<[f32; 4]> = Vec::new(),
+        impulses_dirty: bool = false,
+        lattices: LatticeBuffers = LatticeBuffers::default(),
     },
 }
 
@@ -761,17 +802,145 @@ fn publish(ctx: &mut EffectNodeContext<'_, '_>, geometry: &GasGeometry, light: &
     }
 }
 
+/// One tick of a frame: its simulated seconds and the force and impulse
+/// lattices it reads, by index, if any.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Step {
+    dt: f32,
+    forces: Option<u32>,
+    impulses: Option<u32>,
+}
+
+/// The force lattice over the box: a node every `FORCE_LATTICE_STRIDE` cells
+/// from its first face to its last, as water and sand lay theirs.
+fn force_lattice(geometry: &GasGeometry) -> ForceLattice {
+    ForceLattice::covering(geometry.origin, geometry.cell, geometry.dims.map(|d| d + 1))
+}
+
 impl GasVolume {
-    /// Encode one frame: reallocate and clear when the box changed or a
-    /// restart was asked for, read the light back, step (when `dt` is above
-    /// zero) and publish the fields.
+    /// Advance the clock and lay the frame's ticks: each tick's length, the
+    /// force lattice it reads (one while the field holds still, else one a
+    /// tick, none without a field) and the impulse lattice of the hits
+    /// landing on it. Returns whether the clock restarted.
+    fn plan_ticks(
+        &mut self,
+        ctx: &EffectNodeContext<'_, '_>,
+        geometry: &GasGeometry,
+        settings: &GasSettings,
+    ) -> Result<bool, String> {
+        // The air itself: no still air of its own (Air Resistance is the
+        // air), wind felt at the full drag rate.
+        let field = felt_field(ctx, "Gas Volume")?;
+        let frame = self.clock.advance(
+            ctx.played(),
+            ctx.sim_step.interval.0,
+            settings.speed,
+            ctx.scalar_or_param("reset", 0.0),
+            false,
+            ctx.sim_step.offline(),
+        );
+        // Hits follow the clock before anything else can fail, so a refused
+        // frame never leaves them a frame behind it.
+        self.hits.observe_frame(ctx.played(), &frame)?;
+        let lattice = force_lattice(geometry);
+        self.forces
+            .prepare(lattice, field.as_ref(), &self.clock, &frame)?;
+        let hit_ticks = self.lay_impulses(lattice, frame.first_sequence, frame.ticks)?;
+        let lattices = self.forces.lattices() as u32;
+        self.steps.clear();
+        for tick in 0..frame.ticks {
+            let seconds = frame
+                .interval(u64::from(tick))
+                .map_or(0.0, |interval| interval.duration().0) as f32;
+            self.steps.push(Step {
+                dt: seconds.clamp(0.0, MAX_STEP_SECONDS),
+                forces: (lattices > 0).then(|| tick.min(lattices - 1)),
+                impulses: hit_ticks.then_some(tick),
+            });
+        }
+        Ok(frame.restarted)
+    }
+
+    /// Lay this frame's hits, one impulse lattice per tick of the frame from
+    /// `first`, each the sum of the hits landing on that tick (zero where
+    /// none did). False when no hit landed: nothing is laid or read.
+    fn lay_impulses(
+        &mut self,
+        lattice: ForceLattice,
+        first: u64,
+        ticks: u32,
+    ) -> Result<bool, String> {
+        if self.hits.impulse_tick().is_none() {
+            return Ok(false);
+        }
+        let events = self.hits.frame_events();
+        let count = lattice.node_count();
+        self.impulses.clear();
+        self.impulses.resize(ticks as usize * count, [0.0; 4]);
+        for (tick, values) in (first..).zip(self.impulses.chunks_exact_mut(count)) {
+            if !events.iter().any(|event| event.applied.tick == tick) {
+                continue;
+            }
+            lattice
+                .fill(values, |x| {
+                    events
+                        .iter()
+                        .filter(|event| event.applied.tick == tick)
+                        .fold([0.0; 3], |sum, event| {
+                            let kick = event.value.sample(x);
+                            std::array::from_fn(|axis| sum[axis] + kick[axis])
+                        })
+                })
+                .map_err(|_| "Gas Volume: a hit is not finite inside the box".to_string())?;
+        }
+        self.impulses_dirty = true;
+        Ok(true)
+    }
+
+    /// Copy the frame's force and impulse lattices to the GPU when any tick
+    /// reads one; with neither, nothing is laid or uploaded.
+    fn upload_lattices(
+        &mut self,
+        gpu: &mut GpuEncoder<'_>,
+        lattice: ForceLattice,
+        offline: bool,
+    ) -> Result<(), String> {
+        let reads = self
+            .steps
+            .iter()
+            .any(|step| step.forces.is_some() || step.impulses.is_some());
+        if !reads {
+            return Ok(());
+        }
+        self.lattices.upload(
+            gpu,
+            offline,
+            LatticeUpload {
+                lattice,
+                forces: self.forces.forces(),
+                forces_dirty: self.forces.is_dirty(),
+                impulses: &self.impulses,
+                impulses_dirty: self.impulses_dirty,
+                hits: &[],
+                tick_seconds: &[],
+                far: &[],
+            },
+        )?;
+        self.forces.mark_uploaded();
+        self.impulses_dirty = false;
+        Ok(())
+    }
+
+    /// Encode one frame: reallocate and clear when the box changed or the
+    /// clock restarted, read the light back, run each of the frame's ticks
+    /// and publish the fields.
     fn advance(
         &mut self,
         gpu: &mut GpuEncoder<'_>,
         geometry: &GasGeometry,
         settings: &GasSettings,
-        dt: f32,
         restart: bool,
+        offline: bool,
     ) -> Result<(), String> {
         let device = gpu.device;
         if self.pipelines.is_none() {
@@ -801,8 +970,14 @@ impl GasVolume {
             self.light_slots = [None; RING];
             self.light = LightReadout::default();
         }
+        let lattice = force_lattice(geometry);
+        self.upload_lattices(gpu, lattice, offline)?;
         let buffers = self.buffers.as_ref().expect("buffers were just allocated");
         let pipelines = self.pipelines.as_ref().expect("pipelines were just built");
+        let lattices = [
+            self.lattices.forces().unwrap_or(&buffers.no_forces),
+            self.lattices.impulses().unwrap_or(&buffers.no_forces),
+        ];
 
         // The light written two frames ago, once its frame has retired.
         let clock = device.frame_clock();
@@ -816,19 +991,29 @@ impl GasVolume {
             self.light = decode_light(&read_light_words(&buffers.lights[read_slot]), slot.origin);
         }
 
-        let uniforms = GasUniforms::new(geometry, settings, dt, self.sim_time as f32);
-        let uniform_bytes = bytemuck::bytes_of(&uniforms);
         // Cell kernels cover the cells; face kernels the one-larger face nodes.
         let groups = geometry.dims.map(|d| d.div_ceil(GROUP_EDGE));
         let face_groups = geometry.dims.map(|d| (d + 1).div_ceil(GROUP_EDGE));
         let light = &buffers.lights[write_slot];
         let enc = &mut *gpu.native_enc;
+        let still = Step {
+            dt: 0.0,
+            forces: None,
+            impulses: None,
+        };
 
         if clear {
+            let uniforms = GasUniforms::new(geometry, settings, 0.0, lattice, still);
             // vel_in and state_in are read-only, so two dispatches with the
             // roles rotated reach all three buffers.
             for roles in [Roles::new(2, 0), Roles::new(0, 2)] {
-                let bindings = binding_list(uniform_bytes, buffers, roles, light);
+                let bindings = binding_list(
+                    bytemuck::bytes_of(&uniforms),
+                    buffers,
+                    roles,
+                    light,
+                    lattices,
+                );
                 pass(
                     enc,
                     &pipelines.clear,
@@ -839,12 +1024,20 @@ impl GasVolume {
             }
         }
 
-        let last = self.current;
-        let mut result = last;
-        if dt > 0.0 {
+        let mut last = self.current;
+        let mut uniforms =
+            GasUniforms::new(geometry, settings, self.sim_time as f32, lattice, still);
+        for &step in self.steps.iter().filter(|step| step.dt > 0.0) {
+            uniforms = GasUniforms::new(geometry, settings, self.sim_time as f32, lattice, step);
+            let uniform_bytes = bytemuck::bytes_of(&uniforms);
             let (a, b) = ((last + 1) % RING, (last + 2) % RING);
-            let advection =
-                binding_list(uniform_bytes, buffers, Roles { input: last, a, b }, light);
+            let advection = binding_list(
+                uniform_bytes,
+                buffers,
+                Roles { input: last, a, b },
+                light,
+                lattices,
+            );
             pass(
                 enc,
                 &pipelines.advect,
@@ -866,16 +1059,31 @@ impl GasVolume {
                 face_groups,
                 "node.gas_volume.maccormack",
             );
-            result = b;
-            let working = binding_list(uniform_bytes, buffers, Roles::new(last, result), light);
+            let working =
+                binding_list(uniform_bytes, buffers, Roles::new(last, b), light, lattices);
             // Swirl at 0 confines nothing: its two passes don't run.
             let swirl = settings.vorticity > 0.0;
             for (pipeline, grid, label, runs) in [
                 (&pipelines.sources, groups, "node.gas_volume.sources", true),
-                (&pipelines.forces, face_groups, "node.gas_volume.forces", true),
+                (
+                    &pipelines.forces,
+                    face_groups,
+                    "node.gas_volume.forces",
+                    true,
+                ),
                 (&pipelines.curl, groups, "node.gas_volume.curl", swirl),
-                (&pipelines.confine, face_groups, "node.gas_volume.confine", swirl),
-                (&pipelines.divergence, groups, "node.gas_volume.divergence", true),
+                (
+                    &pipelines.confine,
+                    face_groups,
+                    "node.gas_volume.confine",
+                    swirl,
+                ),
+                (
+                    &pipelines.divergence,
+                    groups,
+                    "node.gas_volume.divergence",
+                    true,
+                ),
             ] {
                 if runs {
                     pass(enc, pipeline, &working, grid, label);
@@ -904,10 +1112,18 @@ impl GasVolume {
                 face_groups,
                 "node.gas_volume.project",
             );
+            last = b;
+            self.sim_time += f64::from(step.dt);
         }
 
         // The published fields and this frame's light, from the result.
-        let working = binding_list(uniform_bytes, buffers, Roles::new(last, result), light);
+        let working = binding_list(
+            bytemuck::bytes_of(&uniforms),
+            buffers,
+            Roles::new(self.current, last),
+            light,
+            lattices,
+        );
         pass(
             enc,
             &pipelines.clear_sums,
@@ -923,8 +1139,7 @@ impl GasVolume {
             "node.gas_volume.publish",
         );
 
-        self.current = result;
-        self.sim_time += f64::from(dt);
+        self.current = last;
         self.light_slots[write_slot] = Some(LightSlot {
             stamp: clock.as_ref().map_or(0, |clock| clock.stamp()),
             origin: geometry.origin,
@@ -932,7 +1147,87 @@ impl GasVolume {
         self.frames += 1;
         Ok(())
     }
+
+    /// Plan the frame's ticks and encode them. On an error the gas holds and
+    /// the frame's hits are discarded with a receipt, never replayed.
+    fn frame(
+        &mut self,
+        ctx: &mut EffectNodeContext<'_, '_>,
+        geometry: &GasGeometry,
+        settings: &GasSettings,
+    ) -> Result<(), String> {
+        let restarted = self.plan_ticks(ctx, geometry, settings)?;
+        let offline = ctx.sim_step.offline();
+        self.advance(ctx.gpu_encoder(), geometry, settings, restarted, offline)?;
+        // A hit is applied once its tick's lattice is on the GPU.
+        self.hits.commit_frame();
+        Ok(())
+    }
 }
+
+impl TickSampled for GasVolume {
+    fn request_physics_samples(
+        &mut self,
+        from: PlayedTime,
+        until: PlayedTime,
+        out: &mut Vec<PlayedTime>,
+    ) {
+        self.forces.request_samples(&self.clock, from, until, out);
+    }
+}
+
+inventory::submit! { TickSampledRegistration::new::<GasVolume>() }
+
+impl TakesHits for GasVolume {
+    fn hit_epoch(&self) -> Option<u64> {
+        self.hits.epoch()
+    }
+
+    /// A gas whose clock has not started makes a hit wait; a broken clock
+    /// refuses it.
+    fn hit_readiness(&self) -> Result<bool, String> {
+        match self.hits.failure() {
+            Some(error) => Err(error.into()),
+            None => Ok(self.hits.epoch().is_some()),
+        }
+    }
+
+    /// A hit is stamped at the fire's own simulated time, so it lands on the
+    /// tick whose interval holds that time, the same tick at any frame rate.
+    fn hit_stamp(
+        &self,
+        played: PlayedTime,
+        sequence: u64,
+        step: SimStep,
+    ) -> Result<EventStamp, String> {
+        if !self.hit_readiness()? {
+            return Err(
+                "Smoke and Fire impulses: the gas has not started; fire waits for it".into(),
+            );
+        }
+        let mut stamp = self.hits.stamp(played, sequence)?;
+        let load = step.load().map(|load| LiveLoad {
+            previous: load.previous,
+            budget: load.budget,
+        });
+        stamp.time = Seconds(self.clock.simulation_at(played, load));
+        Ok(stamp)
+    }
+
+    fn enqueue_hit(&mut self, stamp: EventStamp, field: FieldValue) -> Result<TickStamp, String> {
+        self.hits.enqueue(stamp, field)
+    }
+
+    fn drain_applied_hits(&mut self, consume: &mut dyn FnMut(AppliedEvent<FieldValue>)) {
+        self.hits.drain_applied(consume);
+    }
+
+    fn drain_discarded_hits(&mut self, consume: &mut dyn FnMut(EventStamp)) -> u64 {
+        self.hits.drain_discarded(consume)
+    }
+}
+
+inventory::submit! { TakesHitsRegistration::new::<GasVolume>() }
 
 impl Primitive for GasVolume {
     fn provides_array_output(&self, port: &str) -> bool {
@@ -959,29 +1254,40 @@ impl Primitive for GasVolume {
     }
 
     fn clear_state(&mut self) {
-        self.restart = true;
+        self.clock.restart();
+    }
+
+    fn acceleration_input(&self) -> Option<&'static str> {
+        Some("acceleration_field")
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let (geometry, settings) = match plan(ctx) {
-            Ok(planned) => planned,
-            Err(error) => {
-                ctx.error(error);
-                publish(ctx, &GasGeometry::default(), &LightReadout::default());
-                return;
+        self.clock
+            .set_live_load(ctx.sim_step.load().map(|load| LiveLoad {
+                previous: load.previous,
+                budget: load.budget,
+            }));
+        self.clock.set_played_target(ctx.sim_step.played_target);
+        // A physics sample reads the field at a tick's start; it never
+        // advances time.
+        if ctx.sim_step.authored_sample_only {
+            self.clock
+                .observe_speed(ctx.played(), ctx.scalar_or_param("speed", 1.0));
+            match felt_field(ctx, "Gas Volume") {
+                Ok(field) => self
+                    .forces
+                    .observe_sample(&self.clock, ctx.played(), field.as_ref()),
+                Err(error) => ctx.error(error),
             }
-        };
-        let reset = ctx.scalar_or_param("reset", 0.0);
-        let reset_edge = self
-            .previous_reset
-            .is_some_and(|previous| previous != reset);
-        self.previous_reset = Some(reset);
-        let restart = std::mem::take(&mut self.restart) || reset_edge;
-        let dt = step_seconds(ctx.time.delta.0 as f32, settings.speed);
-        let outcome = self.advance(ctx.gpu_encoder(), &geometry, &settings, dt, restart);
+            return;
+        }
+        let outcome = plan(ctx).and_then(|(geometry, settings)| {
+            self.frame(ctx, &geometry, &settings).map(|()| geometry)
+        });
         match outcome {
-            Ok(()) => publish(ctx, &geometry, &self.light),
+            Ok(geometry) => publish(ctx, &geometry, &self.light),
             Err(error) => {
+                self.hits.abandon_frame();
                 ctx.error(error);
                 publish(ctx, &GasGeometry::default(), &LightReadout::default());
             }
@@ -1064,8 +1370,16 @@ mod tests {
             expansion,
             ignition,
             seed,
+            force_min,
+            force_spacing,
+            force_nodes,
+            forces_on,
+            force_base,
+            impulse_on,
+            impulse_base,
+            pad2,
         );
-        assert_eq!(std::mem::size_of::<GasUniforms>(), 128);
+        assert_eq!(std::mem::size_of::<GasUniforms>(), 176);
         let module = valid_shader();
         let params = module
             .types
@@ -1186,15 +1500,6 @@ mod tests {
         assert_eq!(up, [-1.0, 0.0, 0.0]);
         assert!((g - 9.81).abs() < 1e-6);
         assert_eq!(up_and_gravity([0.0; 3]), ([0.0, 1.0, 0.0], 0.0));
-    }
-
-    #[test]
-    fn the_step_follows_the_frame_and_speed_up_to_a_twentieth() {
-        assert!((step_seconds(1.0 / 60.0, 1.0) - 1.0 / 60.0).abs() < 1e-7);
-        assert!((step_seconds(1.0 / 60.0, 2.0) - 1.0 / 30.0).abs() < 1e-7);
-        assert_eq!(step_seconds(0.5, 1.0), MAX_STEP_SECONDS);
-        assert_eq!(step_seconds(1.0 / 60.0, 0.0), 0.0);
-        assert_eq!(step_seconds(-0.1, 1.0), 0.0);
     }
 
     #[test]

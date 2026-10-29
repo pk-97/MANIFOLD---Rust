@@ -3,8 +3,9 @@
 //! the gas in the box, and one `node.scene_object` that draws the solver's
 //! fields as a volume. The cell follows the World's Cell Size times the
 //! item's Quality (`water::follow_cell`), and the solver follows the World's
-//! gravity, speed and reset through value nodes. A gas pushes nothing back,
-//! so no collider, force or coupling reaches it.
+//! gravity, speed and reset through value nodes. Scene forces and hits reach
+//! the solver at load (`load/expand/acceleration.rs` follows the object's
+//! `gas_state`); a gas pushes nothing back.
 //!
 //! Inside a Group, the box sits in the group's frame and the gas follows the
 //! group's visibility. The box stays axis-aligned: a turned group moves it

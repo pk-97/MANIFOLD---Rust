@@ -46,6 +46,19 @@ struct Params {
     expansion: f32,
     ignition: f32,
     seed: u32,
+    // The lattice over the box the scene's forces and hits are laid on: its
+    // first node in metres, node spacing and node counts. This tick reads the
+    // force lattice from node `force_base` of `forces` when `forces_on` is
+    // nonzero, and adds the hits' velocity change from node `impulse_base`
+    // of `impulses` when `impulse_on` is.
+    force_min: vec3<f32>,
+    force_spacing: f32,
+    force_nodes: vec3<u32>,
+    forces_on: u32,
+    force_base: u32,
+    impulse_on: u32,
+    impulse_base: u32,
+    pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -64,6 +77,11 @@ struct Params {
 @group(0) @binding(11) var<storage, read_write> velocity_out: array<u32>;
 @group(0) @binding(12) var<storage, read_write> light_sums: array<atomic<u32>>;
 @group(0) @binding(13) var<storage, read> blackbody: array<vec4<f32>>;
+// Two vec4 a lattice node, x fastest: (push, drag rate) then (drag rate ×
+// wind, 0), as every solver that feels the scene's forces reads them.
+@group(0) @binding(14) var<storage, read> forces: array<vec4<f32>>;
+// One vec4 a lattice node: a hit's velocity change in m/s (xyz).
+@group(0) @binding(15) var<storage, read> impulses: array<vec4<f32>>;
 
 // How fast a flame fades once its fuel is gone.
 const FLAME_SECONDS: f32 = 0.06;
@@ -345,27 +363,97 @@ fn centre_velocity_a(c: vec3<u32>) -> vec3<f32> {
     ));
 }
 
+// The eight lattice nodes round world point `p` and their trilinear
+// weights, clamped to the lattice.
+struct Corners {
+    node: array<u32, 8>,
+    weight: array<f32, 8>,
+}
+
+fn lattice_corners(p: vec3<f32>) -> Corners {
+    var corners: Corners;
+    let n = params.force_nodes;
+    let g = (p - params.force_min) / params.force_spacing;
+    let base = clamp(floor(g), vec3<f32>(0.0), vec3<f32>(n - vec3<u32>(2u)));
+    let f = clamp(g - base, vec3<f32>(0.0), vec3<f32>(1.0));
+    let b = vec3<u32>(base);
+    for (var k = 0u; k < 8u; k++) {
+        let o = vec3<u32>(k & 1u, (k >> 1u) & 1u, k >> 2u);
+        let w3 = select(vec3<f32>(1.0) - f, f, o == vec3<u32>(1u));
+        let c = b + o;
+        corners.node[k] = c.x + n.x * (c.y + n.y * c.z);
+        corners.weight[k] = w3.x * w3.y * w3.z;
+    }
+    return corners;
+}
+
+// The scene's forces this tick at the lattice point `corners` reads.
+struct Felt {
+    push: vec3<f32>,
+    drag: f32,
+    drag_wind: vec3<f32>,
+}
+
+fn felt_at(corners: Corners) -> Felt {
+    var felt = Felt(vec3<f32>(0.0), 0.0, vec3<f32>(0.0));
+    for (var k = 0u; k < 8u; k++) {
+        let node = params.force_base + corners.node[k];
+        let w = corners.weight[k];
+        let a = forces[2u * node];
+        felt.push += w * a.xyz;
+        felt.drag += w * a.w;
+        felt.drag_wind += w * forces[2u * node + 1u].xyz;
+    }
+    return felt;
+}
+
+// The wind the scene's air moves at near node `c`: the air its forces carry,
+// mixed by their drag rates, read once at the node's cell centre for the cell
+// and its three faces. Still air without a force.
+fn wind_near(c: vec3<u32>) -> vec3<f32> {
+    if params.forces_on == 0u {
+        return vec3<f32>(0.0);
+    }
+    let felt = felt_at(lattice_corners(params.origin + (vec3<f32>(c) + vec3<f32>(0.5)) * params.h));
+    if felt.drag > 0.0 {
+        return felt.drag_wind / felt.drag;
+    }
+    return vec3<f32>(0.0);
+}
+
+// This tick's hits at the lattice point `corners` reads: a velocity change.
+fn kick_at(corners: Corners) -> vec3<f32> {
+    var kick = vec3<f32>(0.0);
+    for (var k = 0u; k < 8u; k++) {
+        kick += corners.weight[k] * impulses[params.impulse_base + corners.node[k]].xyz;
+    }
+    return kick;
+}
+
 // ---- Advection ------------------------------------------------------------
 //
 // These kernels run over the face nodes: a node inside the box also advects
 // its cell's state.
 
 // Semi-Lagrangian: each cell and face takes the fields from where its air
-// came from.
+// came from. The scene's wind is the air moving: everything is carried by it
+// on top of the gas's own velocity, which stays the gas's motion through the
+// wind, so a plume keeps its rise and bends over.
 @compute @workgroup_size(4, 4, 4)
 fn cs_advect(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !in_faces(gid) {
         return;
     }
+    let wind = wind_near(gid);
     if inside(gid) {
-        let back = vec3<f32>(gid) - params.dt * centre_velocity_in(gid) / params.h;
+        let back = vec3<f32>(gid) - params.dt * (centre_velocity_in(gid) + wind) / params.h;
         state_a[cell_index(gid)] = blend_state_in(taps(back));
     }
     var v = vec4<f32>(0.0);
     for (var axis = 0u; axis < 3u; axis++) {
         if has_face(gid, axis) {
             let g = face_point(gid, axis);
-            let back = g - params.dt * face_velocity_in(gid, axis) / params.h;
+            let back = g - params.dt * (face_velocity_in(gid, axis) + wind) / params.h;
             // Air that blows in through an open face arrives still, so no
             // wind at a face can feed itself.
             v[axis] = select(component_in(back, axis), 0.0, outside(back));
@@ -380,15 +468,16 @@ fn cs_advect_back(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !in_faces(gid) {
         return;
     }
+    let wind = wind_near(gid);
     if inside(gid) {
-        let ahead = vec3<f32>(gid) + params.dt * centre_velocity_in(gid) / params.h;
+        let ahead = vec3<f32>(gid) + params.dt * (centre_velocity_in(gid) + wind) / params.h;
         state_b[cell_index(gid)] = blend_state_a(taps(ahead));
     }
     var v = vec4<f32>(0.0);
     for (var axis = 0u; axis < 3u; axis++) {
         if has_face(gid, axis) {
             let g = face_point(gid, axis);
-            let ahead = g + params.dt * face_velocity_in(gid, axis) / params.h;
+            let ahead = g + params.dt * (face_velocity_in(gid, axis) + wind) / params.h;
             v[axis] = select(component_a(ahead, axis), 0.0, outside(ahead));
         }
     }
@@ -403,9 +492,10 @@ fn cs_maccormack(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !in_faces(gid) {
         return;
     }
+    let wind = wind_near(gid);
     if inside(gid) {
         let i = cell_index(gid);
-        let back = vec3<f32>(gid) - params.dt * centre_velocity_in(gid) / params.h;
+        let back = vec3<f32>(gid) - params.dt * (centre_velocity_in(gid) + wind) / params.h;
         let rs = range_state_in(taps(back));
         let s = state_a[i] + 0.5 * (state_in[i] - state_b[i]);
         state_b[i] = clamp(s, rs.lo, rs.hi);
@@ -415,7 +505,7 @@ fn cs_maccormack(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var axis = 0u; axis < 3u; axis++) {
         if has_face(gid, axis) {
             let g = face_point(gid, axis);
-            let back = g - params.dt * face_velocity_in(gid, axis) / params.h;
+            let back = g - params.dt * (face_velocity_in(gid, axis) + wind) / params.h;
             if outside(back) {
                 continue;
             }
@@ -548,8 +638,9 @@ fn cell_above(c: vec3<u32>) -> u32 {
 }
 
 // Forces on the faces: hot air rises and smoke sinks along -gravity, the
-// turbulence's push, and the source blowing along `up` at least as fast as
-// its inflow speed. No face moves more than four cells a step, so the next
+// turbulence's push, the scene's pushes (its wind carries the air in the
+// advection), a hit's velocity change, and the source blowing
+// along `up` at least as fast as its inflow speed. No face moves more than four cells a step, so the next
 // advection stays in reach; nothing flows through the floor.
 @compute @workgroup_size(4, 4, 4)
 fn cs_forces(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -575,6 +666,15 @@ fn cs_forces(@builtin(global_invocation_id) gid: vec3<u32>) {
         var u = v[axis] + params.dt * (
             params.up[axis] * lift * (params.buoyancy * s.y - params.weight * s.x) + push
         );
+        if params.forces_on != 0u || params.impulse_on != 0u {
+            let corners = lattice_corners(params.origin + (face_point(gid, axis) + vec3<f32>(0.5)) * params.h);
+            if params.forces_on != 0u {
+                u += params.dt * felt_at(corners).push[axis];
+            }
+            if params.impulse_on != 0u {
+                u += kick_at(corners)[axis];
+            }
+        }
         if params.up[axis] != 0.0 {
             let w = source_weight(params.origin + (face_point(gid, axis) + vec3<f32>(0.5)) * params.h);
             if w > 0.0 {

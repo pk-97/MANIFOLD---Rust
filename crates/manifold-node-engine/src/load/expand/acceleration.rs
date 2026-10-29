@@ -53,7 +53,14 @@ pub(super) fn resolve(
             });
         }
     }
-    for input in ["transform", "parent_transform", "instances", "vertices"] {
+    // A gas's drawn object reads its solver's state, which takes the forces.
+    for input in [
+        "transform",
+        "parent_transform",
+        "instances",
+        "vertices",
+        "gas_state",
+    ] {
         if let Some(wire) = index.input(object, input)? {
             let Some(producer) = index.by_id.get(&wire.from_node) else {
                 return Err(unsupported(

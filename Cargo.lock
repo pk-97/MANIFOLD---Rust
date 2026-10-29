@@ -2732,6 +2732,8 @@ dependencies = [
  "manifold-gas",
  "manifold-gpu",
  "manifold-node-engine",
+ "manifold-nodes-physics",
+ "manifold-physics",
  "naga",
 ]
 

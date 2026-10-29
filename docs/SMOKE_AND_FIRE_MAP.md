@@ -32,19 +32,30 @@ pressure and projection share one compact stencil, so no cell-to-cell
 zigzag hides from the solve. Three velocity and three state buffers rotate
 roles each frame.
 
-## Step (once a frame, dt = frame time × World Speed, at most 1/20 s)
+## Step (once a tick of the World's clock, as water and sand step)
+
+The gas runs the World's fixed ticks (`SimulationClock`, at most 1/20 s a
+tick), so a force or a hit lands on the same step at any frame rate, and
+World Speed and Reset reach it as they reach water.
 
 1. Advect velocity and state: MacCormack with the min/max clamp. Air that
    comes in through an open face arrives still, so no wind at a face can
    feed itself (with the edge's own velocity, a crosswind grew over seconds
-   and laid the fire flat).
+   and laid the fire flat). A scene wind is the air itself moving: every
+   point is carried by the wind on top of the gas's own velocity, so a
+   plume keeps its rise and bends over (a drag toward the wind held the
+   rise back and laid the smoke flat).
 2. Sources (per cell): emit density or fuel in a noisy squashed ellipsoid;
    burn where hot (fuel to heat and soot, flame); decay; a sponge band over
    15% of the box next to the sides and top fades the gas at up to 30 per
    second, so it thins out before a face and the box never shows.
 3. Forces (per face): buoyancy along −gravity from the two cells' mean
    temperature and density, the curl-noise push (Turbulence, at half the
-   source's size), the source's inflow; at most four cells a step.
+   source's size), the scene's pushes (Radial, Vortex, Uniform) and a
+   hit's velocity change, both read from a lattice over the box every four
+   cells (`TickForces`, one per tick when the field moves), the source's
+   inflow; at most four cells a step. A box too small for a wind lets the
+   smoke leave through its side.
 4. Vorticity confinement (Swirl) at cell centres, each face taking the mean
    of its two cells.
 5. Project: divergence less the flames' expansion, red-black SOR on the

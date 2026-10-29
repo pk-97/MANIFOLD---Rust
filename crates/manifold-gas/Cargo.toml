@@ -8,6 +8,8 @@ publish = false
 manifold-core = { path = "../manifold-core" }
 manifold-gpu = { path = "../manifold-gpu" }
 manifold-node-engine = { path = "../manifold-node-engine" }
+manifold-nodes-physics = { path = "../manifold-nodes-physics" }
+manifold-physics = { path = "../manifold-physics" }
 bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 inventory = "0.3"
 log = { workspace = true }
