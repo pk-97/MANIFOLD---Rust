@@ -89,7 +89,7 @@ Sand draws through the normal opaque scene path, not the water renderer. The wat
 - **Material:** a new Sand gets an opaque PBR Material (transmission 0, roughness about 0.9, sand albedo), tuned on stills. Ripples, caustics, mist and foam are not built for Sand.
 - **Motion blur:** the mesh's triangles change every frame, so the previous-position history (`render_scene/prev_positions.rs`, same triangles only) cannot serve it. `tile_surface_mesh` also writes each vertex's previous position (its position minus the surface velocity times the frame time, from the surface group's `velocity` output) into a second buffer, and `node.scene_object` takes it as an optional `prev_positions` input that the velocity pass reads in place of the history. Any generated mesh can use the same port later.
 - **Smoothing:** the surface group's smoothing rounds ridges; Sand starts with less than water and is tuned on stills.
-- **Particles draw:** the existing Particles choice draws each particle as a small instanced rock with the sand Material, an opaque gravel look, on the same path.
+- **Grains (the default draw):** `node.matter_grains` turns each point into four octahedron grains, each at a hashed offset, turn and size keyed on the point's id, drawn as instances with the sand Material. The grains rest on the floor, so there is no mesh lip there. Render cost is vertex work (non-indexed, several passes): 5.9 ms on the 4 m test pile, against 20 ms for eight icosahedra per point. Surface-only grains would allow more per point.
 - Later: grain texture on steep faces (triplanar), sparkle, the wet tint (step 6), dust.
 
 ## Deleted with this work
