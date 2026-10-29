@@ -761,7 +761,9 @@ struct RenderSceneUniforms {
     /// the formula to the pre-G-P4 hardcoded `F0 = 0.04` exactly, so this
     /// reuse is byte-identical for every asset without the extensions.
     pbr_metallic_roughness: [f32; 4],
-    specular: [f32; 4],
+    /// x: the material's grain size in metres, 0 for none (`sand_grain` in
+    /// render_scene.wgsl); yzw unused.
+    grain: [f32; 4],
     /// `KHR_materials_specular`'s
     /// `specularColorFactor` (rgb, default `[1,1,1]`) — `w` reserved.
     /// A NEW field (not a reserved-slot reuse) since no existing vec4 had
@@ -2506,9 +2508,7 @@ fn build_uniforms(
             material.ior,
             material.specular_factor,
         ],
-        // Reserved for the retired legacy path; keep the named uniform slot so
-        // the shared render-scene ABI stays stable.
-        specular: [0.0; 4],
+        grain: [material.grain * 0.001, 0.0, 0.0, 0.0],
         pbr_specular_tint: [
             material.specular_tint[0],
             material.specular_tint[1],

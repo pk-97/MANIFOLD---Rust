@@ -42,8 +42,8 @@ struct Uniforms {
     // dielectric F0 term below. Defaults collapse the formula to the
     // pre-G-P4 hardcoded F0 = 0.04 exactly.
     pbr_metallic_roughness: vec4<f32>,
-    // Retired legacy lighting slot, kept reserved for uniform ABI stability.
-    specular: vec4<f32>,
+    // x: grain size in metres, 0 for none (sand_grain); yzw unused.
+    grain: vec4<f32>,
     // KHR_materials_specular's
     // specularColorFactor (rgb, default [1,1,1]). w: GLTF_MATERIAL_
     // EXTENSIONS_DESIGN.md E6 bitmask (see specular_family_flags()) —

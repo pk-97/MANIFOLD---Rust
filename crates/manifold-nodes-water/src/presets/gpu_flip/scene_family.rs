@@ -116,7 +116,7 @@ fn flip(draw: WaterDraw, narrow_band: bool) -> WaterFamily {
 
 /// Dry sand's starting look: opaque, rough, the colour of a beach. Its
 /// Material starts here; the stills tune it.
-const DRY_SAND: [(&str, f32); 8] = [
+const DRY_SAND: [(&str, f32); 9] = [
     ("ambient", 0.0),
     ("color_r", 0.55),
     ("color_g", 0.45),
@@ -125,6 +125,7 @@ const DRY_SAND: [(&str, f32); 8] = [
     ("roughness", 0.9),
     ("ior", 1.5),
     ("transmission", 0.0),
+    ("grain", 2.0),
 ];
 
 /// The Sand's surface: the tile mesh the surface already builds, drawn as an

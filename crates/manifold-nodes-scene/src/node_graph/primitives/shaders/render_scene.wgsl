@@ -800,6 +800,101 @@ fn transmission_diffuse(
     return (vec3<f32>(1.0) - specular_color) * attenuated * albedo_rgb;
 }
 
+// ===== Sand grain =====
+
+// A material with a grain size (u.grain.x, metres) shades as packed grains:
+// world space is cut into Voronoi cells, one jittered seed per lattice cell,
+// searched over the 2×2×2 cells round the point (seeds stay in the middle of
+// their cell, so the nearest is always among them). One flat loop: the
+// optimizer unrolls a 3×3×3 nest in this shader for minutes.
+//
+// Each grain gets its own shade and a slight hue, a few are dark mineral
+// grains, the gaps darken as crevices, and each grain bends the normal like a
+// small dome. A few grains are smooth facets turned at random, which catch
+// the light as glints. Where grains are smaller than a pixel, the pattern is
+// drawn at the octave (the grain size doubled k times) that keeps a cell
+// about two pixels across, blended with the next octave like mip levels. A
+// cell then stands for a clump of grains, so its contrast and bend fall with
+// k, but never below a floor: far sand keeps a fine speckle and its glints,
+// as film sand does, instead of going flat.
+struct Grain {
+    albedo: vec3<f32>,
+    normal: vec3<f32>,
+    roughness: f32,
+}
+
+struct GrainOctave {
+    tint: vec3<f32>,
+    bend: vec3<f32>,
+    glint: f32,
+}
+
+fn grain_hash(c: vec3<i32>) -> vec3<f32> {
+    var v = bitcast<vec3<u32>>(c) * 1664525u + vec3<u32>(1013904223u);
+    v.x = v.x + v.y * v.z;
+    v.y = v.y + v.z * v.x;
+    v.z = v.z + v.x * v.y;
+    v = v ^ (v >> vec3<u32>(16u));
+    v.x = v.x + v.y * v.z;
+    v.y = v.y + v.z * v.x;
+    v.z = v.z + v.x * v.y;
+    return vec3<f32>(v >> vec3<u32>(8u)) / 16777216.0;
+}
+
+// The mean of shade × crevice over a grain, so near and far sand keep the
+// material's colour on average.
+const GRAIN_MEAN: f32 = 0.82;
+
+// Octave `k` of the pattern at `p`, in that octave's cells.
+fn grain_octave(p: vec3<f32>, n: vec3<f32>, k: f32) -> GrainOctave {
+    let corner = floor(p - vec3<f32>(0.5));
+    let cell = vec3<i32>(corner);
+    let f = p - corner;
+    var d1 = 8.0;
+    var d2 = 8.0;
+    var to_seed = vec3<f32>(0.0);
+    var id = vec3<f32>(0.0);
+    for (var i = 0u; i < 8u; i = i + 1u) {
+        let o = vec3<i32>(vec3<u32>(i, i >> 1u, i >> 2u) & vec3<u32>(1u));
+        let h = grain_hash(cell + o);
+        let r = vec3<f32>(o) + vec3<f32>(0.15) + 0.7 * h - f;
+        let d = dot(r, r);
+        let nearer = d < d1;
+        d2 = select(min(d2, d), d1, nearer);
+        d1 = min(d1, d);
+        to_seed = select(to_seed, r, nearer);
+        id = select(id, h, nearer);
+    }
+    // A clump of 8^k grains varies less than one grain.
+    let contrast = max(exp2(-1.5 * k), 0.35);
+    var shade = 0.8 + 0.4 * id.x;
+    shade = select(shade, 0.45, id.y < 0.07);
+    let crevice = mix(0.5, 1.0, smoothstep(0.0, 0.3, sqrt(d2) - sqrt(d1)));
+    let hue = 0.1 * (id.z - 0.5);
+    let grain = vec3<f32>(1.0 + hue, 1.0, 1.0 - hue) * (shade * crevice / GRAIN_MEAN);
+    let glint = select(0.0, 1.0, id.y > 0.95);
+    // The dome: tilted away from the seed, more toward the grain's edge; a
+    // glint grain is a flat facet turned at random instead.
+    let dome = -to_seed - dot(-to_seed, n) * n;
+    let facet = 0.7 * (fract(id.zxy * 7.31) - vec3<f32>(0.5));
+    let bend = mix(1.4 * max(exp2(-k), 0.3) * dome, facet, glint);
+    return GrainOctave(mix(vec3<f32>(1.0), grain, contrast), bend, glint);
+}
+
+fn sand_grain(world_pos: vec3<f32>, n: vec3<f32>, albedo: vec3<f32>, roughness: f32, size: f32) -> Grain {
+    let footprint = length(fwidth(world_pos));
+    let level = max(log2(2.0 * footprint / size), 0.0);
+    let k = floor(level);
+    let t = level - k;
+    let near = grain_octave(world_pos / (size * exp2(k)), n, k);
+    let far = grain_octave(world_pos / (size * exp2(k + 1.0)), n, k + 1.0);
+    return Grain(
+        albedo * mix(near.tint, far.tint, t),
+        normalize(n + mix(near.bend, far.bend, t)),
+        mix(roughness, 0.12, mix(near.glint, far.glint, t)),
+    );
+}
+
 // ===== Material kind fragment entry points =====
 
 // Unlit — flat colour passthrough plus emission. No lighting math, no
@@ -854,7 +949,12 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // Water on the surface darkens it and smooths it, keyed on the pixel
     // because materials are shared. After the cutout test, which stays on
     // the material's own alpha.
-    let wet = look_wet_surface(in.clip_pos.xy, albedo.rgb, mr.x);
+    var grain = Grain(albedo.rgb, N, mr.x);
+    if u.grain.x > 0.0 {
+        grain = sand_grain(in.world_pos, N, albedo.rgb, mr.x, u.grain.x);
+        N = grain.normal;
+    }
+    let wet = look_wet_surface(in.clip_pos.xy, grain.albedo, grain.roughness);
     albedo = vec4<f32>(wet.albedo, albedo.a);
     let roughness = wet.roughness;
     let metallic = mr.y;

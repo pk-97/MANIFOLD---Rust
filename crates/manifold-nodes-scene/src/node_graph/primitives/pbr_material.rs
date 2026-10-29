@@ -29,9 +29,11 @@
 use std::borrow::Cow;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_node_engine::scene::material::{AlphaMode, MapSamplerDesc, Material, MaterialKind, MaterialMapInfo, Subsurface, SubsurfaceMode};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::material::{
+    AlphaMode, MapSamplerDesc, Material, MaterialKind, MaterialMapInfo, Subsurface, SubsurfaceMode,
+};
 
 const ALPHA_MODES: &[&str] = &["Opaque", "Mask", "Blend"];
 // Per-map-family sampler settings, same
@@ -66,6 +68,7 @@ manifold_node_engine::primitive! {
         normal_scale: ScalarF32 optional,
         clearcoat_normal_scale: ScalarF32 optional,
         occlusion_strength: ScalarF32 optional,
+        grain: ScalarF32 optional,
         emission_r: ScalarF32 optional,
         emission_g: ScalarF32 optional,
         emission_b: ScalarF32 optional,
@@ -249,6 +252,14 @@ manifold_node_engine::primitive! {
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
             range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("grain"),
+            label: "Grain Size (mm)",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 20.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -1263,6 +1274,7 @@ impl Primitive for PbrMaterial {
         let occlusion_strength = ctx
             .scalar_or_param("occlusion_strength", 1.0)
             .clamp(0.0, 1.0);
+        let grain = ctx.scalar_or_param("grain", 0.0).clamp(0.0, 20.0);
         let mut emission_r = ctx.scalar_or_param("emission_r", 0.0);
         let mut emission_g = ctx.scalar_or_param("emission_g", 0.0);
         let mut emission_b = ctx.scalar_or_param("emission_b", 0.0);
@@ -1492,8 +1504,13 @@ impl Primitive for PbrMaterial {
                 ctx.scalar_or_param(keys[5], 0.0),
             ]
         };
-        let [base_color_uv_transform, normal_uv_transform, mr_uv_transform, occlusion_uv_transform, emissive_uv_transform] =
-            UV_XF_KEYS.map(uv_xf);
+        let [
+            base_color_uv_transform,
+            normal_uv_transform,
+            mr_uv_transform,
+            occlusion_uv_transform,
+            emissive_uv_transform,
+        ] = UV_XF_KEYS.map(uv_xf);
 
         // Per-map-family sampler settings.
         // `enum_or` reads an Enum param (Float fallback mirrors alpha_mode's
@@ -1566,8 +1583,13 @@ impl Primitive for PbrMaterial {
                 },
             }
         };
-        let [base_color_sampler, normal_sampler, mr_sampler, occlusion_sampler, emissive_sampler] =
-            SAMPLER_KEYS.map(map_sampler);
+        let [
+            base_color_sampler,
+            normal_sampler,
+            mr_sampler,
+            occlusion_sampler,
+            emissive_sampler,
+        ] = SAMPLER_KEYS.map(map_sampler);
         const CORE_TEX_COORD_KEYS: [&str; 5] = [
             "uv_set",
             "nrm_uv_set",
@@ -1811,6 +1833,7 @@ impl Primitive for PbrMaterial {
         material.normal_scale = normal_scale;
         material.clearcoat_normal_scale = clearcoat_normal_scale;
         material.occlusion_strength = occlusion_strength;
+        material.grain = grain;
         material.clearcoat = clearcoat;
         material.clearcoat_roughness = clearcoat_roughness;
         material.sheen_color_factor = [sheen_color_r, sheen_color_g, sheen_color_b];
@@ -1877,16 +1900,16 @@ impl Primitive for PbrMaterial {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+    use manifold_node_engine::exec::backend::Backend;
     use manifold_node_engine::exec::effect_node::ParamValues;
     use manifold_node_engine::scene::material::MaterialKind;
 
     fn run_material(params: ParamValues, bound_emission_r: Option<f32>) -> Material {
+        use manifold_core::{Beats, Seconds};
+        use manifold_node_engine::exec::backend::MockBackend;
         use manifold_node_engine::exec::execution_plan::ResourceId;
         use manifold_node_engine::ports::PortType;
-        use manifold_node_engine::exec::backend::MockBackend;
-        use manifold_core::{Beats, Seconds};
 
         let mut backend = MockBackend::new();
         let out_slot = backend.acquire(ResourceId(0), PortType::Material, None, (0, 0));
@@ -2139,13 +2162,13 @@ mod tests {
 
     #[test]
     fn run_emits_pbr_material_and_clamps_roughness_floor() {
-        use manifold_node_engine::exec::backend::Backend;
+        use manifold_core::{Beats, Seconds};
         use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+        use manifold_node_engine::exec::backend::Backend;
+        use manifold_node_engine::exec::backend::MockBackend;
         use manifold_node_engine::exec::effect_node::ParamValues;
         use manifold_node_engine::exec::execution_plan::ResourceId;
         use manifold_node_engine::ports::PortType;
-        use manifold_node_engine::exec::backend::MockBackend;
-        use manifold_core::{Beats, Seconds};
 
         let mut backend = MockBackend::new();
         let out_slot = backend.acquire(ResourceId(0), PortType::Material, None, (0, 0));
@@ -2277,13 +2300,13 @@ mod tests {
     /// branch in `run()` (this primitive is CPU-only, no GPU dispatch).
     #[test]
     fn material_inspector_baked_look_emission_off_stays_gated() {
-        use manifold_node_engine::exec::backend::Backend;
+        use manifold_core::{Beats, Seconds};
         use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
+        use manifold_node_engine::exec::backend::Backend;
+        use manifold_node_engine::exec::backend::MockBackend;
         use manifold_node_engine::exec::effect_node::ParamValues;
         use manifold_node_engine::exec::execution_plan::ResourceId;
         use manifold_node_engine::ports::PortType;
-        use manifold_node_engine::exec::backend::MockBackend;
-        use manifold_core::{Beats, Seconds};
 
         let run_with_baked_look = |baked_look: bool| -> (MaterialKind, [f32; 4]) {
             let mut backend = MockBackend::new();

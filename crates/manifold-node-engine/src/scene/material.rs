@@ -203,6 +203,9 @@ pub struct Material {
     pub clearcoat_normal_scale: f32,
     /// glTF `occlusionTexture.strength` (default `1.0`).
     pub occlusion_strength: f32,
+    /// Grain size in millimetres, 0 for none: the surface shades as packed
+    /// grains of this size (sand).
+    pub grain: f32,
 
     // ---- Cel-specific. Inert when `kind != Cel`. ----
     /// Number of quantization bands `[2, 16]`.
@@ -382,6 +385,7 @@ impl Material {
             normal_scale: 1.0,
             clearcoat_normal_scale: 1.0,
             occlusion_strength: 1.0,
+            grain: 0.0,
             cel_bands: 4,
             band_low: 0.08,
             band_high: 1.0,
