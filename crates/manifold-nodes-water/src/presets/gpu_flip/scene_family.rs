@@ -1,16 +1,15 @@
-//! The families a scene's Water splices (SCENE_DOCUMENT_DESIGN.md section
-//! 7.10 (Water, Water Source, Ocean)), one per solver and draw: no fill of
-//! their own and no host interface. The scene compiler wires the Water's
+//! The families a scene's Water or Sand splices (SCENE_DOCUMENT_DESIGN.md
+//! section 7.10 (Water, Water Source, Ocean)), one per kind and draw: no
+//! fill of their own and no host interface. The scene compiler wires the
 //! sources into the domain's role inputs and the objects into its render
 //! node.
 //!
-//! GPU FLIP is the Dam Break family. MPM is main's Matter solver (the "Live
-//! Matter" group of its Matter scenes, kept as `assets/matter_solver.json`)
-//! with the same display: the surface's field from the push-out particles, the water
-//! object and Physics View's dots. MPM has no whitewater yet: that waits on a
-//! whitewater stage that reads any solver.
-//! Particles draws the push-out particles as small spheres in place of the
-//! surface, as main's Particle View did.
+//! A Water is the GPU FLIP Dam Break family. A Sand is the Matter solver
+//! (`assets/matter_solver.json`) with the shared surface build, drawn as an
+//! opaque mesh through the ordinary material path (MATTER_SAND_DESIGN.md
+//! section 4), not the water renderer, which only draws glass.
+//! Particles draws the push-out particles as small solids in place of the
+//! surface.
 
 use std::sync::{Arc, OnceLock};
 
@@ -115,7 +114,47 @@ fn flip(draw: WaterDraw, narrow_band: bool) -> WaterFamily {
     family(b, objects)
 }
 
-/// Main's Matter solver with the shared display.
+/// Dry sand's starting look: opaque, rough, the colour of a beach. Its
+/// Material starts here; the stills tune it.
+const DRY_SAND: [(&str, f32); 8] = [
+    ("ambient", 0.0),
+    ("color_r", 0.55),
+    ("color_g", 0.45),
+    ("color_b", 0.30),
+    ("metallic", 0.0),
+    ("roughness", 0.9),
+    ("ior", 1.5),
+    ("transmission", 0.0),
+];
+
+/// The Sand's surface: the tile mesh the surface already builds, drawn as an
+/// ordinary opaque object, so it casts shadows and takes any Material. The
+/// water's field inputs and its ripples go.
+fn sand_surface_draw(b: &mut Builder) {
+    b.remove(&PHYSICS_VIEW_SWITCHES[..4]);
+    b.remove(&["water_ripple_detail"]);
+    let water = b.id("water_object") as u32;
+    b.wires
+        .retain(|wire| wire.to_node != water || !wire.to_port.starts_with("field"));
+}
+
+/// The Sand's look on its material node, which a new Sand's own Material
+/// starts from.
+fn sand_material(b: &mut Builder) {
+    let material = b
+        .nodes
+        .iter_mut()
+        .find(|node| node.node_id.as_str() == "water_material")
+        .expect("the display's material");
+    for (name, value) in DRY_SAND {
+        material.params.insert(
+            name.to_owned(),
+            manifold_core::effect_graph_def::SerializedParamValue::Float { value },
+        );
+    }
+}
+
+/// The Matter solver with the shared surface build, drawn as sand.
 fn mpm(draw: WaterDraw, _narrow_band: bool) -> WaterFamily {
     let solver: EffectGraphDef =
         serde_json::from_str(include_str!("../../../assets/matter_solver.json"))
@@ -127,10 +166,13 @@ fn mpm(draw: WaterDraw, _narrow_band: bool) -> WaterFamily {
     let water = display_head(&mut b, frame, surface);
     display_dots(&mut b, frame, (surface, (surface, level_set)), water);
     feed_intervals(&b.nodes, &mut b.wires, domain as u32);
+    sand_material(&mut b);
     let mut objects = vec!["water_object".to_owned(), "dots_object".to_owned()];
     if draw == WaterDraw::Particles {
         particles_draw(&mut b);
         objects.retain(|object| object != "dots_object");
+    } else {
+        sand_surface_draw(&mut b);
     }
     family(b, objects)
 }
