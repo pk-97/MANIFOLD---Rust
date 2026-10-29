@@ -313,7 +313,7 @@ impl Unit {
     }
 }
 
-/// The eleven kinds of scene item (SCENE_DOCUMENT_DESIGN.md ruling 4). A layer
+/// The twelve kinds of scene item (SCENE_DOCUMENT_DESIGN.md ruling 4). A layer
 /// plane is an Object; Copies is a section; an import is a Group whose Source
 /// is a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -326,6 +326,7 @@ pub enum ItemKind {
     Material,
     Water,
     WaterSource,
+    Sand,
     Swarm,
     Force,
     Modifier,
@@ -333,7 +334,7 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 11] = [
+    pub const ALL: [ItemKind; 12] = [
         ItemKind::Group,
         ItemKind::Object,
         ItemKind::Camera,
@@ -341,11 +342,18 @@ impl ItemKind {
         ItemKind::Material,
         ItemKind::Water,
         ItemKind::WaterSource,
+        ItemKind::Sand,
         ItemKind::Swarm,
         ItemKind::Force,
         ItemKind::Modifier,
         ItemKind::World,
     ];
+
+    /// Whether this kind is a simulated domain filled by Water Sources: a
+    /// Water or a Sand.
+    pub fn holds_sources(self) -> bool {
+        matches!(self, ItemKind::Water | ItemKind::Sand)
+    }
 
     /// The name a new item of this kind takes.
     pub fn default_name(self) -> &'static str {
@@ -357,6 +365,7 @@ impl ItemKind {
             ItemKind::Material => "Material",
             ItemKind::Water => "Water",
             ItemKind::WaterSource => "Water Source",
+            ItemKind::Sand => "Sand",
             ItemKind::Swarm => "Swarm",
             ItemKind::Force => "Force",
             ItemKind::Modifier => "Modifier",

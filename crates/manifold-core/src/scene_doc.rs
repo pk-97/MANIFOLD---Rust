@@ -73,6 +73,7 @@ pub enum ItemFields {
     Material(MaterialFields),
     Water(WaterFields),
     WaterSource(WaterSourceFields),
+    Sand(SandFields),
     Swarm(SwarmFields),
     Force(ForceFields),
     Modifier(ModifierFields),
@@ -89,6 +90,7 @@ impl ItemFields {
             ItemFields::Material(_) => ItemKind::Material,
             ItemFields::Water(_) => ItemKind::Water,
             ItemFields::WaterSource(_) => ItemKind::WaterSource,
+            ItemFields::Sand(_) => ItemKind::Sand,
             ItemFields::Swarm(_) => ItemKind::Swarm,
             ItemFields::Force(_) => ItemKind::Force,
             ItemFields::Modifier(_) => ItemKind::Modifier,
@@ -110,6 +112,7 @@ impl ItemFields {
                 role: SourceRole::Inflow,
                 ..WaterSourceFields::default()
             }),
+            ItemKind::Sand => ItemFields::Sand(SandFields::default()),
             ItemKind::Swarm => ItemFields::Swarm(SwarmFields::default()),
             ItemKind::Force => ItemFields::Force(ForceFields::default()),
             ItemKind::Modifier => ItemFields::Modifier(ModifierFields::default()),
@@ -124,6 +127,7 @@ impl ItemFields {
             ItemFields::Object(o) => o.material.as_ref(),
             ItemFields::Swarm(s) => s.material.as_ref(),
             ItemFields::Water(w) => w.material.as_ref(),
+            ItemFields::Sand(s) => s.material.as_ref(),
             _ => None,
         }
     }
@@ -512,7 +516,6 @@ impl FeatureSetting {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct WaterFields {
-    pub solver: WaterSolver,
     pub draw: WaterDraw,
     /// What the water draws with; none draws the solver's own water look.
     pub material: Option<ItemId>,
@@ -523,16 +526,19 @@ pub struct WaterFields {
     pub narrow_band: bool,
 }
 
-/// The liquid solver a Water runs: GPU FLIP, or MLS-MPM (Matter).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum WaterSolver {
-    #[default]
-    Flip,
-    Mpm,
+/// Sand and soil on Matter (MLS-MPM): a domain like a Water's, filled by its
+/// Fill, with no Inflow, Drain or whitewater.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct SandFields {
+    pub draw: WaterDraw,
+    /// What the sand draws with; none draws the template's own look.
+    pub material: Option<ItemId>,
+    /// The Bounds switch: the Sand's own box and walls, instead of the world's.
+    pub bounds: bool,
 }
 
-/// How a Water is drawn: its surface, or its particles as small spheres.
+/// How a Water or Sand is drawn: its surface, or its particles as small spheres.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WaterDraw {

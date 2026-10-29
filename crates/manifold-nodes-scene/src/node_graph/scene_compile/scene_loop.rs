@@ -364,10 +364,10 @@ fn tiled_objects(b: &mut Builder<'_>, copies: bool) -> Vec<NodeId> {
         {
             continue;
         }
-        let water = matches!(
-            b.doc.find(&item).map(|item| &item.fields),
-            Some(ItemFields::Water(_))
-        );
+        let water = b
+            .doc
+            .find(&item)
+            .is_some_and(|item| item.kind().holds_sources());
         // Without a live count the stage would nest the whole buffer.
         if copies && (water || b.input(object, "instance_count").is_none()) {
             continue;

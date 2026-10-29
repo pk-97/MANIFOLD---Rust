@@ -1,7 +1,7 @@
-//! Water and Water Source (SCENE_DOCUMENT_DESIGN.md section 7.10 (Water,
-//! Water Source, Ocean)): each Water splices one copy of the water family
-//! template for its Solver and Draw As (`scene_schema::water_family`), its
-//! node ids `<water id>:<template node id>`, and draws the template's
+//! Water, Sand and Water Source (SCENE_DOCUMENT_DESIGN.md section 7.10
+//! (Water, Water Source, Ocean)): each Water or Sand splices one copy of the
+//! family template for its kind and Draw As (`scene_schema::water_family`),
+//! its node ids `<item id>:<template node id>`, and draws the template's
 //! objects. Its Transform node is the domain box. Each Water Source child
 //! compiles to a `node.fluid_role_source` placed by its own Transform (a
 //! Model's by its Object's), wired into the domain's role inputs in tree
@@ -22,8 +22,8 @@ use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, Serializ
 use manifold_core::scene_doc::{Item, ItemFields, ItemKind, SceneDoc, SourceShape};
 use manifold_core::scene_schema::{
     DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SOLID, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET,
-    WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WORLD_FOLLOWS, WaterFamily, role_index, template_roles,
-    water_family,
+    WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WORLD_FOLLOWS, WaterFamily, role_index, rows,
+    template_roles, water_family,
 };
 use manifold_core::scene_world_controls::WORLD_INPUTS;
 use manifold_foundation::ItemId;
@@ -32,11 +32,11 @@ use manifold_node_engine::scene::render_mode::RENDER_MODE_PHYSICS_VIEW;
 use super::builder::Builder;
 use super::material::surface_for;
 
-/// Every Water in tree order, with the Group it sits in, if any.
+/// Every Water and Sand in tree order, with the Group it sits in, if any.
 pub(crate) fn waters(doc: &SceneDoc) -> Vec<(Item, Option<ItemId>)> {
     let mut found = Vec::new();
     doc.walk(|item, ancestors| {
-        if matches!(item.fields, ItemFields::Water(_)) {
+        if item.kind().holds_sources() {
             let group = ancestors
                 .iter()
                 .rev()
@@ -48,14 +48,11 @@ pub(crate) fn waters(doc: &SceneDoc) -> Vec<(Item, Option<ItemId>)> {
     found
 }
 
-/// Emit every Water and its sources. With no water solver linked, a Water
-/// draws nothing.
+/// Emit every Water and Sand and its sources. With no water solver linked,
+/// they draw nothing.
 pub(crate) fn emit_all(b: &mut Builder<'_>) {
     for (item, group) in waters(b.doc) {
-        let ItemFields::Water(fields) = &item.fields else {
-            continue;
-        };
-        if let Some(family) = water_family(fields) {
+        if let Some(family) = water_family(&item.fields) {
             emit(b, &item, group.as_ref(), &family);
         }
     }
@@ -65,7 +62,7 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
     let owner = item.id.as_str();
     let ids = splice(b, owner, family);
     let node = |name: &str| ids.get(name).copied();
-    for role in template_roles()
+    for role in template_roles(rows(item.kind()))
         .chain(PHYSICS_VIEW_SWITCHES)
         .chain(SURFACE_DETAIL_NODES)
     {
@@ -86,15 +83,16 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
 
     let cell_size = b.add(owner, "cell_size", "node.value");
     b.wire(cell_size, "out", domain, "cell_metres");
-    if let ItemFields::Water(water) = &item.fields {
-        b.set(
-            domain,
-            "bounds",
-            SerializedParamValue::Bool {
-                value: water.bounds,
-            },
-        );
-    }
+    let bounds = match &item.fields {
+        ItemFields::Water(water) => water.bounds,
+        ItemFields::Sand(sand) => sand.bounds,
+        _ => false,
+    };
+    b.set(
+        domain,
+        "bounds",
+        SerializedParamValue::Bool { value: bounds },
+    );
 
     // Every water runs at the World's Speed, as the bodies do: one clock for
     // everything that touches. A per-region speed would feed the domain's

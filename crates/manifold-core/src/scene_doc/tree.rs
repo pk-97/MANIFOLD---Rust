@@ -67,31 +67,36 @@ fn is_environment(item: &Item) -> bool {
 }
 
 /// Why a Water refuses a second Fill.
-pub const ONE_FILL: &str = "This Water already has a Fill; a Water takes one";
+pub const ONE_FILL: &str = "This already has a Fill; a Water or Sand takes one";
 
 fn is_fill(item: &Item) -> bool {
     matches!(&item.fields, ItemFields::WaterSource(source) if source.role == super::SourceRole::Fill)
 }
 
-/// Whether `item` draws with its effective Material: an Object, Group or
-/// Water, and a Swarm whose particles are its own solids (one drawing
+/// Whether `item` draws with its effective Material: an Object, Group,
+/// Water or Sand, and a Swarm whose particles are its own solids (one drawing
 /// another item draws that item's Material).
 pub fn draws_with_material(item: &Item) -> bool {
     match &item.fields {
-        ItemFields::Object(_) | ItemFields::Group(_) | ItemFields::Water(_) => true,
+        ItemFields::Object(_)
+        | ItemFields::Group(_)
+        | ItemFields::Water(_)
+        | ItemFields::Sand(_) => true,
         ItemFields::Swarm(swarm) => !matches!(swarm.draw_as, DrawAs::Item(_)),
         _ => false,
     }
 }
 
 /// Whether an item of `kind` may sit under `parent` (None is the top).
-/// Groups hold anything placeable; a Water holds its sources and looks;
-/// a Water Source sits only in a Water; the World, Forces and Modifiers sit
+/// Groups hold anything placeable; a Water or Sand holds its sources and
+/// looks; a Water Source sits only in a Water or Sand; the World, Forces and Modifiers sit
 /// only at the top (their own sections of the tree).
 pub fn can_hold(parent: Option<ItemKind>, kind: ItemKind) -> bool {
     match (parent, kind) {
         (_, ItemKind::World | ItemKind::Force | ItemKind::Modifier) => parent.is_none(),
-        (Some(ItemKind::Water), ItemKind::WaterSource | ItemKind::Material) => true,
+        (Some(domain), ItemKind::WaterSource | ItemKind::Material) if domain.holds_sources() => {
+            true
+        }
         (_, ItemKind::WaterSource) => false,
         (None | Some(ItemKind::Group), _) => true,
         _ => false,
@@ -140,6 +145,7 @@ impl Item {
                 o.copies_surface = o.copies_surface.as_ref().map(swap);
             }
             ItemFields::Water(w) => w.material = w.material.as_ref().map(swap),
+            ItemFields::Sand(s) => s.material = s.material.as_ref().map(swap),
             ItemFields::Camera(c) => c.target = c.target.as_ref().map(swap),
             ItemFields::Swarm(s) => {
                 s.material = s.material.as_ref().map(swap);
@@ -295,7 +301,9 @@ impl SceneDoc {
             return Err(SceneEditError::SecondOfType(ONE_ENVIRONMENT));
         }
         if is_fill(item)
-            && self.parent_kind(parent)? == Some(ItemKind::Water)
+            && self
+                .parent_kind(parent)?
+                .is_some_and(ItemKind::holds_sources)
             && self.fills_under(parent) > 0
         {
             return Err(SceneEditError::SecondOfType(ONE_FILL));
@@ -317,13 +325,13 @@ impl SceneDoc {
         children.iter().filter(|child| is_fill(child)).count()
     }
 
-    /// Why the Water holding `item` refuses it: a second Fill. A field set
+    /// Why the Water or Sand holding `item` refuses it: a second Fill. A field set
     /// checks this after it writes, as an insert checks before.
     pub fn second_fill(&self, item: &ItemId) -> Option<&'static str> {
         let (parent, _) = self.locate(item)?;
         let water = self
             .find(parent.as_ref()?)
-            .filter(|water| water.kind() == ItemKind::Water)?;
+            .filter(|water| water.kind().holds_sources())?;
         (water.children.iter().filter(|child| is_fill(child)).count() > 1).then_some(ONE_FILL)
     }
 
@@ -513,6 +521,7 @@ impl SceneDoc {
                 }
             }
             ItemFields::Water(w) if w.material.as_ref().is_some_and(gone) => w.material = None,
+            ItemFields::Sand(s) if s.material.as_ref().is_some_and(gone) => s.material = None,
             ItemFields::Swarm(s) => {
                 if s.material.as_ref().is_some_and(gone) {
                     s.material = None;
@@ -780,6 +789,7 @@ impl SceneDoc {
                     ItemFields::Camera(_)
                     | ItemFields::Water(_)
                     | ItemFields::WaterSource(_)
+                    | ItemFields::Sand(_)
                     | ItemFields::Swarm(_)
                     | ItemFields::Force(_)
                     | ItemFields::World(_) => {}

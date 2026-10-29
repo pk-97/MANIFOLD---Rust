@@ -14,6 +14,7 @@ pub mod scene_node_ids_v1240;
 pub mod scene_scale_coc_v1140;
 pub mod scene_transform_v1120;
 pub mod solve_level_card_v1180;
+pub mod water_solver_v1260;
 
 thread_local! {
     /// Per-load handoff from the pre-deserialize migrations (which run pure

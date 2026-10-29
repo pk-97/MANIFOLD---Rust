@@ -462,7 +462,7 @@ impl ScenePanel {
                     && (item.material.is_some()
                         || matches!(
                             item.kind,
-                            ItemKind::Object | ItemKind::Group | ItemKind::Water
+                            ItemKind::Object | ItemKind::Group | ItemKind::Water | ItemKind::Sand
                         ))
                 {
                     cy = self.build_material_summary(

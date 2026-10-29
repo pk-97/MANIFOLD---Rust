@@ -61,7 +61,12 @@ pub fn own_material_commands(
         ItemFields::Object(object) => object.material = Some(material.clone()),
         ItemFields::Group(group) => group.material = Some(material.clone()),
         ItemFields::Water(water) => water.material = Some(material.clone()),
-        _ => return Err("Only an object, a group or a water draws with a material".to_owned()),
+        ItemFields::Sand(sand) => sand.material = Some(material.clone()),
+        _ => {
+            return Err(
+                "Only an object, a group, a water or a sand draws with a material".to_owned(),
+            );
+        }
     }
     let add: Box<dyn Command> = match doc.effective_material(owner) {
         Some(source) => {

@@ -857,8 +857,10 @@ pub(super) fn water_sites(
     };
     let mut sites = Vec::new();
     doc.walk(|item, _| {
-        let ItemFields::Water(water) = &item.fields else {
-            return;
+        let bounds = match &item.fields {
+            ItemFields::Water(water) => water.bounds,
+            ItemFields::Sand(sand) => sand.bounds,
+            _ => return,
         };
         let owner = ShapeOwner::LiquidDomain(NodeId::new(format!("{}:{DOMAIN_ROLE}", item.id)));
         let box_shape = shapes.len();
@@ -960,7 +962,7 @@ pub(super) fn water_sites(
             fill_authored: None,
             sources,
             meshless,
-            bounds: water.bounds,
+            bounds,
         });
     });
     sites

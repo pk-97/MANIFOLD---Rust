@@ -7,8 +7,8 @@ use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_core::scene_doc::{
     CameraFields, CameraRig, FeatureSetting, ForceFields, ForceTargets, ForceType, Item,
-    ItemFields, ItemId, ItemKind, LightType, MaterialFields, MaterialType, SceneDoc, Shape,
-    SourceRole, TextureFeeds, TextureSource, WaterFields, WaterSourceFields, param_id,
+    ItemFields, ItemId, ItemKind, LightType, MaterialFields, MaterialType, SandFields, SceneDoc,
+    Shape, SourceRole, TextureFeeds, TextureSource, WaterFields, WaterSourceFields, param_id,
 };
 use manifold_core::scene_schema::{
     self, FieldControl, FieldValue, add_entry, field_for, unique_name,
@@ -259,7 +259,7 @@ pub(crate) fn add(
             );
         }
     }
-    if entry.kind == ItemKind::Water {
+    if entry.kind.holds_sources() {
         let fill = new_id();
         commands.push(Box::new(AddSceneItemCommand::new(
             layer.clone(),
@@ -288,8 +288,13 @@ pub(crate) fn add(
                 .iter()
                 .map(|(property, value)| write(layer, &fill, property, 0.0, *value)),
         );
-        // Its own Material, as an Object's, starting at the water look.
-        let material = new_material(new_id(), unique_name(WATER_MATERIAL_NAME, &names));
+        // Its own Material, as an Object's, starting at its template's look.
+        let material_name = if entry.kind == ItemKind::Sand {
+            SAND_MATERIAL_NAME
+        } else {
+            WATER_MATERIAL_NAME
+        };
+        let material = new_material(new_id(), unique_name(material_name, &names));
         let material_id = material.id.clone();
         commands.push(Box::new(AddSceneItemCommand::with_subtree(
             layer.clone(),
@@ -297,16 +302,24 @@ pub(crate) fn add(
             1,
             material,
         )));
+        let fields = match ItemFields::default_for(entry.kind) {
+            ItemFields::Water(water) => ItemFields::Water(WaterFields {
+                material: Some(material_id.clone()),
+                ..water
+            }),
+            ItemFields::Sand(sand) => ItemFields::Sand(SandFields {
+                material: Some(material_id.clone()),
+                ..sand
+            }),
+            other => other,
+        };
         commands.push(Box::new(SetSceneItemFieldsCommand::new(
             layer.clone(),
             id.clone(),
-            ItemFields::Water(WaterFields {
-                material: Some(material_id.clone()),
-                ..WaterFields::default()
-            }),
+            fields,
         )));
         commands.extend(
-            scene_schema::water_look()
+            scene_schema::water_look(entry.kind)
                 .into_iter()
                 .filter(|(property, _)| {
                     let family = scene_schema::MATERIAL_FAMILY;
@@ -316,19 +329,28 @@ pub(crate) fn add(
                 .map(|(property, value)| write(layer, &material_id, &property, 0.0, value)),
         );
     }
-    // A Material added inside a Water is that water's look.
+    // A Material added inside a Water or Sand is that item's look.
     if entry.kind == ItemKind::Material
-        && let Some(water) = parent.as_ref().and_then(|parent| doc.find(parent))
-        && let ItemFields::Water(fields) = &water.fields
+        && let Some(domain) = parent.as_ref().and_then(|parent| doc.find(parent))
     {
-        commands.push(Box::new(SetSceneItemFieldsCommand::new(
-            layer.clone(),
-            water.id.clone(),
-            ItemFields::Water(WaterFields {
+        let fields = match &domain.fields {
+            ItemFields::Water(fields) => Some(ItemFields::Water(WaterFields {
                 material: Some(id.clone()),
                 ..fields.clone()
-            }),
-        )));
+            })),
+            ItemFields::Sand(fields) => Some(ItemFields::Sand(SandFields {
+                material: Some(id.clone()),
+                ..fields.clone()
+            })),
+            _ => None,
+        };
+        if let Some(fields) = fields {
+            commands.push(Box::new(SetSceneItemFieldsCommand::new(
+                layer.clone(),
+                domain.id.clone(),
+                fields,
+            )));
+        }
     }
     Ok(batch(commands, &format!("Add {}", entry.label), Some(id)))
 }
@@ -347,6 +369,7 @@ const WATER_FILL: [(&str, f32); 6] = [
 
 /// What a new Water's own Material is called, numbered when taken.
 const WATER_MATERIAL_NAME: &str = "Water";
+const SAND_MATERIAL_NAME: &str = "Sand";
 
 /// What a new Material is called, numbered when taken.
 const MATERIAL_NAME: &str = "Material";

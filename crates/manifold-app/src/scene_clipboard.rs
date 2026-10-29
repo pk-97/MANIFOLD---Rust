@@ -201,6 +201,7 @@ fn bind(fields: &mut ItemFields, material: ItemId) {
         ItemFields::Group(g) => g.material = Some(material),
         ItemFields::Swarm(s) => s.material = Some(material),
         ItemFields::Water(w) => w.material = Some(material),
+        ItemFields::Sand(s) => s.material = Some(material),
         _ => {}
     }
 }

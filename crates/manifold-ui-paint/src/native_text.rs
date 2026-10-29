@@ -368,6 +368,7 @@ fn generate_atlas_icons() -> [Vec<u8>; ICON_COUNT] {
         x if x == Icon::SceneForce.id() => generate_scene_force_icon(),
         x if x == Icon::SceneMaterial.id() => generate_scene_material_icon(),
         x if x == Icon::SceneSwarm.id() => generate_scene_swarm_icon(),
+        x if x == Icon::SceneSand.id() => generate_scene_sand_icon(),
         x if x == Icon::SceneWorld.id() => generate_scene_world_icon(),
         // Waveform shapes occupy ids 0..=4 in declaration order.
         _ => generate_single_waveform(i),
@@ -459,6 +460,20 @@ fn generate_scene_material_icon() -> Vec<u8> {
         let ring = (r - 0.32).abs() <= SCENE_STROKE;
         let (hx, hy) = (nx - 0.42, ny - 0.42);
         ring || hx * hx + hy * hy <= 0.11 * 0.11
+    })
+}
+
+/// Sand — a mound with grains falling onto it.
+fn generate_scene_sand_icon() -> Vec<u8> {
+    const GRAINS: [(f32, f32); 3] = [(0.40, 0.22), (0.56, 0.16), (0.66, 0.30)];
+    supersample_icon(|nx, ny| {
+        let x = (nx - 0.5) / 0.36;
+        let mound = x.abs() <= 1.0 && ny <= 0.80 && ny >= 0.80 - 0.38 * (1.0 - x * x);
+        let grain = GRAINS.iter().any(|&(gx, gy)| {
+            let (dx, dy) = (nx - gx, ny - gy);
+            dx * dx + dy * dy <= 0.045 * 0.045
+        });
+        mound || grain
     })
 }
 

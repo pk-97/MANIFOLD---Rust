@@ -625,14 +625,15 @@ pub fn modifier_refuses(target: &Item) -> Option<&'static str> {
         ItemFields::Water(_) => {
             Some("Water moves by its own simulation: a modifier cannot bend it")
         }
+        ItemFields::Sand(_) => Some("Sand moves by its own simulation: a modifier cannot bend it"),
         _ => None,
     }
 }
 
-/// What the Targets menu lists: Objects and Groups, and Water, so it shows
-/// with the reason no card aims at it.
+/// What the Targets menu lists: Objects and Groups, and Water and Sand, so
+/// they show with the reason no card aims at them.
 fn is_target_kind(item: &Item) -> bool {
-    is_object_or_group(item) || item.kind() == ItemKind::Water
+    is_object_or_group(item) || item.kind().holds_sources()
 }
 
 /// What a new card aims at: the Objects and Groups in `selection` a card can

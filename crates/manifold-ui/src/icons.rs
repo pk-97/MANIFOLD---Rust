@@ -48,11 +48,12 @@ pub enum Icon {
     SceneMaterial = 19,
     SceneWorld = 20,
     SceneSwarm = 21,
+    SceneSand = 22,
 }
 
 impl Icon {
     /// Number of distinct atlas icons (the atlas slot count).
-    pub const COUNT: usize = 22;
+    pub const COUNT: usize = 23;
 
     /// The atlas id (== PUA offset).
     #[inline]
@@ -134,6 +135,7 @@ pub fn scene_item_icon(kind: manifold_foundation::scene_surface::ItemKind, plane
         ItemKind::Light => Icon::SceneLight,
         ItemKind::Material => Icon::SceneMaterial,
         ItemKind::Water | ItemKind::WaterSource => Icon::SceneWater,
+        ItemKind::Sand => Icon::SceneSand,
         ItemKind::Swarm => Icon::SceneSwarm,
         ItemKind::Force => Icon::SceneForce,
         // A wave: a modifier bends what it targets.
@@ -171,6 +173,7 @@ mod tests {
             Icon::SceneMaterial,
             Icon::SceneWorld,
             Icon::SceneSwarm,
+            Icon::SceneSand,
         ]
         .into_iter()
         .enumerate()
@@ -183,8 +186,8 @@ mod tests {
 
     #[test]
     fn count_matches_highest_id() {
-        // COUNT must cover every variant — SceneSwarm is the last id.
-        assert_eq!(Icon::SceneSwarm.id() as usize, Icon::COUNT - 1);
+        // COUNT must cover every variant — SceneSand is the last id.
+        assert_eq!(Icon::SceneSand.id() as usize, Icon::COUNT - 1);
     }
 
     #[test]

@@ -168,9 +168,10 @@ pub fn impulse_unavailable(doc: &SceneDoc, item: &Item) -> Option<&'static str> 
     }
     match &force.targets {
         ForceTargets::Physics
-            if !doc.any_physics() && !holds(doc, &[ItemKind::Swarm, ItemKind::Water]) =>
+            if !doc.any_physics()
+                && !holds(doc, &[ItemKind::Swarm, ItemKind::Water, ItemKind::Sand]) =>
         {
-            Some("Nothing in the scene has physics, a swarm or water for this force to push")
+            Some("Nothing in the scene has physics, a swarm, water or sand for this force to push")
         }
         ForceTargets::Items(ids) if ids.is_empty() => Some("Choose the items this force pushes"),
         ForceTargets::Items(ids)

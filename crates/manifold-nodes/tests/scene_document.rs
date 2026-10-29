@@ -744,15 +744,10 @@ mod every_param_has_a_row {
             .find(&ItemId::new(owner))
             .is_some_and(|item| item.kind() == ItemKind::Material)
             && role == MATERIAL_FAMILY.node;
-        // The water template's params are a family too (`scene_schema::water`).
-        let water = doc
-            .find(&ItemId::new(owner))
-            .is_some_and(|item| match &item.fields {
-                manifold_core::scene_doc::ItemFields::Water(fields) => {
-                    scene_schema::water_family(fields).is_some_and(|template| template.holds(role))
-                }
-                _ => false,
-            });
+        // The water and sand templates' params are a family too (`scene_schema::water`).
+        let water = doc.find(&ItemId::new(owner)).is_some_and(|item| {
+            scene_schema::water_family(&item.fields).is_some_and(|template| template.holds(role))
+        });
         let plain_material = owner == "scene" && role == "default_material";
         // A modifier frame's rest centre, and the Scene Loop's rest box of
         // each object it measures, are placed by the compiler, not a row.

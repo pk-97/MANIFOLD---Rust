@@ -22,7 +22,6 @@ use manifold_core::layer::Layer;
 use manifold_core::liquid_setup::{ColumnOutcome, SetupFit};
 use manifold_core::physics_members::BodyRefusalRow;
 use manifold_core::project::Project;
-use manifold_core::scene_doc::ItemKind;
 use manifold_core::{LayerId, NodeId, PresetTypeId};
 use manifold_nodes_scene::node_graph::scene_vm::{
     BodyAnchor, CopiesAnchor, ParamAddr, RuntimeFit, SceneStructure, SceneVm, SetupProblem,
@@ -549,11 +548,11 @@ fn water_problems(
     report: &[SetupFitEntry],
     structure: &mut Option<Arc<SceneStructure>>,
 ) -> Vec<SetupProblem> {
-    // Only a Water has problems here; a scene without one builds nothing,
+    // Only a Water or Sand has problems here; a scene without one builds nothing,
     // so a row drag on any other scene costs no scene model per frame.
     let mut has_water = false;
     if let Some(doc) = layer.gen_params().and_then(|inst| inst.scene.as_ref()) {
-        doc.walk(|item, _| has_water |= item.kind() == ItemKind::Water);
+        doc.walk(|item, _| has_water |= item.kind().holds_sources());
     }
     let Some(vm) = has_water
         .then(|| crate::scene_gizmo::layer_scene_vm_over(layer, structure.as_ref()))

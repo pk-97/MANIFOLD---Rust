@@ -120,6 +120,12 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.25.0".to_string());
     }
 
+    // A Water is always GPU FLIP; its saved Solver key goes.
+    if is_version_less_than(&version, "1.26.0") {
+        crate::migrations::water_solver_v1260::migrate(&mut root);
+        root["projectVersion"] = Value::String("1.26.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
 }
 

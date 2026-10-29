@@ -1,11 +1,12 @@
 //! Water (SCENE_DOCUMENT_DESIGN.md section 7.10 (Water, Water Source,
-//! Ocean)): a liquid whose Transform is its domain box, with its Water
-//! Sources as children. Solver (GPU FLIP or MPM) and Draw As (Surface or
-//! Particles) are setup fields; the solver, the surface, the whitewater and
-//! the dots come from the water family template the water crate registers
-//! for each pair ([`WaterTemplate`]); the compiler splices one copy per
-//! Water, its node ids `<water id>:<template node id>`. Its look is its
-//! Material, as for any object.
+//! Ocean)): a GPU FLIP liquid whose Transform is its domain box, with its
+//! Water Sources as children. A Sand (`sand.rs`) is the same kind of domain
+//! on Matter. Draw As (Surface or Particles) is a setup field; the solver,
+//! the surface, the whitewater and the dots come from the family template
+//! the water crate registers for each kind and draw ([`WaterTemplate`]); the
+//! compiler splices one copy per Water or Sand, its node ids
+//! `<item id>:<template node id>`. Its look is its Material, as for any
+//! object.
 //!
 //! The template's params are a family, like a Material's: every param of a
 //! template node keeps the template's tuned value (Coarse Solve, Max
@@ -26,7 +27,7 @@ use super::fields::{
 use super::{Exposure, PropertyRow, Reach, follows, perform, row, setup};
 use crate::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
 use crate::fluid_domain::{CELL_SIZE_METRES, DEFAULT_CELL_SIZE, MIN_DOMAIN_SIDE_METRES};
-use crate::scene_doc::{Item, ItemFields, SourceRole, WaterDraw, WaterFields, WaterSolver};
+use crate::scene_doc::{ItemFields, ItemKind, WaterDraw};
 
 /// The water family the scene compiler splices for each Water: the solver,
 /// its display and its looks, with no source and no host wiring.
@@ -56,28 +57,29 @@ impl WaterFamily {
     }
 }
 
-/// Registered by the crate that owns the water solvers, one per solver and
-/// draw.
+/// Registered by the crate that owns the solvers, one per kind (Water or
+/// Sand), draw and Narrow Band.
 pub struct WaterTemplate {
-    pub solver: WaterSolver,
+    pub kind: ItemKind,
     pub draw: WaterDraw,
-    /// GPU FLIP's Narrow Band variant; Matter registers only `false`.
+    /// GPU FLIP's Narrow Band variant; Sand registers only `false`.
     pub narrow_band: bool,
     pub family: fn() -> Arc<WaterFamily>,
 }
 inventory::collect!(WaterTemplate);
 
-/// The registered water family for `fields`' solver and draw, with Narrow
-/// Band where the solver runs it (GPU FLIP), or `None` when no water crate is
-/// linked.
-pub fn water_family(fields: &WaterFields) -> Option<Arc<WaterFamily>> {
-    let narrow_band = fields.narrow_band && fields.solver == WaterSolver::Flip;
+/// The registered family for a Water's or Sand's fields, or `None` for any
+/// other item or when no water crate is linked.
+pub fn water_family(fields: &ItemFields) -> Option<Arc<WaterFamily>> {
+    let (kind, draw, narrow_band) = match fields {
+        ItemFields::Water(w) => (ItemKind::Water, w.draw, w.narrow_band),
+        ItemFields::Sand(s) => (ItemKind::Sand, s.draw, false),
+        _ => return None,
+    };
     inventory::iter::<WaterTemplate>
         .into_iter()
         .find(|template| {
-            template.solver == fields.solver
-                && template.draw == fields.draw
-                && template.narrow_band == narrow_band
+            template.kind == kind && template.draw == draw && template.narrow_band == narrow_band
         })
         .map(|template| (template.family)())
 }
@@ -88,10 +90,10 @@ pub const WATER_MATERIAL_ROLE: &str = "water_material";
 /// The template node that draws the water itself.
 pub const WATER_OBJECT_ROLE: &str = "water_object";
 
-/// The water look the template draws with: its water material's values,
-/// which a new Water's own Material starts at.
-pub fn water_look() -> Vec<(String, f32)> {
-    let Some(family) = water_family(&WaterFields::default()) else {
+/// The look a new Water's or Sand's template draws with: its material's
+/// values, which the new item's own Material starts at.
+pub fn water_look(kind: ItemKind) -> Vec<(String, f32)> {
+    let Some(family) = water_family(&ItemFields::default_for(kind)) else {
         return Vec::new();
     };
     let Some(material) = family
@@ -158,7 +160,7 @@ pub const WORLD_FOLLOWS: [&str; 6] = [
 ];
 
 const T: Reach = Reach::Own("transform");
-const DOMAIN: Reach = Reach::Own(DOMAIN_ROLE);
+pub(super) const DOMAIN: Reach = Reach::Own(DOMAIN_ROLE);
 const CELL_SIZE: Reach = Reach::Own("cell_size");
 const DETAIL: Reach = Reach::Own("surface_detail");
 const PARTICLE_SCALE: Reach = Reach::Own("liquid_particle_scale");
@@ -168,7 +170,7 @@ const RIPPLES: Reach = Reach::Own("water_ripple_detail");
 const MIST: Reach = Reach::Own("water_mist");
 const WETNESS: Reach = Reach::Own("water_wetness");
 const LOOKS: Reach = Reach::Own(WATER_OBJECT_ROLE);
-use ControlGroup::{Domain, Simulation, Surface, Whitewater};
+use ControlGroup::{Domain, Surface, Whitewater};
 
 /// The domain box is axis-aligned: the solvers take no rotation.
 const AXIS_ALIGNED: &str = "the domain box is axis-aligned; the solvers take no rotation";
@@ -179,169 +181,172 @@ const SIZE: HardLimit = HardLimit::AtLeast(MIN_DOMAIN_SIDE_METRES);
 /// The Dam Break tank: four metres a side, standing on the floor.
 const DOMAIN_SIDE: f32 = 4.0;
 
-const WALL_TIP: &str = "On: this face of the box is a wall that holds the water in. Off: water flows out through it and is removed once it leaves the box";
+const WALL_TIP: &str = "On: this face of the box is a wall that holds the contents in. Off: they flow out through it and are removed once they leave the box";
 
-fn water(fields: &ItemFields) -> Option<&WaterFields> {
+/// A Water's or Sand's Bounds switch and draw.
+fn domain(fields: &ItemFields) -> Option<(bool, WaterDraw)> {
     match fields {
-        ItemFields::Water(water) => Some(water),
+        ItemFields::Water(w) => Some((w.bounds, w.draw)),
+        ItemFields::Sand(s) => Some((s.bounds, s.draw)),
         _ => None,
     }
 }
 
-/// The Water's own box and walls are on: the size and wall rows exist.
+/// The item's own box and walls are on: the size and wall rows exist.
 fn bounded(fields: &ItemFields) -> bool {
-    water(fields).is_some_and(|water| water.bounds)
+    domain(fields).is_some_and(|(bounds, _)| bounds)
 }
 
-fn flip(fields: &ItemFields) -> bool {
-    water(fields).is_some_and(|water| water.solver == WaterSolver::Flip)
+pub(super) fn surface(fields: &ItemFields) -> bool {
+    domain(fields).is_some_and(|(_, draw)| draw == WaterDraw::Surface)
 }
 
-fn mpm(fields: &ItemFields) -> bool {
-    water(fields).is_some_and(|water| water.solver == WaterSolver::Mpm)
-}
-
-fn surface(fields: &ItemFields) -> bool {
-    water(fields).is_some_and(|water| water.draw == WaterDraw::Surface)
-}
-
-/// A drawn surface on the solver that makes whitewater, which is where foam,
-/// spray mist and wetness are.
-fn flip_surface(fields: &ItemFields) -> bool {
-    flip(fields) && surface(fields)
-}
-
-pub static WATER_ROWS: [PropertyRow; 47] = [
-    row("pos_x", T, Domain, setup())
-        .unit(Unit::Metres)
-        .limit(HardLimit::Unlimited),
-    row("pos_y", T, Domain, setup())
-        .unit(Unit::Metres)
-        .limit(HardLimit::Unlimited)
-        .default(DOMAIN_SIDE / 2.0),
-    row("pos_z", T, Domain, setup())
-        .unit(Unit::Metres)
-        .limit(HardLimit::Unlimited),
-    row("scale_x", T, Domain, setup())
-        .name("Size X")
-        .tip("The Bounds box's width in metres: the space the water's walls enclose")
-        .unit(Unit::Metres)
-        .limit(SIZE)
-        .default(DOMAIN_SIDE)
-        .when(bounded),
-    row("scale_y", T, Domain, setup())
-        .name("Size Y")
-        .tip("The Bounds box's height in metres: the space the water's walls enclose")
-        .unit(Unit::Metres)
-        .limit(SIZE)
-        .default(DOMAIN_SIDE)
-        .when(bounded),
-    row("scale_z", T, Domain, setup())
-        .name("Size Z")
-        .tip("The Bounds box's depth in metres: the space the water's walls enclose")
-        .unit(Unit::Metres)
-        .limit(SIZE)
-        .default(DOMAIN_SIDE)
-        .when(bounded),
-    row("rot_x", T, Domain, Exposure::Internal(AXIS_ALIGNED)),
-    row("rot_y", T, Domain, Exposure::Internal(AXIS_ALIGNED)),
-    row("rot_z", T, Domain, Exposure::Internal(AXIS_ALIGNED)),
-    row("billboard", T, Domain, Exposure::Internal(AXIS_ALIGNED)),
-    row("closed_neg_x", DOMAIN, Domain, setup())
-        .name("Left Wall")
-        .tip(WALL_TIP)
-        .when(bounded),
-    row("closed_pos_x", DOMAIN, Domain, setup())
-        .name("Right Wall")
-        .tip(WALL_TIP)
-        .when(bounded),
-    row("closed_neg_y", DOMAIN, Domain, setup())
-        .name("Floor")
-        .tip(WALL_TIP)
-        .when(bounded),
-    row("closed_pos_y", DOMAIN, Domain, setup())
-        .name("Ceiling")
-        .tip(WALL_TIP)
-        .when(bounded),
-    row("closed_neg_z", DOMAIN, Domain, setup())
-        .name("Back Wall")
-        .tip(WALL_TIP)
-        .when(bounded),
-    row("closed_pos_z", DOMAIN, Domain, setup())
-        .name("Front Wall")
-        .tip(WALL_TIP)
-        .when(bounded),
-    // The cell edge in metres; the box's cells follow from its size.
-    row("cell_size", CELL_SIZE, Domain, setup())
-        .param("value")
-        .name("Cell Size")
-        .tip("The simulation's grid cell in metres. Smaller cells show finer splashes and detail but cost far more: half the size holds eight times as many cells")
-        .unit(Unit::Metres)
-        .default(DEFAULT_CELL_SIZE)
-        .limit(HardLimit::Between(CELL_SIZE_METRES.0, CELL_SIZE_METRES.1)),
-    // MPM's dials, as main's Matter scenes showed them.
-    row("stiffness", DOMAIN, Simulation, perform(CardBand::Scene, 2))
-        .name("Stiffness")
-        .when(mpm),
-    row("cohesion", DOMAIN, Simulation, perform(CardBand::Scene, 3))
-        .name("Cohesion")
-        .when(mpm),
-    row(
-        "liveliness",
-        DOMAIN,
-        Simulation,
-        perform(CardBand::Scene, 4),
-    )
-    .name("FLIP Ratio")
-    .when(mpm),
-    row("points_per_cell", DOMAIN, Simulation, setup())
-        .name("Particles per Cell")
-        .when(mpm),
-    row("seed", DOMAIN, Simulation, setup())
-        .name("Seed")
-        .when(mpm),
-    row(
-        "domain_size",
-        DOMAIN,
-        Domain,
-        Exposure::Internal("the domain box's Size sets the box"),
-    ),
-    row(
-        "fill_height",
-        DOMAIN,
-        Domain,
-        Exposure::Internal("a Fill source fills the water"),
-    )
-    .default(0.0),
-    // Shown from 0, FLIP Fluids' subdivision 1; the surface nodes take it plus one.
-    row("surface_detail", DETAIL, Surface, setup())
-        .param("value")
-        .name("Surface Detail")
-        .tip("How finely the surface is built: 0 at the simulation's cell size, 1 at half, 2 at a third. Finer shows smaller splashes and sharper edges, and costs more")
-        .default(0.0)
-        .range(0.0, 2.0)
-        .when(surface),
+// The rows a Water and a Sand share: the box, its walls, the Cell Size, the
+// internal domain params, the surface build and the World controls.
+pub(super) const POS_X: PropertyRow = row("pos_x", T, Domain, setup())
+    .unit(Unit::Metres)
+    .limit(HardLimit::Unlimited);
+pub(super) const POS_Y: PropertyRow = row("pos_y", T, Domain, setup())
+    .unit(Unit::Metres)
+    .limit(HardLimit::Unlimited)
+    .default(DOMAIN_SIDE / 2.0);
+pub(super) const POS_Z: PropertyRow = row("pos_z", T, Domain, setup())
+    .unit(Unit::Metres)
+    .limit(HardLimit::Unlimited);
+pub(super) const SCALE_X: PropertyRow = row("scale_x", T, Domain, setup())
+    .name("Size X")
+    .tip("The Bounds box's width in metres: the space its walls enclose")
+    .unit(Unit::Metres)
+    .limit(SIZE)
+    .default(DOMAIN_SIDE)
+    .when(bounded);
+pub(super) const SCALE_Y: PropertyRow = row("scale_y", T, Domain, setup())
+    .name("Size Y")
+    .tip("The Bounds box's height in metres: the space its walls enclose")
+    .unit(Unit::Metres)
+    .limit(SIZE)
+    .default(DOMAIN_SIDE)
+    .when(bounded);
+pub(super) const SCALE_Z: PropertyRow = row("scale_z", T, Domain, setup())
+    .name("Size Z")
+    .tip("The Bounds box's depth in metres: the space its walls enclose")
+    .unit(Unit::Metres)
+    .limit(SIZE)
+    .default(DOMAIN_SIDE)
+    .when(bounded);
+pub(super) const ROT_X: PropertyRow = row("rot_x", T, Domain, Exposure::Internal(AXIS_ALIGNED));
+pub(super) const ROT_Y: PropertyRow = row("rot_y", T, Domain, Exposure::Internal(AXIS_ALIGNED));
+pub(super) const ROT_Z: PropertyRow = row("rot_z", T, Domain, Exposure::Internal(AXIS_ALIGNED));
+pub(super) const BILLBOARD: PropertyRow =
+    row("billboard", T, Domain, Exposure::Internal(AXIS_ALIGNED));
+pub(super) const LEFT_WALL: PropertyRow = row("closed_neg_x", DOMAIN, Domain, setup())
+    .name("Left Wall")
+    .tip(WALL_TIP)
+    .when(bounded);
+pub(super) const RIGHT_WALL: PropertyRow = row("closed_pos_x", DOMAIN, Domain, setup())
+    .name("Right Wall")
+    .tip(WALL_TIP)
+    .when(bounded);
+pub(super) const FLOOR: PropertyRow = row("closed_neg_y", DOMAIN, Domain, setup())
+    .name("Floor")
+    .tip(WALL_TIP)
+    .when(bounded);
+pub(super) const CEILING: PropertyRow = row("closed_pos_y", DOMAIN, Domain, setup())
+    .name("Ceiling")
+    .tip(WALL_TIP)
+    .when(bounded);
+pub(super) const BACK_WALL: PropertyRow = row("closed_neg_z", DOMAIN, Domain, setup())
+    .name("Back Wall")
+    .tip(WALL_TIP)
+    .when(bounded);
+pub(super) const FRONT_WALL: PropertyRow = row("closed_pos_z", DOMAIN, Domain, setup())
+    .name("Front Wall")
+    .tip(WALL_TIP)
+    .when(bounded);
+// The cell edge in metres; the box's cells follow from its size.
+pub(super) const CELL_SIZE_ROW: PropertyRow = row("cell_size", CELL_SIZE, Domain, setup())
+    .param("value")
+    .name("Cell Size")
+    .tip("The simulation's grid cell in metres. Smaller cells show finer detail but cost far more: half the size holds eight times as many cells")
+    .unit(Unit::Metres)
+    .default(DEFAULT_CELL_SIZE)
+    .limit(HardLimit::Between(CELL_SIZE_METRES.0, CELL_SIZE_METRES.1));
+pub(super) const DOMAIN_SIZE: PropertyRow = row(
+    "domain_size",
+    DOMAIN,
+    Domain,
+    Exposure::Internal("the domain box's Size sets the box"),
+);
+pub(super) const FILL_HEIGHT: PropertyRow = row(
+    "fill_height",
+    DOMAIN,
+    Domain,
+    Exposure::Internal("a Fill source fills the domain"),
+)
+.default(0.0);
+// Shown from 0, FLIP Fluids' subdivision 1; the surface nodes take it plus one.
+pub(super) const SURFACE_DETAIL: PropertyRow = row("surface_detail", DETAIL, Surface, setup())
+    .param("value")
+    .name("Surface Detail")
+    .tip("How finely the surface is built: 0 at the simulation's cell size, 1 at half, 2 at a third. Finer shows smaller details and sharper edges, and costs more")
+    .default(0.0)
+    .range(0.0, 2.0)
+    .when(surface);
+pub(super) const SURFACE_PARTICLE_SCALE: PropertyRow =
     row("surface_particle_scale", PARTICLE_SCALE, Surface, setup())
         .param("value")
         .name("Particle Scale")
-        .tip("How large each simulation particle is drawn, times its true size. Larger closes gaps in thin sheets but rounds the water off; smaller keeps splashes crisp but shows single particles")
-        .when(surface),
-    // Times the smoothing's leash (FIELD_LEASH_CELLS in manifold-water-liquid): 1 is the tuned surface, 0 the raw particle field.
+        .tip("How large each simulation particle is drawn, times its true size. Larger closes gaps in thin sheets but rounds the surface off; smaller keeps edges crisp but shows single particles")
+        .when(surface);
+// Times the smoothing's leash (FIELD_LEASH_CELLS in manifold-water-liquid): 1 is the tuned surface, 0 the raw particle field.
+pub(super) const SURFACE_SMOOTHNESS: PropertyRow =
     row("surface_smoothness", SMOOTHNESS, Surface, setup())
         .param("value")
         .name("Smoothness")
         .tip("How much the surface is smoothed between particles: 0 shows each particle's bumps, 2 is the smoothest")
         .default(1.0)
         .range(0.0, 2.0)
-        .when(surface),
-    // The surface group's switch between the raw level set and its closing.
+        .when(surface);
+// The surface group's switch between the raw level set and its closing.
+pub(super) const SURFACE_CLOSE_GAPS: PropertyRow =
     row("surface_close_gaps", CLOSE_GAPS, Surface, setup())
         .param("selector")
         .name("Close Gaps")
-        .tip("Closes holes and gaps in the surface up to two surface cells across, so a thin sheet of water holds together instead of breaking into beads. Droplets closer than that join up")
+        .tip("Closes holes and gaps in the surface up to two surface cells across, so a thin sheet holds together instead of breaking into beads. Pieces closer than that join up")
         .toggle()
         .default(0.0)
-        .when(surface),
+        .when(surface);
+pub(super) const FOLLOW_GRAVITY_X: PropertyRow = follows(WORLD_FOLLOWS[0], "the World's Gravity X");
+pub(super) const FOLLOW_GRAVITY_Y: PropertyRow = follows(WORLD_FOLLOWS[1], "the World's Gravity Y");
+pub(super) const FOLLOW_GRAVITY_Z: PropertyRow = follows(WORLD_FOLLOWS[2], "the World's Gravity Z");
+pub(super) const FOLLOW_AIR: PropertyRow = follows(WORLD_FOLLOWS[3], "the World's Air Resistance");
+pub(super) const FOLLOW_SPEED: PropertyRow = follows(WORLD_FOLLOWS[4], "the World's Speed");
+pub(super) const FOLLOW_RESET: PropertyRow = follows(WORLD_FOLLOWS[5], "the World's Reset");
+
+pub static WATER_ROWS: [PropertyRow; 42] = [
+    POS_X,
+    POS_Y,
+    POS_Z,
+    SCALE_X,
+    SCALE_Y,
+    SCALE_Z,
+    ROT_X,
+    ROT_Y,
+    ROT_Z,
+    BILLBOARD,
+    LEFT_WALL,
+    RIGHT_WALL,
+    FLOOR,
+    CEILING,
+    BACK_WALL,
+    FRONT_WALL,
+    CELL_SIZE_ROW,
+    DOMAIN_SIZE,
+    FILL_HEIGHT,
+    SURFACE_DETAIL,
+    SURFACE_PARTICLE_SCALE,
+    SURFACE_SMOOTHNESS,
+    SURFACE_CLOSE_GAPS,
     // Each optional look is a switch on the water object, which leaves the
     // look and its passes out while off, with its tuning row folded under it.
     row("look_ripples", LOOKS, Surface, setup())
@@ -368,7 +373,7 @@ pub static WATER_ROWS: [PropertyRow; 47] = [
         .switch(Feature::Foam)
         .toggle()
         .default(1.0)
-        .when(flip_surface),
+        .when(surface),
     // Times the foam's area: 1 is the foam the particles make, 0 none.
     row("surface_foam", LOOKS, Surface, setup())
         .param("foam_coverage")
@@ -377,7 +382,7 @@ pub static WATER_ROWS: [PropertyRow; 47] = [
         .gate(Gate::Fold(Feature::Foam))
         .default(1.0)
         .range(0.0, 4.0)
-        .when(flip_surface),
+        .when(surface),
     row("look_mist", LOOKS, Surface, setup())
         .param("mist")
         .name("Spray Mist")
@@ -385,7 +390,7 @@ pub static WATER_ROWS: [PropertyRow; 47] = [
         .switch(Feature::Mist)
         .toggle()
         .default(0.0)
-        .when(flip_surface),
+        .when(surface),
     // Times the spray's droplet extinction: 1 is the mist the spray makes, 0 none.
     row("surface_mist", MIST, Surface, setup())
         .param("strength")
@@ -394,7 +399,7 @@ pub static WATER_ROWS: [PropertyRow; 47] = [
         .gate(Gate::Fold(Feature::Mist))
         .default(1.0)
         .range(0.0, 4.0)
-        .when(flip_surface),
+        .when(surface),
     row("look_wet", LOOKS, Surface, setup())
         .param("wet_surfaces")
         .name("Wet Surfaces")
@@ -402,7 +407,7 @@ pub static WATER_ROWS: [PropertyRow; 47] = [
         .switch(Feature::WetSurfaces)
         .toggle()
         .default(1.0)
-        .when(flip_surface),
+        .when(surface),
     // Times the stage drying rate: at 1 a splash fades to a third in 15 s, 0 never dries.
     row("surface_drying", WETNESS, Surface, setup())
         .param("drying")
@@ -411,7 +416,7 @@ pub static WATER_ROWS: [PropertyRow; 47] = [
         .gate(Gate::Fold(Feature::WetSurfaces))
         .default(1.0)
         .range(0.0, 10.0)
-        .when(flip_surface),
+        .when(surface),
     row("look_caustics", LOOKS, Surface, setup())
         .param("caustics")
         .name("Caustics")
@@ -436,34 +441,31 @@ pub static WATER_ROWS: [PropertyRow; 47] = [
     )
     .param("amount")
     .name("Whitewater Amount")
-    .tip("How much spray, foam and bubbles the simulation spawns, times its default rate")
-    .when(flip),
+    .tip("How much spray, foam and bubbles the simulation spawns, times its default rate"),
     row("spray_visible", Reach::Own("spray_object"), Whitewater, setup())
         .param("visible")
         .name("Spray Drops")
         .tip("Draws the drops splashes throw into the air")
         .toggle()
-        .default(1.0)
-        .when(flip),
+        .default(1.0),
     row("bubble_visible", Reach::Own("bubble_object"), Whitewater, setup())
         .param("visible")
         .name("Bubbles")
         .tip("Draws the air bubbles carried under the surface, seen through the water")
         .toggle()
-        .default(1.0)
-        .when(flip),
-    follows(WORLD_FOLLOWS[0], "the World's Gravity X"),
-    follows(WORLD_FOLLOWS[1], "the World's Gravity Y"),
-    follows(WORLD_FOLLOWS[2], "the World's Gravity Z"),
-    follows(WORLD_FOLLOWS[3], "the World's Air Resistance"),
-    follows(WORLD_FOLLOWS[4], "the World's Speed"),
-    follows(WORLD_FOLLOWS[5], "the World's Reset"),
+        .default(1.0),
+    FOLLOW_GRAVITY_X,
+    FOLLOW_GRAVITY_Y,
+    FOLLOW_GRAVITY_Z,
+    FOLLOW_AIR,
+    FOLLOW_SPEED,
+    FOLLOW_RESET,
 ];
 
-/// The roles the Water's rows reach inside the template, which the compiler
-/// adopts after splicing it.
-pub fn template_roles() -> impl Iterator<Item = &'static str> {
-    WATER_ROWS.iter().filter_map(|row| match row.reach {
+/// The roles a Water's or Sand's rows (`rows`) reach inside its template,
+/// which the compiler adopts after splicing it.
+pub fn template_roles(rows: &'static [PropertyRow]) -> impl Iterator<Item = &'static str> {
+    rows.iter().filter_map(|row| match row.reach {
         Reach::Own(role)
             if !matches!(role, "transform" | "cell_size" | "surface_detail")
                 && !WORLD_FOLLOWS.contains(&role) =>
@@ -473,17 +475,6 @@ pub fn template_roles() -> impl Iterator<Item = &'static str> {
         _ => None,
     })
 }
-
-const SOLVERS: &[Choice] = &[
-    Choice {
-        key: "flip",
-        label: "FLIP",
-    },
-    Choice {
-        key: "mpm",
-        label: "MPM",
-    },
-];
 
 const DRAWS: &[Choice] = &[
     Choice {
@@ -496,45 +487,71 @@ const DRAWS: &[Choice] = &[
     },
 ];
 
-/// Why `item` cannot take the solver or draw `key`, or `None`.
-pub fn choice_unavailable(item: &Item, field: &str, key: &str) -> Option<&'static str> {
-    let fields = water(&item.fields)?;
-    match (field, key) {
-        ("solver", "mpm") if fields.solver != WaterSolver::Mpm => {
-            let flows = item
-                .children
-                .iter()
-                .any(|child| matches!(&child.fields, ItemFields::WaterSource(source) if source.role != SourceRole::Fill));
-            flows.then_some("MPM fills only; Inflow and Drain run on FLIP. Remove them first")
+/// The Bounds switch, shared with Sand.
+pub(super) const BOUNDS_FIELD: FieldRow = FieldRow {
+    id: "bounds",
+    label: "Bounds",
+    section: ControlGroup::Domain,
+    control: on_off(),
+    applies: always,
+    disabled: enabled,
+    read: |fields| is_on(bounded(fields)),
+    write: |fields, value| {
+        let on = parse_on("bounds", value)?;
+        match fields {
+            ItemFields::Water(w) => w.bounds = on,
+            ItemFields::Sand(s) => s.bounds = on,
+            _ => return Err(wrong_value("bounds", value)),
         }
-        _ => None,
-    }
-}
-
-pub static WATER_FIELDS: [FieldRow; 5] = [
-    FieldRow {
-        id: "bounds",
-        label: "Bounds",
-        section: ControlGroup::Domain,
-        control: on_off(),
-        applies: always,
-        disabled: enabled,
-        read: |fields| is_on(matches!(fields, ItemFields::Water(w) if w.bounds)),
-        write: |fields, value| {
-            let on = parse_on("bounds", value)?;
-            match fields {
-                ItemFields::Water(w) => w.bounds = on,
-                _ => return Err(wrong_value("bounds", value)),
-            }
-            Ok(())
-        },
+        Ok(())
     },
+};
+
+/// Draw As, shared with Sand.
+pub(super) const DRAW_FIELD: FieldRow = FieldRow {
+    id: "draw",
+    label: "Draw As",
+    section: ControlGroup::Surface,
+    control: FieldControl::Closed(DRAWS),
+    applies: always,
+    disabled: enabled,
+    read: |fields| match domain(fields) {
+        Some((_, draw)) => FieldValue::Choice(
+            if draw == WaterDraw::Particles {
+                "particles"
+            } else {
+                "surface"
+            }
+            .to_owned(),
+        ),
+        None => FieldValue::Choice(String::new()),
+    },
+    write: |fields, value| {
+        let FieldValue::Choice(key) = value else {
+            return Err(wrong_value("draw", value));
+        };
+        let draw = match key.as_str() {
+            "surface" => WaterDraw::Surface,
+            "particles" => WaterDraw::Particles,
+            _ => return Err(wrong_value("draw", value)),
+        };
+        match fields {
+            ItemFields::Water(w) => w.draw = draw,
+            ItemFields::Sand(s) => s.draw = draw,
+            _ => return Err(wrong_value("draw", value)),
+        }
+        Ok(())
+    },
+};
+
+pub static WATER_FIELDS: [FieldRow; 4] = [
+    BOUNDS_FIELD,
     FieldRow {
         id: "narrow_band",
         label: "Narrow Band",
         section: ControlGroup::Simulation,
         control: on_off(),
-        applies: flip,
+        applies: always,
         disabled: enabled,
         read: |fields| is_on(matches!(fields, ItemFields::Water(w) if w.narrow_band)),
         write: |fields, value| {
@@ -546,66 +563,7 @@ pub static WATER_FIELDS: [FieldRow; 5] = [
             Ok(())
         },
     },
-    FieldRow {
-        id: "solver",
-        label: "Solver",
-        section: ControlGroup::Simulation,
-        control: FieldControl::Closed(SOLVERS),
-        applies: always,
-        disabled: enabled,
-        read: |fields| match fields {
-            ItemFields::Water(w) => FieldValue::Choice(
-                if w.solver == WaterSolver::Mpm {
-                    "mpm"
-                } else {
-                    "flip"
-                }
-                .to_owned(),
-            ),
-            _ => FieldValue::Choice(String::new()),
-        },
-        write: |fields, value| {
-            let (ItemFields::Water(w), FieldValue::Choice(key)) = (fields, value) else {
-                return Err(wrong_value("solver", value));
-            };
-            w.solver = match key.as_str() {
-                "flip" => WaterSolver::Flip,
-                "mpm" => WaterSolver::Mpm,
-                _ => return Err(wrong_value("solver", value)),
-            };
-            Ok(())
-        },
-    },
-    FieldRow {
-        id: "draw",
-        label: "Draw As",
-        section: ControlGroup::Surface,
-        control: FieldControl::Closed(DRAWS),
-        applies: always,
-        disabled: enabled,
-        read: |fields| match fields {
-            ItemFields::Water(w) => FieldValue::Choice(
-                if w.draw == WaterDraw::Particles {
-                    "particles"
-                } else {
-                    "surface"
-                }
-                .to_owned(),
-            ),
-            _ => FieldValue::Choice(String::new()),
-        },
-        write: |fields, value| {
-            let (ItemFields::Water(w), FieldValue::Choice(key)) = (fields, value) else {
-                return Err(wrong_value("draw", value));
-            };
-            w.draw = match key.as_str() {
-                "surface" => WaterDraw::Surface,
-                "particles" => WaterDraw::Particles,
-                _ => return Err(wrong_value("draw", value)),
-            };
-            Ok(())
-        },
-    },
+    DRAW_FIELD,
     MATERIAL_BINDING,
 ];
 
@@ -618,25 +576,39 @@ mod tests {
         applicable(fields).any(|row| row.property == property)
     }
 
-    /// The box size and the six walls are the Bounds switch's rows: they
-    /// exist with Bounds on and not with it off.
+    /// The box size and the six walls are the Bounds switch's rows, on a
+    /// Water and a Sand alike: they exist with Bounds on and not with it off.
     #[test]
     fn size_and_wall_rows_follow_bounds() {
-        let on = ItemFields::Water(WaterFields {
-            bounds: true,
-            ..WaterFields::default()
-        });
-        let off = ItemFields::Water(WaterFields::default());
-        for property in [
-            "scale_x",
-            "scale_y",
-            "scale_z",
-            "closed_neg_x",
-            "closed_pos_z",
-        ] {
-            assert!(applies(&on, property), "{property} with Bounds on");
-            assert!(!applies(&off, property), "{property} with Bounds off");
+        use crate::scene_doc::{SandFields, WaterFields};
+        let pairs = [
+            (
+                ItemFields::Water(WaterFields {
+                    bounds: true,
+                    ..WaterFields::default()
+                }),
+                ItemFields::Water(WaterFields::default()),
+            ),
+            (
+                ItemFields::Sand(SandFields {
+                    bounds: true,
+                    ..SandFields::default()
+                }),
+                ItemFields::Sand(SandFields::default()),
+            ),
+        ];
+        for (on, off) in &pairs {
+            for property in [
+                "scale_x",
+                "scale_y",
+                "scale_z",
+                "closed_neg_x",
+                "closed_pos_z",
+            ] {
+                assert!(applies(on, property), "{property} with Bounds on");
+                assert!(!applies(off, property), "{property} with Bounds off");
+            }
+            assert!(applies(off, "cell_size"));
         }
-        assert!(applies(&off, "cell_size"));
     }
 }

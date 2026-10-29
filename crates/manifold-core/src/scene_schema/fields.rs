@@ -125,6 +125,7 @@ pub fn field_rows(kind: ItemKind) -> &'static [FieldRow] {
         ItemKind::Material => &super::material::MATERIAL_FIELDS,
         ItemKind::Water => &super::water::WATER_FIELDS,
         ItemKind::WaterSource => &super::water_source::WATER_SOURCE_FIELDS,
+        ItemKind::Sand => &super::sand::SAND_FIELDS,
         ItemKind::Swarm => &super::swarm::SWARM_FIELDS,
         ItemKind::Force => &super::force::FORCE_FIELDS,
         ItemKind::Modifier => &super::modifier::MODIFIER_FIELDS,
@@ -142,7 +143,6 @@ pub fn choice_disabled(
     key: &str,
 ) -> Option<&'static str> {
     match item.kind() {
-        ItemKind::Water => super::water::choice_unavailable(item, field, key),
         ItemKind::WaterSource => super::water_source::choice_unavailable(doc, item, field, key),
         ItemKind::Camera => super::camera::choice_unavailable(doc, field, key),
         ItemKind::Modifier => super::scene_wide::type_unavailable(doc, item, field, key)
@@ -390,9 +390,11 @@ pub(super) const MATERIAL_BINDING: FieldRow = FieldRow {
             ItemFields::Group(g) => g.material = material.clone(),
             ItemFields::Swarm(s) => s.material = material.clone(),
             ItemFields::Water(w) => w.material = material.clone(),
+            ItemFields::Sand(s) => s.material = material.clone(),
             _ => {
                 return Err(
-                    "only an Object, a Group, a Swarm or a Water binds a material".to_owned(),
+                    "only an Object, a Group, a Swarm, a Water or a Sand binds a material"
+                        .to_owned(),
                 );
             }
         }

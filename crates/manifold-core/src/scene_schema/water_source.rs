@@ -1,4 +1,4 @@
-//! Water Source: a child of a Water with a role (Fill, Inflow, Drain) and a
+//! Water Source: a child of a Water or Sand with a role (Fill, Inflow, Drain) and a
 //! shape (Box, Sphere, Model). It compiles to one `node.fluid_role_source`
 //! wired into its Water's domain. A Box or Sphere is placed by its Transform;
 //! a Sphere draws its region from a `node.sphere_mesh` one metre across, the
@@ -6,10 +6,10 @@
 //! stands, so it has no Transform of its own. Role is an open list (section
 //! 7.18): absorb zones join here later.
 //!
-//! A Fill fills its shape once, and a Water takes one: the Fill choice is
-//! disabled with its reason beside another Fill (section 7.10). MPM fills a
-//! box and only fills, so a shaped Fill, Inflow and Drain are disabled in an
-//! MPM Water.
+//! A Fill fills its shape once, and a Water or Sand takes one: the Fill
+//! choice is disabled with its reason beside another Fill (section 7.10).
+//! Sand fills a box and only fills, so a shaped Fill, Inflow and Drain are
+//! disabled in a Sand.
 
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
@@ -17,7 +17,7 @@ use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 use super::fields::{Choice, FieldControl, FieldRow, FieldValue, always, enabled, wrong_value};
 use super::{Exposure, PropertyRow, Reach, perform, row, setup};
 use crate::scene_doc::Shape;
-use crate::scene_doc::{Item, ItemFields, SceneDoc, SourceRole, SourceShape, WaterSolver};
+use crate::scene_doc::{Item, ItemFields, SceneDoc, SourceRole, SourceShape};
 
 const ROLES: &[Choice] = &[
     Choice {
@@ -232,7 +232,7 @@ pub static WATER_SOURCE_ROWS: [PropertyRow; 32] = [
     .when(sphere),
 ];
 
-/// The Water `item` sits in.
+/// The Water or Sand `item` sits in.
 fn water_of<'d>(doc: &'d SceneDoc, item: &Item) -> Option<&'d Item> {
     let (parent, _) = doc.locate(&item.id)?;
     doc.find(&parent?)
@@ -246,15 +246,12 @@ pub fn choice_unavailable(
     key: &str,
 ) -> Option<&'static str> {
     let fields = source(&item.fields)?;
-    let mpm = || {
-        water_of(doc, item).is_some_and(
-            |water| matches!(&water.fields, ItemFields::Water(w) if w.solver == WaterSolver::Mpm),
-        )
-    };
+    let sand =
+        || water_of(doc, item).is_some_and(|parent| matches!(parent.fields, ItemFields::Sand(_)));
     match (field, key) {
         ("role", "fill") if fields.role != SourceRole::Fill => {
-            if fields.shape != SourceShape::Box && mpm() {
-                return Some("MPM fills a box; set Shape to Box first");
+            if fields.shape != SourceShape::Box && sand() {
+                return Some("Sand fills a box; set Shape to Box first");
             }
             let water = water_of(doc, item)?;
             let filled = water.children.iter().any(|child| {
@@ -262,11 +259,11 @@ pub fn choice_unavailable(
             });
             filled.then_some(crate::scene_doc::ONE_FILL)
         }
-        ("shape", "sphere" | "model") if fields.role == SourceRole::Fill && mpm() => {
-            Some("MPM fills a box; set the Water's Solver to FLIP for a shaped Fill")
+        ("shape", "sphere" | "model") if fields.role == SourceRole::Fill && sand() => {
+            Some("Sand fills a box")
         }
-        ("role", "inflow" | "drain") if mpm() => {
-            Some("MPM fills only; set the Water's Solver to FLIP for Inflow and Drain")
+        ("role", "inflow" | "drain") if sand() => {
+            Some("Sand fills only; Inflow and Drain are Water's")
         }
         _ => None,
     }

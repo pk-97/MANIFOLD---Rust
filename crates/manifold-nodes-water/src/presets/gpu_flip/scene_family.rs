@@ -15,7 +15,7 @@
 use std::sync::{Arc, OnceLock};
 
 use manifold_core::effect_graph_def::EffectGraphDef;
-use manifold_core::scene_doc::{WaterDraw, WaterSolver};
+use manifold_core::scene_doc::{ItemKind, WaterDraw};
 use manifold_core::scene_schema::{PHYSICS_VIEW_SWITCHES, WaterFamily, WaterTemplate};
 use serde_json::json;
 
@@ -144,7 +144,7 @@ fn family(b: Builder, objects: Vec<String>) -> WaterFamily {
 }
 
 macro_rules! template {
-    ($name:ident, $solver:expr, $draw:expr, $narrow_band:expr, $build:expr) => {
+    ($name:ident, $kind:expr, $draw:expr, $narrow_band:expr, $build:expr) => {
         fn $name() -> Arc<WaterFamily> {
             static FAMILY: OnceLock<Arc<WaterFamily>> = OnceLock::new();
             FAMILY
@@ -152,14 +152,44 @@ macro_rules! template {
                 .clone()
         }
         inventory::submit! {
-            WaterTemplate { solver: $solver, draw: $draw, narrow_band: $narrow_band, family: $name }
+            WaterTemplate { kind: $kind, draw: $draw, narrow_band: $narrow_band, family: $name }
         }
     };
 }
 
-template!(flip_surface, WaterSolver::Flip, WaterDraw::Surface, false, flip);
-template!(flip_particles, WaterSolver::Flip, WaterDraw::Particles, false, flip);
-template!(flip_band_surface, WaterSolver::Flip, WaterDraw::Surface, true, flip);
-template!(flip_band_particles, WaterSolver::Flip, WaterDraw::Particles, true, flip);
-template!(mpm_surface, WaterSolver::Mpm, WaterDraw::Surface, false, mpm);
-template!(mpm_particles, WaterSolver::Mpm, WaterDraw::Particles, false, mpm);
+template!(
+    flip_surface,
+    ItemKind::Water,
+    WaterDraw::Surface,
+    false,
+    flip
+);
+template!(
+    flip_particles,
+    ItemKind::Water,
+    WaterDraw::Particles,
+    false,
+    flip
+);
+template!(
+    flip_band_surface,
+    ItemKind::Water,
+    WaterDraw::Surface,
+    true,
+    flip
+);
+template!(
+    flip_band_particles,
+    ItemKind::Water,
+    WaterDraw::Particles,
+    true,
+    flip
+);
+template!(mpm_surface, ItemKind::Sand, WaterDraw::Surface, false, mpm);
+template!(
+    mpm_particles,
+    ItemKind::Sand,
+    WaterDraw::Particles,
+    false,
+    mpm
+);
