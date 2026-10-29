@@ -93,6 +93,15 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
         "bounds",
         SerializedParamValue::Bool { value: bounds },
     );
+    if let ItemFields::Sand(sand) = &item.fields {
+        b.set(
+            domain,
+            "material",
+            SerializedParamValue::Enum {
+                value: sand.matter.index(),
+            },
+        );
+    }
 
     // Every water runs at the World's Speed, as the bodies do: one clock for
     // everything that touches. A per-region speed would feed the domain's

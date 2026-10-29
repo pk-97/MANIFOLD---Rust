@@ -4,6 +4,24 @@
 // unchanged onto another solver's grid (MATTER_SAND_DESIGN.md section 2).
 // Matrices are mathematical: m[c][r] is row r of column c.
 
+// The rules a material's points follow (`kind`): granular (sand and soil,
+// Drucker-Prager), snow (Stomakhin et al. 2013), viscoplastic (clay, mud and
+// goo, von Mises with a viscous overstress) and elastic (jelly).
+const MATTER_GRANULAR: u32 = 0u;
+const MATTER_SNOW: u32 = 1u;
+const MATTER_VISCOPLASTIC: u32 = 2u;
+const MATTER_ELASTIC: u32 = 3u;
+
+// Snow's critical compression and stretch, θc and θs: beyond them a stretch
+// is plastic (Stomakhin et al. 2013, Table 2).
+const MM_SNOW_COMPRESS: f32 = 2.5e-2;
+const MM_SNOW_STRETCH: f32 = 7.5e-3;
+// The hardening factor's bounds, as implementations of the paper hold it, so
+// a fully packed or fully loosened point stays stable at the substeps the
+// domain budgets (five times the stiffness at most).
+const MM_SNOW_HARDENING_MIN: f32 = 0.1;
+const MM_SNOW_HARDENING_MAX: f32 = 5.0;
+
 // One material's constants. Sand is cohesion 0; soil is sand with cohesion.
 struct MatterMaterial {
     // Lamé shear modulus μ, Pa.
@@ -16,14 +34,27 @@ struct MatterMaterial {
     cohesion: f32,
     // q_s: the plastic strain over which cohesion falls to 1/e.
     softening: f32,
+    // Which rule: MATTER_GRANULAR, MATTER_SNOW, MATTER_VISCOPLASTIC or MATTER_ELASTIC.
+    kind: u32,
+    // Viscoplastic: the deviatoric log strain it yields at, τ_y / (√2 μ) for
+    // a shear yield stress τ_y.
+    yield_strain: f32,
+    // Viscoplastic: η / μ, seconds: past yield, the strain relaxes toward
+    // the yield surface at this time constant, so the stress past yield in
+    // steady shear is η times the shear rate (a Bingham fluid).
+    relax_time: f32,
+    // Snow: ξ, how fast compaction stiffens it.
+    hardening: f32,
 }
 
 // What a particle remembers of its plastic history.
 struct MatterPlastic {
-    // Log volume gained while the grains were pulled apart, paid back before
-    // pressure builds again (Tampubolon et al. 2017).
+    // Granular: log volume gained while the grains were pulled apart, paid
+    // back before pressure builds again (Tampubolon et al. 2017).
     volume_correction: f32,
-    // Accumulated plastic strain; cohesion fades as it grows.
+    // Granular and viscoplastic: accumulated plastic strain; cohesion fades
+    // as it grows. Snow: log Jp, the log of the volume its plastic flow
+    // packed or loosened it to, 0 as it fell.
     strain: f32,
 }
 
@@ -206,19 +237,67 @@ fn matter_log_stretch(sigma: vec3<f32>) -> vec3<f32> {
     return log(max(abs(sigma), vec3<f32>(1.0e-4)));
 }
 
+// Von Mises with a viscous overstress (Perzyna) on Hencky strain: past the
+// yield radius the deviatoric strain returns toward it by
+// Δγ = (‖dev ε‖ − yield) / (1 + relax / dt), all the way when relax is 0
+// (rate-independent clay), a dt / relax share of the excess when it is long
+// (a thick goo). Volume stays elastic. xyz is the kept log strain, w the
+// plastic strain this step adds.
+fn matter_viscoplastic_map(eps: vec3<f32>, dt: f32, m: MatterMaterial) -> vec4<f32> {
+    let tr = eps.x + eps.y + eps.z;
+    let dev = eps - vec3<f32>(tr / 3.0);
+    let n = length(dev);
+    if n <= m.yield_strain {
+        return vec4<f32>(eps, 0.0);
+    }
+    let dgamma = (n - m.yield_strain) / (1.0 + m.relax_time / max(dt, MM_EPSILON));
+    return vec4<f32>(eps - (dgamma / n) * dev, dgamma);
+}
+
+// F = U·diag(stretch)·Vᵀ.
+fn mm_compose(svd: MatterSvd, stretch: vec3<f32>) -> mat3x3<f32> {
+    let us = mat3x3<f32>(svd.u[0] * stretch.x, svd.u[1] * stretch.y, svd.u[2] * stretch.z);
+    return us * transpose(svd.v);
+}
+
+// Snow (Stomakhin et al. 2013): stretches past θc and θs are plastic and pack
+// or loosen the point (log Jp in `strain`); packing stiffens it by
+// exp(ξ (1 − Jp)). Fixed-corotated stress: τ = 2μ(F − R)Fᵀ + λ(J − 1)J·I,
+// diagonal in U as 2μ(σ − 1)σ + λ(J − 1)J.
+fn matter_snow_update(svd: MatterSvd, plastic: MatterPlastic, m: MatterMaterial) -> MatterUpdate {
+    let sigma = clamp(svd.sigma, vec3<f32>(1.0 - MM_SNOW_COMPRESS), vec3<f32>(1.0 + MM_SNOW_STRETCH));
+    var state = plastic;
+    let trial_log = matter_log_stretch(svd.sigma);
+    let kept_log = log(sigma);
+    state.strain = plastic.strain + (trial_log.x + trial_log.y + trial_log.z) - (kept_log.x + kept_log.y + kept_log.z);
+    let h = clamp(exp(m.hardening * (1.0 - exp(state.strain))), MM_SNOW_HARDENING_MIN, MM_SNOW_HARDENING_MAX);
+    let j = sigma.x * sigma.y * sigma.z;
+    let tau = 2.0 * m.mu * h * (sigma - vec3<f32>(1.0)) * sigma + vec3<f32>(m.lambda * h * (j - 1.0) * j);
+    return MatterUpdate(mm_compose(svd, sigma), mm_symmetric(svd.u, tau), state, j);
+}
+
 // One substep of one particle: F advected by its velocity gradient over dt,
-// then the return map, then the stress the kept strain gives.
+// then the material's rule for what stays elastic, then the stress the kept
+// strain gives.
 fn matter_update(f: mat3x3<f32>, grad_v: mat3x3<f32>, dt: f32, plastic: MatterPlastic, m: MatterMaterial) -> MatterUpdate {
     let identity = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
     let trial = (identity + dt * grad_v) * f;
     let svd = matter_svd(trial);
+    if m.kind == MATTER_SNOW {
+        return matter_snow_update(svd, plastic, m);
+    }
     var state = plastic;
-    let kept = matter_return_map(matter_log_stretch(svd.sigma), &state, m);
+    let eps = matter_log_stretch(svd.sigma);
+    var kept = vec4<f32>(eps, 0.0);
+    if m.kind == MATTER_GRANULAR {
+        kept = matter_return_map(eps, &state, m);
+    } else if m.kind == MATTER_VISCOPLASTIC {
+        kept = matter_viscoplastic_map(eps, dt, m);
+    }
     state.strain = state.strain + kept.w;
     let stretch = exp(kept.xyz);
-    let us = mat3x3<f32>(svd.u[0] * stretch.x, svd.u[1] * stretch.y, svd.u[2] * stretch.z);
     return MatterUpdate(
-        us * transpose(svd.v),
+        mm_compose(svd, stretch),
         matter_stress(svd.u, kept.xyz, m),
         state,
         stretch.x * stretch.y * stretch.z,

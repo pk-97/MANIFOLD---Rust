@@ -53,7 +53,10 @@ const OUT_FLOATS: usize = 60;
 
 /// Sand at the design's starting constants: E = 3.537e5 Pa, ν = 0.3, a 35°
 /// Friction Angle.
-fn material(cohesion: f32) -> [f32; 8] {
+/// The uniform: μ, λ, α, the cohesion, its softening, then the rule (0,
+/// granular, as u32 bits), the yield strain, relax time and hardening, padded
+/// to 48 bytes.
+fn material(cohesion: f32) -> [f32; 12] {
     let (e, nu) = (3.537e5f64, 0.3f64);
     let mu = e / (2.0 * (1.0 + nu));
     let lambda = e * nu / ((1.0 + nu) * (1.0 - 2.0 * nu));
@@ -65,6 +68,10 @@ fn material(cohesion: f32) -> [f32; 8] {
         alpha as f32,
         cohesion,
         0.05,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
         0.0,
         0.0,
         0.0,
@@ -168,7 +175,7 @@ fn shared(device: &GpuDevice, data: &[f32]) -> GpuBuffer {
 fn run(
     device: &GpuDevice,
     pipeline: &GpuComputePipeline,
-    material: &[f32; 8],
+    material: &[f32; 12],
     cases: &[[f32; CASE_FLOATS]],
 ) -> Vec<f32> {
     let input = shared(device, bytemuck::cast_slice(cases));

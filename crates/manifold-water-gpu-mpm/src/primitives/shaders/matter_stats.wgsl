@@ -167,7 +167,7 @@ fn point_partial(pt: MatterPoint) -> Partial {
     let svd = matter_svd(transpose(mat3x3<f32>(pt.f_x.xyz, pt.f_y.xyz, pt.f_z.xyz)));
     let e = matter_energy(
         matter_log_stretch(svd.sigma),
-        MatterMaterial(params.mu, params.lambda, 0.0, 0.0, 1.0),
+        MatterMaterial(params.mu, params.lambda, 0.0, 0.0, 1.0, 0u, 0.0, 0.0, 0.0),
     );
     p.live = 1u;
     p.max_speed = length(v);

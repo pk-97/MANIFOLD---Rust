@@ -273,6 +273,9 @@ pub enum Unit {
     Degrees,
     Kilopascals,
     KilogramsPerCubicMetre,
+    Pascals,
+    /// A viscosity: how thick a goo or mud flows.
+    PascalSeconds,
 }
 
 impl Unit {
@@ -294,6 +297,8 @@ impl Unit {
             Self::Degrees => "°",
             Self::Kilopascals => " kPa",
             Self::KilogramsPerCubicMetre => " kg/m³",
+            Self::Pascals => " Pa",
+            Self::PascalSeconds => " Pa·s",
         }
     }
 
@@ -318,6 +323,8 @@ impl Unit {
             Self::Degrees => "°",
             Self::Kilopascals => "kPa",
             Self::KilogramsPerCubicMetre => "kg/m³",
+            Self::Pascals => "Pa",
+            Self::PascalSeconds => "Pa·s",
         }
     }
 }

@@ -44,6 +44,10 @@ struct ToMatterUniforms {
     bounds_hi_y: f32,
     bounds_hi_z: f32,
     kill_height: f32,
+    material_rule: i32,
+    yield_strain: f32,
+    relax_time: f32,
+    hardening: f32,
     dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
@@ -83,6 +87,10 @@ manifold_node_engine::primitive! {
         bounds_lo_x: ScalarF32 optional, bounds_lo_y: ScalarF32 optional, bounds_lo_z: ScalarF32 optional,
         bounds_hi_x: ScalarF32 optional, bounds_hi_y: ScalarF32 optional, bounds_hi_z: ScalarF32 optional,
         kill_height: ScalarF32 optional,
+        material_rule: ScalarF32 optional,
+        yield_strain: ScalarF32 optional,
+        relax_time: ScalarF32 optional,
+        hardening: ScalarF32 optional,
     },
     outputs: {
         points_out: Array(MatterPoint),
@@ -113,6 +121,10 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("bounds_hi_y"), label: "Bounds Max Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("bounds_hi_z"), label: "Bounds Max Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("kill_height"), label: "Kill Height", ty: ParamType::Float, default: ParamValue::Float(f32::MIN), range: Some((f32::MIN, f32::MAX)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("material_rule"), label: "Material Rule", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 3.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("yield_strain"), label: "Yield Strain", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 10.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("relax_time"), label: "Relax Time (s)", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 100.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("hardening"), label: "Hardening", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 100.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "Removal is a short pool (the point's cell has no stored tile), an Open face of the bounds box or the kill height. Wire tiles from the same step as grid. Region body of the Live Matter group, after node.matter_grid_update and node.matter_body_reaction. points/points_out alias the node.matter_state point buffer (updated in place); grid is read as a gather. Positions always advect with the gathered velocity. bodies comes from node.matter_move_bodies (the substep-end pose node.matter_grid_update also reads); shapes, atlas and body_count from node.matter_domain. With bodies unwired no collider is read. reaction/reaction_out alias the domain's reaction words after node.matter_body_reaction (wire its reaction_out here, and this reaction_out into node.matter_state's reaction_in); density, momentum_unit, substeps_per_tick and dynamic_count come from node.matter_domain, tick_index and substep_in_tick from node.matter_state. Without a reaction slot covering every body, or with dynamic_count 0, no reaction is written.",
@@ -181,6 +193,19 @@ impl Primitive for GridToMatter {
             .round()
             .clamp(0.0, 63.0) as i32;
         let kill_height = ctx.scalar_or_param("kill_height", f32::MIN);
+        let material_rule = ctx.scalar_or_param("material_rule", 0.0).round() as i32;
+        let [yield_strain, relax_time, hardening] =
+            ["yield_strain", "relax_time", "hardening"].map(|name| ctx.scalar_or_param(name, 0.0));
+        let physical = (0..=3).contains(&material_rule)
+            && [yield_strain, relax_time, hardening]
+                .iter()
+                .all(|v| v.is_finite() && *v >= 0.0);
+        if !physical {
+            ctx.error(format!(
+                "Grid to Matter: the material rule {material_rule} (yield strain {yield_strain}, relax time {relax_time} s, hardening {hardening}) is not physical; wire node.matter_domain's"
+            ));
+            return;
+        }
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
         let [mu, lambda, alpha, cohesion, softening] = [
             ("mu", 1.36e5),
@@ -287,6 +312,10 @@ impl Primitive for GridToMatter {
             bounds_hi_y: bounds_hi[1],
             bounds_hi_z: bounds_hi[2],
             kill_height,
+            material_rule,
+            yield_strain,
+            relax_time,
+            hardening,
             dispatch_count: active,
             _pad0: 0,
             _pad1: 0,

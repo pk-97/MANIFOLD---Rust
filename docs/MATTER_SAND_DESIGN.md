@@ -101,6 +101,21 @@ Matter's water: the λJ(J − 1) pressure and its Cohesion, `water_lambda`, `COH
 - The Matter row of `LIQUID_SOLVERS` (`testkit/liquid_conformance_fixtures.rs`): Matter is not a liquid.
 - The fixture presets `WaterDamBreakMatter`, `WaterFloatingBoxMatter` and `WaterStillPoolMatter`. One `SandColumn` preset replaces them wherever a test or a primitive's `examples:` list needs a Matter graph (about 40 references: `engine_scenes.rs`, `testkit/assets.rs`, catalog tests, `encode_replay`, `gpu_flip_export_demo.rs`, `retired_cpu_flip.rs`). `matter_scene.rs` and `matter_bodies.rs` test the solver, not water, and move to it.
 
+## 5. More materials
+
+A Sand item is made of a `Matter` (`SandFields.matter`): Sand, Snow, Clay, Mud, Goo or Jelly, each an Add menu entry under Matter with its own starting look (`scene_schema::matter_look`) and dials. The compiler sets the domain's `material` enum; `MatterMaterial::of` (matter.rs) turns the kind and its dials into the constants `node.grid_to_matter` takes, its rule among them (`material_rule`). The rules live in `matter_material.wgsl`:
+
+| Rule | Materials | Model |
+|---|---|---|
+| Granular | Sand, soil | Drucker-Prager with cohesion (section 3) |
+| Snow | Snow | Stomakhin et al. 2013: stretches clamped to [1 − 2.5e-2, 1 + 7.5e-3], the plastic part packs or loosens the point (log Jp in `f_x.w`), hardening exp(ξ(1 − Jp)) held to [0.1, 5]; fixed-corotated stress |
+| Viscoplastic | Clay, mud, goo | Von Mises with a Perzyna overstress on Hencky strain: yield strain τ_y / (√2 μ), relax time η / μ, so steady shear carries τ_y + η·γ̇ (Bingham) |
+| Elastic | Jelly | Hencky elasticity, no plastic flow |
+
+Dials: Stiffness for all; Friction Angle and Cohesion for sand; Hardening for snow; Firmness (shear yield stress, Pa) and Thickness (plastic viscosity, Pa·s) for clay, mud and goo; a Density for each, starting at its material's (snow 400, clay 1800, mud 1700, goo 1400, jelly 1050 kg/m³). Snow's substeps budget for five times its stiffness (fully packed), so it costs about two and a half times sand's steps. Clay runs at sand's Young's modulus rather than its real one, since only the yield shows.
+
+Each item is still its own domain: two items pass through each other. Every point has a slot for its material index (`affine_z.w`, 0 today; the rule comes from the domain), so one shared domain per scene means filling that slot and reading the rule per point, not new material maths.
+
 ## Build order
 
 One batch per step, in step order, each built, checked and committed before the next. Step 1 first so every still after it is a real scene. Step 1 is mostly mechanical match arms across separate files (lane workers); steps 2 and 3 are the lead's or one sonnet worker given the formulas above; step 4 touches the render crate's velocity pass.

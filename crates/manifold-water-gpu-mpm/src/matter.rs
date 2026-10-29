@@ -299,10 +299,97 @@ pub const FRICTION_ANGLE_RANGE: (f32, f32) = (5.0, 60.0);
 /// holds standing, so a cliff fails when the dial drops, not on its own.
 pub const COHESION_SOFTENING: f32 = 0.5;
 
+/// Which rule a material's points follow (`kind` in matter_material.wgsl).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MatterRule {
+    /// Drucker-Prager with cohesion: sand and soil.
+    Granular = 0,
+    /// Stomakhin et al. 2013: packs, hardens and crumbles.
+    Snow = 1,
+    /// Von Mises with a viscous overstress: clay, mud and goo.
+    Viscoplastic = 2,
+    /// Springs back from any shape: jelly.
+    Elastic = 3,
+}
+
+/// The materials Matter simulates, in the domain's `material` enum order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MatterKind {
+    Sand,
+    Snow,
+    Clay,
+    Mud,
+    Goo,
+    Jelly,
+}
+
+/// The domain's `material` enum, in [`MatterKind`] order.
+pub const MATTER_KINDS: [&str; 6] = ["sand", "snow", "clay", "mud", "goo", "jelly"];
+
+/// Snow at Stiffness 1: Stomakhin et al. 2013's reference snow (Table 2),
+/// E₀ = 1.4e5 Pa, ν = 0.2, hardening ξ = 10, 400 kg/m³.
+const SNOW_YOUNG: f64 = 1.4e5;
+const SNOW_POISSON: f64 = 0.2;
+/// The Hardening a new Snow starts at, ξ.
+pub const SNOW_HARDENING: f32 = 10.0;
+/// matter_material.wgsl's MM_SNOW_HARDENING_MAX: the most packing stiffens
+/// snow, which the substeps budget for.
+const SNOW_HARDENING_MAX: f64 = 5.0;
+/// Jelly: a gelatin dessert's Young's modulus, about 20 kPa, nearly
+/// incompressible (ν = 0.45). A metre-tall block sags under its own weight,
+/// as real jelly that size would.
+const JELLY_YOUNG: f64 = 2.0e4;
+const JELLY_POISSON: f64 = 0.45;
+/// Clay: modelling clay yields at about 10 kPa in shear. Its true Young's
+/// modulus (about 1 MPa) would double the substeps for a springiness no one
+/// sees, so it runs at sand's; the yield, which makes the look, is real.
+const CLAY_YOUNG: f64 = 3.0e5;
+const CLAY_POISSON: f64 = 0.4;
+/// Mud and goo: Bingham fluids, their stiffness only the weak
+/// compressibility a fluid solver needs.
+const MUD_YOUNG: f64 = 1.0e5;
+const MUD_POISSON: f64 = 0.4;
+const GOO_YOUNG: f64 = 5.0e4;
+const GOO_POISSON: f64 = 0.45;
+
+impl MatterKind {
+    pub fn from_index(index: usize) -> Option<Self> {
+        [
+            Self::Sand,
+            Self::Snow,
+            Self::Clay,
+            Self::Mud,
+            Self::Goo,
+            Self::Jelly,
+        ]
+        .get(index)
+        .copied()
+    }
+}
+
+/// The dials that shape a material, each read by the kinds it names.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MatterDials {
+    /// All: E scales by its square, so the wave speed and the substeps scale
+    /// by it (D3).
+    pub stiffness: f64,
+    /// Sand: the Friction Angle, degrees.
+    pub friction_angle: f64,
+    /// Sand: the Cohesion, kPa.
+    pub cohesion_kpa: f64,
+    /// Snow: ξ.
+    pub hardening: f64,
+    /// Clay, mud and goo: the shear yield stress, Pa.
+    pub yield_stress: f64,
+    /// Clay, mud and goo: the plastic viscosity, Pa·s.
+    pub viscosity: f64,
+}
+
 /// One material's constants as the material stage takes them
 /// (`MatterMaterial` in matter_material.wgsl), less the softening.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MatterMaterial {
+    pub rule: MatterRule,
     /// Lamé shear modulus μ, Pa.
     pub mu: f64,
     /// Lamé λ, Pa.
@@ -313,39 +400,106 @@ pub struct MatterMaterial {
     pub cohesion: f64,
     /// The Friction Angle φ, radians.
     pub friction_angle: f64,
+    /// Viscoplastic: the deviatoric log strain it yields at, τ_y / (√2 μ).
+    pub yield_strain: f64,
+    /// Viscoplastic: η / μ, s.
+    pub relax_time: f64,
+    /// Snow: ξ.
+    pub hardening: f64,
+}
+
+/// Lamé μ and λ of Young's modulus `young` and Poisson's ratio `poisson`.
+fn lame(young: f64, poisson: f64) -> (f64, f64) {
+    (
+        young / (2.0 * (1.0 + poisson)),
+        young * poisson / ((1.0 + poisson) * (1.0 - 2.0 * poisson)),
+    )
 }
 
 impl MatterMaterial {
+    /// `kind` shaped by `dials`.
+    pub fn of(kind: MatterKind, dials: MatterDials) -> Self {
+        let s2 = dials.stiffness * dials.stiffness;
+        let elastic = |rule, young: f64, poisson| {
+            let (mu, lambda) = lame(young * s2, poisson);
+            Self {
+                rule,
+                mu,
+                lambda,
+                alpha: 0.0,
+                cohesion: 0.0,
+                friction_angle: 0.0,
+                yield_strain: 0.0,
+                relax_time: 0.0,
+                hardening: 0.0,
+            }
+        };
+        let flowing = |young, poisson| {
+            let m = elastic(MatterRule::Viscoplastic, young, poisson);
+            Self {
+                yield_strain: dials.yield_stress.max(0.0) / (2f64.sqrt() * m.mu),
+                relax_time: dials.viscosity.max(0.0) / m.mu,
+                ..m
+            }
+        };
+        match kind {
+            MatterKind::Sand => {
+                Self::sand(dials.stiffness, dials.friction_angle, dials.cohesion_kpa)
+            }
+            MatterKind::Snow => Self {
+                hardening: dials.hardening.max(0.0),
+                ..elastic(MatterRule::Snow, SNOW_YOUNG, SNOW_POISSON)
+            },
+            MatterKind::Clay => flowing(CLAY_YOUNG, CLAY_POISSON),
+            MatterKind::Mud => flowing(MUD_YOUNG, MUD_POISSON),
+            MatterKind::Goo => flowing(GOO_YOUNG, GOO_POISSON),
+            MatterKind::Jelly => elastic(MatterRule::Elastic, JELLY_YOUNG, JELLY_POISSON),
+        }
+    }
+
     /// Sand at `stiffness` (E scales by its square, so the wave speed and the
     /// substeps scale by it, D3), a Friction Angle in degrees and a Cohesion
     /// in kPa. The kPa become β₀ through the shear strength a cohesion adds,
     /// α·(3λ + 2μ)·β₀, so the dial means the same at any Stiffness or
     /// Friction Angle.
     pub fn sand(stiffness: f64, friction_angle: f64, cohesion_kpa: f64) -> Self {
-        let young = SAND_YOUNG * stiffness * stiffness;
-        let mu = young / (2.0 * (1.0 + SAND_POISSON));
-        let lambda = young * SAND_POISSON / ((1.0 + SAND_POISSON) * (1.0 - 2.0 * SAND_POISSON));
+        let (mu, lambda) = lame(SAND_YOUNG * stiffness * stiffness, SAND_POISSON);
         let friction_angle = friction_angle.to_radians();
         let sin = friction_angle.sin();
         let alpha = (2.0f64 / 3.0).sqrt() * 2.0 * sin / (3.0 - sin);
         Self {
+            rule: MatterRule::Granular,
             mu,
             lambda,
             alpha,
             cohesion: cohesion_kpa * 1000.0 / (alpha * (3.0 * lambda + 2.0 * mu)),
             friction_angle,
+            yield_strain: 0.0,
+            relax_time: 0.0,
+            hardening: 0.0,
         }
     }
 
-    /// The Bounds walls' Coulomb friction, tan φ: the sand grips a wall as it
-    /// grips itself.
+    /// The Bounds walls' Coulomb friction: sand grips a wall as it grips
+    /// itself (tan φ), snow and jelly grip moderately, and clay, mud and goo
+    /// stick.
     pub fn wall_friction(&self) -> f64 {
-        self.friction_angle.tan()
+        match self.rule {
+            MatterRule::Granular => self.friction_angle.tan(),
+            MatterRule::Snow | MatterRule::Elastic => 0.5,
+            MatterRule::Viscoplastic => 1.0,
+        }
     }
 
-    /// The pressure wave's speed √((λ + 2μ)/ρ), m/s.
+    /// The fastest pressure wave, √((λ + 2μ)/ρ) m/s, at the most packing
+    /// stiffens snow.
     pub fn wave_speed(&self, density: f64) -> f64 {
-        ((self.lambda + 2.0 * self.mu) / density).sqrt()
+        let hardened = if self.rule == MatterRule::Snow {
+            SNOW_HARDENING_MAX
+        } else {
+            1.0
+        };
+        ((self.lambda + 2.0 * self.mu) * hardened / density).sqrt()
     }
 }
 
@@ -493,6 +647,19 @@ pub fn grid_bytes(pool_tiles: u32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Sand item's Matter and the domain's `material` enum count the same
+    /// materials in the same order.
+    #[test]
+    fn scene_matter_follows_the_domain_material_enum() {
+        use manifold_core::scene_doc::Matter;
+        assert_eq!(Matter::ALL.len(), MATTER_KINDS.len());
+        for (index, matter) in Matter::ALL.into_iter().enumerate() {
+            assert_eq!(matter.index() as usize, index);
+            assert_eq!(matter.name().to_lowercase(), MATTER_KINDS[index]);
+            assert!(MatterKind::from_index(index).is_some());
+        }
+    }
     use manifold_node_engine::ports::std430_stride;
     use manifold_physics::PlayedTime;
 

@@ -109,6 +109,10 @@ fn body(
     bounds_hi_y: f32,
     bounds_hi_z: f32,
     kill_height: f32,
+    material_rule: i32,
+    yield_strain: f32,
+    relax_time: f32,
+    hardening: f32,
 ) -> Element {
     matter_pool_tiles = u32(pool_tiles);
     var p = e_points;
@@ -260,7 +264,7 @@ fn body(
         transpose(mat3x3<f32>(c0, c1, c2)),
         step_dt,
         MatterPlastic(p.affine_x.w, p.f_x.w),
-        MatterMaterial(mu, lambda, alpha, cohesion, softening),
+        MatterMaterial(mu, lambda, alpha, cohesion, softening, u32(material_rule), yield_strain, relax_time, hardening),
     );
     let f_rows = transpose(up.f);
     p.volume_ratio = up.j;

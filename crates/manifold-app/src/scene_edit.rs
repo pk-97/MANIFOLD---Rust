@@ -288,12 +288,14 @@ pub(crate) fn add(
                 .iter()
                 .map(|(property, value)| write(layer, &fill, property, 0.0, *value)),
         );
-        // Its own Material, as an Object's, starting at its template's look.
-        let material_name = if entry.kind == ItemKind::Sand {
-            SAND_MATERIAL_NAME
-        } else {
-            WATER_MATERIAL_NAME
+        // Its own Material, as an Object's, starting at its template's look
+        // and, for a Sand, at what it is made of.
+        let made = fields();
+        let matter = match &made {
+            ItemFields::Sand(sand) => Some(sand.matter),
+            _ => None,
         };
+        let material_name = matter.map_or(WATER_MATERIAL_NAME, |matter| matter.name());
         let material = new_material(new_id(), unique_name(material_name, &names));
         let material_id = material.id.clone();
         commands.push(Box::new(AddSceneItemCommand::with_subtree(
@@ -302,7 +304,7 @@ pub(crate) fn add(
             1,
             material,
         )));
-        let fields = match ItemFields::default_for(entry.kind) {
+        let fields = match made {
             ItemFields::Water(water) => ItemFields::Water(WaterFields {
                 material: Some(material_id.clone()),
                 ..water
@@ -318,6 +320,7 @@ pub(crate) fn add(
             id.clone(),
             fields,
         )));
+        let look = matter.map_or(&[][..], scene_schema::matter_look);
         commands.extend(
             scene_schema::water_look(entry.kind)
                 .into_iter()
@@ -326,7 +329,13 @@ pub(crate) fn add(
                     !family.automatic.contains(&property.as_str())
                         && !family.internal.iter().any(|(param, _)| param == property)
                 })
-                .map(|(property, value)| write(layer, &material_id, &property, 0.0, value)),
+                .map(|(property, value)| {
+                    let value = look
+                        .iter()
+                        .find(|(name, _)| *name == property)
+                        .map_or(value, |(_, own)| *own);
+                    write(layer, &material_id, &property, 0.0, value)
+                }),
         );
     }
     // A Material added inside a Water or Sand is that item's look.
@@ -369,7 +378,6 @@ const WATER_FILL: [(&str, f32); 6] = [
 
 /// What a new Water's own Material is called, numbered when taken.
 const WATER_MATERIAL_NAME: &str = "Water";
-const SAND_MATERIAL_NAME: &str = "Sand";
 
 /// What a new Material is called, numbered when taken.
 const MATERIAL_NAME: &str = "Material";

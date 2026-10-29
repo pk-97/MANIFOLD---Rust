@@ -1406,6 +1406,30 @@
       "fromPort": "solid",
       "toNode": 7,
       "toPort": "static_solid"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "material_rule",
+      "toNode": 7,
+      "toPort": "material_rule"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "yield_strain",
+      "toNode": 7,
+      "toPort": "yield_strain"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "relax_time",
+      "toNode": 7,
+      "toPort": "relax_time"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "hardening",
+      "toNode": 7,
+      "toPort": "hardening"
     }
   ]
 }

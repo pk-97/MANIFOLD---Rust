@@ -559,6 +559,9 @@ impl WaterQuality {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct SandFields {
+    /// What it is made of; Sand, Snow, Clay, Mud, Goo and Jelly are one item
+    /// kind on one solver, each with its own rule and dials.
+    pub matter: Matter,
     pub draw: WaterDraw,
     /// What the sand draws with; none draws the template's own look.
     pub material: Option<ItemId>,
@@ -571,9 +574,54 @@ impl Default for SandFields {
     /// land on in an empty scene.
     fn default() -> Self {
         Self {
+            matter: Matter::Sand,
             draw: WaterDraw::Particles,
             material: None,
             bounds: true,
+        }
+    }
+}
+
+/// A Sand item's material, in the Matter domain's `material` enum order
+/// (manifold-water-gpu-mpm's MATTER_KINDS): sand and soil, snow that packs
+/// and crumbles, clay that holds its shape, mud and goo that flow thickly,
+/// and jelly that springs back.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Matter {
+    #[default]
+    Sand,
+    Snow,
+    Clay,
+    Mud,
+    Goo,
+    Jelly,
+}
+
+impl Matter {
+    pub const ALL: [Matter; 6] = [
+        Matter::Sand,
+        Matter::Snow,
+        Matter::Clay,
+        Matter::Mud,
+        Matter::Goo,
+        Matter::Jelly,
+    ];
+
+    /// Its index in the domain's `material` enum.
+    pub fn index(self) -> u32 {
+        self as u32
+    }
+
+    /// The name a new item of it takes.
+    pub fn name(self) -> &'static str {
+        match self {
+            Matter::Sand => "Sand",
+            Matter::Snow => "Snow",
+            Matter::Clay => "Clay",
+            Matter::Mud => "Mud",
+            Matter::Goo => "Goo",
+            Matter::Jelly => "Jelly",
         }
     }
 }

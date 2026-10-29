@@ -3,7 +3,8 @@
 
 use crate::scene_doc::{
     CameraFields, CameraRig, ForceFields, ForceType, ItemFields, ItemKind, LightFields, LightType,
-    ModifierFields, ModifierType, ObjectFields, Shape, SourceRole, WaterSourceFields,
+    Matter, ModifierFields, ModifierType, ObjectFields, SandFields, Shape, SourceRole, WaterDraw,
+    WaterSourceFields,
 };
 
 /// One thing the Add menu adds: an item of `kind` whose fields are
@@ -92,7 +93,7 @@ const fn model_file(key: &'static str, group: &'static str, label: &'static str)
 }
 
 /// Every Add menu entry, in menu order.
-pub static ADD_ENTRIES: [AddEntry; 61] = [
+pub static ADD_ENTRIES: [AddEntry; 66] = [
     entry(
         "object.cube",
         "Object",
@@ -206,9 +207,41 @@ pub static ADD_ENTRIES: [AddEntry; 61] = [
     entry("water", "Water", "Water", ItemKind::Water, "Water", || {
         ItemFields::default_for(ItemKind::Water)
     }),
-    entry("sand", "Sand", "Sand", ItemKind::Sand, "Sand", || {
+    entry("sand", "Matter", "Sand", ItemKind::Sand, "Sand", || {
         ItemFields::default_for(ItemKind::Sand)
     }),
+    // Snow draws as grains as sand does; the others flow or hold as one
+    // body, so they draw their surface.
+    entry(
+        "matter.snow",
+        "Matter",
+        "Snow",
+        ItemKind::Sand,
+        "Snow",
+        || matter(Matter::Snow, WaterDraw::Particles),
+    ),
+    entry(
+        "matter.clay",
+        "Matter",
+        "Clay",
+        ItemKind::Sand,
+        "Clay",
+        || matter(Matter::Clay, WaterDraw::Surface),
+    ),
+    entry("matter.mud", "Matter", "Mud", ItemKind::Sand, "Mud", || {
+        matter(Matter::Mud, WaterDraw::Surface)
+    }),
+    entry("matter.goo", "Matter", "Goo", ItemKind::Sand, "Goo", || {
+        matter(Matter::Goo, WaterDraw::Surface)
+    }),
+    entry(
+        "matter.jelly",
+        "Matter",
+        "Jelly",
+        ItemKind::Sand,
+        "Jelly",
+        || matter(Matter::Jelly, WaterDraw::Surface),
+    ),
     entry(
         "water_source.fill",
         "Water Source",
@@ -597,6 +630,15 @@ pub fn entry_starts(key: &str) -> &'static [(&'static str, f32)] {
         .iter()
         .find(|(entry, _)| *entry == key)
         .map_or(&[], |(_, starts)| starts)
+}
+
+/// A new Sand item made of `matter`, drawn `draw`.
+fn matter(matter: Matter, draw: WaterDraw) -> ItemFields {
+    ItemFields::Sand(SandFields {
+        matter,
+        draw,
+        ..SandFields::default()
+    })
 }
 
 /// A name for a new item: `base`, or `base N` for the lowest N from 2 that no

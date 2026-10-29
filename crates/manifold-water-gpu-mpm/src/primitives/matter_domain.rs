@@ -22,10 +22,10 @@ use manifold_physics::force_lattice::ForceLattice;
 
 use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::matter::{
-    COHESION_SOFTENING, FRICTION_ANGLE_RANGE, MAX_SUBSTEPS, MatterMaterial, RADIUS_SCALE,
-    REACTION_WORDS, SAND_DENSITY, SAND_FRICTION_ANGLE, field_min, free_fall_speed, lattice_nodes,
-    matter_nodes, matter_pool_tiles, momentum_unit, stiffness_fitting_cap, substeps_for_interval,
-    substeps_per_tick,
+    COHESION_SOFTENING, FRICTION_ANGLE_RANGE, MATTER_KINDS, MAX_SUBSTEPS, MatterDials, MatterKind,
+    MatterMaterial, RADIUS_SCALE, REACTION_WORDS, SAND_DENSITY, SAND_FRICTION_ANGLE,
+    SNOW_HARDENING, field_min, free_fall_speed, lattice_nodes, matter_nodes, matter_pool_tiles,
+    momentum_unit, stiffness_fitting_cap, substeps_for_interval, substeps_per_tick,
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::fluid_domain::{
@@ -358,6 +358,7 @@ manifold_node_engine::primitive! {
         force_lattices: ScalarF32,
         impulse_tick: ScalarF32,
         fill_region: ScalarF32,
+        material_rule: ScalarF32, yield_strain: ScalarF32, relax_time: ScalarF32, hardening: ScalarF32,
         bodies: Array(LiquidBody), regions: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
         collider_nodes: Array(Vec4Vertex), collider_triangles: Array(Vec4Vertex),
         reaction: Array(i32),
@@ -387,6 +388,10 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("friction_angle"), label: "Friction Angle", ty: ParamType::Float, default: ParamValue::Float(SAND_FRICTION_ANGLE), range: Some(FRICTION_ANGLE_RANGE), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("cohesion"), label: "Cohesion (kPa)", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some(COHESION_KPA_RANGE), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("density"), label: "Density (kg/m³)", ty: ParamType::Float, default: ParamValue::Float(SAND_DENSITY), range: Some(DENSITY_RANGE), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("material"), label: "Material", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 5.0)), enum_values: &MATTER_KINDS },
+        ParamDef { name: Cow::Borrowed("hardening"), label: "Hardening", ty: ParamType::Float, default: ParamValue::Float(SNOW_HARDENING), range: Some(HARDENING_RANGE), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("yield_stress"), label: "Yield Stress (Pa)", ty: ParamType::Float, default: ParamValue::Float(1.0e4), range: Some(YIELD_STRESS_RANGE), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("viscosity"), label: "Viscosity (Pa·s)", ty: ParamType::Float, default: ParamValue::Float(20.0), range: Some(VISCOSITY_RANGE), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("roles"), label: "Sources", ty: ParamType::Int, default: ParamValue::Float(manifold_water_liquid::DEFAULT_ROLE_PORTS as f32), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
@@ -596,9 +601,16 @@ impl Coupling {
 const COHESION_KPA_RANGE: (f32, f32) = (0.0, 20.0);
 /// The Density dial's range, kg/m³: snow and powder up to wet heavy soil.
 const DENSITY_RANGE: (f32, f32) = (100.0, 3000.0);
+/// Snow's Hardening ξ: 0 never stiffens as it packs; Stomakhin et al. 2013
+/// ran 5 to 10.
+const HARDENING_RANGE: (f32, f32) = (0.0, 20.0);
+/// The shear Yield Stress, Pa: a runny goo up to a firm clay.
+const YIELD_STRESS_RANGE: (f32, f32) = (0.0, 5.0e4);
+/// The plastic Viscosity, Pa·s: water-thin up to tar.
+const VISCOSITY_RANGE: (f32, f32) = (0.0, 1.0e4);
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 68] = [
+const OUTPUTS: [&str; 72] = [
     "fill_min_x",
     "fill_min_y",
     "fill_min_z",
@@ -667,6 +679,10 @@ const OUTPUTS: [&str; 68] = [
     "wall_velocity_hi_z",
     "fill_region",
     "static_key",
+    "material_rule",
+    "yield_strain",
+    "relax_time",
+    "hardening",
 ];
 const TICKS: usize = 22;
 const EPOCH: usize = 24;
@@ -1225,6 +1241,9 @@ impl MatterDomain {
             "friction_angle",
             "cohesion",
             "density",
+            "hardening",
+            "yield_stress",
+            "viscosity",
         ]
         .map(|name| ctx.scalar_or_param(name, 0.0));
         if !speed.is_finite()
@@ -1411,10 +1430,25 @@ impl MatterDomain {
             ctx.scalar_or_param("cohesion", 0.0)
                 .clamp(COHESION_KPA_RANGE.0, COHESION_KPA_RANGE.1),
         );
+        let ranged = |name, default, (lo, hi): (f32, f32)| {
+            f64::from(ctx.scalar_or_param(name, default).clamp(lo, hi))
+        };
+        let kind = match ctx.params.get("material") {
+            Some(ParamValue::Enum(index)) => MatterKind::from_index(*index as usize),
+            _ => None,
+        }
+        .unwrap_or(MatterKind::Sand);
+        let dials = MatterDials {
+            stiffness: 1.0,
+            friction_angle,
+            cohesion_kpa: cohesion,
+            hardening: ranged("hardening", SNOW_HARDENING, HARDENING_RANGE),
+            yield_stress: ranged("yield_stress", 1.0e4, YIELD_STRESS_RANGE),
+            viscosity: ranged("viscosity", 20.0, VISCOSITY_RANGE),
+        };
         // The wave speed scales with Stiffness (D3): the largest Stiffness
         // whose substeps fit the cap runs, and the domain says so.
-        let unit_wave =
-            MatterMaterial::sand(1.0, friction_angle, cohesion).wave_speed(f64::from(density));
+        let unit_wave = MatterMaterial::of(kind, dials).wave_speed(f64::from(density));
         let fitted = stiffness.min(stiffness_fitting_cap(
             f64::from(cell_size),
             unit_wave,
@@ -1429,7 +1463,13 @@ impl MatterDomain {
                 );
             }
         }
-        let material = MatterMaterial::sand(fitted, friction_angle, cohesion);
+        let material = MatterMaterial::of(
+            kind,
+            MatterDials {
+                stiffness: fitted,
+                ..dials
+            },
+        );
         let wave = material.wave_speed(f64::from(density)) as f32;
         let body_limit = match &self.coupled.owner {
             Some(owner) => live_body_limit(owner, cell_size, wave, density),
@@ -1560,6 +1600,10 @@ impl MatterDomain {
             ("first_tick", first_tick as f32),
             ("dynamic_count", dynamic_count as f32),
             ("static_key", self.static_key),
+            ("material_rule", material.rule as u32 as f32),
+            ("yield_strain", material.yield_strain as f32),
+            ("relax_time", material.relax_time as f32),
+            ("hardening", material.hardening as f32),
             // The shaped fill's region row in a tick, -1 for a box or none:
             // the fill seeds only the box cells inside its shape.
             (

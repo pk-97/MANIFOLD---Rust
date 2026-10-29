@@ -44,7 +44,14 @@ impl TreeSection {
         match self {
             TreeSection::Camera => &["Camera"],
             TreeSection::Lighting => &["Light"],
-            TreeSection::Objects => &["Object", "Group", "Swarm", "Water", "Sand", "Water Source"],
+            TreeSection::Objects => &[
+                "Object",
+                "Group",
+                "Swarm",
+                "Water",
+                "Matter",
+                "Water Source",
+            ],
             TreeSection::Forces => &["Force"],
             TreeSection::Modifiers => &["Modifier"],
         }
