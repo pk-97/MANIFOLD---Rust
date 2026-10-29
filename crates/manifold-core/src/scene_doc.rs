@@ -221,8 +221,16 @@ pub enum Shape {
     Icosahedron,
     Dodecahedron,
     Ocean,
-    /// Land shaped by eroded-looking noise on the GPU each frame.
-    Terrain,
+    /// Land shaped by eroded-looking noise on the GPU each frame. Its own
+    /// material is the ground; `cliff` covers steep ground and `peak` the
+    /// ground above the snow line, when set.
+    #[serde(rename_all = "camelCase")]
+    Terrain {
+        #[serde(default)]
+        cliff: Option<ItemId>,
+        #[serde(default)]
+        peak: Option<ItemId>,
+    },
     /// A built-in curve pushed back into a solid, centred on the curve's plane
     /// (Blender's curve Extrude). `caps` is Fill Caps: a closed outline's
     /// ends are filled.

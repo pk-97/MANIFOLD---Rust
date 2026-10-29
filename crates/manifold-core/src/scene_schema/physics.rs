@@ -210,7 +210,7 @@ pub fn physics_unavailable(doc: &SceneDoc, item: &ItemId) -> Option<&'static str
         ItemFields::Object(object) if object.shape == Shape::Ocean => {
             return Some("An Ocean surface cannot collide; use Water for water");
         }
-        ItemFields::Object(object) if object.shape == Shape::Terrain => {
+        ItemFields::Object(object) if matches!(object.shape, Shape::Terrain { .. }) => {
             return Some("A Terrain is shaped on the GPU each frame and has no collision mesh");
         }
         ItemFields::Object(_) | ItemFields::Group(_) => {}
@@ -259,7 +259,7 @@ fn copies(fields: &ItemFields) -> bool {
 }
 
 fn solid(shape: &Shape) -> bool {
-    !matches!(shape, Shape::Ocean | Shape::Terrain)
+    !matches!(shape, Shape::Ocean | Shape::Terrain { .. })
 }
 
 /// Objects in `items` a group body takes: not under copies, and for a

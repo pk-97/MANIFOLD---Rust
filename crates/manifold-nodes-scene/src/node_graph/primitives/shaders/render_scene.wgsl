@@ -1471,7 +1471,13 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         geometric_N = -geometric_N;
     }
     var N = facing_normal(resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent), in.world_normal, V);
-    let mr = resolve_mr(in.uv);
+    var mr = resolve_mr(in.uv);
+    if terrain.on_tiles.x > 0.5 {
+        let ground = terrain_ground(in.world_pos, normalize(in.world_normal), albedo.rgb, N, mr.x);
+        albedo = vec4<f32>(ground.albedo, albedo.a);
+        N = ground.normal;
+        mr.x = ground.roughness;
+    }
     // Water on the surface darkens it and smooths it, keyed on the pixel
     // because materials are shared. After the cutout test, which stays on
     // the material's own alpha.

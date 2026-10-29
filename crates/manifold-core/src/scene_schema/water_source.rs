@@ -94,7 +94,7 @@ fn modelled(fields: &ItemFields) -> bool {
 
 /// An Object with a mesh a source can take: anything but an Ocean or Terrain.
 pub fn is_model(item: &Item) -> bool {
-    matches!(&item.fields, ItemFields::Object(o) if !matches!(o.shape, Shape::Ocean | Shape::Terrain))
+    matches!(&item.fields, ItemFields::Object(o) if !matches!(o.shape, Shape::Ocean | Shape::Terrain { .. }))
 }
 
 fn inflows(fields: &ItemFields) -> bool {

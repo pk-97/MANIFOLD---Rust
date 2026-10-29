@@ -121,6 +121,28 @@ pub(crate) fn attach(
     }
 }
 
+/// Read every model file the project's scene documents name and put its
+/// facts on them, on this thread: a headless run has no worker to wait for.
+#[cfg(feature = "perf-soak")]
+pub(crate) fn read_all(project: &mut Project) {
+    let mut files = AHashSet::new();
+    for layer in &project.timeline.layers {
+        if let Some(doc) = layer.gen_params().and_then(|inst| inst.scene.as_ref()) {
+            doc.model_files(|file| {
+                files.insert(file.to_owned());
+            });
+        }
+    }
+    for path in files {
+        match manifold_nodes_scene::node_graph::gltf_import::read_file_facts(
+            std::path::Path::new(&path),
+        ) {
+            Ok((facts, _)) => attach(project, None, &path, &facts),
+            Err(message) => log::warn!("[scene] {path}: {message}"),
+        }
+    }
+}
+
 /// Read each file's facts on a worker thread, one event per file.
 pub(crate) fn read_on_worker(
     paths: Vec<String>,

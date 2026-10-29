@@ -326,7 +326,7 @@ impl RenderScene {
         };
         // Indexed by draw, so a draw wholly outside the camera's clip volume
         // keeps its place with no binding set built for it.
-        let binding_sets: Vec<Option<[GpuBinding; 58]>> = draws
+        let binding_sets: Vec<Option<[GpuBinding; 65]>> = draws
             .iter()
             .enumerate()
             .map(|(draw_index, draw)| {
@@ -607,6 +607,34 @@ impl RenderScene {
                             .mask()
                             .filter(|_| !draw.routes_to_transparent())
                             .unwrap_or(dummy),
+                    },
+                    GpuBinding::Bytes {
+                        binding: 69,
+                        data: bytemuck::bytes_of(&draw.terrain_look),
+                    },
+                    GpuBinding::Texture {
+                        binding: 70,
+                        texture: draw.terrain_maps[0].unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 71,
+                        texture: draw.terrain_maps[1].unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 72,
+                        texture: draw.terrain_maps[2].unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 73,
+                        texture: draw.terrain_maps[3].unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 74,
+                        texture: draw.terrain_maps[4].unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 75,
+                        texture: draw.terrain_maps[5].unwrap_or(dummy),
                     },
                 ])
             })

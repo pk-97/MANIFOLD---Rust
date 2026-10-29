@@ -415,6 +415,7 @@ pub(crate) fn prepare_project_edited(
     )
     .map_err(|e| format!("failed to load project '{}': {e}", project_path.display()))?;
     edit(&mut project);
+    crate::scene_models::read_all(&mut project);
     let parse_ms = parse_started.elapsed().as_secs_f64() * 1000.0;
 
     let width = project.settings.output_width.max(1) as u32;

@@ -34,7 +34,7 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::scene_object::{
-    FieldSurface, GasLight, GasLook, GasVolume, InstanceSpace, SceneObject,
+    FieldSurface, GasLight, GasLook, GasVolume, InstanceSpace, SceneObject, TerrainLayers,
 };
 
 manifold_node_engine::primitive! {
@@ -94,6 +94,12 @@ manifold_node_engine::primitive! {
         diffuse_transmission_map: Texture2D optional,
         diffuse_transmission_color_map: Texture2D optional,
         volume_thickness_map: Texture2D optional,
+        terrain_cliff_color: Texture2D optional,
+        terrain_cliff_normal: Texture2D optional,
+        terrain_cliff_mr: Texture2D optional,
+        terrain_peak_color: Texture2D optional,
+        terrain_peak_normal: Texture2D optional,
+        terrain_peak_mr: Texture2D optional,
         instances: Array(InstanceTransform) optional,
         instance_count: ScalarF32 optional,
         copy_scale: Transform optional,
@@ -338,6 +344,72 @@ manifold_node_engine::primitive! {
             range: Some((0.0, 3.0)),
             enum_values: &["Low", "Medium", "High", "Extra High"],
         },
+        // A Terrain's layered ground (`TerrainLayers`): on for a Terrain,
+        // whose cliff and peak maps and tile sizes the compiler wires.
+        ParamDef {
+            name: Cow::Borrowed("terrain"),
+            label: "Terrain Layers",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("terrain_cliff_tile"),
+            label: "Cliff Tile Size",
+            ty: ParamType::Float,
+            default: ParamValue::Float(8.0),
+            range: Some((0.05, 100.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("terrain_peak_tile"),
+            label: "Peak Tile Size",
+            ty: ParamType::Float,
+            default: ParamValue::Float(4.0),
+            range: Some((0.05, 100.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("terrain_cliff_start"),
+            label: "Cliff Starts",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.3),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("terrain_cliff_end"),
+            label: "Cliff Whole",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.5),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("terrain_snow_line"),
+            label: "Snow Line",
+            ty: ParamType::Float,
+            default: ParamValue::Float(120.0),
+            range: Some((-5000.0, 10000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("terrain_snow_softness"),
+            label: "Snow Softness",
+            ty: ParamType::Float,
+            default: ParamValue::Float(20.0),
+            range: Some((0.0, 1000.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("terrain_snow_slope"),
+            label: "Snow Slides Off",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.45),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
     ],
     depth_rule: Terminal,
     composition_notes: "Optional indices are u32 triangle indices into vertices; their live extent controls indexed draws. Optional prev_positions is each vertex's position a frame ago (one vec4 per vertex, as many as the draw reads), for a mesh whose triangles are rebuilt every frame (node.tile_surface_mesh with a velocity): the velocity pass reads it instead of keeping a history, so the object blurs with its motion. An unindexed draw stops at the vertices' live extent, which a fragment cut publishes and the steps after it forward. Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel. Optional `field` is a level set (signed distance per node, negative inside) on the water's display world tiles: `field_tiles` is the world-tile table every field array is laid out under, `field_extent` its eight-float extent (min xyz, 0, max xyz, 0, object space), `field_pool_tiles` the tile slots in the pool and `field_cell_size` the lattice cell in metres, with node p at (p - 1/2) cells; plus optional `field_velocity` (three f32 per node), `field_foam` and `field_mist` (one f32 per node), all pooled the same way, and `wet_map`, node.wet_map's map, which every mesh in the scene reads to look wet: the object then draws the field instead of a mesh. A field has no box of its own, only its extent. With `field` wired, `vertices` is the field's own surface mesh (node.tile_surface_mesh over the same level set): the renderer draws its depth over the opaque scene and marches each ray only round it, so a pixel with no mesh in front draws no water. With `field` wired the tiles, extent, pool and cell size are required; a missing one, a pool under one tile or a cell size at or below zero is a node error and the object carries no field.",
@@ -407,6 +479,25 @@ impl Primitive for SceneObjectNode {
         let diffuse_transmission_map = ctx.inputs.slot_of("diffuse_transmission_map");
         let diffuse_transmission_color_map = ctx.inputs.slot_of("diffuse_transmission_color_map");
         let volume_thickness_map = ctx.inputs.slot_of("volume_thickness_map");
+        let terrain = matches!(ctx.params.get("terrain"), Some(ParamValue::Bool(true))).then(|| {
+            let layer = |prefix: &str| {
+                ["color", "normal", "mr"].map(|map| ctx.inputs.slot_of(&format!("terrain_{prefix}_{map}")))
+            };
+            TerrainLayers {
+                maps: [layer("cliff"), layer("peak")],
+                tile: [
+                    ctx.param_f32("terrain_cliff_tile", 8.0),
+                    ctx.param_f32("terrain_peak_tile", 4.0),
+                ],
+                cliff_slope: [
+                    ctx.param_f32("terrain_cliff_start", 0.3),
+                    ctx.param_f32("terrain_cliff_end", 0.5),
+                ],
+                snow_line: ctx.param_f32("terrain_snow_line", 120.0),
+                snow_softness: ctx.param_f32("terrain_snow_softness", 20.0),
+                snow_slope: ctx.param_f32("terrain_snow_slope", 0.45),
+            }
+        });
         let instances = ctx.inputs.slot_of("instances");
         let instance_count = ctx
             .inputs
@@ -431,6 +522,7 @@ impl Primitive for SceneObjectNode {
             topology,
             field,
             gas,
+            terrain,
             base_color_map,
             normal_map,
             mr_map,

@@ -181,7 +181,7 @@ impl SubsurfacePass {
         enc: &mut GpuEncoder,
         pre: &FramePrelude<'_>,
         draws: &[ObjectDraw<'_>],
-        binding_sets: &[Option<[GpuBinding<'_>; 58]>],
+        binding_sets: &[Option<[GpuBinding<'_>; 65]>],
     ) -> Result<(), String> {
         if let Some(error) = &self.allocation_error {
             return Err(error.clone());

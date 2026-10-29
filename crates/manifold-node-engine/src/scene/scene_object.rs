@@ -77,6 +77,9 @@ pub struct SceneObject {
     /// Smoke or fire in a box of cells (`node.gas_volume`), drawn by the
     /// renderer's volume pass; an object with a gas draws no mesh.
     pub gas: Option<GasVolume>,
+    /// A Terrain's cliff and peak layers, blended over the object's own
+    /// material by slope and height. `None` for every other object.
+    pub terrain: Option<TerrainLayers>,
     /// `Texture2D` slot — base colour map.
     pub base_color_map: Option<Slot>,
     /// `Texture2D` slot — normal map.
@@ -179,6 +182,26 @@ pub struct FieldSurface {
     /// How strongly the sunlight the surface focuses shows on what lies under
     /// it: 1 is physical, 0 turns caustics off.
     pub caustics: f32,
+}
+
+/// A Terrain's layered ground (`look_terrain.wgsl`): a cliff material where
+/// the ground is steep and a peak material above the snow line, each box
+/// mapped in world space and blended over the object's own material.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerrainLayers {
+    /// Cliff, then peak: each layer's base colour, normal and
+    /// metallic-roughness map slots.
+    pub maps: [[Option<Slot>; 3]; 2],
+    /// Each layer's tile size in metres, cliff then peak.
+    pub tile: [f32; 2],
+    /// Steepness (1 minus the normal's up component) where the cliff starts
+    /// and where it is whole.
+    pub cliff_slope: [f32; 2],
+    /// World height of the snow line, in metres, and the band it fades over.
+    pub snow_line: f32,
+    pub snow_softness: f32,
+    /// Steepness past which snow slides off.
+    pub snow_slope: f32,
 }
 
 /// A Smoke's or Fire's volume this frame: the solver's fields on a dense,

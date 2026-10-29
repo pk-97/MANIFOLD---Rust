@@ -3,7 +3,8 @@
 //! visibility.
 
 use manifold_core::effect_graph_def::{EffectGraphWire, SerializedParamValue};
-use manifold_core::scene_doc::{Item, ItemFields, Shape};
+use manifold_core::scene_doc::{Item, ItemFields, ItemId, Shape};
+use manifold_core::scene_schema::MATERIAL_FAMILY;
 use manifold_core::scene_schema::can_copy;
 
 use manifold_node_engine::scene::mesh_source::MeshSource;
@@ -45,7 +46,7 @@ fn mesh_type(shape: &Shape) -> Option<(&'static str, Option<u32>)> {
         Shape::Icosahedron => ("node.platonic_solid_mesh", Some(3)),
         Shape::Dodecahedron => ("node.platonic_solid_mesh", Some(4)),
         Shape::Ocean
-        | Shape::Terrain
+        | Shape::Terrain { .. }
         | Shape::Mesh { .. }
         | Shape::Extrude { .. }
         | Shape::Revolve { .. }
@@ -140,6 +141,31 @@ fn emit_terrain(b: &mut Builder<'_>, item: &Item) -> u32 {
     triangles
 }
 
+/// Wire a Terrain layer's colour, normal and metallic-roughness maps into
+/// its object's draw, and have the layer follow its material's Tile Size.
+fn terrain_layer(b: &mut Builder<'_>, object: u32, material: Option<&ItemId>, layer: &str) {
+    let Some(material) = material else {
+        return;
+    };
+    let maps = b
+        .material_maps
+        .get(material.as_str())
+        .cloned()
+        .unwrap_or_default();
+    for (source, port) in maps {
+        let map = match port {
+            "base_color_map" => "color",
+            "normal_map" => "normal",
+            "mr_map" => "mr",
+            _ => continue,
+        };
+        b.wire(source, "out", object, &format!("terrain_{layer}_{map}"));
+    }
+    if let Some(surface) = b.id(material.as_str(), MATERIAL_FAMILY.node) {
+        b.follow(surface, "tile_size", object, &format!("terrain_{layer}_tile"));
+    }
+}
+
 pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     let ItemFields::Object(fields) = &item.fields else {
         return;
@@ -149,7 +175,7 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     // An Ocean or Terrain is one surface made on the GPU each frame and drawn
     // once: it has no mesh source to copy.
     let ocean = fields.shape == Shape::Ocean;
-    let terrain = fields.shape == Shape::Terrain;
+    let terrain = matches!(fields.shape, Shape::Terrain { .. });
     let group_copies = frame
         .and_then(|frame| frame.copies)
         .or_else(|| b.swarm_draws.get(&item.id).copied())
@@ -288,6 +314,10 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     b.rows(item);
     if ocean {
         ocean::follow_dials(b, item);
+    }
+    if let Shape::Terrain { cliff, peak } = &fields.shape {
+        terrain_layer(b, object, cliff.as_ref(), "cliff");
+        terrain_layer(b, object, peak.as_ref(), "peak");
     }
     super::curves::follow_rows(b, item, &fields.shape);
 }
