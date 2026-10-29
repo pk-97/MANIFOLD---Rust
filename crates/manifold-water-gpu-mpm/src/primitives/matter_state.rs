@@ -10,7 +10,7 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use crate::matter::{
     MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS, grid_accum_bytes,
-    grid_bytes, substep_duration,
+    grid_bytes, substep_duration, water_lift,
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::liquid_domain::{SAND_WATER_DRAG, WATER_PUSH_INPUT};
@@ -72,6 +72,8 @@ struct WaterDragParams {
     rate: f32,
     dt: f32,
     dry: f32,
+    gravity: [f32; 3],
+    lift: f32,
 }
 
 /// Stats readbacks in flight: the GPU writes a slot at the end of a frame's
@@ -106,9 +108,12 @@ manifold_node_engine::primitive! {
         substeps_per_tick: ScalarF32 optional,
         epoch: ScalarF32 optional,
         // Last frame's water at each point (node.water_on_sand), a
-        // state-capture wire, and the sand's density it pushes against.
+        // state-capture wire, and the domain's density, rule and gravity
+        // it pushes and lifts against.
         water_push: Array(f32) optional,
         density: ScalarF32 optional,
+        material_rule: ScalarF32 optional,
+        gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
     },
     outputs: {
         out: Array(MatterPoint),
@@ -127,7 +132,7 @@ manifold_node_engine::primitive! {
     },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; pool_tiles, ticks, substeps_per_tick and epoch from node.matter_domain. The region body (zero_array → matter_move_bodies → matter_to_grid → matter_grid_update → matter_body_reaction → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in, stats_in and reaction_in (node.matter_body_reaction's reaction_out). out and stats escape to node.matter_frame; reaction is the last substep's reaction words, which nothing needs to read. water_push (from node.water_on_sand, a state-capture wire) and density (node.matter_domain's) let a water drag the points once a frame. Only live points (id ≠ 0) move.",
+    composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; pool_tiles, ticks, substeps_per_tick and epoch from node.matter_domain. The region body (zero_array → matter_move_bodies → matter_to_grid → matter_grid_update → matter_body_reaction → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in, stats_in and reaction_in (node.matter_body_reaction's reaction_out). out and stats escape to node.matter_frame; reaction is the last substep's reaction words, which nothing needs to read. water_push (from node.water_on_sand, a state-capture wire) with density, material_rule and gravity (node.matter_domain's) let a water lift and drag the points once a frame. Only live points (id ≠ 0) move.",
     examples: ["SandColumn", "SandBoxDrop"],
     picker: { label: "Matter State", category: Atom },
     summary: "Keeps the liquid's particles between frames and runs its simulation steps.",
@@ -305,6 +310,13 @@ impl Primitive for MatterState {
         let seed = ctx.inputs.array("seed");
         let water_push = ctx.inputs.array(WATER_PUSH_INPUT);
         let density = ctx.scalar_or_param("density", 1600.0);
+        let gravity = [("gravity_x", 0.0), ("gravity", -9.81), ("gravity_z", 0.0)]
+            .map(|(name, default)| ctx.scalar_or_param(name, default));
+        let lift = water_lift(
+            ctx.scalar_or_param("material_rule", 0.0).round() as i32,
+            density,
+            WATER_DENSITY,
+        );
         let out = ctx.outputs.array("out");
         let stats = ctx.outputs.array("stats");
         let gpu = ctx.gpu_encoder();
@@ -410,6 +422,8 @@ impl Primitive for MatterState {
                 rate: SAND_WATER_DRAG * WATER_DENSITY / density,
                 dt: seconds,
                 dry: DRY_SECONDS,
+                gravity,
+                lift,
             };
             gpu.native_enc.dispatch_compute(
                 pipeline,

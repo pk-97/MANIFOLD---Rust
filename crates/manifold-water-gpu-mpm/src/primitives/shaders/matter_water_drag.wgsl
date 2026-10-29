@@ -1,5 +1,6 @@
-// node.matter_state — the water drags the sand: each live point under water
-// moves toward the water's velocity there, at the rate the water is slowed
+// node.matter_state — the water lifts and drags the sand: each live point
+// under water loses `lift` of its gravity for its share under water
+// (`water_lift`), then moves toward the water's velocity there, at the rate the water is slowed
 // by the sand (`SAND_WATER_DRAG` at a full cell) times water's density over
 // the sand's, so the push is equal and opposite. Exact over the frame's
 // simulated time (exponential), so no rate overshoots. The point also keeps
@@ -32,6 +33,10 @@ struct Params {
     dt: f32,
     // Seconds wet sand takes to dry to 1/e, the wet look's.
     dry: f32,
+    // The domain's gravity, m/s², and the share of it water takes off a
+    // point wholly under water.
+    gravity: vec3<f32>,
+    lift: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -51,7 +56,8 @@ fn water_drag(@builtin(global_invocation_id) gid: vec3<u32>) {
     points[i].f_y.w = max(under, points[i].f_y.w * exp(-params.dt / params.dry));
     points[i].f_z.w = under;
     if under > 0.0 {
+        let lifted = points[i].velocity - params.gravity * (params.lift * under * params.dt);
         let keep = exp(-params.rate * under * params.dt);
-        points[i].velocity = water.xyz + (points[i].velocity - water.xyz) * keep;
+        points[i].velocity = water.xyz + (lifted - water.xyz) * keep;
     }
 }

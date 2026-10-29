@@ -312,6 +312,27 @@ pub enum MatterRule {
     Elastic = 3,
 }
 
+/// The grains of the porous materials, kg/m³: quartz for sand, ice for snow.
+pub const QUARTZ_DENSITY: f32 = 2650.0;
+pub const ICE_DENSITY: f32 = 917.0;
+
+/// The share of gravity water takes off a point of `rule` and bulk density
+/// `bulk` under water (Archimedes). A porous material is lifted by the water
+/// its grains push aside, since the water in its pores is the water's own;
+/// a continuous one by its whole volume. Above 1 it floats: snow does.
+pub fn water_lift(rule: i32, bulk: f32, water: f32) -> f32 {
+    let displaced = match rule {
+        r if r == MatterRule::Granular as i32 => QUARTZ_DENSITY,
+        r if r == MatterRule::Snow as i32 => ICE_DENSITY,
+        _ => bulk,
+    };
+    if displaced > 0.0 {
+        water / displaced
+    } else {
+        0.0
+    }
+}
+
 /// The materials Matter simulates, in the domain's `material` enum order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MatterKind {
@@ -706,6 +727,21 @@ mod tests {
     }
     use manifold_node_engine::ports::std430_stride;
     use manifold_physics::PlayedTime;
+
+    #[test]
+    fn water_lifts_grains_or_whole_volume() {
+        let lift = |rule: MatterRule, bulk| water_lift(rule as i32, bulk, 1000.0);
+        // Sand loses its grains' displaced water, 38% of its weight, at any
+        // packing; snow's ice floats; jelly is lifted by its whole volume.
+        assert!((lift(MatterRule::Granular, 1600.0) - 0.377).abs() < 1e-3);
+        assert_eq!(
+            lift(MatterRule::Granular, 1400.0),
+            lift(MatterRule::Granular, 1800.0)
+        );
+        assert!(lift(MatterRule::Snow, 400.0) > 1.0);
+        assert!((lift(MatterRule::Elastic, 1250.0) - 0.8).abs() < 1e-6);
+        assert_eq!(lift(MatterRule::Viscoplastic, 0.0), 0.0);
+    }
 
     #[test]
     fn matter_export_substeps_ignore_frame_partition_roundoff() {

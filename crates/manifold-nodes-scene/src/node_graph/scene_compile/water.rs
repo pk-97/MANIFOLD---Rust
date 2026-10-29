@@ -113,7 +113,8 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) {
 /// The water at each grain of the Sand (`node.water_on_sand`), from the
 /// Water's display level set and velocity (the sources of its Physics View
 /// switches) on its display tiles (the wet map's), into the Sand's state on
-/// the next frame, which drags the grains toward the water's velocity.
+/// the next frame, which lifts the grains under water and drags them toward
+/// the water's velocity.
 fn water_on_sand(
     b: &mut Builder<'_>,
     owner: &str,
@@ -150,7 +151,15 @@ fn water_on_sand(
         state,
         manifold_core::liquid_domain::WATER_PUSH_INPUT,
     );
-    b.wire(domain, "density", state, "density");
+    for port in [
+        "density",
+        "material_rule",
+        "gravity_x",
+        "gravity",
+        "gravity_z",
+    ] {
+        b.wire(domain, port, state, port);
+    }
 }
 
 fn emit(
