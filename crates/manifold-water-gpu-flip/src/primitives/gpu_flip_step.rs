@@ -329,8 +329,34 @@ pub(crate) struct StepParams {
     pub(crate) _pad_hi: u32,
     /// Nonzero when every held slot's static corners are rebuilt this step.
     pub(crate) static_all: u32,
-    pub(crate) _pad_static: [u32; 3],
+    /// Surface tension over density in m³/s² ([`surface_tension`]): the
+    /// water's pressure at the free surface is this times the surface's
+    /// curvature, with ghost fluid on.
+    pub(crate) tension: f32,
+    pub(crate) _pad_static: [u32; 2],
 }
+
+}
+
+/// The capillary length the water's surface tension is given, in cells: the
+/// size below which tension outweighs gravity. Real water's is about 3 mm,
+/// far under any cell, so the tension is set from the cell instead and acts
+/// on what the grid holds of that scale: lumps, sheet rims and drops about a
+/// cell across, while waves and splashes keep the shape gravity gives them.
+pub(crate) const TENSION_CELLS: f32 = 0.75;
+
+/// The explicit surface tension step limit as a share of sqrt(h³ / (σ/ρ)):
+/// 1 / sqrt(2π) (Brackbill, Kothe and Zemach 1992). Capillary waves at the
+/// cell scale grow when a substep is longer.
+pub(crate) const TENSION_STABILITY: f32 = 0.398_942_3;
+
+/// Surface tension over density for cells of `h` metres under `gravity`
+/// (m/s²): (TENSION_CELLS · h)² · |g|, the tension whose capillary length is
+/// TENSION_CELLS cells.
+pub(crate) fn surface_tension(h: f32, gravity: [f32; 3]) -> f32 {
+    let g = (gravity[0] * gravity[0] + gravity[1] * gravity[1] + gravity[2] * gravity[2]).sqrt();
+    let length = TENSION_CELLS * h;
+    length * length * g
 }
 
 /// Free space: no Bounds, no walls, no open faces and no kill height.

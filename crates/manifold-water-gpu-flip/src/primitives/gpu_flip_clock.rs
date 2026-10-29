@@ -29,7 +29,6 @@ pub mod flags {
     /// Include eligible obstacle speed in the maximum.
     pub const FLUID_PRESENT_OR_GENERATING: u32 = 1 << 1;
     /// Enable the surface-tension CFL restriction.
-    #[cfg(all(test, feature = "gpu-proofs"))]
     pub const SURFACE_TENSION: u32 = 1 << 2;
     /// Enable the source-colour mixing restriction.
     #[cfg(all(test, feature = "gpu-proofs"))]

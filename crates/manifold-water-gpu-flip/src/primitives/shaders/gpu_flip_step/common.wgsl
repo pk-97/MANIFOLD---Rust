@@ -132,7 +132,10 @@ struct Params {
     // Nonzero when every held slot's static corners are rebuilt this step:
     // the first step, new lattice buffers, or a new shapes buffer.
     static_all: u32,
-    _pad4: u32,
+    // Surface tension over density in m³/s² (gpu_flip_step.rs
+    // `surface_tension`): the water's pressure at the free surface is this
+    // times its curvature, with `ghost` 1.
+    tension: f32,
     _pad5: u32,
     _pad6: u32,
 };

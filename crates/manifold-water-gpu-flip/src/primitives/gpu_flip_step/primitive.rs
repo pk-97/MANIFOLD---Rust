@@ -360,6 +360,7 @@ impl Primitive for GpuFlipStep {
             .as_ref()
             .expect("tiles reserved")
             .pool_tiles();
+        let tension = surface_tension(h, gravity);
         let step = Step {
             identity,
             params: StepParams {
@@ -423,7 +424,8 @@ impl Primitive for GpuFlipStep {
                 _pad_hi: 0,
                 // The encode decides: it knows the buffers it last built from.
                 static_all: 0,
-                _pad_static: [0; 3],
+                tension,
+                _pad_static: [0; 2],
             },
             clock_plan: &zeros,
             particles,
@@ -511,8 +513,8 @@ impl Primitive for GpuFlipStep {
             frame_duration: interval_duration as f32,
             cell_size: h,
             cfl: ENGINE_CFL as f32,
-            surface_condition: 1.0,
-            surface_constant: 1.0,
+            surface_condition: TENSION_STABILITY,
+            surface_constant: tension,
             color_mixing_rate: 0.0,
             encoded_steps: numerical_steps,
             limit_interval,
@@ -522,6 +524,10 @@ impl Primitive for GpuFlipStep {
                 clock_flags::FIRST_SUBSTEP | clock_flags::FLUID_PRESENT_OR_GENERATING
             } else {
                 clock_flags::FLUID_PRESENT_OR_GENERATING
+            } | if ghost && tension > 0.0 {
+                clock_flags::SURFACE_TENSION
+            } else {
+                0
             },
             interval_sequence: tick_index as u32,
             constant_force: [gravity[0], gravity[1], gravity[2], 0.0],
