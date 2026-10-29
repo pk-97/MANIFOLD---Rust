@@ -24,7 +24,8 @@ use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::matter::{
     COHESION_SOFTENING, FRICTION_ANGLE_RANGE, MAX_SUBSTEPS, MatterMaterial, RADIUS_SCALE,
     REACTION_WORDS, SAND_DENSITY, SAND_FRICTION_ANGLE, field_min, free_fall_speed, lattice_nodes,
-    matter_nodes, matter_pool_tiles, momentum_unit, substeps_for_interval, substeps_per_tick,
+    matter_nodes, matter_pool_tiles, momentum_unit, stiffness_fitting_cap, substeps_for_interval,
+    substeps_per_tick,
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::fluid_domain::{
@@ -1401,7 +1402,24 @@ impl MatterDomain {
         // D4: substeps from the stiffness/CFL rule, from parameters only.
         let v_est = free_fall_speed(f64::from(layout.size[1]));
         let stiffness = f64::from(ctx.scalar_or_param("stiffness", 1.0).clamp(0.5, 3.0));
-        let fitted = stiffness;
+        let (angle_lo, angle_hi) = FRICTION_ANGLE_RANGE;
+        let friction_angle = f64::from(
+            ctx.scalar_or_param("friction_angle", SAND_FRICTION_ANGLE)
+                .clamp(angle_lo, angle_hi),
+        );
+        let cohesion = f64::from(
+            ctx.scalar_or_param("cohesion", 0.0)
+                .clamp(COHESION_KPA_RANGE.0, COHESION_KPA_RANGE.1),
+        );
+        // The wave speed scales with Stiffness (D3): the largest Stiffness
+        // whose substeps fit the cap runs, and the domain says so.
+        let unit_wave =
+            MatterMaterial::sand(1.0, friction_angle, cohesion).wave_speed(f64::from(density));
+        let fitted = stiffness.min(stiffness_fitting_cap(
+            f64::from(cell_size),
+            unit_wave,
+            v_est,
+        ));
         let limited = fitted < stiffness;
         if limited != self.limited {
             self.limited = limited;
@@ -1411,18 +1429,7 @@ impl MatterDomain {
                 );
             }
         }
-        let (angle_lo, angle_hi) = FRICTION_ANGLE_RANGE;
-        let material = MatterMaterial::sand(
-            fitted,
-            f64::from(
-                ctx.scalar_or_param("friction_angle", SAND_FRICTION_ANGLE)
-                    .clamp(angle_lo, angle_hi),
-            ),
-            f64::from(
-                ctx.scalar_or_param("cohesion", 0.0)
-                    .clamp(COHESION_KPA_RANGE.0, COHESION_KPA_RANGE.1),
-            ),
-        );
+        let material = MatterMaterial::sand(fitted, friction_angle, cohesion);
         let wave = material.wave_speed(f64::from(density)) as f32;
         let body_limit = match &self.coupled.owner {
             Some(owner) => live_body_limit(owner, cell_size, wave, density),
