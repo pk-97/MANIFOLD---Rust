@@ -5,14 +5,19 @@
 //     table of (cell key, count) pairs the node clears first.
 //   emit_main: each point reads its own cell and the cells one and two steps
 //     along each axis, FULL points making a cell filled. A point with an empty
-//     cell one step away is at the surface and draws all K grains. One with
-//     an empty cell two steps away lies just under it and draws its first
-//     grain, which fills the gaps between the surface grains; deeper, no
-//     camera sees it and all its grains are holes the draw skips.
+//     cell one step away is at the surface and draws the grains that cover
+//     its patch. One with an empty cell two steps away lies just under it and
+//     draws one grain the point's size, which fills the gaps between the
+//     surface grains; deeper, no camera sees it and its grains are holes the
+//     draw skips.
+// A surface point of radius r draws n = ceil(2 r² / g²) grains of Grain Size
+// g, about one and a half times its patch's area, at most K. Past K the grains
+// grow to r · sqrt(2 / K) instead of leaving gaps, so a coarse cell with a
+// small Grain Size costs at most K grains a point.
 // Copy p·K + j is grain j of point p: a sand grain at a hashed offset in the
-// point's cube (spread · radius each way), scaled to size · radius times a
-// hashed 0.7 to 1.3, each hash keyed on the point's id and j, so a grain keeps
-// its place and size on the point it rides. Its turn is a hashed start plus
+// point's cube (spread · radius each way), scaled to its size times a hashed
+// 0.7 to 1.3, each hash keyed on the point's id and j, so a grain keeps its
+// place and size on the point it rides. Its turn is a hashed start plus
 // the point's position over the grain's radius, as a grain rolls: moving x
 // turns it about z, moving z about x, falling about both, so still sand stays
 // still and moving sand tumbles at its rolling rate. A point past the live
@@ -21,8 +26,10 @@
 struct GrainParams {
     // Below 0: every point.
     live_count: f32,
+    // K, the most grains a point draws.
     grains: u32,
-    size: f32,
+    // Metres.
+    grain_size: f32,
     spread: f32,
     points: u32,
     // Table pairs, a power of two.
@@ -57,6 +64,8 @@ const FULL: u32 = 3u;
 // Probes before a lookup or insert gives up: a full table reads as empty
 // cells, which draws grains (never holes in the surface).
 const MAX_PROBES: u32 = 64u;
+// The filler grain under the surface, times the point's radius.
+const FILLER: f32 = 0.65;
 
 fn mg_hash(v: u32) -> u32 {
     var x = v;
@@ -154,10 +163,15 @@ fn emit_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         return;
     }
-    let c = mg_cell(particles[p]);
+    let q = particles[p];
+    let radius = q.position_radius.w;
+    let x = q.position_radius.xyz;
+    let size = max(params.grain_size, radius * sqrt(2.0 / f32(k)));
+    let cover = min(u32(ceil(2.0 * radius * radius / (size * size))), k);
+    let c = mg_cell(q);
     var drawn = 0u;
     if mg_count(c) < FULL {
-        drawn = k;
+        drawn = cover;
     }
     for (var d = 1; d <= 2 && drawn == 0u; d = d + 1) {
         let filled = mg_count(c + vec3<i32>(d, 0, 0)) >= FULL
@@ -167,21 +181,20 @@ fn emit_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             && mg_count(c + vec3<i32>(0, 0, d)) >= FULL
             && mg_count(c - vec3<i32>(0, 0, d)) >= FULL;
         if !filled {
-            drawn = select(1u, k, d == 1);
+            drawn = select(1u, cover, d == 1);
         }
     }
     for (var j = drawn; j < k; j = j + 1u) {
         copies[p * k + j] = hole;
     }
-    let q = particles[p];
-    let radius = q.position_radius.w;
-    let x = q.position_radius.xyz;
+    // The layer under the surface fills gaps with one grain the point's size.
+    let grain = select(size, max(size, FILLER * radius), drawn == 1u && cover > 1u);
     for (var j = 0u; j < drawn; j = j + 1u) {
-        let key = mg_hash(q.id * 32u + j);
+        let key = mg_hash(q.id * 64u + j);
         let place = mg_unit4(key);
         let turn = mg_unit4(key ^ 0x632be5abu);
         let offset = (place.xyz * 2.0 - vec3<f32>(1.0)) * params.spread * radius;
-        let scale = params.size * radius * (0.7 + 0.6 * place.w);
+        let scale = grain * (0.7 + 0.6 * place.w);
         let rolled = vec3<f32>(x.z + 0.5 * x.y, 0.0, 0.5 * x.y - x.x) / scale;
         copies[p * k + j] = Copy(
             vec4<f32>(x + offset, scale),

@@ -15,7 +15,7 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 
 /// The most grains one point can carry.
-const MAX_GRAINS: f32 = 27.0;
+const MAX_GRAINS: f32 = 64.0;
 
 const SHADER: &str = include_str!("shaders/matter_grains.wgsl");
 
@@ -24,7 +24,7 @@ const SHADER: &str = include_str!("shaders/matter_grains.wgsl");
 struct GrainParams {
     live_count: f32,
     grains: u32,
-    size: f32,
+    grain_size: f32,
     spread: f32,
     points: u32,
     entries: u32,
@@ -40,7 +40,7 @@ pub struct GrainPipelines {
 manifold_node_engine::primitive! {
     name: MatterGrains,
     type_id: "node.matter_grains",
-    purpose: "Draw a matter frame as sand grains at its surface: each point carries Grains copy transforms, grain j at a hashed offset within Spread times the point's radius, turned by hashed angles and its rolling, scaled to Size times the radius (varied 0.7 to 1.3), all keyed on the point's id so a grain stays with its point. Occupancy cells are two point spacings: a point with an empty cell one step along an axis draws all its grains, one with an empty cell two steps away only its first, and a deeper point only holes, as do points past live_count, with radius 0 or with no id. count publishes live_count × Grains, the instance count to draw.",
+    purpose: "Draw a matter frame as sand grains at its surface: each point carries up to Grains copy transforms, grain j at a hashed offset within Spread times the point's radius, turned by hashed angles and its rolling, Grain Size metres across (varied 0.7 to 1.3), all keyed on the point's id so a grain stays with its point. A surface point draws ceil(2 r² / Grain Size²) grains, at most Grains, the grains growing past that cap rather than leaving gaps. Occupancy cells are two point spacings: a point with an empty cell one step along an axis is at the surface, one with an empty cell two steps away draws one filler grain the point's size, and a deeper point only holes. Points past live_count, with radius 0 or with no id are holes. count publishes live_count × Grains, the instance count to draw.",
     inputs: {
         particles: Array(FluidParticle) required,
         live_count: ScalarF32 optional,
@@ -51,8 +51,8 @@ manifold_node_engine::primitive! {
     },
     params: [
         ParamDef { name: Cow::Borrowed("live_count"), label: "Live Count", ty: ParamType::Float, default: ParamValue::Float(-1.0), range: Some((-1.0, 1.0e9)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("grains"), label: "Grains", ty: ParamType::Int, default: ParamValue::Float(4.0), range: Some((1.0, MAX_GRAINS)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("size"), label: "Size", ty: ParamType::Float, default: ParamValue::Float(0.65), range: Some((0.05, 2.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("grains"), label: "Grains", ty: ParamType::Int, default: ParamValue::Float(16.0), range: Some((1.0, MAX_GRAINS)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("grain_size"), label: "Grain Size", ty: ParamType::Float, default: ParamValue::Float(0.014), range: Some((0.002, 0.1)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("spread"), label: "Spread", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 2.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
@@ -74,7 +74,7 @@ manifold_node_engine::primitive! {
 fn grains(params: &ParamValues) -> u32 {
     match params.get("grains") {
         Some(ParamValue::Float(n)) => n.round().clamp(1.0, MAX_GRAINS) as u32,
-        _ => 4,
+        _ => 16,
     }
 }
 
@@ -118,7 +118,7 @@ impl Primitive for MatterGrains {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let k = grains(ctx.params);
-        let size = ctx.scalar_or_param("size", 0.5);
+        let grain_size = ctx.scalar_or_param("grain_size", 0.014);
         let spread = ctx.scalar_or_param("spread", 1.0);
         let (Some(particles), Some(copies)) =
             (ctx.inputs.array("particles"), ctx.outputs.array("copies"))
@@ -163,7 +163,7 @@ impl Primitive for MatterGrains {
         let params = GrainParams {
             live_count: live,
             grains: k,
-            size,
+            grain_size,
             spread,
             points: live_points,
             entries,

@@ -7,6 +7,7 @@
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
 use super::fields::{FieldRow, MATERIAL_BINDING};
+use crate::scene_doc::{ItemFields, WaterDraw};
 use super::water::{
     BACK_WALL, BILLBOARD, BOUNDS_FIELD, CEILING, CELL_SIZE_ROW, DOMAIN, DOMAIN_SIZE, DRAW_FIELD,
     FILL_HEIGHT, FLOOR, FOLLOW_AIR, FOLLOW_GRAVITY_X, FOLLOW_GRAVITY_Y, FOLLOW_GRAVITY_Z,
@@ -14,11 +15,16 @@ use super::water::{
     ROT_Y, ROT_Z, SCALE_X, SCALE_Y, SCALE_Z, SURFACE_CLOSE_GAPS, SURFACE_DETAIL,
     SURFACE_PARTICLE_SCALE, SURFACE_SMOOTHNESS,
 };
-use super::{PropertyRow, perform, row, setup};
+use super::{PropertyRow, Reach, perform, row, setup};
 
-use ControlGroup::Simulation;
+use ControlGroup::{Simulation, Surface};
 
-pub static SAND_ROWS: [PropertyRow; 35] = [
+/// The Sand draws as grains.
+fn grains(fields: &ItemFields) -> bool {
+    matches!(fields, ItemFields::Sand(s) if s.draw == WaterDraw::Particles)
+}
+
+pub static SAND_ROWS: [PropertyRow; 36] = [
     POS_X,
     POS_Y,
     POS_Z,
@@ -60,6 +66,11 @@ pub static SAND_ROWS: [PropertyRow; 35] = [
     // Sand reads as clean slopes, with its grain from the material.
     SURFACE_SMOOTHNESS.default(2.0),
     SURFACE_CLOSE_GAPS,
+    row("grain_size", Reach::Own("sand_grains"), Surface, setup())
+        .name("Grain Size")
+        .unit(Unit::Metres)
+        .tip("How big each grain is, apart from the Cell Size. Smaller grains draw more of them at the surface, up to 16 a particle; past that they grow instead of leaving gaps")
+        .when(grains),
     FOLLOW_GRAVITY_X,
     FOLLOW_GRAVITY_Y,
     FOLLOW_GRAVITY_Z,
