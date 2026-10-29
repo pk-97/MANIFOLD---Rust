@@ -545,9 +545,7 @@ impl GpuDevice {
         }
         if alloc_log_enabled() {
             eprintln!("[gpu-alloc] {kind} {size}");
-            if usage != BufferUse::Gpu {
-                alloc_log_backtrace();
-            }
+            alloc_log_backtrace();
         }
         let raw = self
             .device

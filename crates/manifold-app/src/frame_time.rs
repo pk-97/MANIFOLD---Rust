@@ -1186,6 +1186,7 @@ fn probe(args: &Args) -> Result<(), String> {
     let (gpu_time_tx, gpu_time_rx) = crossbeam_channel::unbounded::<(&'static str, f64, f64)>();
     ct.content_pipeline.set_gpu_time_tap(Some(gpu_time_tx));
     let mut frames: Vec<Frame> = Vec::with_capacity(args.frames);
+    let mut peak_allocated_bytes = 0u64;
     let mut last = Instant::now();
     for index in 0..args.frames {
         let stamped = index % args.stamp_every == args.stamp_every - 1;
@@ -1250,6 +1251,13 @@ fn probe(args: &Args) -> Result<(), String> {
                 write_png(&mut ct, &framed.to_string_lossy());
             }
         }
+        if let Some(memory) = ct
+            .content_pipeline
+            .native_device()
+            .and_then(|device| device.modifier_memory_snapshot())
+        {
+            peak_allocated_bytes = peak_allocated_bytes.max(memory.current_allocated_bytes);
+        }
         let clock = ct.physics_metrics.clock;
         frames.push(Frame {
             interval_ms,
@@ -1293,8 +1301,9 @@ fn probe(args: &Args) -> Result<(), String> {
         .and_then(|device| device.modifier_memory_snapshot())
     {
         println!(
-            "frame-time: GPU memory allocated after the run {:.0} MB",
-            memory.current_allocated_bytes as f64 / 1e6
+            "frame-time: GPU memory allocated after the run {:.0} MB, peak {:.0} MB",
+            memory.current_allocated_bytes as f64 / 1e6,
+            peak_allocated_bytes.max(memory.current_allocated_bytes) as f64 / 1e6
         );
     }
     drop(state_tx);
