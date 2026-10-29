@@ -15,6 +15,11 @@
 //!   instance records in a buffer: the velocity pass reads each copy's
 //!   previous transform from it, and a buffer copy after Pass A refreshes it.
 //!
+//! A mesh whose triangles are rebuilt every frame has no history to keep: its
+//! producer may wire its own previous positions on the object instead (a
+//! liquid's surface mesh, moved back along its velocity), and the velocity
+//! pass reads those.
+//!
 //! Geometry that never changes never allocates a buffer, and none of this runs
 //! for a draw that does not write velocity.
 
@@ -45,6 +50,13 @@ fn read_extent(indexed: bool, draw_vertices: u32, records: u32) -> u32 {
     } else {
         draw_vertices.min(records)
     }
+}
+
+/// The vertex records a draw reads of its vertex buffer.
+fn draw_extent(draw: &ObjectDraw<'_>) -> u32 {
+    let records = (draw.vertices.size / std::mem::size_of::<MeshVertex>() as u64)
+        .min(u64::from(u32::MAX)) as u32;
+    read_extent(draw.indices.is_some(), draw.vertex_count, records)
 }
 
 /// What identifies the records a draw reads.
@@ -169,12 +181,14 @@ pub(super) type PrevPositions = History<u64, u64>;
 /// An object's previous instance records.
 pub(super) type PrevInstances = History<(), ContentVersion>;
 
-/// A draw's previous records this frame: the buffer the copy refreshes after
-/// Pass A, and whether the velocity pass reads it.
+/// A draw's previous records this frame: the buffer, whether the velocity pass
+/// reads it, and whether a copy refreshes it after Pass A (a history does, a
+/// producer's own records do not).
 pub(super) struct PrevDraw {
     buffer: manifold_gpu::GpuBuffer,
     records: u32,
     motion: bool,
+    copy: bool,
 }
 
 impl PrevDraw {
@@ -214,9 +228,7 @@ fn vertex_tokens(
         return None;
     }
     let revision = draw.mesh_revision?;
-    let records = (draw.vertices.size / std::mem::size_of::<MeshVertex>() as u64)
-        .min(u64::from(u32::MAX)) as u32;
-    let extent = read_extent(draw.indices.is_some(), draw.vertex_count, records);
+    let extent = draw_extent(draw);
     (extent > 0).then(|| Tokens {
         buffer: draw.vertices.identity_key(),
         extent,
@@ -242,6 +254,26 @@ fn instance_tokens(
         extent: draw.instance_count,
         same: (),
         version: draw.instances_content?,
+    })
+}
+
+/// The producer's own previous positions for a draw that writes velocity, when
+/// they cover every vertex record the draw reads.
+fn provided_prev(
+    draw: &ObjectDraw<'_>,
+    velocity_wired: bool,
+    has_transmission: bool,
+) -> Option<PrevDraw> {
+    let buffer = draw.provided_prev?;
+    if !writes_velocity(draw, velocity_wired, has_transmission) || draw.vertex_count == 0 {
+        return None;
+    }
+    let records = draw_extent(draw);
+    (buffer.size >= u64::from(records) * RECORD_BYTES).then(|| PrevDraw {
+        buffer: buffer.clone(),
+        records,
+        motion: true,
+        copy: false,
     })
 }
 
@@ -285,6 +317,7 @@ where
             buffer,
             records: now.extent,
             motion: step.motion,
+            copy: true,
         })
     } else {
         None
@@ -315,18 +348,24 @@ impl RenderScene {
             ) else {
                 continue;
             };
-            draw.prev_positions = plan_history(
-                ctx,
-                device,
-                positions,
-                vertex_tokens(draw, velocity_wired, has_transmission),
-                RECORD_BYTES,
-                draw.slot,
-                "per-vertex motion",
-            );
+            draw.prev_positions = match provided_prev(draw, velocity_wired, has_transmission) {
+                Some(prev) => {
+                    *positions = None;
+                    Some(prev)
+                }
+                None => plan_history(
+                    ctx,
+                    device,
+                    positions,
+                    vertex_tokens(draw, velocity_wired, has_transmission),
+                    RECORD_BYTES,
+                    draw.slot,
+                    "per-vertex motion",
+                ),
+            };
             if let Some(prev) = &draw.prev_positions {
                 draw.uniforms.render_mode[2] = if prev.motion { 1.0 } else { 0.0 };
-                vertex_copies = true;
+                vertex_copies |= prev.copy;
             }
             draw.prev_instances = plan_history(
                 ctx,
@@ -366,15 +405,16 @@ impl RenderScene {
         ctx: &mut EffectNodeContext<'_, '_>,
         draws: &[ObjectDraw<'_>],
     ) {
+        let copied = |prev: &Option<PrevDraw>| prev.as_ref().is_some_and(|prev| prev.copy);
         if !draws
             .iter()
-            .any(|draw| draw.prev_positions.is_some() || draw.prev_instances.is_some())
+            .any(|draw| copied(&draw.prev_positions) || copied(&draw.prev_instances))
         {
             return;
         }
         let gpu = ctx.gpu_encoder();
         for draw in draws {
-            if let Some(prev) = &draw.prev_positions {
+            if let Some(prev) = draw.prev_positions.as_ref().filter(|prev| prev.copy) {
                 let pipeline = self
                     .pack_prev_positions_pipeline
                     .as_ref()

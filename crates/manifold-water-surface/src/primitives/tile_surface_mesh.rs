@@ -8,6 +8,10 @@
 //! The node owns its vertex buffer and grows it from the triangles the surface
 //! asked for, read a frame or two late from the GPU's own count. Growth is the
 //! only allocation; steady state allocates nothing.
+//!
+//! With the surface's velocity wired it also writes where each vertex was a
+//! frame ago, for motion blur: the triangles are rebuilt every frame, so the
+//! renderer has no history of its own for them.
 
 use manifold_gpu::BufferUse;
 use std::borrow::Cow;
@@ -16,7 +20,7 @@ use std::sync::LazyLock;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::mesh::MeshVertex;
+use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::live_extent::{LiveExtent, LiveExtentOutput};
@@ -38,6 +42,7 @@ static SOURCE: LazyLock<String> = LazyLock::new(|| {
 });
 const THREADS: u32 = 256;
 const VERTEX_BYTES: u64 = std::mem::size_of::<MeshVertex>() as u64;
+const PREV_BYTES: u64 = std::mem::size_of::<Vec4Vertex>() as u64;
 
 /// Growth granularity and the first buffer, in triangles.
 const GRAIN: u64 = 16_384;
@@ -61,6 +66,8 @@ struct MeshUniforms {
     pool_tiles: u32,
     entries: u32,
     capacity: u32,
+    frame_seconds: f32,
+    _pad: [u32; 3],
 }
 
 /// The capacity, in triangles, to grow to when `asked` crowds `capacity`:
@@ -91,6 +98,7 @@ pub(crate) struct Kernels {
     tiles: GpuComputePipeline,
     finish: GpuComputePipeline,
     tail: GpuComputePipeline,
+    motion: GpuComputePipeline,
 }
 
 impl Kernels {
@@ -103,6 +111,7 @@ impl Kernels {
             tiles: make("sm_tiles"),
             finish: make("sm_finish"),
             tail: make("sm_tail"),
+            motion: make("sm_motion"),
         }
     }
 }
@@ -116,6 +125,9 @@ pub(crate) struct Mesh {
     /// Frames written since `vertices` was made: the late count describes
     /// this buffer's surface from the third.
     frames: u32,
+    /// Each vertex's position a frame ago, as many records as `vertices`;
+    /// held only while a velocity is wired.
+    prev: Option<GpuBuffer>,
 }
 
 fn shared(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
@@ -143,8 +155,9 @@ impl Mesh {
         uniforms: &MeshUniforms,
         levelset: &GpuBuffer,
         tiles: &GpuBuffer,
+        velocity: Option<&GpuBuffer>,
     ) {
-        let bindings = [
+        let mut bindings = vec![
             GpuBinding::Bytes {
                 binding: 0,
                 data: bytemuck::bytes_of(uniforms),
@@ -170,6 +183,21 @@ impl Mesh {
                 offset: 0,
             },
         ];
+        let motion = velocity.zip(self.prev.as_ref());
+        if let Some((velocity, prev)) = motion {
+            bindings.extend([
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: velocity,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: prev,
+                    offset: 0,
+                },
+            ]);
+        }
         let mut pass = |pipeline: &GpuComputePipeline, groups, label| {
             enc.dispatch_compute(pipeline, &bindings, groups, label);
             enc.compute_memory_barrier_buffers();
@@ -186,6 +214,13 @@ impl Mesh {
             [(3 * uniforms.capacity).div_ceil(THREADS), 1, 1],
             "node.tile_surface_mesh.tail",
         );
+        if motion.is_some() {
+            pass(
+                &kernels.motion,
+                [(3 * uniforms.capacity).div_ceil(THREADS), 1, 1],
+                "node.tile_surface_mesh.motion",
+            );
+        }
         self.frames = self.frames.saturating_add(1);
     }
 }
@@ -193,22 +228,24 @@ impl Mesh {
 manifold_node_engine::primitive! {
     name: TileSurfaceMesh,
     type_id: "node.tile_surface_mesh",
-    purpose: "The marching-cubes triangle list of a pooled level set's zero surface, on world tiles: node p at (p - 1/2) cells, a cell's corners its eight nodes, inside where the level set is below zero, normals the interpolated central-difference gradient pointing outward. Each vertex moves once to the mean of the vertices it shares a triangle with (one pass of umbrella smoothing), which rounds drops and thins sheets without deleting either. Each held tile meshes its own 8^3 cells; an edge shared by two tiles gives both the same vertex, so the surface is watertight across tile faces. A node in a tile the table does not hold reads the canonical element. UV is the vertex's xz in metres. The vertex buffer starts at 65536 triangles and grows from the triangles the surface asked for, read a frame late; a frame that asks for more than the buffer holds drops the rest and the buffer grows. Vertices past the live triangles are zero, and the live extent is published.",
+    purpose: "The marching-cubes triangle list of a pooled level set's zero surface, on world tiles: node p at (p - 1/2) cells, a cell's corners its eight nodes, inside where the level set is below zero, normals the interpolated central-difference gradient pointing outward. Each vertex moves once to the mean of the vertices it shares a triangle with (one pass of umbrella smoothing), which rounds drops and thins sheets without deleting either. Each held tile meshes its own 8^3 cells; an edge shared by two tiles gives both the same vertex, so the surface is watertight across tile faces. A node in a tile the table does not hold reads the canonical element. UV is the vertex's xz in metres. The vertex buffer starts at 65536 triangles and grows from the triangles the surface asked for, read a frame late; a frame that asks for more than the buffer holds drops the rest and the buffer grows. Vertices past the live triangles are zero, and the live extent is published. With velocity wired (three f32 per node of the level set's pool), prev_positions holds each live vertex's position a frame ago: the vertex less the trilinear node velocity times the frame's length, in the vertices' order.",
     inputs: {
         levelset: Array(f32) required,
         tiles: Array(u32) required,
         pool_tiles: ScalarF32 optional,
         cell_size: ScalarF32 optional,
+        velocity: Array(f32) optional,
     },
     outputs: {
         vertices: Array(MeshVertex),
+        prev_positions: Array(Vec4Vertex),
     },
     params: [
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
         float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire levelset from the display's level set (after its smoothing), and tiles, pool_tiles and cell_size from node.surface_tiles. Wire vertices to node.scene_object.vertices with the water's material: render_scene draws only the live triangles.",
+    composition_notes: "Wire levelset from the display's level set (after its smoothing), and tiles, pool_tiles and cell_size from node.surface_tiles. Wire vertices to node.scene_object.vertices with the water's material: render_scene draws only the live triangles. For motion blur on an opaque surface, wire velocity from node.surface_weights over the same tiles and prev_positions to node.scene_object.prev_positions.",
     examples: [],
     picker: { label: "Tile Surface Mesh", category: Atom },
     summary: "Builds the triangle mesh of a liquid's surface tile by tile, ready to render with any material.",
@@ -259,6 +296,7 @@ impl TileSurfaceMesh {
             counts,
             capacity: wanted,
             frames: 0,
+            prev: None,
         });
         Ok(())
     }
@@ -270,13 +308,16 @@ impl Primitive for TileSurfaceMesh {
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        port == "vertices"
+        matches!(port, "vertices" | "prev_positions")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        (port == "vertices")
-            .then(|| self.mesh.as_ref().map(|mesh| &mesh.vertices))
-            .flatten()
+        let mesh = self.mesh.as_ref()?;
+        match port {
+            "vertices" => Some(&mesh.vertices),
+            "prev_positions" => mesh.prev.as_ref(),
+            _ => None,
+        }
     }
 
     fn array_output_capacity(
@@ -286,7 +327,7 @@ impl Primitive for TileSurfaceMesh {
         _inputs: &[(&str, u32)],
     ) -> Option<u32> {
         // Provided storage: a one-triangle hint, sized from the surface at run time.
-        (port == "vertices").then_some(3)
+        self.provides_array_output(port).then_some(3)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -327,6 +368,35 @@ impl Primitive for TileSurfaceMesh {
         let (Some(mesh), Some(kernels)) = (self.mesh.as_mut(), self.kernels.as_ref()) else {
             return;
         };
+        let velocity = ctx.inputs.array("velocity");
+        if let Some(velocity) = velocity
+            && velocity.size < pool.elements() * 12
+        {
+            ctx.error(format!(
+                "Tile Surface Mesh: the velocity holds less than three floats a node of a pool of {} tiles",
+                pool.pool_tiles
+            ));
+            return;
+        }
+        // Sized with the vertices, made with them, dropped while no velocity
+        // is wired.
+        let prev_bytes = mesh.capacity * 3 * PREV_BYTES;
+        if velocity.is_none() {
+            mesh.prev = None;
+        } else if mesh
+            .prev
+            .as_ref()
+            .is_none_or(|prev| prev.size != prev_bytes)
+        {
+            mesh.prev = None;
+            match ctx.gpu_encoder().device.try_create_buffer(prev_bytes, BufferUse::Gpu) {
+                Ok(prev) => mesh.prev = Some(prev),
+                Err(error) => ctx.error(format!(
+                    "Tile Surface Mesh: no motion blur, the device refused {:.0} MB of previous positions ({error})",
+                    prev_bytes as f64 / 1e6
+                )),
+            }
+        }
         // The first two frames on a buffer carry no late count of it.
         let (bound, dropped) = if mesh.frames < 2 {
             ((3 * mesh.capacity) as u32, None)
@@ -342,9 +412,18 @@ impl Primitive for TileSurfaceMesh {
             pool_tiles: pool.pool_tiles,
             entries: table_entries(pool.pool_tiles) as u32,
             capacity: mesh.capacity as u32,
+            frame_seconds: ctx.time.delta.0 as f32,
+            _pad: [0; 3],
         };
         let gpu = ctx.gpu_encoder();
-        mesh.encode(gpu.native_enc, kernels, &uniforms, levelset, tiles);
+        mesh.encode(
+            gpu.native_enc,
+            kernels,
+            &uniforms,
+            levelset,
+            tiles,
+            velocity,
+        );
         let counts = mesh.counts.clone();
         ctx.outputs.set_live_extent(
             "vertices",
@@ -376,13 +455,13 @@ mod tests {
         )
         .validate(&module)
         .expect("tile surface mesh validates");
-        for entry in ["sm_reset", "sm_tiles", "sm_finish", "sm_tail"] {
+        for entry in ["sm_reset", "sm_tiles", "sm_finish", "sm_tail", "sm_motion"] {
             assert!(
                 module.entry_points.iter().any(|point| point.name == entry),
                 "missing {entry}"
             );
         }
-        assert_eq!(std::mem::size_of::<MeshUniforms>(), 16);
+        assert_eq!(std::mem::size_of::<MeshUniforms>(), 32);
         assert_eq!(VERTEX_BYTES, 80);
     }
 

@@ -545,6 +545,10 @@ impl RenderScene {
                 vertices_content,
                 mesh_revision: mesh_slot.and_then(|s| ctx.inputs.mesh_revision_of(s)),
                 prev_positions: None,
+                provided_prev: object
+                    .prev_positions
+                    .filter(|&slot| ctx.inputs.slot_content_ready(slot))
+                    .and_then(|slot| ctx.inputs.array_slot(slot)),
                 prev_instances: None,
                 topology_hint: object
                     .indices

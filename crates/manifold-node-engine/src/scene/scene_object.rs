@@ -63,6 +63,11 @@ pub struct SceneObject {
     pub indices: Option<Slot>,
     /// Optional per-vertex appearance weights consumed by `render_scene`.
     pub weights: Option<Slot>,
+    /// `Array<Vec4Vertex>` slot: each vertex's position a frame ago, from a
+    /// producer whose triangles change every frame (a liquid's surface mesh),
+    /// so the renderer's own vertex history cannot give its motion. `None`
+    /// for every other mesh.
+    pub prev_positions: Option<Slot>,
     /// Cut-map slot. The renderer resolves its typed content metadata from
     /// the slot, just as it does for mesh, weights, and map resources.
     pub topology: Option<Slot>,

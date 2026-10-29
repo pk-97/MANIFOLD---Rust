@@ -2012,8 +2012,11 @@ struct ObjectDraw<'ctx> {
     mesh_revision: Option<MeshRevision>,
     /// Last frame's vertex positions, when this draw's mesh deforms and writes
     /// velocity: the velocity pass reads them when `motion` is set, and a
-    /// compute pass after Pass A refreshes them either way.
+    /// compute pass after Pass A refreshes a history buffer either way.
     prev_positions: Option<prev_positions::PrevDraw>,
+    /// The mesh producer's own previous positions (the object's
+    /// `prev_positions` wire), used in place of a history.
+    provided_prev: Option<&'ctx manifold_gpu::GpuBuffer>,
     /// Last frame's instance records, when this draw's instance array moves on
     /// its own and writes velocity: read and refreshed like `prev_positions`.
     prev_instances: Option<prev_positions::PrevDraw>,
@@ -2916,6 +2919,7 @@ impl RenderScene {
             material: inputs.material("material"),
             mesh: inputs.slot_of("vertices"),
             indices: None,
+            prev_positions: None,
             weights: None,
             topology: None,
             field: None,

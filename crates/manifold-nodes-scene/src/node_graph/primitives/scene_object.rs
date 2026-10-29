@@ -44,6 +44,7 @@ manifold_node_engine::primitive! {
         indices: Array(u32) optional,
         weights: Array(f32) optional,
         topology: Array(Vec4Vertex) optional,
+        prev_positions: Array(Vec4Vertex) optional,
         field: Array(f32) optional,
         field_velocity: Array(f32) optional,
         field_foam: Array(FluidParticle) optional,
@@ -214,7 +215,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Optional indices are u32 triangle indices into vertices; their live extent controls indexed draws. An unindexed draw stops at the vertices' live extent, which a fragment cut publishes and the steps after it forward. Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel. Optional `field` is a level set (signed distance per node, negative inside) on the water's display world tiles: `field_tiles` is the world-tile table every field array is laid out under, `field_extent` its eight-float extent (min xyz, 0, max xyz, 0, object space), `field_pool_tiles` the tile slots in the pool and `field_cell_size` the lattice cell in metres, with node p at (p - 1/2) cells; plus optional `field_velocity` (three f32 per node), `field_foam` and `field_mist` (one f32 per node), all pooled the same way, and `wet_map`, node.wet_map's map, which every mesh in the scene reads to look wet: the object then draws the field instead of a mesh. A field has no box of its own, only its extent. With `field` wired, `vertices` is the field's own surface mesh (node.tile_surface_mesh over the same level set): the renderer draws its depth over the opaque scene and marches each ray only round it, so a pixel with no mesh in front draws no water. With `field` wired the tiles, extent, pool and cell size are required; a missing one, a pool under one tile or a cell size at or below zero is a node error and the object carries no field.",
+    composition_notes: "Optional indices are u32 triangle indices into vertices; their live extent controls indexed draws. Optional prev_positions is each vertex's position a frame ago (one vec4 per vertex, as many as the draw reads), for a mesh whose triangles are rebuilt every frame (node.tile_surface_mesh with a velocity): the velocity pass reads it instead of keeping a history, so the object blurs with its motion. An unindexed draw stops at the vertices' live extent, which a fragment cut publishes and the steps after it forward. Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel. Optional `field` is a level set (signed distance per node, negative inside) on the water's display world tiles: `field_tiles` is the world-tile table every field array is laid out under, `field_extent` its eight-float extent (min xyz, 0, max xyz, 0, object space), `field_pool_tiles` the tile slots in the pool and `field_cell_size` the lattice cell in metres, with node p at (p - 1/2) cells; plus optional `field_velocity` (three f32 per node), `field_foam` and `field_mist` (one f32 per node), all pooled the same way, and `wet_map`, node.wet_map's map, which every mesh in the scene reads to look wet: the object then draws the field instead of a mesh. A field has no box of its own, only its extent. With `field` wired, `vertices` is the field's own surface mesh (node.tile_surface_mesh over the same level set): the renderer draws its depth over the opaque scene and marches each ray only round it, so a pixel with no mesh in front draws no water. With `field` wired the tiles, extent, pool and cell size are required; a missing one, a pool under one tile or a cell size at or below zero is a node error and the object carries no field.",
     examples: [],
     picker: { label: "Scene Object", category: Driver },
     summary: "Binds one object's mesh, transform, material, maps, instances, and optional live count into a single wire. Wire it into a render_scene object slot.",
@@ -296,6 +297,7 @@ impl Primitive for SceneObjectNode {
             material,
             mesh,
             indices: ctx.inputs.slot_of("indices"),
+            prev_positions: ctx.inputs.slot_of("prev_positions"),
             weights,
             topology,
             field,
@@ -1033,7 +1035,10 @@ mod gpu_tests {
             mk_vertex([-1.0, 0.5, 4.0]),
             mk_vertex([0.0, 0.0, 0.0]),
         ];
-        let buffer = device.create_buffer(std::mem::size_of_val(expected.as_slice()) as u64, manifold_gpu::BufferUse::Upload);
+        let buffer = device.create_buffer(
+            std::mem::size_of_val(expected.as_slice()) as u64,
+            manifold_gpu::BufferUse::Upload,
+        );
         unsafe {
             buffer.write(0, bytemuck::cast_slice(&expected));
         }
@@ -1108,7 +1113,10 @@ mod gpu_tests {
                 MetalBackend::new(device.arc(), 16, 16, GpuTextureFormat::Rgba16Float);
             backend.pre_bind_array(
                 r_mesh_out,
-                device.create_buffer(9 * std::mem::size_of::<MeshVertex>() as u64, manifold_gpu::BufferUse::Upload),
+                device.create_buffer(
+                    9 * std::mem::size_of::<MeshVertex>() as u64,
+                    manifold_gpu::BufferUse::Upload,
+                ),
             );
             let mut exec = Executor::new(Box::new(backend));
             exec.execute_frame(&mut g, &plan, frame_time());

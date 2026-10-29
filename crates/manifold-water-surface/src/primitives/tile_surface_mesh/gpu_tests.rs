@@ -208,6 +208,10 @@ fn the_relax_keeps_planes_flat_and_drops_whole() {
     assert!(drop.live >= 8, "{} triangles", drop.live);
     for v in &drop.vertices[..3 * drop.live] {
         let d = sub(v.position, CENTRE);
-        assert!(dot(d, d).sqrt() < radius, "{:?} outside the drop", v.position);
+        assert!(
+            dot(d, d).sqrt() < radius,
+            "{:?} outside the drop",
+            v.position
+        );
     }
 }

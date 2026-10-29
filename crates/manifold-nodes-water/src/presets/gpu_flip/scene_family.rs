@@ -19,8 +19,8 @@ use manifold_core::scene_schema::{PHYSICS_VIEW_SWITCHES, WaterFamily, WaterTempl
 use serde_json::json;
 
 use super::{
-    Builder, DISPLAY_TILES, DOTS_OUTPUT, FAMILY_OUTPUTS, LIQUID_BODY_OUTPUT, WaterScene,
-    display_dots, display_head, feed_intervals, float, surface,
+    Builder, DISPLAY_TILES, DOTS_OUTPUT, FAMILY_OUTPUTS, LIQUID_BODY_OUTPUT, VELOCITY_SWITCH,
+    WaterScene, display_dots, display_head, feed_intervals, float, surface,
 };
 
 /// The Platonic shape a drawn particle is, scaled by the particle's radius.
@@ -129,13 +129,23 @@ const DRY_SAND: [(&str, f32); 8] = [
 
 /// The Sand's surface: the tile mesh the surface already builds, drawn as an
 /// ordinary opaque object, so it casts shadows and takes any Material. The
-/// water's field inputs and its ripples go.
+/// water's field inputs and its ripples go; the surface's velocity moves to
+/// the mesh, whose previous positions give the object its motion blur.
 fn sand_surface_draw(b: &mut Builder) {
+    let switch = b.id(VELOCITY_SWITCH) as u32;
+    let velocity = b
+        .wires
+        .iter()
+        .find(|wire| wire.to_node == switch && wire.to_port == "in_0")
+        .map(|wire| (wire.from_node as usize, wire.from_port.clone()))
+        .expect("the surface's velocity feeds the velocity switch");
     b.remove(&PHYSICS_VIEW_SWITCHES[..4]);
     b.remove(&["water_ripple_detail"]);
-    let water = b.id("water_object") as u32;
+    let [water, mesh] = ["water_object", "water_mesh"].map(|name| b.id(name));
     b.wires
-        .retain(|wire| wire.to_node != water || !wire.to_port.starts_with("field"));
+        .retain(|wire| wire.to_node != water as u32 || !wire.to_port.starts_with("field"));
+    b.wire((velocity.0, &velocity.1), mesh, "velocity");
+    b.wire((mesh, "prev_positions"), water, "prev_positions");
 }
 
 /// The Sand's look on its material node, which a new Sand's own Material

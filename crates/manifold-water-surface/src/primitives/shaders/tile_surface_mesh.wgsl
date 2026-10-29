@@ -4,7 +4,8 @@
 // (marching_cubes_common.wgsl: bit c of a case is set when corner c is
 // inside, the level set below zero).
 //
-// Passes, a barrier between each: sm_reset, sm_tiles, sm_finish, sm_tail.
+// Passes, a barrier between each: sm_reset, sm_tiles, sm_finish, sm_tail,
+// and sm_motion when a velocity is wired.
 // sm_tiles runs one workgroup per pool slot. It loads the nodes round its
 // tile into workgroup memory (one below, two above on every axis: the corners
 // of the tile's 8³ cells, the cells round their edges and the central
@@ -20,6 +21,10 @@
 // surface asked for, word 2 last frame's live triangles. Past the buffer's
 // capacity triangles are dropped and word 1 still counts them, so the CPU
 // grows the buffer from it. Every vertex past the live triangles is zero.
+//
+// sm_motion writes where each live vertex was a frame ago, for the renderer's
+// motion vectors: the triangles are rebuilt every frame, so no vertex has a
+// past of its own, and the surface's velocity there stands in for it.
 
 struct Params {
     cell_size: f32,
@@ -27,6 +32,11 @@ struct Params {
     entries: u32,
     // Triangles the vertex buffer holds.
     capacity: u32,
+    // The frame's length, seconds: how far back sm_motion looks.
+    frame_seconds: f32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 }
 
 // `MeshVertex` (manifold_node_engine::mesh), 80 bytes.
@@ -46,6 +56,10 @@ struct MeshVertex {
 @group(0) @binding(2) var<storage, read> tiles: array<u32>;
 @group(0) @binding(3) var<storage, read_write> vertices: array<MeshVertex>;
 @group(0) @binding(4) var<storage, read_write> counts: array<atomic<u32>>;
+// sm_motion only: three f32 per node of the level set's pool, and the
+// previous position per vertex (xyz, w = 1).
+@group(0) @binding(5) var<storage, read> velocity: array<f32>;
+@group(0) @binding(6) var<storage, read_write> prev_positions: array<vec4<f32>>;
 
 fn ts_pool_tiles() -> u32 { return u.pool_tiles; }
 fn ts_table_entries() -> u32 { return u.entries; }
@@ -268,4 +282,31 @@ fn sm_tail(@builtin(global_invocation_id) gid: vec3<u32>) {
         vec3<f32>(0.0), 0.0, vec3<f32>(0.0), 0.0, vec2<f32>(0.0), vec2<f32>(0.0),
         vec4<f32>(0.0), vec4<f32>(0.0),
     );
+}
+
+fn sm_velocity_at(i: u32) -> vec3<f32> {
+    return vec3<f32>(velocity[3u * i], velocity[3u * i + 1u], velocity[3u * i + 2u]);
+}
+
+// A thread a vertex up to the capacity: each live vertex less the trilinear
+// of the node velocities round it over one frame.
+@compute @workgroup_size(256)
+fn sm_motion(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let v = gid.x;
+    if v >= 3u * atomicLoad(&counts[0]) {
+        return;
+    }
+    let p = vertices[v].position;
+    let q = p / u.cell_size + vec3<f32>(0.5);
+    let lower = floor(q);
+    let base = vec3<i32>(lower);
+    let f = q - lower;
+    ts_home(ts_cell_at(base));
+    var sum = vec3<f32>(0.0);
+    for (var k = 0u; k < 8u; k = k + 1u) {
+        let corner = vec3<u32>(k & 1u, (k >> 1u) & 1u, k >> 2u);
+        let w = select(vec3<f32>(1.0) - f, f, corner == vec3<u32>(1u));
+        sum = sum + w.x * w.y * w.z * sm_velocity_at(ts_cell_at(base + vec3<i32>(corner)));
+    }
+    prev_positions[v] = vec4<f32>(p - sum * u.frame_seconds, 1.0);
 }
