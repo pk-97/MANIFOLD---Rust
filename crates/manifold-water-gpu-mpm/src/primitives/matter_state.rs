@@ -20,6 +20,7 @@ use manifold_node_engine::exec::substeps::{
 };
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::wet_map::DRY_SECONDS;
 use manifold_water_liquid::WATER_DENSITY;
 use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 
@@ -70,7 +71,7 @@ struct WaterDragParams {
     count: u32,
     rate: f32,
     dt: f32,
-    pad: u32,
+    dry: f32,
 }
 
 /// Stats readbacks in flight: the GPU writes a slot at the end of a frame's
@@ -408,7 +409,7 @@ impl Primitive for MatterState {
                 count,
                 rate: SAND_WATER_DRAG * WATER_DENSITY / density,
                 dt: seconds,
-                pad: 0,
+                dry: DRY_SECONDS,
             };
             gpu.native_enc.dispatch_compute(
                 pipeline,

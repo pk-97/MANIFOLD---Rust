@@ -47,6 +47,23 @@ struct MatterMaterial {
     relax_time: f32,
     // Snow: ξ, how fast compaction stiffens it.
     hardening: f32,
+    // Granular: the tensile log strain the water held between damp grains
+    // carries (`matter_wet_cohesion`). The water's bridges form again as the
+    // grains move, so flow never softens it.
+    wet: f32,
+}
+
+// Damp sand's cohesion, about what holds a sandcastle wall (Pa): water held
+// between the grains pulls them together. Wholly under water there are no
+// bridges and it is gone; it dries away with the sand.
+const MATTER_WET_COHESION_PA: f32 = 1000.0;
+
+// The wet tensile log strain for a point `wet` (0 dry to 1 soaked) of which
+// `under` is under water, on the cone of friction `alpha` and moduli
+// `lambda`, `mu`: the Cohesion dial's kPa-to-strain rule.
+fn matter_wet_cohesion(wet: f32, under: f32, alpha: f32, lambda: f32, mu: f32) -> f32 {
+    let damp = wet * (1.0 - under);
+    return MATTER_WET_COHESION_PA * damp / max(alpha * (3.0 * lambda + 2.0 * mu), MM_EPSILON);
 }
 
 // What a particle remembers of its plastic history.
@@ -190,7 +207,7 @@ fn mm_symmetric(u: mat3x3<f32>, d: vec3<f32>) -> mat3x3<f32> {
 
 // The cohesion's tensile log strain after `strain` of plastic flow.
 fn matter_cohesion(strain: f32, m: MatterMaterial) -> f32 {
-    return m.cohesion * exp(-strain / max(m.softening, MM_EPSILON));
+    return m.cohesion * exp(-strain / max(m.softening, MM_EPSILON)) + m.wet;
 }
 
 // Drucker-Prager return map on Hencky strain (Klár et al. 2016), its cone

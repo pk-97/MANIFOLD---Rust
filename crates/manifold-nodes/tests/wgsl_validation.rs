@@ -60,6 +60,9 @@ const PARTIAL_SHADERS: &[&str] = &[
     "water_field_common.wgsl",
     "water_march_core.wgsl",
     "field_tiles.wgsl",
+    // The gas march: composed after the scene shading and constants the Rust
+    // side generates (`GAS_VOLUME_WGSL`), validated composed by its own test.
+    "gas_volume.wgsl",
 ];
 
 const NOISE_COMMON: &str = manifold_node_engine::gpu::shader_sources::NOISE_COMMON_WGSL;

@@ -40,9 +40,9 @@ pub struct MatterPoint {
     pub affine_z: [f32; 4],
     /// Elastic deformation F, row 0; w = accumulated plastic strain.
     pub f_x: [f32; 4],
-    /// F row 1; w = 0.
+    /// F row 1; w = how wet the point is, 0 dry to 1 soaked.
     pub f_y: [f32; 4],
-    /// F row 2; w = 0.
+    /// F row 2; w = its share under water this frame.
     pub f_z: [f32; 4],
     /// Kirchhoff stress τ (Pa): xx, yy, zz; w = 0.
     pub stress_diag: [f32; 4],

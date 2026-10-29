@@ -264,7 +264,10 @@ fn body(
         transpose(mat3x3<f32>(c0, c1, c2)),
         step_dt,
         MatterPlastic(p.affine_x.w, p.f_x.w),
-        MatterMaterial(mu, lambda, alpha, cohesion, softening, u32(material_rule), yield_strain, relax_time, hardening),
+        MatterMaterial(
+            mu, lambda, alpha, cohesion, softening, u32(material_rule), yield_strain, relax_time, hardening,
+            select(0.0, matter_wet_cohesion(p.f_y.w, p.f_z.w, alpha, lambda, mu), u32(material_rule) == MATTER_GRANULAR),
+        ),
     );
     let f_rows = transpose(up.f);
     p.volume_ratio = up.j;
@@ -272,8 +275,10 @@ fn body(
     p.affine_y = vec4<f32>(c1, p.affine_y.w);
     p.affine_z = vec4<f32>(c2, p.affine_z.w);
     p.f_x = vec4<f32>(f_rows[0], up.plastic.strain);
-    p.f_y = vec4<f32>(f_rows[1], 0.0);
-    p.f_z = vec4<f32>(f_rows[2], 0.0);
+    // w: the point's wetness and its share under water, kept for
+    // node.matter_state, which sets them once a frame.
+    p.f_y = vec4<f32>(f_rows[1], p.f_y.w);
+    p.f_z = vec4<f32>(f_rows[2], p.f_z.w);
     p.stress_diag = vec4<f32>(up.tau[0][0], up.tau[1][1], up.tau[2][2], 0.0);
     p.stress_off = vec4<f32>(up.tau[1][0], up.tau[2][0], up.tau[2][1], 0.0);
 
