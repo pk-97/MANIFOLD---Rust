@@ -152,6 +152,7 @@ STACKS = {
     "particle_volume": (False, [WORLD_READ, SURFACE / "particle_volume.wgsl"]),
     "surface_weights": (False, [WORLD_READ, SURFACE / "surface_weights.wgsl"]),
     "carry_liquid": (False, [WORLD_READ, SURFACE / "carry_liquid_into_solids.wgsl"]),
+    "field_close": (False, [WORLD_READ, SURFACE / "field_close.wgsl"]),
     "ww_step": (False, [WW / "whitewater_step.wgsl"]),
     "ww_fused": (False, [WORLD_READ, LIQ / "whitewater_common.wgsl",
                          LIQ / "liquid_faces.wgsl",

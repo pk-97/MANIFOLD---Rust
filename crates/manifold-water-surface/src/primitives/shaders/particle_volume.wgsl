@@ -17,7 +17,13 @@
 // of the eleven a blended shape matrix takes. Two blobs up to 2R apart blend
 // into one body where
 // their kernels alone would leave a gap, so a thin spread of particles reads
-// as a film, and a lone blob is its own ellipsoid. A node that gathers less
+// as a film, and a lone blob is its own ellipsoid. Water lying on a solid as
+// thin as a one-particle sheet (a blob with fewer neighbours than
+// `fade_end`, its centre within `film_reach` of the solid) draws as a flat
+// disc centred on the solid's surface below it, `film_wide` across the
+// surface and `film_half` along its normal, so the film's discs blend into
+// one flat sheet `film_half` high with the rest of the water's look, where
+// their own ellipsoids would leave holes and bumps. A node that gathers less
 // than PV_MIN_WEIGHT reads 3 * blob_reach. A blob visits the nodes of its
 // inclusive floor(c - R')..floor(c + R')+1 grid box, R' = R times its
 // weight's reach (shape_diagonal.w).
@@ -55,6 +61,9 @@
 
 // How far, in cells, water reaches into a solid.
 const PV_WALL_REACH: f32 = 0.5;
+// The solid reads 1e30 in a tile no slot holds; capped so a trilinear mix
+// stays finite.
+const PV_SOLID_FAR: f32 = 1.0e4;
 
 struct Params {
     cell_size: f32,
@@ -68,6 +77,14 @@ struct Params {
     // The mean neighbour count at which smoothing starts, and where it is full.
     fade_start: f32,
     fade_end: f32,
+    // Film: a blob with fewer neighbours than fade_end whose centre lies
+    // within film_reach metres of a solid draws as a disc centred on the
+    // solid's surface, up to film_wide metres across it and film_half along
+    // its normal.
+    film_reach: f32,
+    film_half: f32,
+    film_wide: f32,
+    pad0: u32,
 }
 
 struct FluidParticle {
@@ -131,6 +148,9 @@ const PV_FIXED_VELOCITY: f32 = 4096.0;
 // lone one. Below it the rounded sums say nothing about where the blobs are,
 // and the node reads as air.
 const PV_MIN_WEIGHT: f32 = 1.0e-3;
+// How far a film disc's weight reaches, times the disc: FILM_BLEND in
+// manifold-water-liquid's field_build.rs.
+const PV_FILM_BLEND: f32 = 1.2;
 var<workgroup> pv_held: u32;
 // The slots of the tiles the window touches, x fastest, at most
 // ceil(PV_MAX_WINDOW / 8) + 1 a side.
@@ -153,6 +173,28 @@ fn pv_apply(d: vec3<f32>, o: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
         o.x * v.x + d.y * v.y + o.z * v.z,
         o.y * v.x + o.z * v.y + d.z * v.z,
     );
+}
+
+// The solid's distance at point x, trilinear on the display nodes round it
+// (node p at (p - 1/2) cells), with its gradient per metre (xyz, distance w).
+fn pv_solid_at(x: vec3<f32>, h: f32) -> vec4<f32> {
+    let g = x / h + vec3<f32>(0.5);
+    let lower = floor(g);
+    let f = g - lower;
+    let base = vec3<i32>(lower);
+    var value = 0.0;
+    var slope = vec3<f32>(0.0);
+    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
+        let o = vec3<i32>(i32(corner & 1u), i32((corner >> 1u) & 1u), i32((corner >> 2u) & 1u));
+        let wx = select(1.0 - f.x, f.x, o.x == 1);
+        let wy = select(1.0 - f.y, f.y, o.y == 1);
+        let wz = select(1.0 - f.z, f.z, o.z == 1);
+        let toward = select(vec3<f32>(-1.0), vec3<f32>(1.0), o == vec3<i32>(1));
+        let v = min(solid[ts_cell_at(base + o)], PV_SOLID_FAR);
+        value = value + wx * wy * wz * v;
+        slope = slope + v * toward * vec3<f32>(wy * wz, wx * wz, wx * wy);
+    }
+    return vec4<f32>(slope / h, value);
 }
 
 @compute @workgroup_size(256)
@@ -235,17 +277,58 @@ fn cs_main(
         let tail = cell_ranges[slot * 512u + ts_local(vec3<i32>(x1, y, z))];
         for (var b = head.start; b < tail.start + tail.count; b = b + 1u) {
             let centre_radius = blobs[b].center_radius;
-            let centre = centre_radius.xyz;
             let r = centre_radius.w;
             if !(r > 0.0) {
                 continue;
             }
             let shape_diagonal = blobs[b].shape_diagonal;
+            var centre = centre_radius.xyz;
+            var support = vec3<f32>(blend * shape_diagonal.w);
+            var diag = shape_diagonal.xyz;
+            var off = vec3<f32>(0.0);
+            var size = 1.0;
+            // Film: a flat disc centred on the solid's surface, `wide`
+            // across it and film_half along its normal n
+            // (A = t I + (k - t) n nᵀ, t = r / wide, k = r / film_half), so
+            // the film's discs blend into one flat sheet film_half high that
+            // bridges gaps between its particles. A disc covers its
+            // particle's share of the film: `wide` grows as the inverse
+            // square root of its neighbours, film_half at fade_end up to
+            // film_wide where the film has thinned out. Its weight reaches
+            // PV_FILM_BLEND times the disc. A blob turns into its disc by
+            // `film`, which rises from 0 at fade_end neighbours to 1 at
+            // fade_start and from 0 at film_reach off the solid to 1 at half
+            // that, so no blob jumps between the two shapes from one frame to
+            // the next: its centre, shape and weight's size blend, and its
+            // box covers both.
+            var film = 0.0;
+            if counts[b] < params.fade_end {
+                let near = pv_solid_at(centre, h);
+                let steep = length(near.xyz);
+                if near.w < params.film_reach && steep > 0.0 {
+                    let thin = (params.fade_end - counts[b]) / (params.fade_end - params.fade_start);
+                    let close = 2.0 * (params.film_reach - near.w) / params.film_reach;
+                    film = smoothstep(0.0, 1.0, min(thin, 1.0)) * smoothstep(0.0, 1.0, min(close, 1.0));
+                }
+                if film > 0.0 {
+                    let n = near.xyz / steep;
+                    let wide = min(params.film_half * sqrt(params.fade_end / max(counts[b], 1.0)), params.film_wide);
+                    let t = r / wide;
+                    let flat = r / params.film_half - t;
+                    let own_off = blobs[b].shape_off_diagonal;
+                    centre = centre - film * near.w * n;
+                    diag = mix(diag, vec3<f32>(t) + flat * n * n, film);
+                    off = mix(own_off.xyz, flat * vec3<f32>(n.x * n.y, n.x * n.z, n.y * n.z), film);
+                    size = mix(own_off.w, blend / (PV_FILM_BLEND * r), film);
+                    let wide2 = wide * wide;
+                    let half2 = params.film_half * params.film_half;
+                    support = max(support, PV_FILM_BLEND * sqrt(vec3<f32>(wide2) + n * n * (half2 - wide2)));
+                }
+            }
             // Native support is a grid-aligned box including its outer
             // interpolation node, cut to the tile.
-            let support = blend * shape_diagonal.w;
-            let first = vec3<i32>(floor((centre - vec3<f32>(support)) / h + vec3<f32>(0.5)));
-            let last = vec3<i32>(floor((centre + vec3<f32>(support)) / h + vec3<f32>(0.5))) + vec3<i32>(1);
+            let first = vec3<i32>(floor((centre - support) / h + vec3<f32>(0.5)));
+            let last = vec3<i32>(floor((centre + support) / h + vec3<f32>(0.5))) + vec3<i32>(1);
             let lo_node = max(first, t0);
             let hi_node = min(last, t0 + vec3<i32>(7));
             // Most blobs in the window miss the tile: only those that reach
@@ -253,11 +336,15 @@ fn cs_main(
             if any(lo_node > hi_node) {
                 continue;
             }
-            let diag = shape_diagonal.xyz;
-            let shape_off_diagonal = blobs[b].shape_off_diagonal;
-            let off = shape_off_diagonal.xyz;
-            let size = shape_off_diagonal.w;
-            let count = counts[b] * PV_FIXED_COUNT;
+            if film == 0.0 {
+                let shape_off_diagonal = blobs[b].shape_off_diagonal;
+                off = shape_off_diagonal.xyz;
+                size = shape_off_diagonal.w;
+            }
+            // A film's flat sheet rests on its solid, so the smoothing may
+            // move it as it moves bulk water: its disc counts as fade_end
+            // neighbours, where the smoothing's weight is full.
+            let count = mix(counts[b], params.fade_end, film) * PV_FIXED_COUNT;
             let moving = sorted[b].velocity * PV_FIXED_VELOCITY;
             for (var nz = lo_node.z; nz <= hi_node.z; nz = nz + 1) {
                 for (var ny = lo_node.y; ny <= hi_node.y; ny = ny + 1) {

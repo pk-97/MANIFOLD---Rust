@@ -15,7 +15,7 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
 use manifold_water_liquid::field_build::{
-    BLOB_CENTRE_SMOOTHING, BLOB_MAX_STRETCH, BLOB_NEIGHBOUR_CELLS, WEIGHT_FADE_END,
+    BLOB_CENTRE_SMOOTHING, BLOB_MAX_STRETCH, BLOB_NEIGHBOUR_CELLS, FILM_BLEND, FILM_HALF_CELLS, FILM_REACH_CELLS, FILM_WIDE_CELLS, WEIGHT_FADE_END,
     WEIGHT_FADE_START, display_stride, expected_bulk_neighbours,
 };
 use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob};
@@ -42,6 +42,13 @@ struct Uniforms {
     run: u32,
     fade_start: f32,
     fade_end: f32,
+    // Film (FILM_REACH_CELLS): a blob with fewer neighbours than fade_end
+    // and its centre within film_reach metres of a solid draws as a disc on
+    // the solid, up to film_wide metres across and film_half thick each way.
+    film_reach: f32,
+    film_half: f32,
+    film_wide: f32,
+    _pad: u32,
 }
 
 /// Most cells a node's search window may reach; the shader's window span is
@@ -56,10 +63,12 @@ fn blob_reach(particle_scale: f32, sim_cell_size: f32, particle_radius: f32) -> 
 
 /// How far from the cell its particle is sorted into a blob reaches,
 /// metres: the support (1.5 radii) of the most stretched blob, plus the
-/// farthest node.shape_particle_blobs moves a centre off its particle.
+/// farthest node.shape_particle_blobs moves a centre off its particle, or a
+/// film disc's weight from its particle moved onto the solid, if further.
 fn search_reach(blob_reach: f32, sim_cell_size: f32) -> f32 {
-    1.5 * blob_reach * BLOB_MAX_STRETCH
-        + BLOB_CENTRE_SMOOTHING * BLOB_NEIGHBOUR_CELLS * sim_cell_size
+    let blob = 1.5 * blob_reach * BLOB_MAX_STRETCH + BLOB_CENTRE_SMOOTHING * BLOB_NEIGHBOUR_CELLS * sim_cell_size;
+    let film = (FILM_BLEND * FILM_WIDE_CELLS + FILM_REACH_CELLS) * sim_cell_size;
+    blob.max(film)
 }
 
 /// Cells per run of the window walk: about one simulation cell's blobs, so a
@@ -94,7 +103,7 @@ fn check_reach(blob_reach: f32, window: f32, cell_size: f32) -> Result<(), Strin
 manifold_node_engine::primitive! {
     name: ParticleVolume,
     type_id: "node.particle_volume",
-    purpose: "The liquid's level set on the display's world tiles: at each node (node p at (p - 1/2) cells, the low corner of cell p), blended ellipsoids (Zhu and Bridson 2005): each blob carries a shape matrix A (stretched along sheets, shrunk when alone) and a size, and over the blobs within R = 1.5 blob reaches (particle_scale × particle_radius simulation cells × sim_cell_size, the largest blob radius) of the node, weighted (1 - (|size · A (c - x)|/R)^2)^3, the blend runs on each blob's stretched offset q = A (c - x), radius r and gradient scale g = |A q|/|q|; the level set is (|q̄| - r̄)/ḡ, the blended ellipsoid's algebraic distance over its gradient, negative inside and Zhu and Bridson's |x - c̄| - r̄ for round blobs, so particles up to 2R apart blend into one body; a node no blob reaches reads three blob reaches. The same blend gives weights, how much the field smoothing moves each node: the weighted mean of the blobs' neighbour counts (counts, from node.shape_particle_blobs) faded from 27% to 54% of the bulk count particles_per_cell implies within a simulation cell, 1 in bulk water and 0 on thin sheets and drops; and velocity, three f32 per pool element (element e at 3e..3e+2), the weighted mean velocity of the blobs' particles (sorted) in metres per second. Both are 0 where no blob reaches, in a free slot and in the canonical element. Each blob visits the inclusive FLIP grid support box from floor((centre - R)/cell + 1/2) through floor((centre + R)/cell + 1/2)+1. The blobs arrive sorted into the display cells and a node reads the cells within R of it. A node inside a solid (solid is the solid's distance on the same tiles, negative inside) takes at least its depth in the solid less half a cell: water against a wall reaches half a cell into it, so its surface meets the face at an angle behind it instead of lying on it, and deeper in no node reads as inside the liquid. A free slot and the canonical element hold three cells, the far value.",
+    purpose: "The liquid's level set on the display's world tiles: at each node (node p at (p - 1/2) cells, the low corner of cell p), blended ellipsoids (Zhu and Bridson 2005): each blob carries a shape matrix A (stretched along sheets, shrunk when alone) and a size, and over the blobs within R = 1.5 blob reaches (particle_scale × particle_radius simulation cells × sim_cell_size, the largest blob radius) of the node, weighted (1 - (|size · A (c - x)|/R)^2)^3, the blend runs on each blob's stretched offset q = A (c - x), radius r and gradient scale g = |A q|/|q|; the level set is (|q̄| - r̄)/ḡ, the blended ellipsoid's algebraic distance over its gradient, negative inside and Zhu and Bridson's |x - c̄| - r̄ for round blobs, so particles up to 2R apart blend into one body; a node no blob reaches reads three blob reaches. The same blend gives weights, how much the field smoothing moves each node: the weighted mean of the blobs' neighbour counts (counts, from node.shape_particle_blobs) faded from 27% to 54% of the bulk count particles_per_cell implies within a simulation cell, 1 in bulk water and 0 on thin sheets and drops; and velocity, three f32 per pool element (element e at 3e..3e+2), the weighted mean velocity of the blobs' particles (sorted) in metres per second. Both are 0 where no blob reaches, in a free slot and in the canonical element. Each blob visits the inclusive FLIP grid support box from floor((centre - R)/cell + 1/2) through floor((centre + R)/cell + 1/2)+1. The blobs arrive sorted into the display cells and a node reads the cells within R of it. A node inside a solid (solid is the solid's distance on the same tiles, negative inside) takes at least its depth in the solid less half a cell: water against a wall reaches half a cell into it, so its surface meets the face at an angle behind it instead of lying on it, and deeper in no node reads as inside the liquid. A blob with fewer neighbours than 54% of the bulk count and its centre within a simulation cell of a solid (solid's gradient gives the surface) draws as a flat disc centred on the solid's surface instead, a simulation cell high and one to two across, wider where its neighbours are fewer, turning into it gradually so none pops: a film one particle thick reads as one flat sheet, and it takes the full smoothing weight. A free slot and the canonical element hold three cells, the far value.",
     inputs: {
         blobs: Array(FluidBlob) required,
         cell_ranges: Array(CellRange) required,
@@ -244,6 +253,10 @@ impl Primitive for ParticleVolume {
             run: walk_run(stride),
             fade_start: WEIGHT_FADE_START * bulk,
             fade_end: WEIGHT_FADE_END * bulk,
+            film_reach: FILM_REACH_CELLS * sim_cell_size,
+            film_half: FILM_HALF_CELLS * sim_cell_size,
+            film_wide: FILM_WIDE_CELLS * sim_cell_size,
+            _pad: 0,
         };
         let gpu = ctx.gpu_encoder();
         // One workgroup per slot, and one more for the canonical element.
@@ -323,7 +336,7 @@ mod cpu_tests {
         )
         .validate(&module)
         .unwrap_or_else(|error| panic!("{error:?}"));
-        assert_eq!(std::mem::size_of::<Uniforms>(), 32);
+        assert_eq!(std::mem::size_of::<Uniforms>(), 48);
     }
 
     #[test]

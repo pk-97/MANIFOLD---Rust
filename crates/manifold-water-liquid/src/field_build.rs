@@ -97,6 +97,35 @@ pub const WEIGHT_FADE_START: f32 = 0.27;
 /// sheet sits at the same point of the fade at 1.5 times those fractions.
 pub const WEIGHT_FADE_END: f32 = 0.54;
 
+/// Film: water lying on a solid as thin as a one-particle sheet (a blob with
+/// fewer neighbours than [`WEIGHT_FADE_END`] of the bulk count, its centre
+/// within [`FILM_REACH_CELLS`] simulation cells of the solid). Its blob is
+/// drawn as a flat disc centred on the solid's surface, up to
+/// [`FILM_WIDE_CELLS`] across it and [`FILM_HALF_CELLS`] along its normal,
+/// instead of its own ellipsoid, so the film's discs blend into one flat sheet
+/// instead of holes and bumps. The blob turns into its disc gradually, fully
+/// at [`WEIGHT_FADE_START`] of the bulk neighbours and half this reach, so a
+/// particle near either limit never flickers between the two shapes.
+pub const FILM_REACH_CELLS: f32 = 1.0;
+
+/// A film disc's half-thickness in simulation cells: the sheet stands this
+/// high off the solid. Walls pass through cell centres, so at Surface Detail 0 the
+/// nearest display nodes sit half a cell either side of the surface; a sheet
+/// only half a cell high puts its surface on those nodes and draws nothing.
+pub const FILM_HALF_CELLS: f32 = 1.0;
+
+/// A film disc's widest radius across the solid's surface in simulation
+/// cells. A disc covers its particle's share of the film, [`FILM_HALF_CELLS`]
+/// across at [`WEIGHT_FADE_END`] of the bulk neighbours and wider as the
+/// inverse square root of fewer, up to this where the film has thinned out,
+/// so the sheet bridges the gaps there.
+pub const FILM_WIDE_CELLS: f32 = 2.0;
+
+/// How far a film disc's blend weight reaches, times the disc: past its edge
+/// by a fifth, so neighbouring discs blend into one sheet without each one
+/// reaching as far as a blob's 1.5 radii.
+pub const FILM_BLEND: f32 = 1.2;
+
 /// How far the field is carried into a drawn solid, in cells (D2 step 5),
 /// so water meets a wall flush instead of stopping short of it.
 pub const SOLID_CARRY_CELLS: f32 = 2.0;

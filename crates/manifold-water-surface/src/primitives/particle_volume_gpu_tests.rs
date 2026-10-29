@@ -19,6 +19,10 @@ const WALL_REACH_CELLS: f32 = 0.5;
 /// nodes and tile 0 for the rest; y from 3 and z from -2 cross tile faces too.
 const ORIGIN: [i32; 3] = [-6, 3, -2];
 const DIMS: [u32; 3] = [16, 20, 16];
+/// More neighbours than any film has: past the smoothing fade at every
+/// particle density.
+const BULK_COUNT: f32 = 1000.0;
+
 /// A far canonical solid.
 const NO_SOLID: f32 = 1.0e30;
 
@@ -194,7 +198,9 @@ fn run(
     let (ranges_slot, _) = harness.array(ranges, ranges.len());
     let (solid_slot, _) = harness.array(solid, len);
     let (tiles_slot, _) = harness.array(words, words.len());
-    let (counts_slot, _) = harness.array(&vec![0.0f32; blobs.len()], blobs.len());
+    // Bulk water's neighbour counts, so no blob beside the solid draws as a
+    // film disc: the dense box models plain blobs.
+    let (counts_slot, _) = harness.array(&vec![BULK_COUNT; blobs.len()], blobs.len());
     let (sorted_slot, _) =
         harness.array(&vec![FluidParticle::zeroed(); blobs.len()], blobs.len());
     // An element the node leaves unwritten stays NaN and fails every compare.
