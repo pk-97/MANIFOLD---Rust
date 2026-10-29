@@ -2,7 +2,9 @@
 //! the display's world tiles: the liquid grown by one simulation cell, then
 //! shrunk by one, so holes and gaps through a thin sheet up to two simulation
 //! cells across close at every Surface Detail and every other surface stays
-//! where it was. Two runs of one kernel
+//! where it was. The shrink keeps only what the closing adds where it adds
+//! much, so the shallow dips between particles keep their shape instead of
+//! taking the cube's. Two runs of one kernel
 //! (`shaders/field_close.wgsl`), the grow into a scratch field and the shrink
 //! from it into the output. The node owns both and makes them on its first
 //! run, so while a switch leaves it out it holds no memory.
@@ -42,7 +44,7 @@ struct Uniforms {
 manifold_node_engine::primitive! {
     name: FieldClose,
     type_id: "node.field_close",
-    purpose: "A morphological closing of the liquid's level set on a world-tile pool: each node takes the least value of the nodes within a simulation cell of it (a cube, sim_cell_size over cell_size nodes each way, a whole number from 1 to 3: the liquid grown by a simulation cell), then each takes the greatest of those (shrunk by one). Holes and gaps through the liquid up to two simulation cells across close at every Surface Detail; every other surface comes back where it was. Node arrays on the world tiles of a pool, one element per pooled node, read at the same pool index. A node in a tile the table does not hold takes no part. The canonical element and free slots hold the far value, 3 cells.",
+    purpose: "A morphological closing of the liquid's level set on a world-tile pool: each node takes the least value of the nodes within a simulation cell of it (a cube, sim_cell_size over cell_size nodes each way, a whole number from 1 to 3: the liquid grown by a simulation cell), then each takes the greatest of those (shrunk by one). Holes and gaps through the liquid up to two simulation cells across close at every Surface Detail; every other surface comes back where it was. The shrink keeps only what the closing adds where it adds much: a node the closing moves inward by under 0.15 simulation cells keeps the input level set, one moved by over 0.5 takes the closing, easing between, so shallow dips between particles keep their own shape. Node arrays on the world tiles of a pool, one element per pooled node, read at the same pool index. A node in a tile the table does not hold takes no part. The canonical element and free slots hold the far value, 3 cells.",
     inputs: {
         levelset: Array(f32) required,
         tiles: Array(u32) required,
@@ -191,6 +193,7 @@ impl Primitive for FieldClose {
                     buffer(1, src),
                     buffer(2, tiles),
                     buffer(3, out),
+                    buffer(4, levelset),
                 ],
                 [pool.pool_tiles + 1, 1, 1],
                 label,

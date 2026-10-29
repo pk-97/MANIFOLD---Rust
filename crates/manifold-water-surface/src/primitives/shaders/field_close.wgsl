@@ -11,6 +11,15 @@
 // at every Surface Detail, and every surface the grow leaves open comes back
 // where it was. Each pass is separable: the extreme along x, then y, then z.
 //
+// The shrink keeps only what the closing adds where it adds much. A node the
+// closing moves inward by less than FC_KEEP_FROM_CELLS simulation cells
+// keeps `raw`, the level set before the grow; one moved by more than
+// FC_KEEP_ALL_CELLS takes the closing; between them it eases from one to the
+// other. So the shallow dips between neighbouring particles, which the
+// smoothing evens out, stay as they were, and only the holes and gaps the
+// closing really fills change: the cube's flat faces are never pressed into
+// the dips as squares, or into a bumpy slope as steps.
+//
 // The workgroup stages its tile and `stride` nodes round it through its 27
 // neighbour tiles, then takes the extremes one row of the staged region per
 // thread, in place. A node in a tile the table does not hold takes no part:
@@ -35,6 +44,8 @@ struct Params {
 @group(0) @binding(1) var<storage, read> src: array<f32>;
 @group(0) @binding(2) var<storage, read> buf_tiles: array<u32>;
 @group(0) @binding(3) var<storage, read_write> field: array<f32>;
+// The level set before the grow, read by the shrink.
+@group(0) @binding(4) var<storage, read> raw: array<f32>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
 fn ts_table_entries() -> u32 { return params.entries; }
@@ -43,6 +54,10 @@ fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 const FC_THREADS: u32 = 256u;
 // FIELD_FAR_CELLS (scene_object), the level set where no tile is held.
 const FC_FAR_CELLS: f32 = 3.0;
+// How far inward, in simulation cells, the closing must move a node before
+// the shrink keeps any of it, and before it keeps all of it.
+const FC_KEEP_FROM_CELLS: f32 = 0.15;
+const FC_KEEP_ALL_CELLS: f32 = 0.5;
 
 var<workgroup> fc_held: u32;
 // The slots of the 27 tiles round this one, by neighbour index.
@@ -147,8 +162,15 @@ fn cs_main(
         fc_reduce_row(vec3<u32>(s + (lane & 7u), s + (lane >> 3u), 0u), vec3<u32>(0u, 0u, 1u));
     }
     workgroupBarrier();
+    let sim_cell = params.cell_size * f32(s);
     for (var local = lane; local < 512u; local = local + FC_THREADS) {
         let r = vec3<u32>(local & 7u, (local >> 3u) & 7u, local >> 6u) + vec3<u32>(s);
-        field[slot * 512u + local] = fc_region[fc_index(r)];
+        var v = fc_region[fc_index(r)];
+        if params.widest == 1u {
+            let before = raw[slot * 512u + local];
+            let moved = max(before - v, 0.0);
+            v = before - moved * smoothstep(FC_KEEP_FROM_CELLS * sim_cell, FC_KEEP_ALL_CELLS * sim_cell, moved);
+        }
+        field[slot * 512u + local] = v;
     }
 }
