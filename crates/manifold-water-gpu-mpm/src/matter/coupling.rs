@@ -3,7 +3,7 @@
 
 use manifold_physics::BodyImpulse;
 
-use super::{MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, substeps_per_tick};
+use super::{MAX_SUBSTEPS, REACTION_WORDS, substeps_per_tick};
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::{LiquidRigidOwner, takes_reaction};
 
@@ -47,19 +47,27 @@ pub fn decode(
 }
 
 /// The D4 body term: the shortest `0.5·(dx/c)·√(m_b/(ρ0·A_b·dx))` over the
-/// dynamic coupled bodies, with `c` the wave speed. Errors, naming the
-/// body, when it needs more than [`MAX_SUBSTEPS`] substeps with `dt_f`.
+/// dynamic coupled bodies, with `c` the wave speed and ρ0 the material's
+/// density. Errors, naming the body, when it needs more than
+/// [`MAX_SUBSTEPS`] substeps with `dt_f`.
 fn body_limit_details(
     owner: &LiquidRigidOwner,
     cell_size: f32,
     wave: f32,
+    density: f32,
 ) -> Option<(f32, usize, f32)> {
     let mut limit: Option<(f32, usize, f32)> = None;
     for (index, (face_area, row)) in owner.face_areas().zip(owner.rows()).enumerate() {
         if !takes_reaction(row) {
             continue;
         }
-        let dt = body_substep(cell_size, wave, 1.0 / row.position_inv_mass[3], face_area);
+        let dt = body_substep(
+            cell_size,
+            wave,
+            density,
+            1.0 / row.position_inv_mass[3],
+            face_area,
+        );
         if limit.is_none_or(|(known, _, _)| dt < known) {
             limit = Some((dt, index, face_area));
         }
@@ -69,17 +77,23 @@ fn body_limit_details(
 
 /// Live retains the actual body CFL restriction even when it exceeds the
 /// numerical cap; the frame planner reports the cap and covers the remainder.
-pub fn live_body_limit(owner: &LiquidRigidOwner, cell_size: f32, wave: f32) -> Option<f32> {
-    body_limit_details(owner, cell_size, wave).map(|(dt, _, _)| dt)
+pub fn live_body_limit(
+    owner: &LiquidRigidOwner,
+    cell_size: f32,
+    wave: f32,
+    density: f32,
+) -> Option<f32> {
+    body_limit_details(owner, cell_size, wave, density).map(|(dt, _, _)| dt)
 }
 
 pub fn body_limit(
     owner: &LiquidRigidOwner,
     cell_size: f32,
     wave: f32,
+    density: f32,
     v_est: f32,
 ) -> Result<Option<f32>, String> {
-    let Some((dt, index, face_area)) = body_limit_details(owner, cell_size, wave) else {
+    let Some((dt, index, face_area)) = body_limit_details(owner, cell_size, wave, density) else {
         return Ok(None);
     };
     if substeps_per_tick(cell_size, wave, v_est, Some(dt), None) > MAX_SUBSTEPS {
@@ -93,10 +107,11 @@ pub fn body_limit(
     Ok(Some(dt))
 }
 
-/// D4's `dt_b` for one body of `mass` kg and largest face `area` m².
-pub fn body_substep(cell_size: f32, wave: f32, mass: f32, area: f32) -> f32 {
+/// D4's `dt_b` for one body of `mass` kg and largest face `area` m² in a
+/// material of `density` kg/m³.
+pub fn body_substep(cell_size: f32, wave: f32, density: f32, mass: f32, area: f32) -> f32 {
     let dx = f64::from(cell_size);
-    let ratio = f64::from(mass) / (f64::from(WATER_DENSITY) * f64::from(area) * dx);
+    let ratio = f64::from(mass) / (f64::from(density) * f64::from(area) * dx);
     (0.5 * dx / f64::from(wave) * ratio.sqrt()) as f32
 }
 

@@ -68,7 +68,7 @@ manifold_node_engine::primitive! {
     ],
     depth_rule: Terminal,
     composition_notes: "Region body of the Live Matter group, before node.matter_to_grid. bodies, first_tick, body_count, rows, substeps_per_tick, momentum_unit, cell_size, dynamic_count and reaction come from node.matter_domain (one row per body per tick of this frame; reaction is the tick's slot that node.matter_body_reaction adds to later in each substep); tick_index, substep_in_tick and step_dt from node.matter_state. bodies_out feeds node.matter_grid_update's collider projection, node.matter_body_reaction and node.liquid_solid_distance. reaction is read only when dynamic_count is above 0.",
-    examples: ["WaterDamBreakMatter", "WaterFloatingBoxMatter"],
+    examples: ["SandColumn", "SandBoxDrop"],
     picker: { label: "Matter Move Bodies", category: Atom },
     summary: "Moves the solid objects in a liquid to where they are at this instant of the simulation.",
     category: Particles3D,

@@ -2,7 +2,8 @@
 // first the pool (every authored cell below `pool_cells`), then the column box
 // clipped above the pool; each cell holds 2³ or 3³ points, one per sub-cell,
 // jittered inside it by a hash of (seed, cell, sub-cell). id = birth ordinal.
-// V0 = dx³ / points_per_cell, J = 1, C = 0, at rest. Cell coordinates are in
+// V0 = dx³ / points_per_cell, J = 1, C = 0, at rest, undeformed (F = I, no
+// plastic history, no stress), material 0 (sand). Cell coordinates are in
 // the authored box, which starts at (fill_min_x, fill_min_y, fill_min_z) and
 // holds fill_cells_x/y/z cells. A seed inside an enabled collider at its pose
 // when the epoch starts (rows 0..body_count of `bodies`, sampled from its
@@ -116,8 +117,13 @@ fn body(
     p.id = select(idx + 1u, 0u, mf_inside_collider(p.position, body_count, cell_size));
     p.velocity = vec3<f32>(0.0);
     p.volume_ratio = 1.0;
-    p.affine_x = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    p.affine_x = vec4<f32>(0.0);
     p.affine_y = vec4<f32>(0.0, 0.0, 0.0, cell_size * cell_size * cell_size / f32(ppc));
     p.affine_z = vec4<f32>(0.0);
+    p.f_x = vec4<f32>(1.0, 0.0, 0.0, 0.0);
+    p.f_y = vec4<f32>(0.0, 1.0, 0.0, 0.0);
+    p.f_z = vec4<f32>(0.0, 0.0, 1.0, 0.0);
+    p.stress_diag = vec4<f32>(0.0);
+    p.stress_off = vec4<f32>(0.0);
     return p;
 }

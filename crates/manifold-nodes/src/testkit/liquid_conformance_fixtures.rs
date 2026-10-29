@@ -5,23 +5,16 @@ use manifold_core::effect_graph_def::{
     SerializedParamValue,
 };
 use manifold_core::id::NodeId;
-use manifold_core::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
-use manifold_nodes_water::testkit::conformance::testkit::{
-    G, liquid_totals, matter_totals, set_fill_param,
-};
+use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
+use manifold_nodes_water::testkit::conformance::testkit::{G, liquid_totals, set_fill_param};
 
 use crate::engine_scenes::scene_def;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_nodes_water::presets::gpu_flip::{SHIPPED_PRESET, WaterScene, render_def};
-use manifold_water_gpu_mpm::matter::{MatterPoint, STATS_WORDS};
 use manifold_water_liquid::primitives::liquid_stats::LIQUID_STATS_WORDS;
 use manifold_water_whitewater::primitives::whitewater_step::WHITEWATER_STEP_SHADER;
 
 use manifold_nodes_water::testkit::conformance::*;
-
-const MPM_MOVES_ITS_OWN_BODIES: &str = "MPM moves its bodies by its own per-substep law (D7), which tracks when \
-     its reaction lands; it shares the force handoff (D17) but the coupled motion law is not its prediction, so \
-     there is no law to agree with until section 7 (Deferred) moves MPM onto it";
 
 const GPU_FLIP_WALLS_IN_SOLVE: &str = "GPU FLIP's tank walls are in its pressure solve on every face by \
      design, as in the engine: an open face is a sink that removes particles, not a hole in the wall. The \
@@ -36,9 +29,6 @@ const GPU_FLIP_FLOATS_HIGH: &str = "BUG-u8nqr (GPU FLIP floating boxes keep bobb
      its own high rest, short of the centimetre of travel the handover check needs; the handover on these boxes is exact";
 const GPU_FLIP_STACK_WOBBLE: &str = "BUG-tsdw3 (GPU FLIP stack: the top box wobbles just over the rest bound): \
      each box stands on the one below and no water is lost, but the top box rests at about 1.07 cm/s RMS";
-const MPM_FLOATS_LOW: &str = "BUG-28j99 (MPM floats boxes about 3.5 cm low and drifts at rest): hidden on main by \
-     the old impulse handoff, which pushed floating bodies up";
-
 const fn known(check: Check, miss: &'static str, reason: &'static str) -> KnownRed {
     KnownRed {
         check,
@@ -47,126 +37,59 @@ const fn known(check: Check, miss: &'static str, reason: &'static str) -> KnownR
     }
 }
 
-pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
-    LiquidSolverRow {
-        type_id: MATTER_DOMAIN_TYPE_ID,
-        fixture: matter_fixture,
-        gpu: true,
-        coupled: true,
-        atomic_free: &[],
-        atomic_free_shaders: &[],
-        refusals: &[
-            RefusalCase {
-                what: "Resolution 256 on Dam Break Matter at the default Grid Budget",
-                fixture: Fixture::DamBreak,
-                edit: |def| {
-                    set_type_param(
-                        def,
-                        MATTER_DOMAIN_TYPE_ID,
-                        "cell_metres",
-                        SerializedParamValue::Float { value: 4.0 / 256.0 },
-                    )
-                },
-                names: &["grid_budget_mcells", "Cell Size"],
+pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[LiquidSolverRow {
+    type_id: GPU_FLIP_DOMAIN_TYPE_ID,
+    fixture: gpu_flip_fixture,
+    gpu: true,
+    coupled: true,
+    atomic_free: &[],
+    atomic_free_shaders: &[("node.whitewater_step", WHITEWATER_STEP_SHADER)],
+    refusals: &[
+        RefusalCase {
+            what: "Resolution 256 on Dam Break GPU FLIP: more particles than a count carries exactly",
+            fixture: Fixture::DamBreak,
+            edit: |def| {
+                set_type_param(
+                    def,
+                    GPU_FLIP_DOMAIN_TYPE_ID,
+                    "cell_metres",
+                    SerializedParamValue::Float { value: 4.0 / 256.0 },
+                )
             },
-            RefusalCase {
-                what: "Particles per Cell 27 at Resolution 176 on Still Pool Matter",
-                fixture: Fixture::StillPool,
-                edit: |def| {
-                    set_type_param(
-                        def,
-                        MATTER_DOMAIN_TYPE_ID,
-                        "cell_metres",
-                        SerializedParamValue::Float { value: 4.0 / 176.0 },
-                    );
-                    set_type_param(
-                        def,
-                        MATTER_DOMAIN_TYPE_ID,
-                        "points_per_cell",
-                        SerializedParamValue::Enum { value: 1 },
-                    );
-                },
-                names: &["Cell Size", "points_per_cell"],
-            },
-            RefusalCase {
-                what: "Dam Break Matter's Initial Fill turned 0.3 rad",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_fill_param(def, MATTER_DOMAIN_TYPE_ID, "rot_y", 0.3),
-                names: &["Initial Fill"],
-            },
-        ],
-        totals: Some(TotalsReadout {
-            type_id: "node.matter_state",
-            port: "stats",
-            words: STATS_WORDS as usize,
-            read: matter_totals,
-        }),
-        state: Some(StateArray {
-            type_id: "node.matter_state",
-            port: "out",
-            record_bytes: std::mem::size_of::<MatterPoint>(),
-        }),
-        exempt: &[(Check::HandoverAgreement, MPM_MOVES_ITS_OWN_BODIES)],
-        known_red: &[
-            known(Check::FloatingRest, "rms", MPM_FLOATS_LOW),
-            known(Check::FloatingRest, "drift", MPM_FLOATS_LOW),
-            known(Check::FloatingDraft, "draft", MPM_FLOATS_LOW),
-        ],
-    },
-    LiquidSolverRow {
-        type_id: GPU_FLIP_DOMAIN_TYPE_ID,
-        fixture: gpu_flip_fixture,
-        gpu: true,
-        coupled: true,
-        atomic_free: &[],
-        atomic_free_shaders: &[("node.whitewater_step", WHITEWATER_STEP_SHADER)],
-        refusals: &[
-            RefusalCase {
-                what: "Resolution 256 on Dam Break GPU FLIP: more particles than a count carries exactly",
-                fixture: Fixture::DamBreak,
-                edit: |def| {
-                    set_type_param(
-                        def,
-                        GPU_FLIP_DOMAIN_TYPE_ID,
-                        "cell_metres",
-                        SerializedParamValue::Float { value: 4.0 / 256.0 },
-                    )
-                },
-                names: &["Cell Size", "fill_height"],
-            },
-            RefusalCase {
-                what: "Dam Break GPU FLIP's Initial Fill turned 0.3 rad",
-                fixture: Fixture::DamBreak,
-                edit: |def| set_fill_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "rot_y", 0.3),
-                names: &["Initial Fill"],
-            },
-        ],
-        totals: Some(TotalsReadout {
-            type_id: "node.liquid_state",
-            port: "stats",
-            words: LIQUID_STATS_WORDS as usize,
-            read: liquid_totals,
-        }),
-        state: Some(StateArray {
-            type_id: "node.liquid_state",
-            port: "out",
-            record_bytes: std::mem::size_of::<FluidParticle>(),
-        }),
-        exempt: &[(Check::CollisionMomentum, GPU_FLIP_WALLS_IN_SOLVE)],
-        known_red: &[
-            known(Check::FloatingRest, "centre", GPU_FLIP_FLOATS_HIGH),
-            known(Check::FloatingRest, "rms", GPU_FLIP_FLOATS_HIGH),
-            known(Check::FloatingRest, "drift", GPU_FLIP_FLOATS_HIGH),
-            known(Check::LiftOff, "left", GPU_FLIP_CORNER_LIFT),
-            known(Check::LiftOff, "surface", GPU_FLIP_CORNER_LIFT),
-            known(Check::LiftOff, "lost", GPU_FLIP_CORNER_LIFT),
-            known(Check::LiftOff, "refused", GPU_FLIP_CORNER_LIFT),
-            known(Check::SubmergedStack, "rms", GPU_FLIP_STACK_WOBBLE),
-            known(Check::HandoverAgreement, "travel", GPU_FLIP_FLOATS_HIGH),
-            known(Check::HandoverAgreement, "bound", GPU_FLIP_CORNER_LIFT),
-        ],
-    },
-];
+            names: &["Cell Size", "fill_height"],
+        },
+        RefusalCase {
+            what: "Dam Break GPU FLIP's Initial Fill turned 0.3 rad",
+            fixture: Fixture::DamBreak,
+            edit: |def| set_fill_param(def, GPU_FLIP_DOMAIN_TYPE_ID, "rot_y", 0.3),
+            names: &["Initial Fill"],
+        },
+    ],
+    totals: Some(TotalsReadout {
+        type_id: "node.liquid_state",
+        port: "stats",
+        words: LIQUID_STATS_WORDS as usize,
+        read: liquid_totals,
+    }),
+    state: Some(StateArray {
+        type_id: "node.liquid_state",
+        port: "out",
+        record_bytes: std::mem::size_of::<FluidParticle>(),
+    }),
+    exempt: &[(Check::CollisionMomentum, GPU_FLIP_WALLS_IN_SOLVE)],
+    known_red: &[
+        known(Check::FloatingRest, "centre", GPU_FLIP_FLOATS_HIGH),
+        known(Check::FloatingRest, "rms", GPU_FLIP_FLOATS_HIGH),
+        known(Check::FloatingRest, "drift", GPU_FLIP_FLOATS_HIGH),
+        known(Check::LiftOff, "left", GPU_FLIP_CORNER_LIFT),
+        known(Check::LiftOff, "surface", GPU_FLIP_CORNER_LIFT),
+        known(Check::LiftOff, "lost", GPU_FLIP_CORNER_LIFT),
+        known(Check::LiftOff, "refused", GPU_FLIP_CORNER_LIFT),
+        known(Check::SubmergedStack, "rms", GPU_FLIP_STACK_WOBBLE),
+        known(Check::HandoverAgreement, "travel", GPU_FLIP_FLOATS_HIGH),
+        known(Check::HandoverAgreement, "bound", GPU_FLIP_CORNER_LIFT),
+    ],
+}];
 
 /// GPU FLIP's scenes in the render graph the app shows: the pool scenes at
 /// the 64³ lattice its solver is built for, the box scenes at their own. A
@@ -493,24 +416,14 @@ fn with_box(mut def: EffectGraphDef) -> EffectGraphDef {
     });
     def
 }
-fn matter_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
-    Some(match BoxScene::of(fixture) {
-        Some(scene) => scene.test_stacked(
-            fixture,
-            scene.apply(bundled("WaterFloatingBoxMatter"), MATTER_DOMAIN_TYPE_ID),
-        ),
-        None if fixture == Fixture::StillPool => bundled("WaterStillPoolMatter"),
-        None => bundled("WaterDamBreakMatter"),
-    })
-}
 fn bundled(id: &'static str) -> EffectGraphDef {
     scene_def(&PresetTypeId::new(id))
         .unwrap_or_else(|| panic!("no bundled preset {id}"))
         .as_ref()
         .clone()
 }
-/// The Floating Box preset whose box the GPU FLIP box scenes carry.
-const BOX_PRESET: &str = "WaterFloatingBoxMatter";
+/// The Box Drop fixture whose box the GPU FLIP box scenes carry.
+const BOX_PRESET: &str = "SandBoxDrop";
 
 /// The preset's Box3D world, the box's start, body and drawn object.
 const BOX_NODES: [&str; 6] = [
@@ -525,7 +438,9 @@ const BOX_NODES: [&str; 6] = [
 mod tests {
 
     use super::*;
-    use manifold_core::liquid_domain::{LIQUID_DOMAIN_TYPE_IDS, is_liquid_domain};
+    use manifold_core::liquid_domain::{
+        LIQUID_DOMAIN_TYPE_IDS, MATTER_DOMAIN_TYPE_ID, is_liquid_domain,
+    };
     use manifold_node_engine::exec::extent::ExtentError;
     use manifold_node_engine::persistence::PrimitiveRegistry;
     use manifold_nodes_water::testkit::preset_extents::LiquidPreset;
@@ -571,9 +486,11 @@ mod tests {
     #[test]
     fn liquid_conformance_covers_every_domain() {
         let registry = conformance_registry();
+        // Matter shares the liquid domain contract but simulates sand, which
+        // the liquid checks (floating, drafts, handover) do not describe.
         for &type_id in LIQUID_DOMAIN_TYPE_IDS
             .iter()
-            .filter(|id| registry.contains(id))
+            .filter(|id| registry.contains(id) && **id != MATTER_DOMAIN_TYPE_ID)
         {
             let rows = LIQUID_SOLVERS
                 .iter()

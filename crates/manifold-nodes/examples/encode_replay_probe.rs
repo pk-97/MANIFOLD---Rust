@@ -1,4 +1,4 @@
-//! Frame CPU and GPU ms for the bundled Dam Break, encode replay off against on,
+//! Frame CPU and GPU ms for the bundled Sand Column, encode replay off against on,
 //! alternating runs so drift hits both sides, and the CPU of the frame whose region recorded first.
 //!
 //! A report, not a gate: the byte and conservation parity of replay are the `encode_replay` GPU proofs. Run it
@@ -18,7 +18,7 @@ use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::testkit::gpu_harness;
 
-const DAM_BREAK: &str = "WaterDamBreakMatter";
+const SAND_COLUMN: &str = "SandColumn";
 const WARM: usize = 8;
 const MEASURED: u32 = 48;
 
@@ -30,7 +30,7 @@ struct Timings {
 
 fn run_preset(replay: bool, frames: u32) -> Timings {
     let h = gpu_harness::shared();
-    let json = manifold_nodes::engine_scenes::scene_json(&PresetTypeId::new(DAM_BREAK))
+    let json = manifold_nodes::engine_scenes::scene_json(&PresetTypeId::new(SAND_COLUMN))
         .expect("bundled preset");
     let def: EffectGraphDef = serde_json::from_str(&json).expect("preset parses");
     let manifest = ParamManifest::from_params(
@@ -83,7 +83,7 @@ fn run_preset(replay: bool, frames: u32) -> Timings {
         let profile = enc.commit_and_wait_profiled(&h.device);
         assert_eq!(
             profile.failed_command_buffers, 0,
-            "{DAM_BREAK} frame {frame} failed on the GPU"
+            "{SAND_COLUMN} frame {frame} failed on the GPU"
         );
         out.gpu_ms.push(profile.total_ms);
         out.stats_by_frame.push(runtime.replay_stats());
@@ -119,7 +119,7 @@ fn main() {
         let cpu: Vec<String> = rows[side].iter().map(|r| format!("{:.3}", r.0)).collect();
         let gpu: Vec<String> = rows[side].iter().map(|r| format!("{:.3}", r.1)).collect();
         println!(
-            "ENCODE REPLAY PROBE {DAM_BREAK} {name}: frame CPU ms [{}], GPU ms [{}], recording frame {} CPU {:.2} ms",
+            "ENCODE REPLAY PROBE {SAND_COLUMN} {name}: frame CPU ms [{}], GPU ms [{}], recording frame {} CPU {:.2} ms",
             cpu.join(", "),
             gpu.join(", "),
             first_visit.0,

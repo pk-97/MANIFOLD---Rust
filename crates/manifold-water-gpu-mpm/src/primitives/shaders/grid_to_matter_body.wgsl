@@ -13,9 +13,13 @@ fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 // the resolved grid (`buf_grid`, Element2 = MatterGridNode):
 //   v_pic = Σ w·v_i
 //   v_p  ← β·(v_p + Σ w·(v_i − v_before_i)) + (1 − β)·v_pic     (β = Liveliness)
-//   C_p  = (4/dx²)·Σ w·v_i ⊗ d_i,   x_p += dt·v_pic,   J ← J·(1 + dt·tr C)
+//   C_p  = (4/dx²)·Σ w·v_i ⊗ d_i,   x_p += dt·v_pic
 // Positions advect with v_pic (AFLIP, Fei et al. 2021, as Blatny & Gaume 2025
-// implement it). Node p sits at world p·h, pooled by world tile (READ_SIDE).
+// implement it). Then the material stage (matter_material.wgsl): F advects by
+// C over dt, the return map keeps it inside the yield cone, and the record
+// takes the new F, J = det F, its plastic state (volume correction in
+// affine_x.w, plastic strain in f_x.w) and the Kirchhoff stress P2G spreads.
+// The material index in affine_z.w is kept. Node p sits at world p·h, pooled by world tile (READ_SIDE).
 // A point whose own cell (the one holding it) has no stored tile is removed
 // (id 0, velocity 0, volume ratio 0, which node.matter_stats counts as a short
 // pool). After the move, a point beyond an Open face of the bounds box or below
@@ -92,7 +96,11 @@ fn body(
     cell_size: f32,
     step_dt: f32,
     liveliness: f32,
+    mu: f32,
+    lambda: f32,
+    alpha: f32,
     cohesion: f32,
+    softening: f32,
     active_count: i32,
     body_count: i32,
     density: f32,
@@ -228,13 +236,24 @@ fn body(
             }
         }
     }
-    // D3: tension-free water (Cohesion 0) stores no expansion; cohesive water
-    // tears at twice its rest volume.
-    let j_max = select(2.0, 1.0, cohesion <= 0.0);
-    p.volume_ratio = min(p.volume_ratio * (1.0 + step_dt * (c0.x + c1.y + c2.z)), j_max);
-    p.affine_x = vec4<f32>(c0, p.affine_x.w);
+    // Records hold rows; a WGSL matrix is built from columns.
+    let up = matter_update(
+        transpose(mat3x3<f32>(p.f_x.xyz, p.f_y.xyz, p.f_z.xyz)),
+        transpose(mat3x3<f32>(c0, c1, c2)),
+        step_dt,
+        MatterPlastic(p.affine_x.w, p.f_x.w),
+        MatterMaterial(mu, lambda, alpha, cohesion, softening),
+    );
+    let f_rows = transpose(up.f);
+    p.volume_ratio = up.j;
+    p.affine_x = vec4<f32>(c0, up.plastic.volume_correction);
     p.affine_y = vec4<f32>(c1, p.affine_y.w);
-    p.affine_z = vec4<f32>(c2, 0.0);
+    p.affine_z = vec4<f32>(c2, p.affine_z.w);
+    p.f_x = vec4<f32>(f_rows[0], up.plastic.strain);
+    p.f_y = vec4<f32>(f_rows[1], 0.0);
+    p.f_z = vec4<f32>(f_rows[2], 0.0);
+    p.stress_diag = vec4<f32>(up.tau[0][0], up.tau[1][1], up.tau[2][2], 0.0);
+    p.stress_off = vec4<f32>(up.tau[1][0], up.tau[2][0], up.tau[2][1], 0.0);
 
     let lo = vec3<f32>(bounds_lo_x, bounds_lo_y, bounds_lo_z);
     let hi = vec3<f32>(bounds_hi_x, bounds_hi_y, bounds_hi_z);

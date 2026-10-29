@@ -54,9 +54,9 @@ struct GridUpdateUniforms {
     wall_velocity_hi_x: f32,
     wall_velocity_hi_y: f32,
     wall_velocity_hi_z: f32,
+    wall_friction: f32,
     dispatch_count: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 manifold_node_engine::primitive! {
@@ -93,6 +93,7 @@ manifold_node_engine::primitive! {
         bounds_hi_x: ScalarF32 optional, bounds_hi_y: ScalarF32 optional, bounds_hi_z: ScalarF32 optional,
         wall_velocity_lo_x: ScalarF32 optional, wall_velocity_lo_y: ScalarF32 optional, wall_velocity_lo_z: ScalarF32 optional,
         wall_velocity_hi_x: ScalarF32 optional, wall_velocity_hi_y: ScalarF32 optional, wall_velocity_hi_z: ScalarF32 optional,
+        wall_friction: ScalarF32 optional,
     },
     outputs: {
         grid_out: Array(MatterGridNode),
@@ -131,10 +132,11 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("wall_velocity_hi_x"), label: "Wall Velocity Hi X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e3, 1.0e3)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("wall_velocity_hi_y"), label: "Wall Velocity Hi Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e3, 1.0e3)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("wall_velocity_hi_z"), label: "Wall Velocity Hi Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e3, 1.0e3)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("wall_friction"), label: "Wall Friction", ty: ParamType::Float, default: ParamValue::Float(0.7), range: Some((0.0, 4.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "Region body of the Live Matter group, between node.matter_to_grid and node.grid_to_matter. grid/grid_out alias the node.matter_state grid array (one MatterGridNode per world-tile node, pooled: 512 per tile slot and a canonical node last; node p sits at world p·cell_size); accum is read as a gather (4 words per node) and tiles is the world-tile table the pool is found through, with pool_tiles slots. There are no padding nodes. Gravity, the Bounds box (bounds_lo/hi, wall_faces, wall_velocity_lo/hi), the lattice minimum, body_count, shapes, atlas and momentum_unit (the same value node.matter_to_grid reads) come from node.matter_domain, bodies from node.matter_move_bodies, step_dt, tick_index and substep_in_tick from the substep boundary. forces, impulses and the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick) come from node.matter_domain; field_min_x/y/z are now only the force field lattice's origin, the field lattices start there. Every substep adds the force lattice of its tick: one lattice per tick from first_tick, or one for all ticks when force_lattices is 1 (0: no forces); impulses apply once, on substep 0 of tick impulse_tick (−1: none). With bodies unwired no collider is read; with forces or impulses unwired neither is read.",
-    examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
+    examples: ["SandColumn"],
     picker: { label: "Matter Grid Update", category: Atom },
     summary: "Turns the grid's gathered liquid momentum into velocities, adds gravity and stops the liquid at the walls.",
     category: Particles3D,
@@ -177,6 +179,7 @@ impl Primitive for MatterGridUpdate {
             .scalar_or_param("wall_faces", 0.0)
             .round()
             .clamp(0.0, 63.0) as i32;
+        let wall_friction = ctx.scalar_or_param("wall_friction", 0.7).max(0.0);
         let vec3 = |ctx: &EffectNodeContext<'_, '_>, name: &str| {
             [
                 ctx.scalar_or_param(&format!("{name}_x"), 0.0),
@@ -330,9 +333,9 @@ impl Primitive for MatterGridUpdate {
             wall_velocity_hi_x: wall_velocity_hi[0],
             wall_velocity_hi_y: wall_velocity_hi[1],
             wall_velocity_hi_z: wall_velocity_hi[2],
+            wall_friction,
             dispatch_count: nodes,
             _pad0: 0,
-            _pad1: 0,
         };
         // An unwired lattice is never read (force_lattices 0, impulse_tick −1).
         gpu.native_enc.dispatch_compute(

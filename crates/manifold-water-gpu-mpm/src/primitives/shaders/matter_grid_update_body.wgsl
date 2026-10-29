@@ -105,6 +105,7 @@ fn body(
     wall_velocity_hi_x: f32,
     wall_velocity_hi_y: f32,
     wall_velocity_hi_z: f32,
+    wall_friction: f32,
 ) -> Element {
     matter_pool_tiles = u32(pool_tiles);
     var out: Element;
@@ -157,6 +158,7 @@ fn body(
         u32(wall_faces),
         vec3<f32>(wall_velocity_lo_x, wall_velocity_lo_y, wall_velocity_lo_z),
         vec3<f32>(wall_velocity_hi_x, wall_velocity_hi_y, wall_velocity_hi_z),
+        wall_friction,
     );
 
     for (var b = 0; b < body_count; b = b + 1) {

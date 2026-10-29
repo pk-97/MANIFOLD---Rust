@@ -44,7 +44,7 @@ manifold_node_engine::primitive! {
     params: [],
     depth_rule: Terminal,
     composition_notes: "Reads node.matter_state's out and stats after the region; count, simulation_time, display_time and epoch come from node.matter_fill and node.matter_domain. Its outputs are the particle-frame seam node.fluid_surface also publishes, so the Liquid Surface atoms and node.particles_to_copies read either solver unchanged. identity_a/b carry the domain epoch.",
-    examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
+    examples: ["SandColumn"],
     picker: { label: "Matter Frame", category: Atom },
     summary: "Hands the simulated liquid particles to the liquid surface, one frame per simulation tick.",
     category: Particles3D,

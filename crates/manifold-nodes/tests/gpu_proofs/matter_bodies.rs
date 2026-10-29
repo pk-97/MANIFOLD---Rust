@@ -1043,9 +1043,11 @@ fn matter_push_out_reaction_matches_removed_momentum() {
                 id: i + 1,
                 velocity: v0,
                 volume_ratio: 1.0,
-                affine_x: [0.0, 0.0, 0.0, 1.0],
                 affine_y: [0.0, 0.0, 0.0, v_rest],
-                affine_z: [0.0; 4],
+                f_x: [1.0, 0.0, 0.0, 0.0],
+                f_y: [0.0, 1.0, 0.0, 0.0],
+                f_z: [0.0, 0.0, 1.0, 0.0],
+                ..MatterPoint::default()
             }
         })
         .collect();

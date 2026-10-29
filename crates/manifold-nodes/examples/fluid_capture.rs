@@ -26,10 +26,7 @@
 //! A scene with several Waters names the one to measure with `--water ID` (its
 //! nodes are `ID:<node>`); every Water still draws. Whitewater counts are the
 //! GPU's own words, read from the whitewater step's `counts_out` each offline frame.
-//! A GPU solver has no CPU mesh and reports its time in `gpu_ms`. `--look-metrics` records the particle look
-//! metrics (look gates) from each offline
-//! frame's published particles, through the same `matter::look` code the gate
-//! tests use, into `look_metrics.csv` and `look_summary.txt`.
+//! A GPU solver has no CPU mesh and reports its time in `gpu_ms`.
 
 use manifold_gpu::BufferUse;
 use manifold_nodes as _;
@@ -60,10 +57,6 @@ use {
     manifold_node_engine::exec::effect_node::EffectNode,
     manifold_node_engine::exec::effect_node::SimStep, manifold_node_engine::parameters::ParamValue,
     manifold_node_engine::persistence::PrimitiveRegistry,
-};
-use {
-    manifold_water_gpu_mpm::matter, manifold_water_gpu_mpm::matter::look::Cells,
-    manifold_water_gpu_mpm::matter::look::LookRecorder,
 };
 
 const DEFAULT_WIDTH: u32 = 1280;
@@ -96,9 +89,6 @@ struct CaptureOptions {
     linear: bool,
     cinematic: bool,
     supersample: u32,
-    /// Record the particle look metrics
-    /// (look gates A1, A2, A5, A6) from each offline frame's particles.
-    look_metrics: bool,
     /// Every offline frame renders at the last frame's time (a stopped transport).
     hold_time: bool,
     /// The Water a scene's capture measures, by item id; none for a preset
@@ -139,7 +129,6 @@ struct PresetSettings {
     surface_detail: u32,
     viscosity: f64,
     surface_tension: f64,
-    points_per_cell: u32,
     /// The domain's Simulation Speed: each fixed transport tick advances the
     /// liquid by speed × 1/60 s, so offline water time is speed × tick time.
     speed: f64,
@@ -357,7 +346,6 @@ fn preset_settings(json: &str, water: Option<&str>) -> CaptureResult<PresetSetti
             surface_detail: 0,
             viscosity: 0.0,
             surface_tension: 0.0,
-            points_per_cell: 0,
             speed: 1.0,
             whitewater: false,
         });
@@ -424,12 +412,6 @@ fn preset_settings(json: &str, water: Option<&str>) -> CaptureResult<PresetSetti
     {
         return Err(io::Error::other("preset liquid domain settings are invalid").into());
     }
-    // The look metrics' sample spacing: MPM's Points Per Cell enum (0 is
-    // 2 per axis, 1 is 3); a solver without it seeds 8 a cell.
-    let points_per_cell = match domain["params"]["points_per_cell"]["value"].as_u64() {
-        Some(1) => 27,
-        _ => 8,
-    };
     Ok(PresetSettings {
         solver: Solver::Gpu,
         frame_node,
@@ -439,7 +421,6 @@ fn preset_settings(json: &str, water: Option<&str>) -> CaptureResult<PresetSetti
         surface_detail: 0,
         viscosity: 0.0,
         surface_tension: 0.0,
-        points_per_cell,
         speed,
         whitewater,
     })
@@ -732,26 +713,6 @@ fn render_frame(
     Ok((timings, fluid))
 }
 
-/// The newest particle frame the solver published on the last dumped frame:
-/// its first `count` records.
-fn published_particles(
-    runtime: &PresetRuntime,
-    device: &GpuDevice,
-    frame_node: &str,
-    count: f64,
-) -> CaptureResult<Vec<FluidParticle>> {
-    let arrays = runtime.dump_arrays_all();
-    let frame = arrays
-        .iter()
-        .find(|array| array.name == frame_node && array.port == "particles_b")
-        .ok_or_else(|| {
-            io::Error::other(format!(
-                "--look-metrics: no {frame_node}.particles_b this frame"
-            ))
-        })?;
-    Ok(read_back(device, frame.buffer, count.max(0.0) as u64))
-}
-
 /// The first `count` records of a dumped GPU buffer, or as many as it holds.
 fn read_back<T: bytemuck::Pod>(
     device: &GpuDevice,
@@ -802,62 +763,6 @@ fn whitewater_counts(
         return Err(io::Error::other("whitewater_counts holds fewer than three words").into());
     };
     Ok([foam, bubble, spray].map(f64::from))
-}
-
-/// Write the per-frame look samples and the A1, A2, A5, A6 summary.
-fn write_look_metrics(dir: &Path, look: &LookRecorder) -> CaptureResult<()> {
-    let mut csv = BufWriter::new(File::create(dir.join("look_metrics.csv"))?);
-    writeln!(
-        csv,
-        "time,mean_speed,surface_height,detached_fraction,sheet_fraction"
-    )?;
-    for &(time, speed, height) in &look.samples {
-        let at = |series: &[(f32, f32)]| {
-            series
-                .iter()
-                .find(|s| (s.0 - time).abs() < 1e-4)
-                .map_or(String::new(), |s| s.1.to_string())
-        };
-        writeln!(
-            csv,
-            "{time},{speed},{height},{},{}",
-            at(&look.splash),
-            at(&look.sheets)
-        )?;
-    }
-    csv.flush()?;
-    let settle = look.settling();
-    let mut summary = BufWriter::new(File::create(dir.join("look_summary.txt"))?);
-    writeln!(
-        summary,
-        "A1 lattice alignment (largest bin over mean, per axis; fails above 1.5):"
-    )?;
-    for (time, ratio, interior) in &look.alignment {
-        writeln!(
-            summary,
-            "  t {time:.2} s: {ratio:?} over {interior} interior points"
-        )?;
-    }
-    writeln!(
-        summary,
-        "A2 settle (mean speed below {} m/s): {:?} s; ringing over {} s windows: {:.4} m",
-        matter::look::SETTLE_SPEED,
-        settle.settle_time,
-        matter::look::RINGING_WINDOW,
-        settle.ringing
-    )?;
-    writeln!(
-        summary,
-        "A5 detached fraction, max over t in [0.5, 3] s: {:.4}",
-        look.max_splash()
-    )?;
-    writeln!(
-        summary,
-        "A6 sheet fraction, max over t in [0.5, 3] s: {:.4}",
-        look.max_sheets()
-    )?;
-    summary.flush()?;
-    Ok(())
 }
 
 fn render_output_frame(
@@ -1029,7 +934,6 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
         linear: false,
         cinematic: false,
         supersample: 1,
-        look_metrics: false,
         hold_time: false,
         water: None,
         solver: Solver::None,
@@ -1059,7 +963,6 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
             "--offline-only" => options.offline_only = true,
             "--linear" => options.linear = true,
             "--cinematic" => options.cinematic = true,
-            "--look-metrics" => options.look_metrics = true,
             "--hold-time" => options.hold_time = true,
             "--water" => options.water = Some(value("--water")?),
             "--supersample" => {
@@ -1078,7 +981,7 @@ fn parse_options() -> CaptureResult<CaptureOptions> {
     }
     options.output_dir = output_dir.ok_or_else(|| {
         io::Error::other(
-            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2] [--look-metrics] [--hold-time] [--water ID]",
+            "usage: fluid_capture OUTPUT_DIR [--preset PATH] [--width N] [--height N] [--frames N] [--fps N] [--offline-only] [--max-seconds N] [--stills-every N] [--linear] [--cinematic] [--supersample 1|2] [--hold-time] [--water ID]",
         )
     })?;
     if options.width == 0
@@ -1176,9 +1079,6 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         linear: options.linear || tone_mapped,
         ..options.clone()
     };
-    if options.solver == Solver::None && options.look_metrics {
-        return Err(io::Error::other("--look-metrics needs a liquid in the preset").into());
-    }
     let instrumented_json = instrument_preset(&json, options.cinematic, options.supersample)?;
     if options.cinematic {
         fs::write(
@@ -1208,7 +1108,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         render_height,
         &options.frame_node,
     )?;
-    let dump_arrays = options.look_metrics || preset.whitewater;
+    let dump_arrays = preset.whitewater;
     offline_runtime.set_dump_all(options.cinematic || dump_arrays);
     let (initial_timings, initial_fluid) = render_frame(
         &mut offline_runtime,
@@ -1251,12 +1151,6 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         fs::create_dir_all(options.output_dir.join("stills"))?;
     }
     let mut capture_ms = 0.0;
-    let mut look = options.look_metrics.then(|| {
-        let layout = domain_layout(None, preset.domain_size as f32, preset.cell_size)
-            .expect("preset domain settings were validated");
-        let spacing = layout.cell_size as f32 / (preset.points_per_cell as f32).cbrt();
-        LookRecorder::new(Cells::from_layout(&layout), spacing)
-    });
     for frame in 1..=options.frames {
         ensure_wall_limit(overall_started, "offline pass", options.max_seconds)?;
         let authored_time = if options.hold_time {
@@ -1282,15 +1176,6 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         if preset.whitewater {
             [fluid.foam_count, fluid.bubble_count, fluid.spray_count] =
                 whitewater_counts(&offline_runtime, &device, &options.frame_node)?;
-        }
-        if let Some(look) = look.as_mut() {
-            let particles = published_particles(
-                &offline_runtime,
-                &device,
-                &options.frame_node,
-                fluid.particle_count,
-            )?;
-            look.observe(authored_time as f32, &particles);
         }
         let expected_time = preset.speed * (authored_time * FIXED_HZ + 1e-8).floor() / FIXED_HZ;
         if options.solver != Solver::None && (fluid.simulation_time - expected_time).abs() > 1e-4 {
@@ -1357,9 +1242,6 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         .expect("offline rows contain all stepped frames")
         .fluid
         .simulation_time;
-    if let Some(look) = &look {
-        write_look_metrics(&options.output_dir, look)?;
-    }
     drop(offline_target);
     drop(offline_runtime);
 
@@ -1590,7 +1472,7 @@ mod tests {
     #[test]
     fn every_liquid_on_the_seam_is_found_by_its_frame() {
         let matter = preset_settings(
-            include_str!("../tests/fixtures/presets/WaterDamBreakMatter.json"),
+            include_str!("../tests/fixtures/presets/SandColumn.json"),
             None,
         )
         .unwrap();
@@ -1598,14 +1480,7 @@ mod tests {
             (matter.solver, matter.frame_node.as_str()),
             (Solver::Gpu, "matter_frame")
         );
-        assert_eq!(
-            (
-                matter.resolution,
-                matter.domain_size,
-                matter.points_per_cell
-            ),
-            (64, 4.0, 8)
-        );
+        assert_eq!((matter.resolution, matter.domain_size), (64, 4.0));
         let gpu_flip = preset_settings(
             include_str!("../tests/fixtures/presets/WaterDamBreakGpuFlip.json"),
             None,

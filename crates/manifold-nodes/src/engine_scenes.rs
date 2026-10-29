@@ -10,16 +10,15 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::preset_def::PresetKind;
 
 /// Every engine scene, by file stem.
-pub const NAMES: [&str; 9] = [
+pub const NAMES: [&str; 8] = [
     "Ocean",
     "OceanCliff",
     "PhysicsSolids",
+    "SandBoxDrop",
+    "SandColumn",
     "WaterDamBreakGpuFlip",
-    "WaterDamBreakMatter",
     "WaterDamBreakParticles",
-    "WaterFloatingBoxMatter",
     "WaterSeaWallGpuFlip",
-    "WaterStillPoolMatter",
 ];
 
 fn path(name: &str) -> PathBuf {

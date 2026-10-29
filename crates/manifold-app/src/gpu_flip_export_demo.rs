@@ -195,12 +195,7 @@ fn gpu_flip_dam_break_export_matches_across_frame_rates() {
 fn liquid_presets_play_without_pipeline_compiles() {
     use manifold_core::cold_touch::{ColdTouchKind, cold_touch_count};
     let mut failures = Vec::new();
-    for preset in [
-        PRESET,
-        "WaterDamBreakMatter",
-        "WaterFloatingBoxMatter",
-        "WaterStillPoolMatter",
-    ] {
+    for preset in [PRESET, "SandColumn", "SandBoxDrop"] {
         let mut content = headless_content_thread(project_of(preset), WIDTH, HEIGHT);
         let (state_tx, _state_rx) = crate::content_state::state_channel();
         crate::headless_harness::warm_project(&mut content, &state_tx);

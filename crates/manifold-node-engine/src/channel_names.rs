@@ -169,6 +169,11 @@ pub mod well_known {
         AFFINE_X        = "affine_x";
         AFFINE_Y        = "affine_y";
         AFFINE_Z        = "affine_z";
+        F_X             = "f_x";
+        F_Y             = "f_y";
+        F_Z             = "f_z";
+        STRESS_DIAG     = "stress_diag";
+        STRESS_OFF      = "stress_off";
         VELOCITY_MASS   = "velocity_mass";
         VELOCITY_BEFORE = "velocity_before";
         POSITION_INV_MASS = "position_inv_mass";

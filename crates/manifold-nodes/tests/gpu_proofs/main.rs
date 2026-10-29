@@ -24,7 +24,6 @@ mod fragment_storage;
 mod gbuffer_depth;
 mod gbuffer_velocity;
 mod matter_bodies;
-mod matter_look;
 mod matter_scene;
 mod matter_transfer;
 mod motion_blur_visibility;

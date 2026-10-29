@@ -225,11 +225,11 @@ fn encode_replay_parity() {
     let on = dam_break(true, FRAMES, |_, _| {});
     assert!(
         on.stats.replayed > 0,
-        "Dam Break replayed nothing: {:?}",
+        "Sand Column replayed nothing: {:?}",
         on.stats
     );
-    eprintln!("encode replay parity, Dam Break: {:?}", on.stats);
-    assert_within_spread("Dam Break", &off, &again, &on);
+    eprintln!("encode replay parity, Sand Column: {:?}", on.stats);
+    assert_within_spread("Sand Column", &off, &again, &on);
 }
 
 /// Mean |Δ| over an Rgba16Float image.
@@ -323,7 +323,7 @@ fn assert_within_spread(
 fn warm_dam_break() {
     static WARM: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     WARM.get_or_init(|| {
-        run_preset(DAM_BREAK, true, 16, false, |_, _| {});
+        run_preset(SAND_COLUMN, true, 16, false, |_, _| {});
     });
 }
 
@@ -440,11 +440,11 @@ struct PresetOutcome {
     stats_by_frame: Vec<GpuReplayStats>,
 }
 
-const DAM_BREAK: &str = "WaterDamBreakMatter";
+const SAND_COLUMN: &str = "SandColumn";
 
 fn dam_break(replay: bool, frames: u32, change: impl Fn(u32, &mut ParamManifest)) -> PresetOutcome {
     warm_dam_break();
-    run_preset(DAM_BREAK, replay, frames, true, change)
+    run_preset(SAND_COLUMN, replay, frames, true, change)
 }
 
 fn run_preset(

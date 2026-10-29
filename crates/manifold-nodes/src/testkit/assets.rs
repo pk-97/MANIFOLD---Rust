@@ -6,7 +6,7 @@ pub const ASSETS_GENERATOR_PRESETS_PHYSICSSOLIDS_JSON: &str =
 pub const ASSETS_GENERATOR_PRESETS_WATERDAMBREAKGPUFLIP_JSON: &str =
     include_str!("../../tests/fixtures/presets/WaterDamBreakGpuFlip.json");
 pub const ASSETS_GENERATOR_PRESETS_WATERDAMBREAKMATTER_JSON: &str =
-    include_str!("../../tests/fixtures/presets/WaterDamBreakMatter.json");
+    include_str!("../../tests/fixtures/presets/SandColumn.json");
 pub const ASSETS_SCENE_MODIFIER_PRESETS_ELASTICSCULPTURE_JSON: &str =
     include_str!("../../assets/scene-modifier-presets/ElasticSculpture.json");
 pub const ASSETS_SCENE_MODIFIER_PRESETS_MATHVIEW_JSON: &str =

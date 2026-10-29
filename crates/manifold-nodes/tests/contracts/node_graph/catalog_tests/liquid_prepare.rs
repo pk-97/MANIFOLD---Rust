@@ -12,7 +12,7 @@ use manifold_node_engine::runtime::PresetRuntime;
 
 /// One preset per liquid solver. The floating box holds every node type the
 /// other MPM presets hold except the CPU-side fluid role source.
-const LIQUID_PRESETS: [&str; 2] = ["WaterDamBreakGpuFlip.json", "WaterFloatingBoxMatter.json"];
+const LIQUID_PRESETS: [&str; 2] = ["WaterDamBreakGpuFlip.json", "SandBoxDrop.json"];
 
 fn cache_len(device: &manifold_gpu::GpuDevice) -> (usize, usize) {
     (

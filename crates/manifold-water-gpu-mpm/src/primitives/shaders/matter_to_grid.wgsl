@@ -2,8 +2,8 @@
 // (workgroup memory and barriers). Each live point adds to the 27 grid nodes
 // of its quadratic B-spline stencil:
 //   mass     += w · m_p
-//   momentum += w · (m_p·v_p + (m_p·C_p − dt·V0·(4/dx²)·τ_p·I)·d_i)
-// with the water Kirchhoff pressure τ = λ·J·(J − 1) (× Cohesion for J ≥ 1).
+//   momentum += w · (m_p·v_p + (m_p·C_p − dt·V0·(4/dx²)·τ_p)·d_i)
+// with τ_p the Kirchhoff stress node.grid_to_matter left on the point.
 // Node p sits at p·dx and lives in the world tiles' pooled arrays (the
 // including source prepends the table's read side): word w of node p is
 // accum[ts_cell_at(p)·4 + w], the canonical element where no tile is held.
@@ -31,6 +31,11 @@ struct MatterPoint {
     affine_x: vec4<f32>,
     affine_y: vec4<f32>,
     affine_z: vec4<f32>,
+    f_x: vec4<f32>,
+    f_y: vec4<f32>,
+    f_z: vec4<f32>,
+    stress_diag: vec4<f32>,
+    stress_off: vec4<f32>,
 }
 
 struct CellRange {
@@ -42,15 +47,15 @@ struct P2gParams {
     cell_size: f32,
     active_count: u32,
     step_dt: f32,
-    lambda: f32,
-    cohesion: f32,
     density: f32,
     tick_index: u32,
     substep_in_tick: u32,
     momentum_unit: f32,
     pool_tiles: u32,
     table_entries: u32,
-    _pad: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: P2gParams;
@@ -122,22 +127,20 @@ fn scatter(pt: MatterPoint, use_tile: bool, tile_origin: vec3<i32>) {
     let w1 = vec3<f32>(0.75) - (f - vec3<f32>(1.0)) * (f - vec3<f32>(1.0));
     let w2 = 0.5 * (f - vec3<f32>(0.5)) * (f - vec3<f32>(0.5));
 
-    let j = pt.volume_ratio;
     let v0 = pt.affine_y.w;
     let mass = v0 * params.density;
-    var tau = params.lambda * j * (j - 1.0);
-    if j >= 1.0 {
-        tau = tau * params.cohesion;
-    }
+    let diag = pt.stress_diag.xyz;
+    let off = pt.stress_off.xyz;
     if !(finite3(pt.velocity) && finite3(pt.affine_x.xyz) && finite3(pt.affine_y.xyz)
-        && finite3(pt.affine_z.xyz) && finite3(vec3<f32>(j, v0, tau))) {
+        && finite3(pt.affine_z.xyz) && finite3(vec3<f32>(pt.volume_ratio, v0, 0.0))
+        && finite3(diag) && finite3(off)) {
         return;
     }
-    let stress = params.step_dt * v0 * 4.0 * inv_dx * inv_dx * tau;
-    // Affine rows: m·C − stress·I.
-    let a0 = mass * pt.affine_x.xyz - vec3<f32>(stress, 0.0, 0.0);
-    let a1 = mass * pt.affine_y.xyz - vec3<f32>(0.0, stress, 0.0);
-    let a2 = mass * pt.affine_z.xyz - vec3<f32>(0.0, 0.0, stress);
+    let s = params.step_dt * v0 * 4.0 * inv_dx * inv_dx;
+    // Affine rows: m·C − s·τ, τ symmetric (xy, xz, yz off the diagonal).
+    let a0 = mass * pt.affine_x.xyz - s * vec3<f32>(diag.x, off.x, off.y);
+    let a1 = mass * pt.affine_y.xyz - s * vec3<f32>(off.x, diag.y, off.z);
+    let a2 = mass * pt.affine_z.xyz - s * vec3<f32>(off.y, off.z, diag.z);
     let mv = mass * pt.velocity;
 
     // Both scales are powers of two times one reciprocal, so their ratio is

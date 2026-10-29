@@ -110,7 +110,7 @@ manifold_node_engine::primitive! {
     params: [],
     depth_rule: Terminal,
     composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; pool_tiles, ticks, substeps_per_tick and epoch from node.matter_domain. The region body (zero_array → matter_move_bodies → matter_to_grid → matter_grid_update → matter_body_reaction → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in, stats_in and reaction_in (node.matter_body_reaction's reaction_out). out and stats escape to node.matter_frame; reaction is the last substep's reaction words, which nothing needs to read. Only live points (id ≠ 0) move.",
-    examples: ["WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"],
+    examples: ["SandColumn", "SandBoxDrop"],
     picker: { label: "Matter State", category: Atom },
     summary: "Keeps the liquid's particles between frames and runs its simulation steps.",
     category: Particles3D,

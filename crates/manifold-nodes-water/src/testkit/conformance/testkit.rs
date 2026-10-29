@@ -4,9 +4,6 @@ pub const G: f32 = super::G;
 pub fn liquid_totals(words: &[u32]) -> LiquidTotals {
     super::liquid_totals(words)
 }
-pub fn matter_totals(words: &[u32]) -> LiquidTotals {
-    super::matter_totals(words)
-}
 pub fn set_fill_param(def: &mut EffectGraphDef, type_id: &str, param: &str, value: f32) {
     super::set_fill_param(def, type_id, param, value);
 }

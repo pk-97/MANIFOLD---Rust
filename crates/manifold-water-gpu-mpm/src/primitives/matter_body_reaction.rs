@@ -55,7 +55,9 @@ struct BodyReactionUniforms {
     wall_velocity_hi_x: f32,
     wall_velocity_hi_y: f32,
     wall_velocity_hi_z: f32,
+    wall_friction: f32,
     dispatch_count: u32,
+    _pad: [u32; 3],
 }
 
 manifold_node_engine::primitive! {
@@ -94,6 +96,7 @@ manifold_node_engine::primitive! {
         bounds_hi_x: ScalarF32 optional, bounds_hi_y: ScalarF32 optional, bounds_hi_z: ScalarF32 optional,
         wall_velocity_lo_x: ScalarF32 optional, wall_velocity_lo_y: ScalarF32 optional, wall_velocity_lo_z: ScalarF32 optional,
         wall_velocity_hi_x: ScalarF32 optional, wall_velocity_hi_y: ScalarF32 optional, wall_velocity_hi_z: ScalarF32 optional,
+        wall_friction: ScalarF32 optional,
     },
     outputs: {
         reaction_out: Array(i32),
@@ -134,10 +137,11 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("wall_velocity_hi_x"), label: "Wall Velocity Hi X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e3, 1.0e3)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("wall_velocity_hi_y"), label: "Wall Velocity Hi Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e3, 1.0e3)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("wall_velocity_hi_z"), label: "Wall Velocity Hi Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e3, 1.0e3)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("wall_friction"), label: "Wall Friction", ty: ParamType::Float, default: ParamValue::Float(0.7), range: Some((0.0, 4.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "Region body of the Live Matter group, after node.matter_grid_update (its grid_out is this grid) and before node.grid_to_matter. reaction/reaction_out alias node.matter_domain's reaction array (16 words per body, the slot the domain cleared for this tick and reads back fenced); reaction_out feeds node.grid_to_matter's reaction, whose reaction_out closes into node.matter_state's reaction_in so the region runs this node every substep; bodies from node.matter_move_bodies; shapes, atlas, tiles and pool_tiles (the world-tile pool the grid is stored in; node p sits at world p·cell_size, no padding nodes), the Bounds box (bounds_lo/hi, wall_faces, wall_velocity_lo/hi), the force field lattice's origin (field_min_x/y/z, only that), gravity, momentum_unit, body_count, dynamic_count and substeps_per_tick from node.matter_domain; tick_index, substep_in_tick and step_dt from node.matter_state; forces, impulses and the field scalars from node.matter_domain, wired exactly as node.matter_grid_update's so both start from the same velocity. Skips its dispatch when dynamic_count is 0 or reaction is unwired.",
-    examples: ["WaterFloatingBoxMatter", "WaterDamBreakMatter", "WaterStillPoolMatter"],
+    examples: ["SandBoxDrop", "SandColumn"],
     picker: { label: "Matter Body Reaction", category: Atom },
     summary: "Measures how hard the liquid pushes on each floating object so the physics world can move it.",
     category: Particles3D,
@@ -204,6 +208,7 @@ impl Primitive for MatterBodyReaction {
             ctx.scalar_or_param("gravity_z", 0.0),
         ];
         let wall_faces = int(ctx, "wall_faces", 0.0).min(63);
+        let wall_friction = ctx.scalar_or_param("wall_friction", 0.7).max(0.0);
         let momentum_unit = ctx.scalar_or_param("momentum_unit", 128.0);
         let body_count = int(ctx, "body_count", 0.0).min(MAX_LIQUID_BODIES as i32);
         let tick_index = int(ctx, "tick_index", 0.0);
@@ -321,7 +326,9 @@ impl Primitive for MatterBodyReaction {
             wall_velocity_hi_x: wall_velocity_hi[0],
             wall_velocity_hi_y: wall_velocity_hi[1],
             wall_velocity_hi_z: wall_velocity_hi[2],
+            wall_friction,
             dispatch_count: nodes,
+            _pad: [0; 3],
         };
         gpu.native_enc.dispatch_compute(
             pipeline,

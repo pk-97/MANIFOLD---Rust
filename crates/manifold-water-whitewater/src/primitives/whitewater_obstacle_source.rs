@@ -13,7 +13,9 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_physics::clock::TICK;
-use manifold_water_liquid::bodies::{COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::bodies::{
+    COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape,
+};
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::tile_pool::{TilePool, tile_pool};
 
@@ -110,7 +112,7 @@ manifold_node_engine::primitive! {
     ],
     depth_rule: Terminal,
     composition_notes: "Wire the same body, shape, atlas and collider tree inputs as liquid_solid_distance, and tiles, pool_tiles and cell_size from node.gpu_flip_step; source feeds whitewater_step.obstacle_source and dust_potential.source, distance their solid. Both outputs are node arrays of pool_len(pool_tiles) elements. Domain influence is resolved from the whitewater base level; obstacle controls default to FLIP MeshObject defaults. A custom nearest-object metadata producer may replace this node for per-object properties.",
-    examples: ["WaterDamBreakMatter"],
+    examples: ["SandColumn"],
     picker: { label: "Whitewater Obstacle Source", category: Atom },
     summary: "Supplies obstacle properties for dust emission and whitewater influence.",
     category: Particles3D,
@@ -227,8 +229,7 @@ impl Primitive for WhitewaterObstacleSource {
             (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles), Some(tiles)),
             Some(source),
             Some(distance),
-        ) =
-            (inputs, self.source.as_ref(), self.distance.as_ref())
+        ) = (inputs, self.source.as_ref(), self.distance.as_ref())
         else {
             return;
         };

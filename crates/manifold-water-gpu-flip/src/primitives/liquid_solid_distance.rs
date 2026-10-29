@@ -86,7 +86,7 @@ manifold_node_engine::primitive! {
     ],
     depth_rule: Terminal,
     composition_notes: "Once per frame, after the liquid's tick region. bodies, shapes, atlas, body_count and rows come from the liquid's domain (node.matter_domain, node.gpu_flip_domain); the Bounds box and the Wall faces from node.gpu_flip_domain (unwired: no walls); tiles, pool_tiles and cell_size from node.surface_tiles. solid holds exactly one value per pool element, sized every frame from the same pool the dispatch covers; a pool the device cannot hold is a named error. Feed solid to the display atoms that stop at solids (node.push_out_of_solid) and to the water object's solid.",
-    examples: ["WaterDamBreakMatter"],
+    examples: ["SandColumn"],
     picker: { label: "Liquid Solid Distance", category: Atom },
     summary: "Marks where the walls and solid objects are around a liquid, so its surface stops at them.",
     category: Particles3D,

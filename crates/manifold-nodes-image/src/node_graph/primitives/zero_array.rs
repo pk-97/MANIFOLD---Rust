@@ -31,7 +31,7 @@ manifold_node_engine::primitive! {
     params: [],
     depth_rule: Terminal,
     composition_notes: "Aliased in/out: the array is cleared in place and keeps its identity, so a scatter downstream adds into the same buffer. In a substep region, clear the grid accumulator at the start of every substep, before node.matter_to_grid.",
-    examples: ["WaterDamBreakMatter"],
+    examples: ["SandColumn"],
     picker: { label: "Clear Array", category: Atom },
     summary: "Resets a list of whole numbers to zero so it can be added into again.",
     category: MathAndConvert,

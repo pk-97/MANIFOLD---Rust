@@ -8,6 +8,8 @@
 //                 writes the 17 stats words.
 // Every sum runs in a fixed order, so stats are deterministic. Non-finite
 // values are found with an exponent-bits test: fast math may fold isfinite().
+// Composed after matter_material.wgsl: each point's elastic energy comes from
+// the stretches of its F.
 
 struct MatterPoint {
     position: vec3<f32>,
@@ -17,6 +19,11 @@ struct MatterPoint {
     affine_x: vec4<f32>,
     affine_y: vec4<f32>,
     affine_z: vec4<f32>,
+    f_x: vec4<f32>,
+    f_y: vec4<f32>,
+    f_z: vec4<f32>,
+    stress_diag: vec4<f32>,
+    stress_off: vec4<f32>,
 }
 
 struct MatterGridNode {
@@ -55,7 +62,7 @@ struct StatsParams {
     gravity_x: f32,
     gravity_y: f32,
     gravity_z: f32,
-    cohesion: f32,
+    mu: f32,
     density: f32,
     tick_index: u32,
     _pad0: u32,
@@ -136,14 +143,11 @@ fn point_partial(pt: MatterPoint) -> Partial {
     }
     let j = pt.volume_ratio;
     let v0 = pt.affine_y.w;
-    var tau = params.lambda * j * (j - 1.0);
-    if j >= 1.0 {
-        tau = tau * params.cohesion;
-    }
     // node.matter_to_grid skips exactly these points; counting them here is
     // how D14 learns of them.
-    if !(finite3(pt.position) && finite3(pt.velocity) && finite(j) && finite(v0) && finite(tau)
-        && finite3(pt.affine_x.xyz) && finite3(pt.affine_y.xyz) && finite3(pt.affine_z.xyz)) {
+    if !(finite3(pt.position) && finite3(pt.velocity) && finite(j) && finite(v0)
+        && finite3(pt.affine_x.xyz) && finite3(pt.affine_y.xyz) && finite3(pt.affine_z.xyz)
+        && finite3(pt.stress_diag.xyz) && finite3(pt.stress_off.xyz)) {
         p.nonfinite = 1u;
         return p;
     }
@@ -152,10 +156,11 @@ fn point_partial(pt: MatterPoint) -> Partial {
     // field_min is the potential's datum: potential energy is -m g·(x - field_min).
     let rel = pt.position - vec3<f32>(params.field_min_x, params.field_min_y, params.field_min_z);
     let g = vec3<f32>(params.gravity_x, params.gravity_y, params.gravity_z);
-    var e = 0.5 * params.lambda * (j - 1.0) * (j - 1.0);
-    if j >= 1.0 {
-        e = e * params.cohesion;
-    }
+    let svd = matter_svd(transpose(mat3x3<f32>(pt.f_x.xyz, pt.f_y.xyz, pt.f_z.xyz)));
+    let e = matter_energy(
+        matter_log_stretch(svd.sigma),
+        MatterMaterial(params.mu, params.lambda, 0.0, 0.0, 1.0),
+    );
     p.live = 1u;
     p.max_speed = length(v);
     p.min_j = j;

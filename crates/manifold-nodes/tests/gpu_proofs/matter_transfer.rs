@@ -1,10 +1,9 @@
-//! MLS-MPM transfer atoms on the GPU against the f64 CPU oracle
-//! (invariants and enforcement).
-//! The chain runs without a substep region: each frame is one substep
+//! MLS-MPM transfer atoms on the GPU: the grid carries exactly the points'
+//! mass. The chain runs without a substep region: each frame is one substep
 //! (clear → particle-to-grid → grid update → grid-to-particle), the point
 //! buffer updated in place across frames. The GPU grid is pooled on world
-//! tiles; the CPU oracle's grid is the dense lattice, read back from the pool
-//! through the table particle-to-grid built.
+//! tiles, read back as the dense lattice through the table particle-to-grid
+//! built.
 
 use std::borrow::Cow;
 
@@ -25,15 +24,21 @@ use manifold_node_engine::{
     state_store::StateStore,
 };
 use manifold_water_gpu_mpm::matter::{
-    MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterPoint, field_min, mass_unit, matter_nodes,
-    matter_pool_tiles, momentum_unit, water_lambda,
+    MASS_SCALE, MatterGridNode, MatterPoint, SAND_DENSITY, field_min, mass_unit, matter_nodes,
+    matter_pool_tiles, momentum_unit,
 };
 use manifold_water_liquid::bounds::{ALL_FACES, NO_KILL_HEIGHT};
 use manifold_water_liquid::testkit::world_box::from_pool_under;
-use {
-    manifold_water_gpu_mpm::matter::reference, manifold_water_gpu_mpm::matter::reference::Params,
-    manifold_water_gpu_mpm::matter::reference::Point,
-};
+
+/// One substep's settings.
+#[derive(Clone, Copy)]
+struct Params {
+    dt: f64,
+    gravity: [f64; 3],
+    density: f64,
+    walls: u32,
+    bounds: [[f64; 3]; 2],
+}
 
 /// An array the test fills after pre-allocation, sized by `max_capacity`.
 pub(crate) struct HostArray {
@@ -88,7 +93,6 @@ pub(crate) struct Chain {
     plan: ExecutionPlan,
     executor: Executor,
     state: StateStore,
-    points: ResourceId,
     accum: ResourceId,
     tiles: ResourceId,
     p2g: NodeInstanceId,
@@ -114,7 +118,7 @@ pub(crate) fn output_of(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) 
 }
 
 impl Chain {
-    pub(crate) fn new(layout: &FluidDomainLayout, points: &[MatterPoint], p: &Params) -> Self {
+    fn new(layout: &FluidDomainLayout, points: &[MatterPoint], p: &Params) -> Self {
         let registry = PrimitiveRegistry::with_builtin();
         let (dx, min, nodes) = (
             layout.cell_size as f32,
@@ -173,8 +177,6 @@ impl Chain {
         let unit = momentum_unit(dx, p.dt);
         set(&mut graph, p2g, "momentum_unit", unit);
         set(&mut graph, update, "momentum_unit", unit);
-        set(&mut graph, p2g, "lambda", p.lambda as f32);
-        set(&mut graph, p2g, "cohesion", p.cohesion as f32);
         set(&mut graph, p2g, "density", p.density as f32);
         set(&mut graph, update, "gravity_x", p.gravity[0] as f32);
         set(&mut graph, update, "gravity", p.gravity[1] as f32);
@@ -182,8 +184,7 @@ impl Chain {
         set(&mut graph, update, "wall_faces", p.walls as f32);
         set(&mut graph, g2p, "open_faces", 0.0);
         set(&mut graph, g2p, "kill_height", NO_KILL_HEIGHT);
-        set(&mut graph, g2p, "liveliness", p.liveliness as f32);
-        set(&mut graph, g2p, "cohesion", p.cohesion as f32);
+        set(&mut graph, g2p, "density", p.density as f32);
 
         let plan = compile(&graph).expect("matter chain compiles");
         let harness = manifold_node_engine::testkit::gpu_harness::shared();
@@ -205,7 +206,6 @@ impl Chain {
             plan,
             executor: Executor::new(Box::new(backend)),
             state: StateStore::new(),
-            points: points_res,
             accum,
             tiles,
             p2g,
@@ -216,9 +216,8 @@ impl Chain {
         }
     }
 
-    /// One substep; frame k rounds with tick k, substep 0 (the oracle's
-    /// `Params { tick_index: k, .. }`).
-    pub(crate) fn step(&mut self) {
+    /// One substep; frame k rounds with tick k, substep 0.
+    fn step(&mut self) {
         set(&mut self.graph, self.p2g, "tick_index", self.frame as f32);
         let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
         let time = FrameTime {
@@ -254,12 +253,7 @@ impl Chain {
         unsafe { std::slice::from_raw_parts(ptr.cast::<T>().cast_const(), n).to_vec() }
     }
 
-    pub(crate) fn points(&self) -> Vec<MatterPoint> {
-        self.read(self.points)
-    }
-
-    /// The accumulator's four words a node over the dense lattice, x fastest,
-    /// as the oracle indexes its grid.
+    /// The accumulator's four words a node over the dense lattice, x fastest.
     fn accum(&self) -> Vec<i32> {
         let pooled: Vec<[i32; 4]> = self.read(self.accum);
         let table: Vec<u32> = self.read(self.tiles);
@@ -276,9 +270,8 @@ fn layout() -> FluidDomainLayout {
 }
 
 /// 512 points (8 per cell over a 4×4×4-cell blob) resting on the floor,
-/// with an affine velocity field, a non-zero C and volume ratios either side
-/// of 1, so every term of the transfer (stress, cohesion, walls, Liveliness)
-/// is exercised.
+/// with an affine velocity field, a non-zero C, a sheared F and a stress, so
+/// every term of the transfer is exercised.
 fn fixture(layout: &FluidDomainLayout) -> Vec<MatterPoint> {
     let dx = layout.cell_size as f32;
     let (min, nodes) = (field_min(layout), matter_nodes(layout.cells));
@@ -306,9 +299,14 @@ fn fixture(layout: &FluidDomainLayout) -> Vec<MatterPoint> {
             id: n + 1,
             velocity: [0.3 + 0.5 * rel[1], -0.4 - 0.2 * rel[0], 0.1 * rel[2]],
             volume_ratio: 0.985 + 0.03 * jitter(4),
-            affine_x: [0.1, 0.5, 0.0, 1.0],
+            affine_x: [0.1, 0.5, 0.0, 0.0],
             affine_y: [-0.2, 0.0, 0.0, v0],
             affine_z: [0.0, 0.0, 0.1, 0.0],
+            f_x: [0.99, 0.02, 0.0, 0.0],
+            f_y: [0.0, 0.98 + 0.03 * jitter(4), 0.0, 0.0],
+            f_z: [0.0, 0.0, 1.0, 0.0],
+            stress_diag: [-2.0e3, -3.0e3, -2.0e3, 0.0],
+            stress_off: [500.0, 0.0, 0.0, 0.0],
         });
     }
     out
@@ -318,10 +316,7 @@ fn params() -> Params {
     Params {
         dt: 1.0e-3,
         gravity: [0.0, -9.81, 0.0],
-        lambda: water_lambda(1.0, 1.0),
-        cohesion: 0.3,
-        density: 1000.0,
-        liveliness: 0.5,
+        density: f64::from(SAND_DENSITY),
         walls: ALL_FACES,
         bounds: {
             let l = layout();
@@ -330,64 +325,7 @@ fn params() -> Params {
                 std::array::from_fn(|a| f64::from(l.min[a] + l.size[a])),
             ]
         },
-        fixed_point: false,
-        tick_index: 0,
-        substep_in_tick: 0,
     }
-}
-
-fn max_errors(gpu: &[MatterPoint], cpu: &[Point]) -> (f64, f64) {
-    let mut dx = 0.0f64;
-    let mut dv = 0.0f64;
-    for (g, c) in gpu.iter().zip(cpu) {
-        assert_eq!(g.id, c.id, "point {} alive-state differs", c.id);
-        for d in 0..3 {
-            dx = dx.max((f64::from(g.position[d]) - c.x[d]).abs());
-            dv = dv.max((f64::from(g.velocity[d]) - c.v[d]).abs());
-        }
-    }
-    (dx, dv)
-}
-
-#[test]
-fn matter_transfer_matches_reference() {
-    let layout = layout();
-    let points = fixture(&layout);
-    let p = params();
-    let mut chain = Chain::new(&layout, &points, &p);
-    chain.step();
-    let gpu = chain.points();
-    let mut cpu: Vec<Point> = points.iter().map(Point::from).collect();
-    reference::substep(&mut cpu, &layout, &p);
-    let (dx, dv) = max_errors(&gpu, &cpu);
-    eprintln!("matter_transfer_matches_reference: max |Δx| = {dx:.3e} m, max |Δv| = {dv:.3e} m/s");
-    let mut fixed: Vec<Point> = points.iter().map(Point::from).collect();
-    reference::substep(
-        &mut fixed,
-        &layout,
-        &Params {
-            fixed_point: true,
-            ..p
-        },
-    );
-    let (fdx, fdv) = max_errors(&gpu, &fixed);
-    eprintln!("  vs the fixed-point oracle: max |Δx| = {fdx:.3e} m, max |Δv| = {fdv:.3e} m/s");
-    // Section 12's tolerances hold against the oracle that rounds each grid
-    // contribution to Q = 2^20 exactly as the GPU does (D5).
-    assert!(
-        fdx <= 1.0e-5,
-        "positions differ from the fixed-point oracle by {fdx:.3e} m"
-    );
-    assert!(
-        fdv <= 2.0e-5,
-        "velocities differ from the fixed-point oracle by {fdv:.3e} m/s"
-    );
-    // Against continuous f64 the positions still hold; velocities carry the
-    // Q = 2^20 momentum quantization, largest at low-mass surface nodes
-    // (1.05e-4 m/s measured at dt = 1 ms; one LSB is dx/dt/2^20 = 6e-5 m/s
-    // per unit of node mass).
-    assert!(dx <= 1.0e-5, "positions differ by {dx:.3e} m");
-    assert!(dv <= 2.0e-4, "velocities differ by {dv:.3e} m/s");
 }
 
 #[test]
@@ -407,114 +345,4 @@ fn matter_grid_mass_matches_particle_mass() {
     let rel = (grid - particles).abs() / particles;
     eprintln!("matter_grid_mass_matches_particle_mass: relative error {rel:.3e}");
     assert!(rel <= 1.0e-5, "grid {grid} vs particles {particles}");
-}
-
-/// The GPU rounds each accumulator word as the fixed-point oracle does (D5):
-/// small words, where the rounding offset decides the result and f32 has
-/// bits to spare, match exactly. A different hash on either side would miss
-/// about half of them. The blob straddles world x = 0, so its scatter lands
-/// in tiles −1 and 0 of the pool.
-#[test]
-fn matter_accumulator_words_match_fixed_point_oracle() {
-    let layout = layout();
-    let points = fixture(&layout);
-    let p = params();
-    assert!(
-        points.iter().any(|pt| pt.position[0] < 0.0)
-            && points.iter().any(|pt| pt.position[0] > 0.0),
-        "the blob straddles tiles -1 and 0"
-    );
-    let mut chain = Chain::new(&layout, &points, &p);
-    chain.step();
-    let gpu = chain.accum();
-    let mut fixed: Vec<Point> = points.iter().map(Point::from).collect();
-    let grid = reference::substep(
-        &mut fixed,
-        &layout,
-        &Params {
-            fixed_point: true,
-            ..p
-        },
-    );
-    let m_unit = f64::from(mass_unit(layout.cell_size as f32));
-    let to_mass = f64::from(MASS_SCALE) / m_unit;
-    let to_momentum = f64::from(MOMENTUM_SCALE)
-        / m_unit
-        / f64::from(momentum_unit(layout.cell_size as f32, p.dt));
-    // Large words sum f32 contributions of up to 1e8 that partly cancel, so
-    // they differ from the f64 oracle by f32 precision: tens of LSB, about
-    // 1e-10·dx/dt of velocity at a full node.
-    let (mut small, mut exact, mut worst_large) = (0usize, 0usize, 0.0f64);
-    for (node, words) in gpu.chunks_exact(4).enumerate() {
-        let oracle = [
-            grid.momentum[node][0] * to_momentum,
-            grid.momentum[node][1] * to_momentum,
-            grid.momentum[node][2] * to_momentum,
-            grid.mass[node] * to_mass,
-        ];
-        for (word, expected) in words.iter().zip(oracle) {
-            let expected = expected.round();
-            if expected.abs() < 4096.0 {
-                small += 1;
-                exact += usize::from(f64::from(*word) == expected);
-            } else {
-                worst_large = worst_large.max((f64::from(*word) - expected).abs());
-            }
-        }
-    }
-    let rate = exact as f64 / small as f64;
-    eprintln!(
-        "matter_accumulator_words_match_fixed_point_oracle: {exact}/{small} small words exact ({rate:.4}), large words within {worst_large} LSB"
-    );
-    assert!(
-        small > 1000,
-        "the fixture exercises few small words: {small}"
-    );
-    assert!(rate >= 0.95, "small words match only {rate:.4}");
-    assert!(
-        worst_large <= 256.0,
-        "large words differ by {worst_large} LSB"
-    );
-}
-
-#[test]
-fn matter_hundred_substeps_match_reference() {
-    let layout = layout();
-    let points = fixture(&layout);
-    let p = params();
-    let mut chain = Chain::new(&layout, &points, &p);
-    let mut cpu: Vec<Point> = points.iter().map(Point::from).collect();
-    let mut fixed = cpu.clone();
-    for step in 0..100 {
-        chain.step();
-        reference::substep(&mut cpu, &layout, &p);
-        reference::substep(
-            &mut fixed,
-            &layout,
-            &Params {
-                fixed_point: true,
-                tick_index: step,
-                ..p
-            },
-        );
-    }
-    let (dx, dv) = max_errors(&chain.points(), &cpu);
-    eprintln!(
-        "matter_hundred_substeps_match_reference: max |Δx| = {dx:.3e} m, max |Δv| = {dv:.3e} m/s"
-    );
-    let (fdx, fdv) = max_errors(&chain.points(), &fixed);
-    eprintln!("  vs the fixed-point oracle: max |Δx| = {fdx:.3e} m, max |Δv| = {fdv:.3e} m/s");
-    // f32 against f64 over 100 substeps (4.7e-6 m, 8.4e-5 m/s measured).
-    assert!(
-        fdx <= 1.0e-5,
-        "positions differ from the fixed-point oracle by {fdx:.3e} m"
-    );
-    assert!(
-        fdv <= 2.0e-4,
-        "velocities differ from the fixed-point oracle by {fdv:.3e} m/s"
-    );
-    // Plus the accumulated Q = 2^20 quantization (9.6e-5 m, 1.4e-3 m/s
-    // measured): a fraction of a millimetre against a 62.5 mm cell.
-    assert!(dx <= 2.0e-4, "positions differ by {dx:.3e} m");
-    assert!(dv <= 3.0e-3, "velocities differ by {dv:.3e} m/s");
 }

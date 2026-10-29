@@ -130,7 +130,7 @@ mod tests {
     fn retired_ids_and_nested_nodes_are_detected() {
         assert!(is_retired_cpu_flip_preset(&PresetTypeId::new("WaterBasin")));
         assert!(!is_retired_cpu_flip_preset(&PresetTypeId::new(
-            "WaterStillPoolMatter"
+            "SandColumn"
         )));
         assert!(graph_contains_retired_cpu_flip_node(&graph(vec![node(
             RETIRED_CPU_FLIP_NODE_TYPE_ID,

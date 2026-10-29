@@ -18,7 +18,13 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::pool_len;
 
-const SHADER: &str = include_str!("shaders/matter_stats.wgsl");
+static SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{}\n{}",
+        include_str!("shaders/matter_material.wgsl"),
+        include_str!("shaders/matter_stats.wgsl")
+    )
+});
 /// Elements one workgroup folds: 256 threads × 8.
 const BLOCK: u32 = 256 * 8;
 /// Bytes of one partial record.
@@ -38,7 +44,7 @@ struct StatsParams {
     gravity_x: f32,
     gravity_y: f32,
     gravity_z: f32,
-    cohesion: f32,
+    mu: f32,
     density: f32,
     tick_index: u32,
     _pad0: u32,
@@ -55,13 +61,17 @@ impl StatsPipelines {
     fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
             points: device.create_compute_pipeline(
-                SHADER,
+                SHADER.as_str(),
                 "points_main",
                 "node.matter_stats.points",
             ),
-            grid: device.create_compute_pipeline(SHADER, "grid_main", "node.matter_stats.grid"),
+            grid: device.create_compute_pipeline(
+                SHADER.as_str(),
+                "grid_main",
+                "node.matter_stats.grid",
+            ),
             finish: device.create_compute_pipeline(
-                SHADER,
+                SHADER.as_str(),
                 "finish_main",
                 "node.matter_stats.finish",
             ),
@@ -81,8 +91,8 @@ manifold_node_engine::primitive! {
         field_min_x: ScalarF32 optional, field_min_y: ScalarF32 optional, field_min_z: ScalarF32 optional,
         pool_tiles: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
+        mu: ScalarF32 optional,
         lambda: ScalarF32 optional,
-        cohesion: ScalarF32 optional,
         density: ScalarF32 optional,
         active_count: ScalarF32 optional,
         tick_end: ScalarF32 optional,
@@ -99,16 +109,16 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("gravity_x"), label: "Gravity X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity"), label: "Gravity Y", ty: ParamType::Float, default: ParamValue::Float(-9.81), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lambda"), label: "Bulk Stiffness (Pa)", ty: ParamType::Float, default: ParamValue::Float(1.111e6), range: Some((0.0, 1.0e9)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("cohesion"), label: "Cohesion", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("density"), label: "Density (kg/m³)", ty: ParamType::Float, default: ParamValue::Float(1000.0), range: Some((1.0, 1.0e5)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("mu"), label: "Shear Modulus (Pa)", ty: ParamType::Float, default: ParamValue::Float(1.36e5), range: Some((0.0, 1.0e9)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("lambda"), label: "Lamé λ (Pa)", ty: ParamType::Float, default: ParamValue::Float(2.04e5), range: Some((0.0, 1.0e9)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("density"), label: "Density (kg/m³)", ty: ParamType::Float, default: ParamValue::Float(1600.0), range: Some((1.0, 1.0e5)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("active_count"), label: "Active Count", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_000_000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("tick_end"), label: "Tick End", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("tick_index"), label: "Tick Index", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0e9)), enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "Last atom of the Live Matter region body. stats/stats_out alias node.matter_state's stats array, whose final value escapes the region to node.matter_frame (which refuses to publish a non-finite tick) and to matter_state's readback (live count, fault). Gate it with the boundary's tick_end so it runs once per tick; a skipped substep leaves the array as it was. Words: 0 non-finite, 1 clamped nodes, 2 live, 3 max speed, 4 min J, 5 max J, 6 volume, 7 max |accumulator|, 8 mass, 9-11 momentum, 12 kinetic, 13 potential, 14 elastic, 15 tick, 16 points removed because their tile had no pool slot (id 0 with volume ratio 0). The grid and accum cover 512 * pool_tiles + 1 nodes; the canonical last node is not reduced.",
-    examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
+    examples: ["SandColumn"],
     picker: { label: "Matter Stats", category: Atom },
     summary: "Measures the liquid once per tick: how much there is, how fast it moves, its energy, and whether anything went wrong.",
     category: Particles3D,
@@ -159,9 +169,9 @@ impl Primitive for MatterStats {
         let run_now = ctx.scalar_or_param("tick_end", 1.0) > 0.5;
         let requested = ctx.scalar_or_param("active_count", 0.0).round().max(0.0) as u32;
         let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as u32;
-        let lambda = ctx.scalar_or_param("lambda", 1.111e6);
-        let cohesion = ctx.scalar_or_param("cohesion", 0.0);
-        let density = ctx.scalar_or_param("density", 1000.0);
+        let mu = ctx.scalar_or_param("mu", 1.36e5);
+        let lambda = ctx.scalar_or_param("lambda", 2.04e5);
+        let density = ctx.scalar_or_param("density", 1600.0);
         let gravity = [
             ctx.scalar_or_param("gravity_x", 0.0),
             ctx.scalar_or_param("gravity", -9.81),
@@ -222,7 +232,7 @@ impl Primitive for MatterStats {
             gravity_x: gravity[0],
             gravity_y: gravity[1],
             gravity_z: gravity[2],
-            cohesion,
+            mu,
             density,
             tick_index,
             _pad0: 0,

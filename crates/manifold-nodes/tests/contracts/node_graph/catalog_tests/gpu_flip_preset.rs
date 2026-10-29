@@ -458,9 +458,8 @@ fn liquid_presets_feed_state_dropped_time_from_their_clock_domain() {
     for name in [
         SHIPPED_PRESET,
         PARTICLE_VIEW_PRESET,
-        "WaterDamBreakMatter",
-        "WaterStillPoolMatter",
-        "WaterFloatingBoxMatter",
+        "SandColumn",
+        "SandBoxDrop",
     ] {
         let json =
             scene_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));

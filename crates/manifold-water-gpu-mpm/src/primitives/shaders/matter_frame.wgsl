@@ -16,6 +16,11 @@ struct MatterPoint {
     affine_x: vec4<f32>,
     affine_y: vec4<f32>,
     affine_z: vec4<f32>,
+    f_x: vec4<f32>,
+    f_y: vec4<f32>,
+    f_z: vec4<f32>,
+    stress_diag: vec4<f32>,
+    stress_off: vec4<f32>,
 }
 
 struct FluidParticle {

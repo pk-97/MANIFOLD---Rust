@@ -1,5 +1,5 @@
 //! MLS-MPM matter: the point and grid
-//! records the matter atoms share, the water constants, the block sort of
+//! records the matter atoms share, the sand constants, the block sort of
 //! the lattice, the fixed-point encoding of grid accumulation (D5) and the
 //! substep rule (D4). The clock, lattice, bodies and rigid owner are every
 //! GPU liquid's: `liquid`.
@@ -13,16 +13,13 @@ use manifold_physics::clock::TICK;
 use manifold_water_liquid::world_tiles::{Reach, run_tiles};
 
 pub mod coupling;
-#[doc = "The f64 CPU oracle, compiled for unit tests and the `gpu-proofs` binary."]
-pub mod look;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod material_gpu_tests;
-#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
-#[doc(hidden)]
-pub mod reference;
 
-/// One material point. 80 bytes. Storage order is id order and never changes
-/// (D9): the published frame must be id-sorted.
+/// One material point. 160 bytes. Storage order is id order and never changes
+/// (D9): the published frame must be id-sorted. The material state (F, its
+/// plastic history and the stress) rides in the same record, so the sort
+/// still permutes indices, never records.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MatterPoint {
@@ -32,18 +29,30 @@ pub struct MatterPoint {
     pub id: u32,
     /// Metres per second.
     pub velocity: [f32; 3],
-    /// J, current over rest volume.
+    /// J = det F, current over rest volume.
     pub volume_ratio: f32,
-    /// Affine velocity C, row 0 (1/s); w = plastic volume ratio (1 when unused).
+    /// Affine velocity C, row 0 (1/s); w = the log volume the grains gained
+    /// while pulled apart, paid back before pressure builds.
     pub affine_x: [f32; 4],
     /// C row 1; w = rest volume V0 in cubic metres.
     pub affine_y: [f32; 4],
-    /// C row 2; w = 0.
+    /// C row 2; w = the material index (0 sand), kept by every pass.
     pub affine_z: [f32; 4],
+    /// Elastic deformation F, row 0; w = accumulated plastic strain.
+    pub f_x: [f32; 4],
+    /// F row 1; w = 0.
+    pub f_y: [f32; 4],
+    /// F row 2; w = 0.
+    pub f_z: [f32; 4],
+    /// Kirchhoff stress τ (Pa): xx, yy, zz; w = 0.
+    pub stress_diag: [f32; 4],
+    /// τ: xy, xz, yz; w = 0.
+    pub stress_off: [f32; 4],
 }
 
 /// Std430: position Vec3F at 0, id at 12, velocity at 16, volume_ratio at 28,
-/// the three affine rows at 32, 48, 64. Stride 80.
+/// the three affine rows at 32, 48, 64, the three F rows at 80, 96, 112, the
+/// stress at 128 and 144. Stride 160.
 pub const MATTER_POINT_SPECS: &[ChannelSpec] = &[
     ChannelSpec {
         name: well_known::POSITION,
@@ -71,6 +80,26 @@ pub const MATTER_POINT_SPECS: &[ChannelSpec] = &[
     },
     ChannelSpec {
         name: well_known::AFFINE_Z,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::F_X,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::F_Y,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::F_Z,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::STRESS_DIAG,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::STRESS_OFF,
         ty: ChannelElementType::Vec4F,
     },
 ];
@@ -106,7 +135,7 @@ impl KnownItem for MatterGridNode {
 }
 
 const _: () = {
-    assert!(std::mem::size_of::<MatterPoint>() == 80);
+    assert!(std::mem::size_of::<MatterPoint>() == 160);
     assert!(std::mem::size_of::<MatterGridNode>() == 32);
 };
 
@@ -247,41 +276,75 @@ pub fn encode_fixed(x: f64, point_key: u32, slot: u32) -> i64 {
     whole as i64 + i64::from(carry)
 }
 
-/// Largest J cohesive water keeps (D3): the Cohesion tension κ·λ·J·(J − 1)
-/// pulls a stretched point back; a point stretched to twice its rest volume
-/// is torn, and the cap keeps λ·J·(J − 1) finite. Tension-free water
-/// (Cohesion 0) keeps J ≤ 1.
-pub const COHESIVE_J_MAX: f32 = 2.0;
-
-/// The largest J a point keeps after each update, for a Cohesion (D3).
-pub fn j_max(cohesion: f32) -> f32 {
-    if cohesion <= 0.0 { 1.0 } else { COHESIVE_J_MAX }
-}
-
-/// Rest density of water, kg/m³ (taichi_elements `p_rho`).
-pub use manifold_water_liquid::WATER_DENSITY;
-
 /// Mass unit of the accumulators: `1000 · dx³ / 8` kg (D5), so a full node of
-/// water sums to about 8 units.
+/// sand at 1600 kg/m³ sums to about 13 units.
 pub fn mass_unit(cell_size: f32) -> f32 {
     125.0 * cell_size * cell_size * cell_size
 }
 
-/// Young's modulus per metre of the longest domain side and Poisson's ratio
-/// (taichi_elements: `E = 1e6 · size`, `nu = 0.2`).
-const YOUNG_PER_METRE: f64 = 1.0e6;
-const POISSON_RATIO: f64 = 0.2;
+/// Sand's Young's modulus (Pa) and Poisson's ratio at Stiffness 1, the values
+/// Tampubolon et al. 2017 used. Sand's look comes from its plasticity; the
+/// stiffness only has to hold it up without bouncing.
+const SAND_YOUNG: f64 = 3.537e5;
+const SAND_POISSON: f64 = 0.3;
+/// Dry sand's bulk density, kg/m³.
+pub const SAND_DENSITY: f32 = 1600.0;
+/// The Friction Angle a new Sand starts at, degrees.
+pub const SAND_FRICTION_ANGLE: f32 = 35.0;
+/// The Friction Angle's range, degrees: below it the cone is too narrow for
+/// a cohesion to mean anything, above it sand holds cliffs it never holds.
+pub const FRICTION_ANGLE_RANGE: (f32, f32) = (5.0, 60.0);
+/// The plastic strain over which soil's cohesion falls to 1/e.
+pub const COHESION_SOFTENING: f32 = 0.05;
 
-/// Water's bulk term λ in Pa at `stiffness` (D3: λ scales by s²).
-pub fn water_lambda(longest_side_m: f64, stiffness: f64) -> f64 {
-    let e = YOUNG_PER_METRE * longest_side_m;
-    let lambda0 = e * POISSON_RATIO / ((1.0 + POISSON_RATIO) * (1.0 - 2.0 * POISSON_RATIO));
-    lambda0 * stiffness * stiffness
+/// One material's constants as the material stage takes them
+/// (`MatterMaterial` in matter_material.wgsl), less the softening.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MatterMaterial {
+    /// Lamé shear modulus μ, Pa.
+    pub mu: f64,
+    /// Lamé λ, Pa.
+    pub lambda: f64,
+    /// Drucker-Prager friction α = √(2/3)·2 sin φ / (3 − sin φ).
+    pub alpha: f64,
+    /// β₀, the tensile log strain intact soil carries.
+    pub cohesion: f64,
+    /// The Friction Angle φ, radians.
+    pub friction_angle: f64,
 }
 
-/// Acoustic wave speed `√(λ/ρ)` in m/s.
-pub fn wave_speed(lambda: f64, density: f64) -> f64 {
-    (lambda / density).sqrt()
+impl MatterMaterial {
+    /// Sand at `stiffness` (E scales by its square, so the wave speed and the
+    /// substeps scale by it, D3), a Friction Angle in degrees and a Cohesion
+    /// in kPa. The kPa become β₀ through the shear strength a cohesion adds,
+    /// α·(3λ + 2μ)·β₀, so the dial means the same at any Stiffness or
+    /// Friction Angle.
+    pub fn sand(stiffness: f64, friction_angle: f64, cohesion_kpa: f64) -> Self {
+        let young = SAND_YOUNG * stiffness * stiffness;
+        let mu = young / (2.0 * (1.0 + SAND_POISSON));
+        let lambda = young * SAND_POISSON / ((1.0 + SAND_POISSON) * (1.0 - 2.0 * SAND_POISSON));
+        let friction_angle = friction_angle.to_radians();
+        let sin = friction_angle.sin();
+        let alpha = (2.0f64 / 3.0).sqrt() * 2.0 * sin / (3.0 - sin);
+        Self {
+            mu,
+            lambda,
+            alpha,
+            cohesion: cohesion_kpa * 1000.0 / (alpha * (3.0 * lambda + 2.0 * mu)),
+            friction_angle,
+        }
+    }
+
+    /// The Bounds walls' Coulomb friction, tan φ: the sand grips a wall as it
+    /// grips itself.
+    pub fn wall_friction(&self) -> f64 {
+        self.friction_angle.tan()
+    }
+
+    /// The pressure wave's speed √((λ + 2μ)/ρ), m/s.
+    pub fn wave_speed(&self, density: f64) -> f64 {
+        ((self.lambda + 2.0 * self.mu) / density).sqrt()
+    }
 }
 
 /// Acoustic CFL (taichi_elements' default dt at L = 1 gives c·dt/dx = 0.33).
@@ -466,42 +529,43 @@ mod tests {
 
     #[test]
     fn matter_records_match_their_channel_layouts() {
-        assert_eq!(std430_stride(MATTER_POINT_SPECS), 80);
+        assert_eq!(std430_stride(MATTER_POINT_SPECS), 160);
         assert_eq!(std430_stride(MATTER_GRID_NODE_SPECS), 32);
     }
 
-    /// D4's worked numbers at the Dam Break setup: L = H = 4 m, 64 cells,
-    /// Stiffness 1 → λ = 1.11e6 Pa, c = 33.3 m/s, v_est = 8.9 m/s, n = 34.
+    /// MATTER_SAND_DESIGN.md section 3's worked numbers: Stiffness 1 gives
+    /// μ = 136 kPa and λ = 204 kPa, a 17.3 m/s wave in 1600 kg/m³ sand, and
+    /// with a 4 m fall 21 substeps a tick at 6.25 cm cells, 11 at 12.5 cm and
+    /// 6 at 25 cm; a 35° Friction Angle gives α = 0.386.
     #[test]
-    fn matter_substep_rule_matches_worked_example() {
-        let dx = 4.0 / 64.0;
-        let lambda = water_lambda(4.0, 1.0);
-        assert!((lambda - 1.111e6).abs() < 1.0e3, "{lambda}");
-        let c = wave_speed(lambda, 1000.0);
-        assert!((c - 33.33).abs() < 0.01, "{c}");
-        let v = free_fall_speed(4.0);
-        assert!((v - 8.86).abs() < 0.01, "{v}");
-        assert_eq!(substeps_per_tick(dx, c as f32, v as f32, None, None), 34);
-        let dt = TICK / 34.0;
-        assert!((dt - 4.90e-4).abs() < 1.0e-6, "{dt}");
+    fn sand_constants_match_the_design() {
+        let sand = MatterMaterial::sand(1.0, 35.0, 0.0);
+        assert!((sand.mu - 1.360e5).abs() < 100.0, "{}", sand.mu);
+        assert!((sand.lambda - 2.040e5).abs() < 100.0, "{}", sand.lambda);
+        assert!((sand.alpha - 0.386).abs() < 1e-3, "{}", sand.alpha);
+        assert_eq!(sand.cohesion, 0.0);
+        let c = sand.wave_speed(f64::from(SAND_DENSITY));
+        assert!((c - 17.25).abs() < 0.01, "{c}");
+        let v = free_fall_speed(4.0) as f32;
+        let n = |dx: f32| substeps_per_tick(dx, c as f32, v, None, None);
+        assert_eq!([n(0.0625), n(0.125), n(0.25)], [21, 11, 6]);
     }
 
+    /// One kPa of Cohesion holds the same shear strength whatever the
+    /// Stiffness and Friction Angle: α·(3λ + 2μ)·β₀ = 1000 Pa.
     #[test]
-    fn matter_substeps_follow_stiffness() {
-        let dx = 4.0f32 / 64.0;
-        let v = free_fall_speed(4.0) as f32;
-        let n = |s: f64| {
-            substeps_per_tick(
-                dx,
-                wave_speed(water_lambda(4.0, s), 1000.0) as f32,
-                v,
-                None,
-                None,
-            )
-        };
-        assert_eq!(n(0.5), 21);
-        assert_eq!(n(1.0), 34);
-        assert_eq!(n(2.0), 61);
+    fn cohesion_kpa_is_a_shear_strength() {
+        for (stiffness, angle) in [(0.5, 20.0), (1.0, 35.0), (2.5, 50.0)] {
+            let soil = MatterMaterial::sand(stiffness, angle, 1.0);
+            let strength = soil.alpha * (3.0 * soil.lambda + 2.0 * soil.mu) * soil.cohesion;
+            assert!(
+                (strength - 1000.0).abs() < 1e-6,
+                "{stiffness} {angle}: {strength}"
+            );
+        }
+        // Stiffness scales the wave speed linearly (E by its square).
+        let wave = |s: f64| MatterMaterial::sand(s, 35.0, 0.0).wave_speed(1600.0);
+        assert!((wave(2.0) / wave(1.0) - 2.0).abs() < 1e-12);
     }
 
     #[test]
@@ -509,7 +573,7 @@ mod tests {
         // Resolution 256 in a 4 m domain: Stiffness 3 needs more than 128.
         let dx = 4.0f64 / 256.0;
         let v = free_fall_speed(4.0);
-        let unit = wave_speed(water_lambda(4.0, 1.0), 1000.0);
+        let unit = MatterMaterial::sand(1.0, 35.0, 0.0).wave_speed(f64::from(SAND_DENSITY));
         let requested = 3.0;
         let n_requested =
             substeps_per_tick(dx as f32, (unit * requested) as f32, v as f32, None, None);

@@ -51,6 +51,7 @@ fn ts_table_entries() -> u32 { return params.entries; }
 fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 
 const FS_THREADS: u32 = 256u;
+const EXP_WEIGHT: f32 = 1.0;
 // field_build::FIELD_LEASH_CELLS.
 const FS_LEASH_CELLS: f32 = 0.5;
 // FIELD_FAR_CELLS (scene_object), the level set where no tile is held.
@@ -122,6 +123,37 @@ fn fs_pass(from_a: bool, src: FsBox, dst: FsBox, dir: vec3<u32>, step: u32, far:
             fs_a[fs_at(dst, r)] = v;
         }
     }
+}
+
+fn fs_prior_at(home: vec3<i32>, n: vec3<i32>, canon: f32) -> f32 {
+    let d = (n >> vec3<u32>(3u)) - home;
+    if any(abs(d) > vec3<i32>(1)) {
+        return canon;
+    }
+    let slot = fs_near[ts_neighbour_index(d)];
+    if slot == WT_NONE {
+        return canon;
+    }
+    return prior[slot * 512u + ts_local(n)];
+}
+
+fn fs_prior_trilinear(home: vec3<i32>, q: vec3<f32>, canon: f32) -> f32 {
+    let fl = floor(q);
+    let t = q - fl;
+    let b = vec3<i32>(fl);
+    let c000 = fs_prior_at(home, b, canon);
+    let c100 = fs_prior_at(home, b + vec3<i32>(1, 0, 0), canon);
+    let c010 = fs_prior_at(home, b + vec3<i32>(0, 1, 0), canon);
+    let c110 = fs_prior_at(home, b + vec3<i32>(1, 1, 0), canon);
+    let c001 = fs_prior_at(home, b + vec3<i32>(0, 0, 1), canon);
+    let c101 = fs_prior_at(home, b + vec3<i32>(1, 0, 1), canon);
+    let c011 = fs_prior_at(home, b + vec3<i32>(0, 1, 1), canon);
+    let c111 = fs_prior_at(home, b + vec3<i32>(1, 1, 1), canon);
+    let x00 = mix(c000, c100, t.x);
+    let x10 = mix(c010, c110, t.x);
+    let x01 = mix(c001, c101, t.x);
+    let x11 = mix(c011, c111, t.x);
+    return mix(mix(x00, x10, t.y), mix(x01, x11, t.y), t.z);
 }
 
 @compute @workgroup_size(256)
@@ -214,7 +246,25 @@ fn cs_main(
         let anchor = reference[e];
         var out = before;
         if abs(anchor) < band {
-            out = clamp(before + weights[e] * (smoothed - before), anchor - leash, anchor + leash);
+            let home = ts_slot_tile(slot);
+            let node = home * 8 + vec3<i32>(i32(local & 7u), i32((local >> 3u) & 7u), i32(local >> 6u));
+            let st = i32(s);
+            let grad = vec3<f32>(
+                fs_prior_at(home, node + vec3<i32>(st, 0, 0), canon) - fs_prior_at(home, node - vec3<i32>(st, 0, 0), canon),
+                fs_prior_at(home, node + vec3<i32>(0, st, 0), canon) - fs_prior_at(home, node - vec3<i32>(0, st, 0), canon),
+                fs_prior_at(home, node + vec3<i32>(0, 0, st), canon) - fs_prior_at(home, node - vec3<i32>(0, 0, st), canon),
+            );
+            var corrected = smoothed;
+            let gl = length(grad);
+            if gl > 1.0e-9 {
+                let nrm = grad / gl;
+                let q = vec3<f32>(node);
+                let across = fs_prior_trilinear(home, q + nrm * f32(s), canon)
+                    + fs_prior_trilinear(home, q - nrm * f32(s), canon) - 2.0 * before;
+                let c = select((1.0 + f32(s * s)) / 4.0, 0.25, s == 1u) / f32(s * s);
+                corrected = smoothed - c * across;
+            }
+            out = clamp(before + EXP_WEIGHT * (corrected - before), anchor - leash, anchor + leash);
         }
         field[e] = out;
     }

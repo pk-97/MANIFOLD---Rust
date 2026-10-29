@@ -143,7 +143,7 @@ fn liquid_carry_rejects_short_solid_before_gpu_work() {
 fn liquid_presets_all_extent_checked() {
     let presets = liquid_presets();
     assert!(
-        presets.len() >= 7,
+        presets.len() >= 6,
         "liquid presets: {:?}",
         presets.iter().map(|(id, _)| id).collect::<Vec<_>>()
     );
@@ -194,7 +194,7 @@ use manifold_core::liquid_domain::is_liquid_domain;
 fn an_atom_without_a_rule_fails_by_name() {
     let (_, def) = liquid_presets()
         .into_iter()
-        .find(|(id, _)| id == "WaterDamBreakMatter")
+        .find(|(id, _)| id == "SandColumn")
         .expect("preset");
     let mut preset = LiquidPreset::build(def.as_ref()).expect("builds");
     let rules: Vec<ExtentRule> = EXTENT_RULES
@@ -219,7 +219,7 @@ fn a_lattice_past_its_storage_is_caught() {
     use manifold_core::effect_graph_def::SerializedParamValue;
     let (_, def) = liquid_presets()
         .into_iter()
-        .find(|(id, _)| id == "WaterDamBreakMatter")
+        .find(|(id, _)| id == "SandColumn")
         .expect("preset");
     let mut flat = manifold_core::flatten::flatten_groups(def.as_ref()).expect("flattens");
     let counter = flat

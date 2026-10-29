@@ -10,11 +10,11 @@ fn matter_liquid_samples_its_field_and_its_world_per_tick() {
     let runtime = PresetRuntime::from_json_str(
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/presets/WaterFloatingBoxMatter.json"
+            "/tests/fixtures/presets/SandBoxDrop.json"
         )),
         &PrimitiveRegistry::with_builtin(),
     )
-    .expect("WaterFloatingBoxMatter loads");
+    .expect("SandBoxDrop loads");
     let pairs = runtime.plan.node_pairs();
     assert!(
         !pairs.is_empty(),

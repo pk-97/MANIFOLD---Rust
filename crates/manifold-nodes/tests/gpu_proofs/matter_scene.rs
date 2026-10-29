@@ -189,9 +189,19 @@ impl MatterScene {
         for port in ["simulation_time", "display_time", "epoch"] {
             wire(&mut graph, (domain, port), (frame, port));
         }
-        for port in ["lambda", "cohesion", "density"] {
-            wire(&mut graph, (domain, port), (p2g, port));
+        wire(&mut graph, (domain, "density"), (p2g, "density"));
+        for port in ["mu", "lambda", "density"] {
             wire(&mut graph, (domain, port), (stats, port));
+        }
+        for port in ["mu", "lambda", "alpha", "cohesion", "softening", "density"] {
+            wire(&mut graph, (domain, port), (g2p, port));
+        }
+        for node in [update, reaction] {
+            wire(
+                &mut graph,
+                (domain, "wall_friction"),
+                (node, "wall_friction"),
+            );
         }
         wire(
             &mut graph,
@@ -204,7 +214,6 @@ impl MatterScene {
             (update, "momentum_unit"),
         );
         wire(&mut graph, (domain, "liveliness"), (g2p, "liveliness"));
-        wire(&mut graph, (domain, "cohesion"), (g2p, "cohesion"));
 
         wire(&mut graph, (fill, "points"), (state, "seed"));
         for (node, port) in [
@@ -653,24 +662,6 @@ impl MatterScene {
             .unwrap_or_else(|| panic!("the frame node read no `{name}`"))
     }
 
-    /// Give every live point the same velocity and no affine motion, between
-    /// frames (the GPU is idle).
-    pub(crate) fn set_velocity(&self, velocity: [f32; 3]) {
-        let mut points = self.points();
-        for p in points.iter_mut().filter(|p| p.id != 0) {
-            p.velocity = velocity;
-            p.affine_x = [0.0, 0.0, 0.0, p.affine_x[3]];
-            p.affine_y = [0.0, 0.0, 0.0, p.affine_y[3]];
-            p.affine_z = [0.0; 4];
-        }
-        let backend = self.executor.backend();
-        let buffer = backend
-            .array_buffer(backend.slot_for(self.points).expect("bound"))
-            .expect("array");
-        // SAFETY: shared storage, no GPU work in flight.
-        unsafe { buffer.write(0, bytemuck::cast_slice(&points)) };
-    }
-
     /// A scalar the state node read this frame.
     pub(crate) fn state_input(&self, name: &str) -> f32 {
         self.executor
@@ -723,26 +714,27 @@ fn matter_frame_ids_strictly_increasing() {
 #[test]
 fn matter_variable_speed_export_grouping_matches_raw_points() {
     use manifold_water_gpu_mpm::matter::{
-        MAX_SUBSTEPS, WATER_DENSITY, free_fall_speed, momentum_unit, substeps_for_interval,
-        substeps_per_tick, water_lambda, wave_speed,
+        MAX_SUBSTEPS, MatterMaterial, SAND_DENSITY, SAND_FRICTION_ANGLE, free_fall_speed,
+        momentum_unit, substeps_for_interval, substeps_per_tick,
     };
 
+    // Stiffness 2.5: the slow interval's substeps cross a power of two of
+    // dx/dt that the fast interval's capped substeps do not.
     let settings = SceneSettings {
         resolution: 16,
         domain_size: 1.0,
-        stiffness: 1.0,
+        stiffness: 2.5,
         ..SceneSettings::default()
     };
     let dx = settings.domain_size / settings.resolution as f32;
     let nominal = substeps_per_tick(
         dx,
-        wave_speed(
-            water_lambda(
-                f64::from(settings.domain_size),
-                f64::from(settings.stiffness),
-            ),
-            f64::from(WATER_DENSITY),
-        ) as f32,
+        MatterMaterial::sand(
+            f64::from(settings.stiffness),
+            f64::from(SAND_FRICTION_ANGLE),
+            0.0,
+        )
+        .wave_speed(f64::from(SAND_DENSITY)) as f32,
         free_fall_speed(f64::from(settings.domain_size)) as f32,
         None,
         None,
@@ -935,12 +927,12 @@ fn matter_substeps_follow_stiffness_live() {
         ..SceneSettings::default()
     });
     scene.tick();
-    assert_eq!(scene.state_input("substeps_per_tick"), 34.0);
+    assert_eq!(scene.state_input("substeps_per_tick"), 21.0);
     scene.set_domain("stiffness", 0.5);
     scene.tick();
-    assert_eq!(scene.state_input("substeps_per_tick"), 21.0);
+    assert_eq!(scene.state_input("substeps_per_tick"), 14.0);
     scene.set_domain("stiffness", 2.0);
     scene.tick();
-    assert_eq!(scene.state_input("substeps_per_tick"), 61.0);
+    assert_eq!(scene.state_input("substeps_per_tick"), 35.0);
     assert!(scene.frame_input("count") > 0.0);
 }

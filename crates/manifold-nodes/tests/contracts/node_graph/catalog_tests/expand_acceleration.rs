@@ -22,7 +22,7 @@ fn top(node: &str) -> NodeId {
 fn matter_surface_water_resolves_to_its_domain_force_port() {
     let def = preset(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/presets/WaterDamBreakMatter.json"
+        "/tests/fixtures/presets/SandColumn.json"
     )));
     let registry = PrimitiveRegistry::with_builtin();
     let index = FlatSceneIndex::build(&def).unwrap();

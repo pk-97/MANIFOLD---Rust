@@ -151,7 +151,7 @@ manifold_node_engine::primitive! {
     ],
     depth_rule: Terminal,
     composition_notes: "Feeds node.matter_state's seed (copied in when the domain's epoch changes) and its count. Cell boxes are in the authored domain's cells, from node.matter_domain's fill outputs (fill_min, fill_cells); the box is clipped above the pool so no cell seeds twice. Points per Cell is 8 or 27.",
-    examples: ["WaterDamBreakMatter", "WaterStillPoolMatter"],
+    examples: ["SandColumn"],
     picker: { label: "Matter Fill", category: Atom },
     summary: "Places the liquid's starting particles in the domain: a pool on the floor plus one box.",
     category: Particles3D,

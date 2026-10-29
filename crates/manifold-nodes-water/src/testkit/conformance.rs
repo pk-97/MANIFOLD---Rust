@@ -13,7 +13,6 @@ use manifold_water_liquid::testkit::CUBE_EDGE_PER_SCALE;
 #[cfg(any(test, feature = "testkit"))]
 use serde_json::Value;
 
-use manifold_water_gpu_mpm::matter::MatterTickStats;
 use manifold_water_liquid::WATER_DENSITY;
 use manifold_water_liquid::primitives::liquid_stats::LiquidTickStats;
 
@@ -298,16 +297,6 @@ fn liquid_totals(words: &[u32]) -> LiquidTotals {
         mass: f64::from(stats.mass),
         momentum: stats.momentum.map(f64::from),
         energy: f64::from(stats.kinetic),
-        nonfinite: stats.nonfinite,
-    }
-}
-
-fn matter_totals(words: &[u32]) -> LiquidTotals {
-    let stats = MatterTickStats::from_words(words);
-    LiquidTotals {
-        mass: f64::from(stats.mass),
-        momentum: stats.momentum.map(f64::from),
-        energy: f64::from(stats.kinetic) + f64::from(stats.elastic),
         nonfinite: stats.nonfinite,
     }
 }

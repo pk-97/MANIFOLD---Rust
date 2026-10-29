@@ -245,7 +245,7 @@ manifold_node_engine::primitive! {
         float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire levelset from the display's level set (after its smoothing), and tiles, pool_tiles and cell_size from node.surface_tiles. Wire vertices to node.scene_object.vertices with the water's material: render_scene draws only the live triangles. For motion blur on an opaque surface, wire velocity from node.surface_weights over the same tiles and prev_positions to node.scene_object.prev_positions.",
+    composition_notes: "Wire levelset from the display's level set (after its smoothing), and tiles, pool_tiles and cell_size from node.surface_tiles. Wire vertices to node.scene_object.vertices with the water's material: render_scene draws only the live triangles. For motion blur on an opaque surface, wire velocity from node.particle_volume over the same tiles and prev_positions to node.scene_object.prev_positions.",
     examples: [],
     picker: { label: "Tile Surface Mesh", category: Atom },
     summary: "Builds the triangle mesh of a liquid's surface tile by tile, ready to render with any material.",
