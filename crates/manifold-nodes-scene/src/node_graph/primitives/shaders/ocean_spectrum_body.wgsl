@@ -10,6 +10,8 @@
 
 const OSP_G: f32 = 9.81;
 const OSP_PI: f32 = 3.14159265358979;
+// Surface tension over density of clean water, m³/s² (0.0728 N/m over 998 kg/m³).
+const OSP_TENSION: f32 = 7.2946e-5;
 
 fn osp_pcg(v: u32) -> u32 {
     let s = v * 747796405u + 2891336453u;
@@ -30,7 +32,7 @@ fn osp_gauss(seed: u32, ix: i32, iz: i32) -> vec2<f32> {
 }
 
 // √(S_k)·Δk at wavevector k (rad/m); 0 outside [band_low, band_high).
-fn osp_amplitude(k: vec2<f32>, dk: f32, band_low: f32, band_high: f32, wind_speed: f32, wind_dir: f32, fetch_m: f32) -> f32 {
+fn osp_amplitude(k: vec2<f32>, dk: f32, band_low: f32, band_high: f32, wind_speed: f32, wind_dir: f32, wind_spread: f32, fetch_m: f32) -> f32 {
     let kl = length(k);
     if kl < 1e-6 || kl < band_low || (band_high > 0.0 && kl >= band_high) {
         return 0.0;
@@ -53,11 +55,13 @@ fn osp_amplitude(k: vec2<f32>, dk: f32, band_low: f32, band_high: f32, wind_spee
     }
     var theta = atan2(k.y, k.x) - wind_dir;
     theta = theta - 2.0 * OSP_PI * floor((theta + OSP_PI) / (2.0 * OSP_PI));
-    var spread = 0.5 / OSP_PI;
+    var around_wind = 0.5 / OSP_PI;
     if beta >= 1e-4 {
         let ch = cosh(beta * theta);
-        spread = beta / (2.0 * tanh(beta * OSP_PI)) / (ch * ch);
+        around_wind = beta / (2.0 * tanh(beta * OSP_PI)) / (ch * ch);
     }
+    // Wind Spread 1 follows the wind, 0 runs the waves every way alike.
+    let spread = mix(0.5 / OSP_PI, around_wind, wind_spread);
     let s_k = s_omega * spread * (OSP_G / (2.0 * omega)) / kl;
     return sqrt(s_k) * dk;
 }
@@ -75,6 +79,7 @@ fn body(
     band_high: f32,
     wind_speed: f32,
     wind_direction: f32,
+    wind_spread: f32,
     fetch_km: f32,
     wave_size: f32,
     swell_speed: f32,
@@ -98,10 +103,12 @@ fn body(
     let wd = radians(wind_direction);
     let fetch_m = 1000.0 * max(fetch_km, 0.001);
     let s = bitcast<u32>(seed);
-    let h0 = osp_gauss(s, ix, iz) * (0.5 * osp_amplitude(k, dk, band_low, band_high, wind_speed, wd, fetch_m));
-    let h0n = osp_gauss(s, -ix, -iz) * (0.5 * osp_amplitude(-k, dk, band_low, band_high, wind_speed, wd, fetch_m));
+    let h0 = osp_gauss(s, ix, iz) * (0.5 * osp_amplitude(k, dk, band_low, band_high, wind_speed, wd, wind_spread, fetch_m));
+    let h0n = osp_gauss(s, -ix, -iz) * (0.5 * osp_amplitude(-k, dk, band_low, band_high, wind_speed, wd, wind_spread, fetch_m));
     let kl = length(k);
-    let ph = sqrt(OSP_G * kl) * time * swell_speed;
+    // Capillary-gravity dispersion: the ripples' surface tension speeds the
+    // shortest waves; the ocean's are long enough that gravity alone rules.
+    let ph = sqrt(OSP_G * kl + OSP_TENSION * kl * kl * kl) * time * swell_speed;
     let e = vec2<f32>(cos(ph), -sin(ph));
     let hk = (osp_cmul(h0, e) + osp_cmul(vec2<f32>(h0n.x, -h0n.y), vec2<f32>(e.x, -e.y)))
         * (wave_size * f32(n) * f32(n));

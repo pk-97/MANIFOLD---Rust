@@ -12,10 +12,19 @@ use super::super::ocean_spectrum::{OceanSpectrum, SpectrumUniforms};
 use super::FieldObject;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 
-/// The FFT side: a power of two with 4 texels per cell across the 32 cells
-/// the tile spans (`TILE_WAVELENGTHS` x `RESOLVED_WAVELENGTH_CELLS`). The
-/// Ocean builds its own cascades at the spectrum's default 256.
+/// The FFT side: a power of two, so the tile's shortest wave, two texels,
+/// is 1.6 cm, about the 1.7 cm where capillary-gravity waves run slowest.
+/// The Ocean builds its own cascades at the spectrum's default 256.
 const RIPPLE_TEXELS: u32 = 128;
+
+/// The tile's side in metres, whatever the cell: ripples are a size of their
+/// own, from the shortest capillary wave up to [`RIPPLE_LONGEST_METRES`];
+/// longer waves are the simulation's.
+const RIPPLE_TILE_METRES: f32 = 1.0;
+
+/// The longest ripple: the tile holds [`TILE_WAVELENGTHS`] of it, so its
+/// repeat is not seen.
+const RIPPLE_LONGEST_METRES: f32 = RIPPLE_TILE_METRES / TILE_WAVELENGTHS;
 
 /// Mip levels of the tile: `log2(RIPPLE_TEXELS) + 1`, down to one texel.
 const MIP_LEVELS: u32 = RIPPLE_TEXELS.ilog2() + 1;
@@ -25,7 +34,7 @@ const MIP_LEVELS: u32 = RIPPLE_TEXELS.ilog2() + 1;
 /// starts below it.
 const RESOLVED_WAVELENGTH_CELLS: f32 = 4.0;
 
-/// The tile holds eight of the longest ripple, so its repeat is not seen.
+/// Wavelengths of the longest ripple across the tile.
 const TILE_WAVELENGTHS: f32 = 8.0;
 
 /// The flow map's cycle in seconds (Vlachos 2010, "Water Flow in Portal 2",
@@ -67,14 +76,11 @@ fn resolved_metres(cell: f32) -> f32 {
     RESOLVED_WAVELENGTH_CELLS * cell
 }
 
-/// The tile's side in metres.
-fn tile_metres(cell: f32) -> f32 {
-    TILE_WAVELENGTHS * resolved_metres(cell)
-}
-
-/// The lowest wavenumber (rad/m) of the tile's spectrum: the field's own waves stay out.
+/// The lowest wavenumber (rad/m) of the tile's spectrum: the field's own
+/// waves stay out, and so do waves longer than a ripple where the field is
+/// coarser than that.
 fn band_low(cell: f32) -> f32 {
-    std::f32::consts::TAU / resolved_metres(cell)
+    std::f32::consts::TAU / resolved_metres(cell).min(RIPPLE_LONGEST_METRES)
 }
 
 /// Whether a field wants ripples: a velocity lattice to flow along and a
@@ -89,8 +95,7 @@ fn field_cell(field: &FieldObject) -> f32 {
 
 /// The tile's side in metres when the field wants ripples.
 pub(super) fn tile_for(field: &FieldObject) -> Option<f32> {
-    wants_ripples(field.velocity.is_some(), field.ripple_detail)
-        .then(|| tile_metres(field_cell(field)))
+    wants_ripples(field.velocity.is_some(), field.ripple_detail).then_some(RIPPLE_TILE_METRES)
 }
 
 /// One field's slope texture.
@@ -347,16 +352,20 @@ mod tests {
     }
 
     #[test]
-    fn tile_and_band_follow_the_cell() {
+    fn the_band_starts_below_the_field_or_at_the_longest_ripple() {
         let model = model_matrix([0.0; 3], [0.0; 3], [1.0; 3]);
+        // A 2 cm cell draws waves down to 8 cm itself: the band starts there.
+        let cell = cell_metres(0.02, model);
+        assert!((cell - 0.02).abs() < 1e-6, "cell {cell}");
+        assert!((band_low(cell) - std::f32::consts::TAU / 0.08).abs() < 1e-2);
+        // A 5 cm cell draws waves down to 20 cm, longer than a ripple: the
+        // band starts at the longest ripple, 1/8 of the metre tile.
         let cell = cell_metres(0.05, model);
-        assert!((cell - 0.05).abs() < 1e-6, "cell {cell}");
-        assert!((tile_metres(cell) - 1.6).abs() < 1e-5);
-        assert!((band_low(cell) - std::f32::consts::TAU / 0.2).abs() < 1e-3);
+        assert!((band_low(cell) - std::f32::consts::TAU / 0.125).abs() < 1e-3);
 
         let doubled = model_matrix([0.0; 3], [0.0; 3], [2.0; 3]);
-        let cell = cell_metres(0.05, doubled);
-        assert!((tile_metres(cell) - 3.2).abs() < 1e-5);
+        let cell = cell_metres(0.01, doubled);
+        assert!((band_low(cell) - std::f32::consts::TAU / 0.08).abs() < 1e-2);
 
         // The smallest axis scale sets the tile.
         let squashed = model_matrix([0.0; 3], [0.0; 3], [1.0, 0.25, 1.0]);

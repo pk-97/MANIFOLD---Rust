@@ -26,6 +26,9 @@ pub(crate) const DEFAULT_FETCH_KM: f32 = 300.0;
 pub(crate) const DEFAULT_WAVE_SIZE: f32 = 1.0;
 /// Multiplier on the spectrum's time.
 pub(crate) const DEFAULT_SWELL_SPEED: f32 = 1.0;
+/// How much the waves follow the wind: 1 is Donelan-Banner spreading around
+/// it, 0 runs them every way alike.
+pub(crate) const DEFAULT_WIND_SPREAD: f32 = 1.0;
 /// Seed of the random phases.
 pub(crate) const DEFAULT_SEED: i32 = 1;
 
@@ -40,18 +43,23 @@ pub(crate) struct SpectrumUniforms {
     band_high: f32,
     wind_speed: f32,
     wind_direction: f32,
+    wind_spread: f32,
     fetch_km: f32,
     wave_size: f32,
     swell_speed: f32,
     seed: i32,
     time: f32,
     pub(crate) dispatch_count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 impl SpectrumUniforms {
     /// The height half spectrum of one tile for the water's ripple detail,
-    /// from the same sea as the Ocean's defaults. `dispatch_count` covers
-    /// field 0 (Dy) alone: the body puts field f at idx / (N·(N/2+1)).
+    /// from the same sea as the Ocean's defaults but running every way: the
+    /// flow raises the ripples, not a wind. `dispatch_count` covers field 0
+    /// (Dy) alone: the body puts field f at idx / (N·(N/2+1)).
     pub(crate) fn ripple(n: u32, tile_size: f32, band_low: f32, time: f32) -> Self {
         Self {
             size: n as i32,
@@ -60,12 +68,16 @@ impl SpectrumUniforms {
             band_high: 0.0,
             wind_speed: DEFAULT_WIND_SPEED,
             wind_direction: DEFAULT_WIND_DIRECTION,
+            wind_spread: 0.0,
             fetch_km: DEFAULT_FETCH_KM,
             wave_size: DEFAULT_WAVE_SIZE,
             swell_speed: DEFAULT_SWELL_SPEED,
             seed: DEFAULT_SEED,
             time,
             dispatch_count: n * (n / 2 + 1),
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         }
     }
 }
@@ -73,7 +85,7 @@ impl SpectrumUniforms {
 manifold_node_engine::primitive! {
     name: OceanSpectrum,
     type_id: "node.ocean_spectrum",
-    purpose: "One ocean wave cascade's spectrum at time t: JONSWAP from wind speed and fetch, Donelan-Banner spreading around the wind direction, deep-water dispersion, random phases from a seed. Writes six half spectra (height Dy, sideways Dx and Dz, and their slopes Dxx, Dzz, Dxz) of N rows by N/2+1 columns for node.inverse_fft_2d, holding only wavenumbers in [band_low, band_high) so cascades never double-count.",
+    purpose: "One ocean wave cascade's spectrum at time t: JONSWAP from wind speed and fetch, Donelan-Banner spreading around the wind direction (Wind Spread 1; 0 runs the waves every way alike), capillary-gravity dispersion, random phases from a seed. Writes six half spectra (height Dy, sideways Dx and Dz, and their slopes Dxx, Dzz, Dxz) of N rows by N/2+1 columns for node.inverse_fft_2d, holding only wavenumbers in [band_low, band_high) so cascades never double-count.",
     inputs: {
         wind_speed: ScalarF32 optional,
         wind_direction: ScalarF32 optional,
@@ -91,6 +103,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("band_high"), label: "Band High", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("wind_speed"), label: "Wind Speed", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_WIND_SPEED), range: Some((0.1, 40.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("wind_direction"), label: "Wind Direction", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_WIND_DIRECTION), range: Some((-360.0, 360.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("wind_spread"), label: "Wind Spread", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_WIND_SPREAD), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fetch_km"), label: "Fetch (km)", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_FETCH_KM), range: Some((0.1, 5000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("wave_size"), label: "Wave Size", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_WAVE_SIZE), range: Some((0.0, 4.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("swell_speed"), label: "Swell Speed", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_SWELL_SPEED), range: Some((0.0, 4.0)), enum_values: &[] },
@@ -174,12 +187,16 @@ impl Primitive for OceanSpectrum {
             band_high: param_f32(ctx.params, "band_high", 0.0),
             wind_speed: ctx.scalar_or_param("wind_speed", DEFAULT_WIND_SPEED),
             wind_direction: ctx.scalar_or_param("wind_direction", DEFAULT_WIND_DIRECTION),
+            wind_spread: param_f32(ctx.params, "wind_spread", DEFAULT_WIND_SPREAD),
             fetch_km: param_f32(ctx.params, "fetch_km", DEFAULT_FETCH_KM),
             wave_size: ctx.scalar_or_param("wave_size", DEFAULT_WAVE_SIZE),
             swell_speed: ctx.scalar_or_param("swell_speed", DEFAULT_SWELL_SPEED),
             seed: param_f32(ctx.params, "seed", DEFAULT_SEED as f32).round() as i32,
             time,
             dispatch_count: spectrum_len(n),
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         let Some(out) = ctx.outputs.array("spectrum") else {
             return;
@@ -213,6 +230,8 @@ impl Primitive for OceanSpectrum {
 #[cfg(test)]
 pub(crate) mod reference {
     pub const G: f64 = 9.81;
+    /// Surface tension over density of clean water, m³/s².
+    pub const TENSION: f64 = 0.0728 / 998.0;
 
     #[derive(Clone, Copy)]
     pub struct Spectrum {
@@ -222,6 +241,7 @@ pub(crate) mod reference {
         pub band_high: f64,
         pub wind_speed: f64,
         pub wind_direction_deg: f64,
+        pub wind_spread: f64,
         pub fetch_km: f64,
         pub wave_size: f64,
         pub swell_speed: f64,
@@ -271,11 +291,12 @@ pub(crate) mod reference {
         let pi = std::f64::consts::PI;
         let mut theta = kz.atan2(kx) - s.wind_direction_deg.to_radians();
         theta -= 2.0 * pi * ((theta + pi) / (2.0 * pi)).floor();
-        let spread = if beta < 1e-4 {
+        let around_wind = if beta < 1e-4 {
             0.5 / pi
         } else {
             beta / (2.0 * (beta * pi).tanh()) / (beta * theta).cosh().powi(2)
         };
+        let spread = (1.0 - s.wind_spread) * 0.5 / pi + s.wind_spread * around_wind;
         s_omega * spread * (G / (2.0 * omega)) / k
     }
 
@@ -304,7 +325,7 @@ pub(crate) mod reference {
     pub fn h(s: &Spectrum, ix: i32, iz: i32, t: f64) -> (f64, f64) {
         let dk = std::f64::consts::TAU / s.tile_size;
         let k = (f64::from(ix).powi(2) + f64::from(iz).powi(2)).sqrt() * dk;
-        let ph = (G * k).sqrt() * t * s.swell_speed;
+        let ph = (G * k + TENSION * k * k * k).sqrt() * t * s.swell_speed;
         let e = (ph.cos(), -ph.sin());
         let a = mul(h0(s, ix, iz), e);
         let neg = h0(s, -ix, -iz);
@@ -348,6 +369,7 @@ mod tests {
             band_high: 0.0,
             wind_speed: 10.0,
             wind_direction_deg: 0.0,
+            wind_spread: 1.0,
             fetch_km: 300.0,
             wave_size: 1.0,
             swell_speed: 1.0,
@@ -492,6 +514,7 @@ mod gpu_tests {
             band_high: 0.0,
             wind_speed: 12.0,
             wind_direction_deg: 30.0,
+            wind_spread: 1.0,
             fetch_km: 200.0,
             wave_size: 1.3,
             swell_speed: 0.8,
@@ -516,12 +539,16 @@ mod gpu_tests {
             band_high: s.band_high as f32,
             wind_speed: s.wind_speed as f32,
             wind_direction: s.wind_direction_deg as f32,
+            wind_spread: s.wind_spread as f32,
             fetch_km: s.fetch_km as f32,
             wave_size: s.wave_size as f32,
             swell_speed: s.swell_speed as f32,
             seed: s.seed as i32,
             time: t,
             dispatch_count: len,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         let mut enc = device.create_encoder("ocean-spectrum-test");
         enc.dispatch_compute(

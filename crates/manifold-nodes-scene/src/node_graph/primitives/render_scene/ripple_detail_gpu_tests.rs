@@ -152,7 +152,7 @@ fn a_tile_has_ripples_and_repeats() {
     let field = field(&lattices);
     let ripples = made_tile(&device, &field);
     let tile = ripples.tile(0).expect("the field wants ripples");
-    assert!((tile.tile_metres - 1.6).abs() < 1e-5);
+    assert!((tile.tile_metres - 1.0).abs() < 1e-5);
     let slopes = read_slopes(&device, &tile.texture);
 
     let sum_sq: f64 = slopes
