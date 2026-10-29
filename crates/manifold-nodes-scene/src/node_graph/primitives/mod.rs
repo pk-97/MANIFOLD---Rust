@@ -111,6 +111,7 @@ mod shatter_mesh;
 mod simplex_per_instance;
 mod slice_mesh;
 mod taper_mesh;
+mod terrain;
 mod torus_wrap_field;
 mod transform_3d;
 mod transform_shake;

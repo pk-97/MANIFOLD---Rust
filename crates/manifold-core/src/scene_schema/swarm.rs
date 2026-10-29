@@ -278,9 +278,14 @@ pub(super) fn pick_unavailable(
     pick: &Item,
 ) -> Option<&'static str> {
     let ocean = matches!(&pick.fields, ItemFields::Object(object) if object.shape == Shape::Ocean);
+    let terrain =
+        matches!(&pick.fields, ItemFields::Object(object) if object.shape == Shape::Terrain);
     match field {
         "emit_from" if ocean => Some("An Ocean is endless: it has no surface to emit from"),
         "draw_as" if ocean => Some("An Ocean is endless: it cannot be drawn at every particle"),
+        "emit_from" | "draw_as" if terrain => {
+            Some("A Terrain is shaped on the GPU each frame: it has no mesh to share")
+        }
         "draw_as" => draw_as_refused(doc, swarm, pick),
         _ => None,
     }

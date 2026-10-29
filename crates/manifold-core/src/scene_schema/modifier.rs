@@ -622,6 +622,9 @@ pub fn modifier_refuses(target: &Item) -> Option<&'static str> {
         ItemFields::Object(object) if object.shape == Shape::Ocean => {
             Some("An Ocean is endless: it has no bounds for a modifier to bend in")
         }
+        ItemFields::Object(object) if object.shape == Shape::Terrain => {
+            Some("A Terrain is shaped on the GPU each frame: a modifier cannot bend it")
+        }
         ItemFields::Water(_) => {
             Some("Water moves by its own simulation: a modifier cannot bend it")
         }

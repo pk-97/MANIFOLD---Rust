@@ -45,6 +45,7 @@ fn mesh_type(shape: &Shape) -> Option<(&'static str, Option<u32>)> {
         Shape::Icosahedron => ("node.platonic_solid_mesh", Some(3)),
         Shape::Dodecahedron => ("node.platonic_solid_mesh", Some(4)),
         Shape::Ocean
+        | Shape::Terrain
         | Shape::Mesh { .. }
         | Shape::Extrude { .. }
         | Shape::Revolve { .. }
@@ -128,18 +129,31 @@ fn detail_level(b: &Builder<'_>, item: &Item, rest: Option<&Rest>) -> u32 {
     level
 }
 
+/// A Terrain's chain: `node.terrain` lays and lifts the grid, and
+/// `node.make_triangles` turns it into triangles with normals. Returns the
+/// triangles node, the Object's vertices.
+fn emit_terrain(b: &mut Builder<'_>, item: &Item) -> u32 {
+    let owner = item.id.as_str();
+    let grid = b.add(owner, "terrain", "node.terrain");
+    let triangles = b.add(owner, "triangles", "node.make_triangles");
+    b.wire(grid, "vertices", triangles, "in");
+    triangles
+}
+
 pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     let ItemFields::Object(fields) = &item.fields else {
         return;
     };
     let owner = item.id.as_str();
     // Inside a copied group, or drawn as a swarm's particles.
-    // An Ocean is one surface drawn once: it has no mesh source to copy.
+    // An Ocean or Terrain is one surface made on the GPU each frame and drawn
+    // once: it has no mesh source to copy.
     let ocean = fields.shape == Shape::Ocean;
+    let terrain = fields.shape == Shape::Terrain;
     let group_copies = frame
         .and_then(|frame| frame.copies)
         .or_else(|| b.swarm_draws.get(&item.id).copied())
-        .filter(|_| !ocean);
+        .filter(|_| !ocean && !terrain);
     let own_copies = fields.copies && can_copy(&fields.shape) && group_copies.is_none();
     // A swarm drawing this object with Copies on carries its layout to every
     // particle, as it does a Group's (`swarm::nest_layout`).
@@ -162,6 +176,10 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         let Some(triangles) = ocean::emit_surface(b, item) else {
             return;
         };
+        rest = None;
+        (triangles, (triangles, "out"), None)
+    } else if terrain {
+        let triangles = emit_terrain(b, item);
         rest = None;
         (triangles, (triangles, "out"), None)
     } else if let Some(curve) = super::curves::emit(b, item, &fields.shape) {
@@ -212,7 +230,7 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     let (surface, maps) = surface_for(b, &item.id);
     // An object that is its own body draws at the body's solved pose.
     // A surface made on the GPU each frame has no collision mesh.
-    let pose = if ocean {
+    let pose = if ocean || terrain {
         None
     } else {
         super::physics::object(b, item, frame, mesh, transform)

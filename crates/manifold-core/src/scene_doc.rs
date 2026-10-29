@@ -207,8 +207,8 @@ pub struct ObjectFields {
     pub copies_surface: Option<ItemId>,
 }
 
-/// An Object's Shape: the built-in solids, Ocean, or a mesh from a file.
-/// The built-ins are the solids a mesh node generates.
+/// An Object's Shape: the built-in solids, Ocean, Terrain, or a mesh from a
+/// file. The built-ins are the solids a mesh node generates.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub enum Shape {
@@ -221,6 +221,8 @@ pub enum Shape {
     Icosahedron,
     Dodecahedron,
     Ocean,
+    /// Land shaped by eroded-looking noise on the GPU each frame.
+    Terrain,
     /// A built-in curve pushed back into a solid, centred on the curve's plane
     /// (Blender's curve Extrude). `caps` is Fill Caps: a closed outline's
     /// ends are filled.

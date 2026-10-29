@@ -92,9 +92,9 @@ fn modelled(fields: &ItemFields) -> bool {
     source(fields).is_some_and(|s| s.shape == SourceShape::Model)
 }
 
-/// An Object with a mesh a source can take: anything but an Ocean.
+/// An Object with a mesh a source can take: anything but an Ocean or Terrain.
 pub fn is_model(item: &Item) -> bool {
-    matches!(&item.fields, ItemFields::Object(o) if o.shape != Shape::Ocean)
+    matches!(&item.fields, ItemFields::Object(o) if !matches!(o.shape, Shape::Ocean | Shape::Terrain))
 }
 
 fn inflows(fields: &ItemFields) -> bool {

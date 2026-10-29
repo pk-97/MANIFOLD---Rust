@@ -33,6 +33,7 @@ mod sand;
 mod scene_level;
 mod scene_wide;
 mod swarm;
+mod terrain;
 mod water;
 mod water_source;
 mod world;
@@ -78,6 +79,8 @@ pub use scene_wide::{
 pub use swarm::{
     MAX_COUNT as SWARM_MAX_COUNT, MAX_COUNT_REASON as SWARM_MAX_COUNT_REASON, SWARM_ROWS,
 };
+pub use terrain::TERRAIN_RESOLUTION;
+use terrain::TERRAIN_TABLES;
 pub use water::{
     DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET,
     WATER_FAMILY_REASON, WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WATER_ROWS, WORLD_FOLLOWS,
@@ -369,14 +372,20 @@ fn copies_rows(kind: ItemKind) -> &'static [PropertyRow] {
     }
 }
 
-/// The Ocean surface's rows, on an Object (they apply while its Shape is Ocean).
+/// The Ocean and Terrain surfaces' rows, on an Object (they apply while its
+/// Shape is Ocean or Terrain).
 fn ocean_rows(kind: ItemKind) -> impl Iterator<Item = &'static PropertyRow> {
     let tables: &'static [&'static [PropertyRow]] = if kind == ItemKind::Object {
         &OCEAN_TABLES
     } else {
         &[]
     };
-    tables.iter().flat_map(|table| table.iter())
+    let terrain: &'static [&'static [PropertyRow]] = if kind == ItemKind::Object {
+        &TERRAIN_TABLES
+    } else {
+        &[]
+    };
+    tables.iter().chain(terrain).flat_map(|table| table.iter())
 }
 
 /// Every row a kind declares, applicable or not, including the sections
