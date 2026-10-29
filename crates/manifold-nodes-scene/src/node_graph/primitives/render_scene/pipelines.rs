@@ -749,6 +749,8 @@ impl RenderScene {
             device,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
         );
+        // The gas march draws in Pass B too; the first smoke is a cache hit.
+        super::gas_volume::GasPass::prewarm(device, manifold_gpu::GpuTextureFormat::Rgba16Float);
 
         // IBL pipelines are fixed-source,
         // asset-independent (shader source depends only on render_scene's

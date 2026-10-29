@@ -3,7 +3,8 @@
 //! when it is on, and the render settings on the scene's render node. A
 //! Swarm follows the world's gravity, still air and clock, so a scene with
 //! one has the world too, and so does a Water, which also follows the Render
-//! Mode for Physics View.
+//! Mode for Physics View. A Smoke or Fire follows the gravity and clock, and
+//! the World's Cell Size.
 //!
 //! Ambient occlusion sits behind a picture switch that follows the Strength
 //! row, so a Strength of zero prunes the whole occlusion chain.
@@ -27,17 +28,20 @@ pub(crate) fn emit(b: &mut Builder<'_>) {
     };
     let owner = item.id.as_str();
     let mut world = None;
+    let any_gas = !super::gas::gases(b.doc).is_empty();
     if b.doc.any_physics()
         || b.doc.any_copies()
         || b.doc.any_swarm()
         || !super::water::waters(b.doc).is_empty()
+        || any_gas
     {
         let node = b.add(owner, "physics", "node.physics_world");
         super::physics::join_world(b, node);
         world = Some(node);
     }
-    // The World's Cell Size, which every Water's and Sand's cell follows.
-    if !super::water::waters(b.doc).is_empty() {
+    // The World's Cell Size, which every Water's, Sand's, Smoke's and Fire's
+    // cell follows.
+    if !super::water::waters(b.doc).is_empty() || any_gas {
         b.add(owner, "cell_size", "node.value");
     }
     let render = b.scene("render");
@@ -56,6 +60,7 @@ pub(crate) fn emit(b: &mut Builder<'_>) {
         super::swarm::follow_world(b, world);
     }
     super::water::follow_world(b, world, mode);
+    super::gas::follow_world(b, world);
 }
 
 /// Contact shadows on the active camera's picture, before depth of field and

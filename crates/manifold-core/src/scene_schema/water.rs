@@ -175,7 +175,7 @@ use ControlGroup::{Domain, Surface, Whitewater};
 const AXIS_ALIGNED: &str = "the domain box is axis-aligned; the solvers take no rotation";
 
 /// Each side of the box, within what the solvers hold.
-const SIZE: HardLimit = HardLimit::AtLeast(MIN_DOMAIN_SIDE_METRES);
+pub(super) const SIZE: HardLimit = HardLimit::AtLeast(MIN_DOMAIN_SIDE_METRES);
 
 /// The Dam Break tank: four metres a side, standing on the floor.
 const DOMAIN_SIDE: f32 = 4.0;
@@ -262,6 +262,15 @@ pub(super) const FRONT_WALL: PropertyRow = row("closed_pos_z", DOMAIN, Domain, s
     .name("Front Wall")
     .tip(WALL_TIP)
     .when(bounded);
+// The item's cell-size node: it follows the World's Cell Size, scaled by
+// the item's Quality (`scene_compile::water::follow_cell`).
+pub(super) const CELL_SIZE_ROW: PropertyRow = row(
+    "cell_size",
+    Reach::Own("cell_size"),
+    Domain,
+    Exposure::Automatic("the World's Cell Size times the Quality's scale"),
+)
+.param("value");
 pub(super) const DOMAIN_SIZE: PropertyRow = row(
     "domain_size",
     DOMAIN,
@@ -314,7 +323,7 @@ pub(super) const FOLLOW_AIR: PropertyRow = follows(WORLD_FOLLOWS[3], "the World'
 pub(super) const FOLLOW_SPEED: PropertyRow = follows(WORLD_FOLLOWS[4], "the World's Speed");
 pub(super) const FOLLOW_RESET: PropertyRow = follows(WORLD_FOLLOWS[5], "the World's Reset");
 
-pub static WATER_ROWS: [PropertyRow; 41] = [
+pub static WATER_ROWS: [PropertyRow; 42] = [
     POS_X,
     POS_Y,
     POS_Z,
@@ -331,6 +340,7 @@ pub static WATER_ROWS: [PropertyRow; 41] = [
     CEILING,
     BACK_WALL,
     FRONT_WALL,
+    CELL_SIZE_ROW,
     DOMAIN_SIZE,
     FILL_HEIGHT,
     SURFACE_DETAIL,
@@ -560,12 +570,13 @@ fn quality_of(fields: &ItemFields) -> Option<Quality> {
     match fields {
         ItemFields::Water(w) => Some(w.quality),
         ItemFields::Sand(s) => Some(s.quality),
+        ItemFields::Smoke(g) | ItemFields::Fire(g) => Some(g.quality),
         _ => None,
     }
 }
 
-/// A Water's or Sand's Quality: its cells on the World's grid
-/// ([`Quality::cell_scale`]).
+/// A Water's, Sand's, Smoke's or Fire's Quality: its cells on the World's
+/// grid ([`Quality::cell_scale`]).
 pub(super) const QUALITY_FIELD: FieldRow = FieldRow {
     id: "quality",
     label: "Quality",
@@ -589,6 +600,7 @@ pub(super) const QUALITY_FIELD: FieldRow = FieldRow {
         match fields {
             ItemFields::Water(w) => w.quality = Quality::ALL[i],
             ItemFields::Sand(s) => s.quality = Quality::ALL[i],
+            ItemFields::Smoke(g) | ItemFields::Fire(g) => g.quality = Quality::ALL[i],
             _ => return Err(wrong_value("quality", value)),
         }
         Ok(())

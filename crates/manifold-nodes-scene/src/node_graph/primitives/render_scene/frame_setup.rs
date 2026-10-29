@@ -20,6 +20,52 @@ fn grown_buffer(
     slot.clone().expect("buffer allocated")
 }
 
+/// What a frame draws: the mesh draws, the water fields, the gases, and
+/// whether anything needs Pass B's snapshots.
+type ObjectsThisFrame<'ctx> = (
+    Vec<ObjectDraw<'ctx>>,
+    Vec<FieldObject<'ctx>>,
+    Vec<GasDraw<'ctx>>,
+    bool,
+);
+
+/// The point light a gas casts on the scene, if any: at the flames'
+/// emission-weighted centre, the blackbody colour of their mean temperature,
+/// strength Fire Light × Flame Brightness × their emission sum. The range is
+/// the box's half height, so the light falls off as the inverse square past
+/// the flames and stays finite inside them.
+fn fire_light(
+    gas: &manifold_node_engine::scene::scene_object::GasVolume,
+) -> Option<manifold_node_engine::scene::light::Light> {
+    use manifold_node_engine::scene::blackbody::blackbody_radiance;
+    let look = &gas.look;
+    let strength = look.light_brightness * look.flame_brightness * gas.light.power;
+    if !(strength > 0.0 && strength.is_finite()) {
+        return None;
+    }
+    let kelvin = look.kelvin_cool
+        + (look.kelvin_hot - look.kelvin_cool) * gas.light.temperature.clamp(0.0, 1.0);
+    let rgb = blackbody_radiance(kelvin);
+    let luminance = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+    if luminance.is_nan() || luminance <= 0.0 {
+        return None;
+    }
+    let colour = rgb.map(|c| c / luminance);
+    let pos = gas.light.position;
+    let range = 0.5 * gas.cell_size * gas.dims[1] as f32;
+    Some(manifold_node_engine::scene::light::Light::point(
+        pos,
+        [pos[0], pos[1] - 1.0, pos[2]],
+        colour,
+        strength,
+        range,
+        false,
+        manifold_node_engine::scene::light::ShadowSoftness::Hard,
+        0.0,
+        0,
+    ))
+}
+
 impl RenderScene {
     /// BUG-trh7 stage 2, pass 0: the frame preamble — per-frame inputs, the
     /// light/caster tables, temporal-upscale resolution, RT toggle latches,
@@ -37,7 +83,7 @@ impl RenderScene {
         pre: &FramePrelude<'ctx>,
         port_index: &ahash::AHashMap<&'static str, manifold_node_engine::bindings::Slot>,
         single_object: Option<SceneObject>,
-    ) -> Option<(Vec<ObjectDraw<'ctx>>, Vec<FieldObject<'ctx>>, bool)> {
+    ) -> Option<ObjectsThisFrame<'ctx>> {
         let FramePrelude {
             objects,
             cam,
@@ -70,6 +116,7 @@ impl RenderScene {
 
         let mut draws: Vec<ObjectDraw<'ctx>> = Vec::with_capacity(*objects);
         let mut fields: Vec<FieldObject<'ctx>> = Vec::new();
+        let mut gases: Vec<GasDraw<'ctx>> = Vec::new();
         // The sole CPU gate for the
         // Pass A/B split below. Only `Blend` objects ever reach Pass B
         // (`is_glass` in `gltf_import.rs` always routes a nonzero
@@ -108,6 +155,14 @@ impl RenderScene {
                 // pushed into `draws`) removes it from both the main pass
                 // and the shadow-caster pass below, which filters from
                 // `draws`.
+                continue;
+            }
+            if let Some(gas) = object.gas {
+                match Self::collect_gas(ctx, pre, n, gas) {
+                    Some(Some(g)) => gases.push(g),
+                    Some(None) => self.report_incomplete_frame(ctx),
+                    None => return None,
+                }
                 continue;
             }
             if let Some(field) = object.field {
@@ -719,8 +774,9 @@ impl RenderScene {
         // A field draws in Pass B, so it needs every resource the glass gate
         // ensures: the opaque depth snapshot, the scene-colour snapshot and
         // the Pass B depth states.
-        has_transmission |= !fields.is_empty();
-        Some((draws, fields, has_transmission))
+        // A gas marches over the opaque depth snapshot the same gate makes.
+        has_transmission |= !fields.is_empty() || !gases.is_empty();
+        Some((draws, fields, gases, has_transmission))
     }
 
     /// Cull each camera-culled draw's copies against the camera's clip volume
@@ -934,6 +990,27 @@ impl RenderScene {
                 light_data.extend_from_slice(&packed);
                 shaft_light_data.extend_from_slice(&packed);
                 shaft_light_count += 1;
+            }
+        }
+        // A Fire lights the scene: one unshadowed point light at its flames'
+        // centre, the flame colour at their temperature, its strength
+        // following what they give off this frame (read back two frames
+        // late), so the light flickers with the flames.
+        for n in 0..objects {
+            let Some(object) = port_index
+                .get(self.object_port_names[n].as_ref())
+                .and_then(|&slot| ctx.inputs.object_slot(slot))
+            else {
+                continue;
+            };
+            if let Some(light) = object
+                .gas
+                .filter(|_| object.visible)
+                .and_then(|gas| fire_light(&gas))
+            {
+                // Not a card's light, so no viewport marker.
+                light_count += 1;
+                light_data.extend_from_slice(&light.packed(-1.0));
             }
         }
         // D4: `@binding(8)` must ALWAYS be bound (the fragment shaders

@@ -12,7 +12,8 @@
 //! decides which rows exist.
 //!
 //! An Ocean shape is the sea chain (`ocean.rs`). Water and its sources
-//! splice the water family template (`water.rs`). Forces (`forces.rs`) and
+//! splice the water family template (`water.rs`); Smoke and Fire emit a gas
+//! solver and the object that draws it (`gas.rs`). Forces (`forces.rs`) and
 //! Modifier cards (`modifiers.rs`, in chain order) compile to scene modifier
 //! instances; Copies emit a copies body per item (`copies.rs`); physics
 //! emits a body per item (`physics.rs`).
@@ -23,6 +24,7 @@ mod copies;
 mod curves;
 mod deformers;
 mod forces;
+mod gas;
 mod group;
 mod light;
 mod material;
@@ -58,6 +60,7 @@ pub fn compile(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
     camera::aim_all(&mut b);
     swarm::finish(&mut b);
     water::emit_all(&mut b);
+    gas::emit_all(&mut b);
     world::emit(&mut b);
     camera::finish_cut(&mut b);
     copies::join_world(&mut b);
@@ -77,6 +80,7 @@ pub fn drawn_items(doc: &SceneDoc) -> Vec<manifold_foundation::ItemId> {
     swarm::emit_all(&mut b);
     group::emit_tree(&mut b);
     water::emit_all(&mut b);
+    gas::emit_all(&mut b);
     swarm::draw_alike(&mut b);
     b.object_items
 }

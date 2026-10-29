@@ -50,6 +50,8 @@ impl TreeSection {
                 "Swarm",
                 "Water",
                 "Matter",
+                "Smoke",
+                "Fire",
                 "Water Source",
             ],
             TreeSection::Forces => &["Force"],

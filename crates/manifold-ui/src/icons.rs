@@ -136,7 +136,8 @@ pub fn scene_item_icon(kind: manifold_foundation::scene_surface::ItemKind, plane
         ItemKind::Material => Icon::SceneMaterial,
         ItemKind::Water | ItemKind::WaterSource => Icon::SceneWater,
         ItemKind::Sand => Icon::SceneSand,
-        ItemKind::Swarm => Icon::SceneSwarm,
+        // Smoke and Fire show the Swarm's scatter of dots.
+        ItemKind::Swarm | ItemKind::Smoke | ItemKind::Fire => Icon::SceneSwarm,
         ItemKind::Force => Icon::SceneForce,
         // A wave: a modifier bends what it targets.
         ItemKind::Modifier => Icon::WaveSine,

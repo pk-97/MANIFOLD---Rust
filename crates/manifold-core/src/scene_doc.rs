@@ -74,6 +74,8 @@ pub enum ItemFields {
     Water(WaterFields),
     WaterSource(WaterSourceFields),
     Sand(SandFields),
+    Smoke(GasFields),
+    Fire(GasFields),
     Swarm(SwarmFields),
     Force(ForceFields),
     Modifier(ModifierFields),
@@ -91,6 +93,8 @@ impl ItemFields {
             ItemFields::Water(_) => ItemKind::Water,
             ItemFields::WaterSource(_) => ItemKind::WaterSource,
             ItemFields::Sand(_) => ItemKind::Sand,
+            ItemFields::Smoke(_) => ItemKind::Smoke,
+            ItemFields::Fire(_) => ItemKind::Fire,
             ItemFields::Swarm(_) => ItemKind::Swarm,
             ItemFields::Force(_) => ItemKind::Force,
             ItemFields::Modifier(_) => ItemKind::Modifier,
@@ -113,6 +117,8 @@ impl ItemFields {
                 ..WaterSourceFields::default()
             }),
             ItemKind::Sand => ItemFields::Sand(SandFields::default()),
+            ItemKind::Smoke => ItemFields::Smoke(GasFields::default()),
+            ItemKind::Fire => ItemFields::Fire(GasFields::default()),
             ItemKind::Swarm => ItemFields::Swarm(SwarmFields::default()),
             ItemKind::Force => ItemFields::Force(ForceFields::default()),
             ItemKind::Modifier => ItemFields::Modifier(ModifierFields::default()),
@@ -556,11 +562,35 @@ impl Quality {
         }
     }
 
+    /// Its index in [`Quality::ALL`]: Low 0 to Extra High 3, the numbering
+    /// the gas solver and the gas renderer share.
+    pub fn index(self) -> u32 {
+        self as u32
+    }
+
     /// The level whose cells are nearest `ratio` times the World's, on a log
     /// scale.
     pub fn nearest(ratio: f32) -> Self {
         let finer = -ratio.log2();
         Self::ALL[(finer.round() + 1.0).clamp(0.0, 3.0) as usize]
+    }
+}
+
+/// A Smoke's or Fire's own choices; its dials are rows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct GasFields {
+    /// How finely the gas simulates: its cells on the World's grid.
+    pub quality: Quality,
+}
+
+impl Default for GasFields {
+    /// A new gas starts at High, cells half the World's: fine enough to show
+    /// a flame's shape.
+    fn default() -> Self {
+        Self {
+            quality: Quality::High,
+        }
     }
 }
 

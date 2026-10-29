@@ -21,6 +21,7 @@ mod curves;
 mod deformers;
 mod fields;
 mod force;
+mod gas;
 mod group;
 mod light;
 mod material;
@@ -53,6 +54,7 @@ pub use fields::{
     field_rows, is_material, is_object_or_group, is_on, item_disabled, on_off_key, set_field,
 };
 pub use force::{FORCE_ROWS, impulse_unavailable};
+pub use gas::{FIRE_ROWS, SMOKE_ROWS};
 pub use group::GROUP_ROWS;
 pub use light::LIGHT_ROWS;
 pub use material::{
@@ -346,6 +348,8 @@ pub fn rows(kind: ItemKind) -> &'static [PropertyRow] {
         ItemKind::Water => &WATER_ROWS,
         ItemKind::WaterSource => &WATER_SOURCE_ROWS,
         ItemKind::Sand => &SAND_ROWS,
+        ItemKind::Smoke => &SMOKE_ROWS,
+        ItemKind::Fire => &FIRE_ROWS,
     }
 }
 

@@ -1,4 +1,5 @@
 pub mod atmosphere;
+pub mod blackbody;
 pub mod boundary_nodes;
 pub mod camera;
 pub mod curve_sweep;

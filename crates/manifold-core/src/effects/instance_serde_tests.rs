@@ -683,13 +683,24 @@ fn saved_cells_lift_onto_the_world() {
     };
     let mut doc = SceneDoc::base();
     let world = doc.world().unwrap().id.clone();
-    let (head, decoy, sand) = (ItemId::new("head"), ItemId::new("decoy"), ItemId::new("sand"));
+    let (head, decoy, sand) = (
+        ItemId::new("head"),
+        ItemId::new("decoy"),
+        ItemId::new("sand"),
+    );
     for (id, fields) in [
-        (&head, ItemFields::Water(WaterFields { quality: Quality::High, ..WaterFields::default() })),
+        (
+            &head,
+            ItemFields::Water(WaterFields {
+                quality: Quality::High,
+                ..WaterFields::default()
+            }),
+        ),
         (&decoy, ItemFields::Water(WaterFields::default())),
         (&sand, ItemFields::Sand(SandFields::default())),
     ] {
-        doc.insert(None, 0, Item::new(id.clone(), "Item", fields)).unwrap();
+        doc.insert(None, 0, Item::new(id.clone(), "Item", fields))
+            .unwrap();
     }
     let mut generator = PresetInstance::new_generator(PresetTypeId::new("Scene"));
     generator.scene = Some(doc);
@@ -717,7 +728,10 @@ fn saved_cells_lift_onto_the_world() {
     assert_eq!(quality(&sand), Quality::Medium);
     let pending = loaded.pending_wire.as_ref().unwrap();
     let world_cell = pending[&param_id(&world, "cell_size")].value;
-    assert!((world_cell * Quality::High.cell_scale() - 0.0825).abs() < 1e-6, "{world_cell}");
+    assert!(
+        (world_cell * Quality::High.cell_scale() - 0.0825).abs() < 1e-6,
+        "{world_cell}"
+    );
     for id in [&head, &decoy, &sand] {
         assert!(!pending.contains_key(&param_id(id, "cell_size")));
     }

@@ -33,7 +33,9 @@ use manifold_node_engine::mesh::{InstanceTransform, MeshVertex, Vec4Vertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::scene_object::{FieldSurface, InstanceSpace, SceneObject};
+use manifold_node_engine::scene::scene_object::{
+    FieldSurface, GasLight, GasLook, GasVolume, InstanceSpace, SceneObject,
+};
 
 manifold_node_engine::primitive! {
     name: SceneObjectNode,
@@ -55,6 +57,20 @@ manifold_node_engine::primitive! {
         field_pool_tiles: ScalarF32 optional,
         field_cell_size: ScalarF32 optional,
         field_ripple_detail: ScalarF32 optional,
+        gas_state: Array(u32) optional,
+        gas_velocity: Array(u32) optional,
+        gas_cell_size: ScalarF32 optional,
+        gas_origin_x: ScalarF32 optional,
+        gas_origin_y: ScalarF32 optional,
+        gas_origin_z: ScalarF32 optional,
+        gas_dims_x: ScalarF32 optional,
+        gas_dims_y: ScalarF32 optional,
+        gas_dims_z: ScalarF32 optional,
+        gas_light_power: ScalarF32 optional,
+        gas_light_x: ScalarF32 optional,
+        gas_light_y: ScalarF32 optional,
+        gas_light_z: ScalarF32 optional,
+        gas_light_temperature: ScalarF32 optional,
         transform: Transform optional,
         parent_transform: Transform optional,
         parent_visible: ScalarF32 optional,
@@ -213,6 +229,115 @@ manifold_node_engine::primitive! {
             range: None,
             enum_values: &[],
         },
+        // A Smoke's or Fire's look (`node.gas_volume` wired to gas_state):
+        // the renderer's volume pass reads these.
+        // The smoke's colour (its scattering tint), red.
+        ParamDef {
+            name: Cow::Borrowed("gas_smoke_r"),
+            label: "Smoke Red",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.85),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("gas_smoke_g"),
+            label: "Smoke Green",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.85),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("gas_smoke_b"),
+            label: "Smoke Blue",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.85),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        // Extinction per metre at density 1.
+        ParamDef {
+            name: Cow::Borrowed("gas_density"),
+            label: "Smoke Density",
+            ty: ParamType::Float,
+            default: ParamValue::Float(8.0),
+            range: Some((0.0, 200.0)),
+            enum_values: &[],
+        },
+        // The share of the light the smoke stops that it scatters on, not absorbs.
+        ParamDef {
+            name: Cow::Borrowed("gas_albedo"),
+            label: "Smoke Brightness",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.9),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        // Fine swirls the march adds below the cells, carried by the flow.
+        ParamDef {
+            name: Cow::Borrowed("gas_detail"),
+            label: "Detail",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.6),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        // Flame radiance at full flame and 1500 K, in the scene's light units.
+        ParamDef {
+            name: Cow::Borrowed("gas_flame_brightness"),
+            label: "Flame Brightness",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 100.0)),
+            enum_values: &[],
+        },
+        // The flame's colour temperature in kelvin where it is coolest.
+        ParamDef {
+            name: Cow::Borrowed("gas_kelvin_cool"),
+            label: "Flame Cool",
+            ty: ParamType::Float,
+            default: ParamValue::Float(900.0),
+            range: Some((500.0, 4000.0)),
+            enum_values: &[],
+        },
+        // The flame's colour temperature in kelvin where it is hottest.
+        ParamDef {
+            name: Cow::Borrowed("gas_kelvin_hot"),
+            label: "Flame Hot",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1800.0),
+            range: Some((500.0, 4000.0)),
+            enum_values: &[],
+        },
+        // The flames' light on their own smoke, times Flame Brightness.
+        ParamDef {
+            name: Cow::Borrowed("gas_glow"),
+            label: "Glow",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 4.0)),
+            enum_values: &[],
+        },
+        // The fire's light on the scene, times what its flames give off; 0 adds no light.
+        ParamDef {
+            name: Cow::Borrowed("gas_light_brightness"),
+            label: "Fire Light",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 20.0)),
+            enum_values: &[],
+        },
+        // The gas render preset: march samples, light volume, detail and
+        // scattering octaves (render_scene/gas_volume.rs `render_preset`).
+        ParamDef {
+            name: Cow::Borrowed("gas_quality"),
+            label: "Gas Quality",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(2),
+            range: Some((0.0, 3.0)),
+            enum_values: &["Low", "Medium", "High", "Extra High"],
+        },
     ],
     depth_rule: Terminal,
     composition_notes: "Optional indices are u32 triangle indices into vertices; their live extent controls indexed draws. Optional prev_positions is each vertex's position a frame ago (one vec4 per vertex, as many as the draw reads), for a mesh whose triangles are rebuilt every frame (node.tile_surface_mesh with a velocity): the velocity pass reads it instead of keeping a history, so the object blurs with its motion. An unindexed draw stops at the vertices' live extent, which a fragment cut publishes and the steps after it forward. Wire `object` into render_scene's object_k port (replacing the legacy mesh_k/material_k/…/instances_k nine-wire family). Unwired inputs read as the same unresolved/identity defaults their legacy per-object ports did: vertices unwired = no draw (consumer skip, matching render_scene.rs's existing tolerance), transform unwired = identity TRS, material unwired = the consumer's existing structured-error path, maps unwired = no map. `instance_count` is optional and has no param fallback: with `instances` wired, an unwired count preserves buffer capacity while a wired value is floored and clamped to capacity; zero, negative, NaN, and infinity produce zero draws. `visible` is a [0, 1] threshold (> 0.5 = on) so it can be modulated by an LFO or MIDI, or bound to an eye-toggle in the panel. Optional `field` is a level set (signed distance per node, negative inside) on the water's display world tiles: `field_tiles` is the world-tile table every field array is laid out under, `field_extent` its eight-float extent (min xyz, 0, max xyz, 0, object space), `field_pool_tiles` the tile slots in the pool and `field_cell_size` the lattice cell in metres, with node p at (p - 1/2) cells; plus optional `field_velocity` (three f32 per node), `field_foam` and `field_mist` (one f32 per node), all pooled the same way, and `wet_map`, node.wet_map's map, which every mesh in the scene reads to look wet: the object then draws the field instead of a mesh. A field has no box of its own, only its extent. With `field` wired, `vertices` is the field's own surface mesh (node.tile_surface_mesh over the same level set): the renderer draws its depth over the opaque scene and marches each ray only round it, so a pixel with no mesh in front draws no water. With `field` wired the tiles, extent, pool and cell size are required; a missing one, a pool under one tile or a cell size at or below zero is a node error and the object carries no field.",
@@ -259,6 +384,10 @@ impl Primitive for SceneObjectNode {
             .then(|| ctx.inputs.slot_of("field"))
             .flatten()
             .and_then(|levelset| field_surface(ctx, levelset));
+        let gas = (visible && parent_visible)
+            .then(|| ctx.inputs.slot_of("gas_state"))
+            .flatten()
+            .and_then(|state| gas_volume(ctx, state));
         let base_color_map = ctx.inputs.slot_of("base_color_map");
         let normal_map = ctx.inputs.slot_of("normal_map");
         let mr_map = ctx.inputs.slot_of("mr_map");
@@ -301,6 +430,7 @@ impl Primitive for SceneObjectNode {
             weights,
             topology,
             field,
+            gas,
             base_color_map,
             normal_map,
             mr_map,
@@ -405,6 +535,74 @@ fn field_surface(ctx: &mut EffectNodeContext<'_, '_>, levelset: Slot) -> Option<
             0.0
         },
         caustics,
+    })
+}
+
+/// The wired gas and its box: the velocity, cell size, origin and dims are
+/// required with a gas state; a missing one, a cell size at or below zero or
+/// an empty box is a node error, and the object draws no gas.
+fn gas_volume(ctx: &mut EffectNodeContext<'_, '_>, state: Slot) -> Option<GasVolume> {
+    let scalar = |name: &str| scalar_input(ctx, name);
+    let (Some(velocity), Some(cell_size), Some(ox), Some(oy), Some(oz), Some(nx), Some(ny), Some(nz)) = (
+        ctx.inputs.slot_of("gas_velocity"),
+        scalar("gas_cell_size"),
+        scalar("gas_origin_x"),
+        scalar("gas_origin_y"),
+        scalar("gas_origin_z"),
+        scalar("gas_dims_x"),
+        scalar("gas_dims_y"),
+        scalar("gas_dims_z"),
+    ) else {
+        ctx.error(
+            "scene_object: `gas_state` is wired but its velocity, cell size, origin or dims is not",
+        );
+        return None;
+    };
+    let dims = [nx, ny, nz].map(|n| n.round().max(0.0) as u32);
+    if !(cell_size > 0.0 && cell_size.is_finite()) || dims.contains(&0) {
+        ctx.error(format!(
+            "scene_object: a gas needs a cell size above zero and at least one cell per axis (cell {cell_size}, dims {dims:?})"
+        ));
+        return None;
+    }
+    let param = |ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32| {
+        ctx.scalar_or_param(name, default)
+    };
+    let quality = match ctx.params.get("gas_quality") {
+        Some(ParamValue::Enum(index)) => (*index).min(3),
+        _ => 2,
+    };
+    Some(GasVolume {
+        state,
+        velocity,
+        origin: [ox, oy, oz],
+        cell_size,
+        dims,
+        look: GasLook {
+            smoke_color: [
+                param(ctx, "gas_smoke_r", 0.85),
+                param(ctx, "gas_smoke_g", 0.85),
+                param(ctx, "gas_smoke_b", 0.85),
+            ],
+            density: param(ctx, "gas_density", 8.0).max(0.0),
+            albedo: param(ctx, "gas_albedo", 0.9).clamp(0.0, 1.0),
+            detail: param(ctx, "gas_detail", 0.6).clamp(0.0, 1.0),
+            flame_brightness: param(ctx, "gas_flame_brightness", 0.0).max(0.0),
+            kelvin_cool: param(ctx, "gas_kelvin_cool", 900.0),
+            kelvin_hot: param(ctx, "gas_kelvin_hot", 1800.0),
+            glow: param(ctx, "gas_glow", 0.0).max(0.0),
+            light_brightness: param(ctx, "gas_light_brightness", 0.0).max(0.0),
+            quality,
+        },
+        light: GasLight {
+            position: [
+                scalar_input(ctx, "gas_light_x").unwrap_or(0.0),
+                scalar_input(ctx, "gas_light_y").unwrap_or(0.0),
+                scalar_input(ctx, "gas_light_z").unwrap_or(0.0),
+            ],
+            power: scalar_input(ctx, "gas_light_power").unwrap_or(0.0).max(0.0),
+            temperature: scalar_input(ctx, "gas_light_temperature").unwrap_or(0.0),
+        },
     })
 }
 

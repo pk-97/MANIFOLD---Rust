@@ -31,7 +31,7 @@ use manifold_core::NodeId;
 use manifold_core::effect_graph_def::SerializedParamValue;
 use manifold_core::effect_graph_def::{EffectGraphDef, ParamSpecDef};
 use manifold_core::param_lookup::NodeParamMetadata;
-use manifold_core::scene_doc::{CameraRig, ItemFields, ItemId, param_id};
+use manifold_core::scene_doc::{CameraRig, Item, ItemFields, ItemId, ItemKind, param_id};
 use manifold_core::scene_modifier_preset::{SceneModifierInstanceDef, SceneTargetSelection};
 use manifold_core::scene_schema::{
     self, COPIES_ROLE, Exposure, LOOP_CAMERA_ROWS, LOOP_GAP_ROW, PropertyRow, modifier_type,
@@ -364,10 +364,12 @@ fn tiled_objects(b: &mut Builder<'_>, copies: bool) -> Vec<NodeId> {
         {
             continue;
         }
-        let water = b
-            .doc
-            .find(&item)
-            .is_some_and(|item| item.kind().holds_sources());
+        let kind = b.doc.find(&item).map(Item::kind);
+        // A Smoke or Fire is a volume with no mesh: there is nothing to tile.
+        if kind.is_some_and(ItemKind::is_gas) {
+            continue;
+        }
+        let water = kind.is_some_and(ItemKind::holds_sources);
         // Without a live count the stage would nest the whole buffer.
         if copies && (water || b.input(object, "instance_count").is_none()) {
             continue;

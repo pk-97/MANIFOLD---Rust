@@ -1,8 +1,10 @@
-//! The water registration crate: links the six manifold-water-* crates, and
+//! The water registration crate: links the six manifold-water-* crates and
+//! the gas solver (Smoke and Fire), and
 //! owns what names more than one of them: graph migrations, the bundled water
 //! presets, the physics scene, the runtime extension and the cross-solver
 //! test harnesses. Never depends on another node family or the UI.
 
+use manifold_gas as _;
 use manifold_water_gpu_flip as _;
 use manifold_water_gpu_mpm as _;
 use manifold_water_liquid as _;

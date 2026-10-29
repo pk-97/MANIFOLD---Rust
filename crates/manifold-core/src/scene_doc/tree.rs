@@ -790,6 +790,8 @@ impl SceneDoc {
                     | ItemFields::Water(_)
                     | ItemFields::WaterSource(_)
                     | ItemFields::Sand(_)
+                    | ItemFields::Smoke(_)
+                    | ItemFields::Fire(_)
                     | ItemFields::Swarm(_)
                     | ItemFields::Force(_)
                     | ItemFields::World(_) => {}

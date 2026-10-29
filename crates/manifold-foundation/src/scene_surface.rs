@@ -276,6 +276,8 @@ pub enum Unit {
     Pascals,
     /// A viscosity: how thick a goo or mud flows.
     PascalSeconds,
+    /// A colour temperature: how hot a flame glows.
+    Kelvin,
 }
 
 impl Unit {
@@ -299,6 +301,7 @@ impl Unit {
             Self::KilogramsPerCubicMetre => " kg/m³",
             Self::Pascals => " Pa",
             Self::PascalSeconds => " Pa·s",
+            Self::Kelvin => " K",
         }
     }
 
@@ -325,11 +328,12 @@ impl Unit {
             Self::KilogramsPerCubicMetre => "kg/m³",
             Self::Pascals => "Pa",
             Self::PascalSeconds => "Pa·s",
+            Self::Kelvin => "K",
         }
     }
 }
 
-/// The twelve kinds of scene item (SCENE_DOCUMENT_DESIGN.md ruling 4). A layer
+/// The kinds of scene item (SCENE_DOCUMENT_DESIGN.md ruling 4). A layer
 /// plane is an Object; Copies is a section; an import is a Group whose Source
 /// is a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -343,6 +347,8 @@ pub enum ItemKind {
     Water,
     WaterSource,
     Sand,
+    Smoke,
+    Fire,
     Swarm,
     Force,
     Modifier,
@@ -350,7 +356,7 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 12] = [
+    pub const ALL: [ItemKind; 14] = [
         ItemKind::Group,
         ItemKind::Object,
         ItemKind::Camera,
@@ -359,6 +365,8 @@ impl ItemKind {
         ItemKind::Water,
         ItemKind::WaterSource,
         ItemKind::Sand,
+        ItemKind::Smoke,
+        ItemKind::Fire,
         ItemKind::Swarm,
         ItemKind::Force,
         ItemKind::Modifier,
@@ -369,6 +377,11 @@ impl ItemKind {
     /// Water or a Sand.
     pub fn holds_sources(self) -> bool {
         matches!(self, ItemKind::Water | ItemKind::Sand)
+    }
+
+    /// Whether this kind is a gas solver in a box of cells: a Smoke or a Fire.
+    pub fn is_gas(self) -> bool {
+        matches!(self, ItemKind::Smoke | ItemKind::Fire)
     }
 
     /// The name a new item of this kind takes.
@@ -382,6 +395,8 @@ impl ItemKind {
             ItemKind::Water => "Water",
             ItemKind::WaterSource => "Water Source",
             ItemKind::Sand => "Sand",
+            ItemKind::Smoke => "Smoke",
+            ItemKind::Fire => "Fire",
             ItemKind::Swarm => "Swarm",
             ItemKind::Force => "Force",
             ItemKind::Modifier => "Modifier",

@@ -203,7 +203,11 @@ impl RenderScene {
     }
 
     /// Report an invalid field and abort the frame.
-    fn fail_field<T>(ctx: &mut EffectNodeContext<'_, '_>, n: usize, message: String) -> Option<T> {
+    pub(super) fn fail_field<T>(
+        ctx: &mut EffectNodeContext<'_, '_>,
+        n: usize,
+        message: String,
+    ) -> Option<T> {
         ctx.gpu_encoder()
             .merge_frame_status(FrameRenderStatus::Failed(
                 FrameRenderFailure::InvalidGeometry,

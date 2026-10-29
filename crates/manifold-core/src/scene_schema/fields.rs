@@ -126,6 +126,7 @@ pub fn field_rows(kind: ItemKind) -> &'static [FieldRow] {
         ItemKind::Water => &super::water::WATER_FIELDS,
         ItemKind::WaterSource => &super::water_source::WATER_SOURCE_FIELDS,
         ItemKind::Sand => &super::sand::SAND_FIELDS,
+        ItemKind::Smoke | ItemKind::Fire => &super::gas::GAS_FIELDS,
         ItemKind::Swarm => &super::swarm::SWARM_FIELDS,
         ItemKind::Force => &super::force::FORCE_FIELDS,
         ItemKind::Modifier => &super::modifier::MODIFIER_FIELDS,

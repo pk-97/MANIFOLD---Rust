@@ -22,6 +22,7 @@ impl RenderScene {
         pre: &FramePrelude<'ctx>,
         draws: &[ObjectDraw<'ctx>],
         fields: &[FieldObject<'ctx>],
+        gases: &[GasDraw<'ctx>],
         has_transmission: bool,
         denoise_active: bool,
         rt_rendered_this_frame: bool,
@@ -1216,6 +1217,55 @@ impl RenderScene {
                     return None;
                 }
             }
+            // Smoke and fire march over the opaque scene and the water, before
+            // any glass, so glass in front transmits them; a ray stops at the
+            // nearer of the two.
+            if !gases.is_empty() {
+                let Some(inv_view_proj) = mat4_inverse(pre.view_proj) else {
+                    Self::fail_frame(ctx, None, "Gas: singular camera matrix");
+                    return None;
+                };
+                let view = gas_volume::GasView {
+                    inv_view_proj,
+                    width,
+                    height,
+                    seconds: ctx.time.seconds.0 as f32,
+                    frame: ctx.time.frame_count as u32,
+                    sun: first_sun(&pre.light_data, pre.light_count),
+                };
+                let objects: Vec<gas_volume::GasObject> = gases
+                    .iter()
+                    .map(|gas| gas_volume::GasObject {
+                        state: gas.state,
+                        velocity: gas.velocity,
+                        volume: gas.volume,
+                        uniforms: bytemuck::bytes_of(&gas.uniforms),
+                    })
+                    .collect();
+                let gpu = ctx.gpu_encoder();
+                // The march reads a copy of the depth with the water in it;
+                // the depth itself stays the pass's attachment.
+                gpu.native_enc.copy_texture_to_texture(
+                    opaque_depth_snapshot,
+                    transmissive_depth_scratch,
+                    width,
+                    height,
+                    1,
+                );
+                if let Err(error) = self.gas_pass.encode(
+                    gpu.device,
+                    gpu.native_enc,
+                    resolve_target,
+                    opaque_depth_snapshot,
+                    transmissive_depth_scratch,
+                    &scene_bindings(opaque_scene_color),
+                    &view,
+                    &objects,
+                ) {
+                    Self::fail_frame(ctx, None, format!("Gas: {error}"));
+                    return None;
+                }
+            }
             // Capture the already-composited layers before each farther-to-nearer
             // draw. Every glass layer then transmits the layers behind it, instead
             // of all panes replacing one another with the original opaque image.
@@ -1440,4 +1490,21 @@ fn field_draw<'a>(field: &'a FieldObject<'_>) -> FieldDraw<'a> {
         prev_model: field.prev_model,
         slot: field.slot,
     }
+}
+
+/// The first Sun in the packed light table (`frame_setup.rs`'s layout:
+/// direction toward the light and mode 0, then premultiplied colour and the
+/// caster slot): what lights and shadows a gas.
+fn first_sun(light_data: &[[f32; 4]], light_count: u32) -> Option<([f32; 3], [f32; 3], f32)> {
+    light_data
+        .chunks_exact(LIGHT_VEC4_STRIDE)
+        .take(light_count as usize)
+        .find(|light| light[0][3] < 0.5)
+        .map(|light| {
+            (
+                [light[0][0], light[0][1], light[0][2]],
+                [light[1][0], light[1][1], light[1][2]],
+                light[1][3],
+            )
+        })
 }

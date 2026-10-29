@@ -2722,6 +2722,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "manifold-gas"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "inventory",
+ "log",
+ "manifold-core",
+ "manifold-gas",
+ "manifold-gpu",
+ "manifold-node-engine",
+ "naga",
+]
+
+[[package]]
 name = "manifold-gpu"
 version = "0.1.0"
 dependencies = [
@@ -2941,6 +2955,7 @@ dependencies = [
  "manifold-core",
  "manifold-fluids",
  "manifold-foundation",
+ "manifold-gas",
  "manifold-gpu",
  "manifold-node-engine",
  "manifold-nodes-physics",

@@ -112,6 +112,7 @@ impl RenderScene {
             caustics: Default::default(),
             water_march: Default::default(),
             water_shade: Default::default(),
+            gas_pass: Default::default(),
             ripple_detail: Default::default(),
             live_draw_args: live_draw_args::LiveDrawArgs::default(),
             culled_instances: Vec::new(),

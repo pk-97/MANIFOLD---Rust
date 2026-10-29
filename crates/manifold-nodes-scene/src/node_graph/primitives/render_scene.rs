@@ -67,6 +67,8 @@
 mod construction;
 mod field_objects;
 mod frame_setup;
+mod gas_objects;
+mod gas_volume;
 mod frustum;
 mod item_pick;
 mod live_draw_args;
@@ -80,6 +82,7 @@ mod rt_trace;
 mod selection_mask;
 mod volume_optics;
 use field_objects::{FieldObject, ObjectMaterial};
+use gas_objects::GasDraw;
 mod water_cover;
 mod water_march;
 use water_march::{FieldDraw, FieldView};
@@ -1407,6 +1410,8 @@ pub struct RenderScene {
     caustics: caustics::Caustics,
     water_march: water_march::WaterMarch,
     water_shade: water_shade::WaterShade,
+    /// Smoke and fire: their 3D textures, light volumes and the march.
+    gas_pass: gas_volume::GasPass,
     ripple_detail: ripple_detail::RippleDetail,
     live_draw_args: live_draw_args::LiveDrawArgs,
     /// Per-object-slot instance records that survived the camera cull, and
@@ -2920,6 +2925,7 @@ impl RenderScene {
             weights: None,
             topology: None,
             field: None,
+            gas: None,
             base_color_map: inputs.slot_of("base_color_map"),
             normal_map: inputs.slot_of("normal_map"),
             mr_map: inputs.slot_of("mr_map"),
@@ -3072,12 +3078,12 @@ impl RenderScene {
         // its pipeline (BUG-trh7 stage 2, `collect_object_draws`). None =
         // abort frame: structured error + magenta clear. An empty draw list
         // is handled below so every connected output is cleared.
-        let Some((mut draws, fields, has_transmission)) =
+        let Some((mut draws, fields, gases, has_transmission)) =
             self.collect_object_draws(ctx, &pre, &port_index, single_object)
         else {
             return;
         };
-        if draws.is_empty() && fields.is_empty() {
+        if draws.is_empty() && fields.is_empty() && gases.is_empty() {
             self.clear_empty_frame(ctx);
             return;
         }
@@ -3335,6 +3341,7 @@ impl RenderScene {
                 &pre,
                 &draws,
                 &fields,
+                &gases,
                 has_transmission,
                 denoise_active,
                 rt_rendered_this_frame,

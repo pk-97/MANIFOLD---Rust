@@ -116,7 +116,7 @@ pub static WORLD_ROWS: [PropertyRow; 61] = [
     row("cell_size", CELL_SIZE, PhysicsWorld, setup())
         .param("value")
         .name("Cell Size")
-        .tip("The simulation grid's cell in metres, shared by every Water and Sand in the scene. Each item's Quality picks its cells on it: Low twice this, Medium this, High half, Extra High a quarter. Smaller cells show finer detail but cost far more: half the size holds eight times as many cells")
+        .tip("The simulation grid's cell in metres, shared by every Water, Sand, Smoke and Fire in the scene. Each item's Quality picks its cells on it: Low twice this, Medium this, High half, Extra High a quarter. Smaller cells show finer detail but cost far more: half the size holds eight times as many cells")
         .unit(Unit::Metres)
         .default(DEFAULT_CELL_SIZE)
         .limit(HardLimit::Between(CELL_SIZE_METRES.0, CELL_SIZE_METRES.1)),

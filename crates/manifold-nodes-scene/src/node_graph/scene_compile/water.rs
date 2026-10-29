@@ -34,9 +34,18 @@ use super::material::surface_for;
 
 /// Every Water and Sand in tree order, with the Group it sits in, if any.
 pub(crate) fn waters(doc: &SceneDoc) -> Vec<(Item, Option<ItemId>)> {
+    items_of(doc, ItemKind::holds_sources)
+}
+
+/// Every item of the kinds `wanted` accepts, in tree order, with the Group it
+/// sits in, if any.
+pub(crate) fn items_of(
+    doc: &SceneDoc,
+    wanted: fn(ItemKind) -> bool,
+) -> Vec<(Item, Option<ItemId>)> {
     let mut found = Vec::new();
     doc.walk(|item, ancestors| {
-        if item.kind().holds_sources() {
+        if wanted(item.kind()) {
             let group = ancestors
                 .iter()
                 .rev()
@@ -279,31 +288,36 @@ fn renumber(
     }
 }
 
+/// One grid per World: `owner`'s cell is the World's Cell Size times its own
+/// Quality's scale. A scene with no World keeps the default cell.
+pub(super) fn follow_cell(b: &mut Builder<'_>, owner: &str, quality: Quality) {
+    let Some(cell) = b.id(owner, "cell_size") else {
+        return;
+    };
+    let world_cell = b
+        .doc
+        .world()
+        .and_then(|world| b.id(world.id.as_str(), "cell_size"));
+    if let Some(world_cell) = world_cell {
+        b.follow(world_cell, "value", cell, "value");
+    }
+    b.scale_param(cell, "value", quality.cell_scale());
+}
+
 /// Make every Water follow the World: gravity, still air, speed and reset
 /// through its value nodes, and the World's Render Mode node, whose Physics View draws
 /// the particle dots instead of the surface. The switches sit at the mode
 /// less Physics View's index plus one, so only Physics View reaches 1; the
 /// side that is off is never computed.
 pub(crate) fn follow_world(b: &mut Builder<'_>, world: Option<u32>, mode: u32) {
-    let world_cell = b
-        .doc
-        .world()
-        .and_then(|world| b.id(world.id.as_str(), "cell_size"));
     for (item, _) in waters(b.doc) {
         let owner = item.id.as_str();
-        // One grid per World: the item's cell is the World's Cell Size times
-        // its own Quality's scale.
-        if let Some(cell) = b.id(owner, "cell_size") {
-            let quality = match &item.fields {
-                ItemFields::Water(water) => water.quality,
-                ItemFields::Sand(sand) => sand.quality,
-                _ => Quality::Medium,
-            };
-            if let Some(world_cell) = world_cell {
-                b.follow(world_cell, "value", cell, "value");
-            }
-            b.scale_param(cell, "value", quality.cell_scale());
-        }
+        let quality = match &item.fields {
+            ItemFields::Water(water) => water.quality,
+            ItemFields::Sand(sand) => sand.quality,
+            _ => Quality::Medium,
+        };
+        follow_cell(b, owner, quality);
         if let Some(world) = world {
             for (control, role) in WORLD_INPUTS.iter().zip(WORLD_FOLLOWS) {
                 if let Some(value) = b.id(owner, role) {

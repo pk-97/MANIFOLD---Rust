@@ -93,7 +93,7 @@ const fn model_file(key: &'static str, group: &'static str, label: &'static str)
 }
 
 /// Every Add menu entry, in menu order.
-pub static ADD_ENTRIES: [AddEntry; 66] = [
+pub static ADD_ENTRIES: [AddEntry; 68] = [
     entry(
         "object.cube",
         "Object",
@@ -242,6 +242,12 @@ pub static ADD_ENTRIES: [AddEntry; 66] = [
         "Jelly",
         || matter(Matter::Jelly, WaterDraw::Surface),
     ),
+    entry("smoke", "Smoke", "Smoke", ItemKind::Smoke, "Smoke", || {
+        ItemFields::default_for(ItemKind::Smoke)
+    }),
+    entry("fire", "Fire", "Fire", ItemKind::Fire, "Fire", || {
+        ItemFields::default_for(ItemKind::Fire)
+    }),
     entry(
         "water_source.fill",
         "Water Source",

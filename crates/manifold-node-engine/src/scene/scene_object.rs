@@ -74,6 +74,9 @@ pub struct SceneObject {
     /// Water drawn straight from a level set instead of a mesh. `None` for
     /// mesh objects; an object with a field draws the field.
     pub field: Option<FieldSurface>,
+    /// Smoke or fire in a box of cells (`node.gas_volume`), drawn by the
+    /// renderer's volume pass; an object with a gas draws no mesh.
+    pub gas: Option<GasVolume>,
     /// `Texture2D` slot — base colour map.
     pub base_color_map: Option<Slot>,
     /// `Texture2D` slot — normal map.
@@ -176,6 +179,59 @@ pub struct FieldSurface {
     /// How strongly the sunlight the surface focuses shows on what lies under
     /// it: 1 is physical, 0 turns caustics off.
     pub caustics: f32,
+}
+
+/// A Smoke's or Fire's volume this frame: the solver's fields on a dense,
+/// axis-aligned box of cells, the look the renderer marches it with, and the
+/// fire's light.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GasVolume {
+    /// `Array<u32>`, two words a cell in order x + nx·(y + ny·z): half
+    /// floats (density, temperature) then (fuel, flame).
+    pub state: Slot,
+    /// `Array<u32>`, two words a cell: half floats (u, v) then (w, 0), m/s.
+    pub velocity: Slot,
+    /// World position of the box's min corner; cell (i, j, k) spans
+    /// `origin + [i, i + 1] · cell_size` on each axis.
+    pub origin: [f32; 3],
+    pub cell_size: f32,
+    pub dims: [u32; 3],
+    pub look: GasLook,
+    pub light: GasLight,
+}
+
+/// How a gas draws.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GasLook {
+    pub smoke_color: [f32; 3],
+    /// Extinction per metre at density 1.
+    pub density: f32,
+    /// Single-scattering albedo, 0 to 1.
+    pub albedo: f32,
+    /// Detail noise strength, 0 to 1.
+    pub detail: f32,
+    /// Flame radiance at full flame and the 1500 K reference, in the
+    /// scene's light units.
+    pub flame_brightness: f32,
+    /// Flame colour temperature in kelvin at normalised temperature 0 and 1.
+    pub kelvin_cool: f32,
+    pub kelvin_hot: f32,
+    /// Fire glow on the smoke, times the flame brightness.
+    pub glow: f32,
+    /// The fire's point light, times its emission sum; 0 adds no light.
+    pub light_brightness: f32,
+    /// The render preset: 0 Low, 1 Medium, 2 High, 3 Extra High.
+    pub quality: u32,
+}
+
+/// The fire's light as the solver read it back: the flames' emission-weighted
+/// centre in the world, their emission sum (0 for none) and their
+/// emission-weighted normalised temperature.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GasLight {
+    pub position: [f32; 3],
+    pub power: f32,
+    pub temperature: f32,
 }
 
 /// The space an object's instances live in. Nested group transforms are
