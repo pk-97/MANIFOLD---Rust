@@ -6,51 +6,6 @@
 //! the module map.
 
 use super::RtObjectGeometry;
-use bytemuck::{Pod, Zeroable};
-
-/// CPU mirror of the MSL `SubsurfaceMaterial` row.  The renderer keeps rows in
-/// canonical object order; the committed instance id selects the normal-source
-/// row whose `object_index` addresses this table.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct SubsurfaceMaterial {
-    pub color_weight: [f32; 4],
-    pub radius_phase: [f32; 4],
-    /// x = transport mode (0 diffusion, 1 random walk), y = sample count.
-    pub config: [u32; 4],
-}
-
-const _: () = assert!(std::mem::size_of::<SubsurfaceMaterial>() == 48);
-const _: () = assert!(std::mem::offset_of!(SubsurfaceMaterial, color_weight) == 0);
-const _: () = assert!(std::mem::offset_of!(SubsurfaceMaterial, radius_phase) == 16);
-const _: () = assert!(std::mem::offset_of!(SubsurfaceMaterial, config) == 32);
-
-/// CPU mirror of the MSL `SubsurfaceParams` per-dispatch payload.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-pub struct SubsurfaceParams {
-    pub inv_view_proj: [[f32; 4]; 4],
-    pub camera_pos: [f32; 4],
-    pub render_size: [u32; 2],
-    pub frame_index: u32,
-    pub slot_row_base: u32,
-    pub light_count: u32,
-    pub material_count: u32,
-    pub query_units_per_pixel: u32,
-    /// Radians every environment lookup turns by (the render's `env_rotation`).
-    pub env_rotation: f32,
-}
-
-const _: () = assert!(std::mem::size_of::<SubsurfaceParams>() == 112);
-const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, inv_view_proj) == 0);
-const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, camera_pos) == 64);
-const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, render_size) == 80);
-const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, frame_index) == 88);
-const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, slot_row_base) == 92);
-const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, light_count) == 96);
-const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, material_count) == 100);
-const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, query_units_per_pixel) == 104);
-const _: () = assert!(std::mem::offset_of!(SubsurfaceParams, env_rotation) == 108);
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]

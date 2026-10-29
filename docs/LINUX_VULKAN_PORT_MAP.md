@@ -107,7 +107,7 @@ The remaining raw-handle users are Mac-gated and stay Metal: `manifold-media/src
 - **`arrayLength`:** Metal counts the whole buffer and ignores the binding offset, Vulkan counts the bound range (design D9). P1 checks no shader binds a runtime-sized array at an offset.
 - **String substitution:** `create_specialized_compute_pipeline` (21 calls in 6 files) and `create_specialized_render_pipeline_depth_msaa` (`render_scene/pipelines.rs:462`) replace text in WGSL. So do `render_scene/pipelines.rs:189` and the water-surface `interior_fill.rs:27-28` and `surface_tiles.rs:39-40`. All of it is backend-neutral.
 - **Point size:** `shader_common::rebind_vertex_output_as_point_size` serves both backends. The callers are `render_scene/pipelines.rs:376,610` and `render_scene/pass2_draw.rs:634`.
-- **Hand-written MSL:** `metal/shadow_rays.msl` (4,610 lines, 20 kernels) and `metal/subsurface.msl` (559 lines, 3 kernels), compiled together at `raytrace/tracer.rs:820`. They use:
+- **Hand-written MSL:** `metal/shadow_rays.msl` (4,610 lines, 20 kernels), compiled in `raytrace/tracer.rs`. They use:
   - ray queries
   - `array<texture2d<float>, 64>` and writes to `texture2d_array`
   - GPU addresses inside structs, fed by `GpuBuffer::gpu_address` (21 call sites, all ray tracing)

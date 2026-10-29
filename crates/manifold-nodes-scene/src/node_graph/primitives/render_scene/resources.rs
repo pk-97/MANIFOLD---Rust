@@ -48,7 +48,7 @@ impl RenderScene {
         } = *pre;
         let preparing = ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
         let rt_enabled = rt_enabled || preparing;
-        let has_subsurface = draws.iter().any(|draw| draw.subsurface_binding[0] > 0.0);
+        let has_subsurface = draws.iter().any(|draw| draw.subsurface_look.scatters());
         // Peek color format BEFORE the gpu_encoder block below borrows ctx.
         let opaque_scene_color_target_format = has_transmission
             .then(|| ctx.outputs.texture_2d("color").map(|t| t.format))
@@ -227,7 +227,7 @@ impl RenderScene {
             {
                 self.ensure_shadow_pass(gpu.device);
                 self.ensure_shadow_maps(gpu.device, casters);
-            } else if has_transmission || rt_enabled || has_subsurface {
+            } else if has_transmission || rt_enabled {
                 // The transmissive
                 // opaque-depth prepass below reuses `shadow_pipeline` (a
                 // depth-only pipeline fed the camera's `view_proj` instead
@@ -246,7 +246,7 @@ impl RenderScene {
             // borrows of `self` below) — the same `&mut self` ensure calls
             // deferred to right before Pass 2 fetches `target` (the natural
             // place otherwise) would conflict with those borrows under NLL.
-            if has_transmission || rt_enabled || has_subsurface {
+            if has_transmission || rt_enabled {
                 self.ensure_opaque_depth_snapshot(gpu.device, width, height);
             }
             if has_transmission {
@@ -255,8 +255,7 @@ impl RenderScene {
                     .err();
             }
             if has_subsurface {
-                self.subsurface_pass
-                    .ensure(gpu.device, width, height, draws.len());
+                self.subsurface_pass.ensure(gpu.device, width, height);
             }
             if has_transmission && let Some(format) = opaque_scene_color_target_format {
                 self.ensure_opaque_scene_color(gpu.device, width, height, format);

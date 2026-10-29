@@ -152,6 +152,17 @@ impl RenderScene {
         ),
     ];
 
+    /// The subsurface light pass (`subsurface.rs`): `fs_pbr` returns the
+    /// scattering surface's diffuse light before its colour, with light
+    /// from behind through its thin parts, and its slot in alpha. The main
+    /// pass keeps the marker comment, so it never computes this.
+    pub(super) const SUBSURFACE_LIGHT_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[
+        (
+            "        // subsurface light pass (only in its pipeline, `SUBSURFACE_LIGHT_SPECIALIZATIONS`)\n",
+            "        return vec4<f32>(\n            direct.diffuse_light + kd_ibl * ibl.irradiance * occlusion\n                + subsurface_through(in.world_pos, N, subsurface_look.distance.rgb),\n            subsurface_look.weight_slot.y,\n        );\n",
+        ),
+    ];
+
     /// The solid-surface variant: drops every `discard` from the three
     /// fragment entries (the `fs_pbr` volume-nearest test, and the
     /// appearance-fade and alpha-cutout tests all three share). A fragment
@@ -658,6 +669,11 @@ impl RenderScene {
                     }
                 });
             }
+            scope.spawn(|| {
+                for solid in [false, true] {
+                    subsurface::light_pipeline(device, solid);
+                }
+            });
         });
 
         // The

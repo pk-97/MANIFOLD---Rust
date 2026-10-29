@@ -157,10 +157,11 @@ pub static SAND_FIELDS: [FieldRow; 3] = [BOUNDS_FIELD, DRAW_FIELD, MATERIAL_BIND
 /// What a new item of `matter` looks like on its own Material, over the
 /// Sand template's look, each from what the material is made of:
 /// - Snow: ice grains (IOR 1.31) a fraction of a millimetre across at about
-///   0.9 albedo, rough and sparkling. Real snow also carries light
-///   centimetres inside, but the renderer's subsurface is noisy and costs
-///   about 16 ms a frame on a metre of it, so it stays off.
-/// - Clay: terracotta, satin.
+///   0.9 albedo, glinting. Light runs millimetres to a centimetre inside,
+///   blue the furthest, so creases and thin edges glow faintly blue; a
+///   little light stays at the surface for its crust.
+/// - Clay: terracotta, satin, its light spreading a few millimetres and red
+///   the furthest.
 /// - Mud: dark wet soil under a film of water (a clear coat at water's
 ///   IOR), gritty below it.
 /// - Goo: honey, clear (transmission 1) with its amber from absorption
@@ -173,10 +174,17 @@ pub fn matter_look(matter: Matter) -> &'static [(&'static str, f32)] {
             ("color_r", 0.9),
             ("color_g", 0.92),
             ("color_b", 0.95),
-            ("roughness", 0.8),
+            ("roughness", 0.35),
             ("specular", 0.5),
             ("ior", 1.31),
             ("grain", 0.4),
+            ("subsurface_weight", 0.85),
+            ("subsurface_radius_r", 0.004),
+            ("subsurface_radius_g", 0.006),
+            ("subsurface_radius_b", 0.012),
+            ("subsurface_color_r", 0.9),
+            ("subsurface_color_g", 0.94),
+            ("subsurface_color_b", 0.98),
         ],
         Matter::Clay => &[
             ("color_r", 0.42),
@@ -185,6 +193,13 @@ pub fn matter_look(matter: Matter) -> &'static [(&'static str, f32)] {
             ("roughness", 0.6),
             ("specular", 0.35),
             ("grain", 0.0),
+            ("subsurface_weight", 1.0),
+            ("subsurface_radius_r", 0.006),
+            ("subsurface_radius_g", 0.003),
+            ("subsurface_radius_b", 0.002),
+            ("subsurface_color_r", 0.42),
+            ("subsurface_color_g", 0.16),
+            ("subsurface_color_b", 0.085),
         ],
         Matter::Mud => &[
             ("color_r", 0.075),

@@ -88,40 +88,6 @@ impl GpuShadowRayTracer {
         match self.never {}
     }
 
-    /// Encode the cached geometry-aware subsurface transport pass.
-    #[allow(clippy::too_many_arguments)]
-    pub fn dispatch_subsurface(
-        &self,
-        encoder: &mut GpuEncoder,
-        device: &GpuDevice,
-        params: &SubsurfaceParams,
-        accel: &RtAccel,
-        normal_sources: &GpuBuffer,
-        materials: &GpuBuffer,
-        gi_materials: &GpuBuffer,
-        lights: &GpuBuffer,
-        current_objects: &[RtObjectGeometry<'_>],
-        material_textures: &[&GpuTexture],
-        depth: &GpuTexture,
-        environment: &GpuTexture,
-        raw_output: &GpuTexture,
-        guide: &GpuTexture,
-        guide_read: &GpuTexture,
-        depth_read: &GpuTexture,
-        depth_write: &GpuTexture,
-        previous_view_proj: [[f32; 4]; 4],
-        previous_inv_view_proj: [[f32; 4]; 4],
-        history_read: &GpuTexture,
-        history_write: &GpuTexture,
-        count_read: &GpuTexture,
-        count_write: &GpuTexture,
-        filter_scratch: &GpuTexture,
-        output: &GpuTexture,
-        reset: bool,
-    ) {
-        match self.never {}
-    }
-
     /// RT-T1-B value-test-only entry point (`docs/RAYTRACING_DESIGN.md` section 8
     /// Tier-1 item 2's gate) — dispatches the SAME `fetch_interpolated_normal`
     /// MSL helper `trace_shadow_rays` uses internally, against caller-

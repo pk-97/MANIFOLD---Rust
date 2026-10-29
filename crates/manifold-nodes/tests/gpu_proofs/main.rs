@@ -33,7 +33,6 @@ mod render_scene_ao_mask;
 mod render_scene_map_set;
 mod render_scene_pbr_fidelity;
 mod render_scene_shadow_cache;
-mod render_scene_subsurface;
 mod rt_atrous_post;
 #[path = "catalog/rt_bug318_import_toggle.rs"]
 mod rt_bug318_import_toggle;

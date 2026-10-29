@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::accel::ProbeBlas;
-use arrayvec::ArrayVec;
 use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -45,11 +44,6 @@ use crate::types::{
 /// bare MSL `float3` is sizeof 16 and desyncs from `#[repr(C)] [f32; 3]`.
 const SHADOW_RAYS_MSL: &str = include_str!("../shadow_rays.msl");
 
-/// Subsurface transport extends the shared shadow-ray helper library; the
-/// device-global library compiles the concatenated helper and transport
-/// kernels once.
-const SUBSURFACE_MSL: &str = include_str!("../subsurface.msl");
-
 // RT-T2-A: a 1x1 fully-opaque (alpha=1.0) texture — bound into every
 // `alpha_textures` slot a frame's `dispatch_shadow_rays` call doesn't fill
 // with a real base-color texture. Fully opaque so an accidental sample
@@ -72,34 +66,6 @@ fn create_dummy_alpha_texture(device: &GpuDevice) -> GpuTexture {
 }
 
 pub(crate) const SHADOW_WORKGROUP: [u32; 3] = [8, 8, 1];
-const SUBSURFACE_BINDING_COUNT: usize = 10 + MAX_RT_MATERIAL_TEXTURES;
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct SubsurfaceReconstructionParams {
-    inv_view_proj: [[f32; 4]; 4],
-    previous_view_proj: [[f32; 4]; 4],
-    previous_inv_view_proj: [[f32; 4]; 4],
-    size: [u32; 2],
-    reset: u32,
-    max_history: u32,
-    step: u32,
-    pixel_radius: f32,
-    filter_strength: f32,
-    _pad: u32,
-}
-
-const _: () = {
-    assert!(std::mem::size_of::<SubsurfaceReconstructionParams>() == 224);
-    assert!(std::mem::offset_of!(SubsurfaceReconstructionParams, previous_view_proj) == 64);
-    assert!(std::mem::offset_of!(SubsurfaceReconstructionParams, previous_inv_view_proj) == 128);
-    assert!(std::mem::offset_of!(SubsurfaceReconstructionParams, size) == 192);
-    assert!(std::mem::offset_of!(SubsurfaceReconstructionParams, step) == 208);
-};
-
-fn subsurface_reconstruction_params_bytes(params: &SubsurfaceReconstructionParams) -> &[u8] {
-    bytemuck::bytes_of(params)
-}
 
 fn dispatch_groups_2d(size: [u32; 2], workgroup: [u32; 3]) -> [u32; 3] {
     [
@@ -254,7 +220,6 @@ const MAX_RT_REFLECTION_SPP: u32 = 32;
 #[derive(Clone, Copy, Hash)]
 enum TraceKind {
     Lighting,
-    Subsurface,
 }
 
 /// Identity of a trace's cost shape: kind, scene acceleration structure,
@@ -384,11 +349,6 @@ pub struct GpuShadowRayTracer {
     /// P4a (§5.1): the always-zero 16-byte stats buffer callers bind when
     /// the scene has no emissive table — see [`Self::zero_emissive_stats`].
     zero_emissive_stats: GpuBuffer,
-    /// Cached subsurface transport pipeline compiled from the shared
-    /// shadow-ray helpers plus `subsurface.msl`.
-    subsurface_pipeline: GpuComputePipeline,
-    subsurface_reconstruct_pipeline: GpuComputePipeline,
-    subsurface_filter_pipeline: GpuComputePipeline,
     secondary_lights: Option<GpuBuffer>,
     secondary_irradiance: Option<GpuTexture>,
     secondary_brdf_lut: Option<GpuTexture>,
@@ -434,10 +394,6 @@ pub struct RtPipelines {
     /// RT input lands through this kernel on the caller's encoder — no
     /// mapped-table writes at encode time (the last-write-wins tear).
     pub copy_inline_pipeline: GpuComputePipeline,
-    /// Cached `trace_subsurface` pipeline; cloned into each tracer instance.
-    pub subsurface_pipeline: GpuComputePipeline,
-    pub subsurface_reconstruct_pipeline: GpuComputePipeline,
-    pub subsurface_filter_pipeline: GpuComputePipeline,
 }
 
 /// P4a (§5.1): the emissive-preparation pipeline set — device-global code
@@ -471,10 +427,7 @@ impl RtPipelines {
         // the WGSL path's pinned older version — matches the prototype's
         // `Gpu::compile_library`.
         opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
-        let source = format!(
-            "{}{prelude}{SHADOW_RAYS_MSL}\n{SUBSURFACE_MSL}",
-            crate::ShadowCaster::MSL
-        );
+        let source = format!("{}{prelude}{SHADOW_RAYS_MSL}", crate::ShadowCaster::MSL);
         let src_ns = NSString::from_str(&source);
         let library = device
             .raw_device()
@@ -559,63 +512,6 @@ impl RtPipelines {
             })
         });
 
-        // Subsurface transport shares the helper functions and acceleration
-        // bindings from the shadow-ray library, but has its own fixed ABI.
-        // Keep this PSO in the device-global set so no frame can compile a
-        // kernel while dispatching.
-        let mut subsurface_slots: Vec<(u32, SlotKind)> = vec![
-            (0, SlotKind::Buffer),  // accel
-            (1, SlotKind::Buffer),  // params
-            (2, SlotKind::Buffer),  // normal sources
-            (3, SlotKind::Buffer),  // scattering materials
-            (4, SlotKind::Buffer),  // lights
-            (5, SlotKind::Buffer),  // canonical GI materials
-            (6, SlotKind::Buffer),  // tile region inline bytes
-            (0, SlotKind::Texture), // camera depth
-            (1, SlotKind::Texture), // environment
-            (2, SlotKind::Texture), // output
-            (3, SlotKind::Texture), // geometric normal/object guide
-        ];
-        subsurface_slots.extend(
-            (4..4 + MAX_RT_MATERIAL_TEXTURES as u32).map(|binding| (binding, SlotKind::Texture)),
-        );
-        let subsurface_pipeline = compile_pipeline(
-            device,
-            &library,
-            "trace_subsurface",
-            identity_slot_map(&subsurface_slots),
-        );
-        let subsurface_reconstruct_pipeline = compile_pipeline(
-            device,
-            &library,
-            "reconstruct_subsurface",
-            identity_slot_map(&[
-                (1, SlotKind::Buffer),
-                (0, SlotKind::Texture),
-                (1, SlotKind::Texture),
-                (2, SlotKind::Texture),
-                (3, SlotKind::Texture),
-                (4, SlotKind::Texture),
-                (5, SlotKind::Texture),
-                (6, SlotKind::Texture),
-                (7, SlotKind::Texture),
-                (8, SlotKind::Texture),
-                (9, SlotKind::Texture),
-                (10, SlotKind::Texture),
-            ]),
-        );
-        let subsurface_filter_pipeline = compile_pipeline(
-            device,
-            &library,
-            "filter_subsurface",
-            identity_slot_map(&[
-                (1, SlotKind::Buffer),
-                (0, SlotKind::Texture),
-                (1, SlotKind::Texture),
-                (2, SlotKind::Texture),
-                (3, SlotKind::Texture),
-            ]),
-        );
         let upsample_pipeline = compile_pipeline(
             device,
             &library,
@@ -925,9 +821,6 @@ impl RtPipelines {
             descriptor_build_pipeline,
             emissive,
             copy_inline_pipeline,
-            subsurface_pipeline,
-            subsurface_reconstruct_pipeline,
-            subsurface_filter_pipeline,
         }
     }
 }
@@ -1010,9 +903,6 @@ impl GpuShadowRayTracer {
             debug_ray_query_pipeline: p.debug_ray_query_pipeline.clone(),
             emissive: p.emissive.clone(),
             zero_emissive_stats: device.create_buffer(16, BufferUse::Upload),
-            subsurface_pipeline: p.subsurface_pipeline.clone(),
-            subsurface_reconstruct_pipeline: p.subsurface_reconstruct_pipeline.clone(),
-            subsurface_filter_pipeline: p.subsurface_filter_pipeline.clone(),
             secondary_lights: None,
             secondary_irradiance: None,
             secondary_brdf_lut: None,
@@ -1049,277 +939,6 @@ impl GpuShadowRayTracer {
         self.secondary_irradiance = Some(irradiance.clone());
         self.secondary_brdf_lut = Some(brdf_lut.clone());
         self.secondary_prefiltered_sheen = Some(prefiltered_sheen.clone());
-    }
-
-    /// Encode the cached geometry-aware subsurface transport pass. The
-    /// material and light tables are caller-owned GPU buffers; this method
-    /// snapshots only the small parameter and bounded tile payloads as Metal
-    /// inline bytes, so it introduces no per-frame staging allocation.
-    #[allow(clippy::too_many_arguments)]
-    pub fn dispatch_subsurface(
-        &self,
-        encoder: &mut GpuEncoder,
-        device: &GpuDevice,
-        params: &SubsurfaceParams,
-        accel: &RtAccel,
-        normal_sources: &GpuBuffer,
-        materials: &GpuBuffer,
-        gi_materials: &GpuBuffer,
-        lights: &GpuBuffer,
-        current_objects: &[RtObjectGeometry<'_>],
-        material_textures: &[&GpuTexture],
-        depth: &GpuTexture,
-        environment: &GpuTexture,
-        raw_output: &GpuTexture,
-        guide: &GpuTexture,
-        guide_read: &GpuTexture,
-        depth_read: &GpuTexture,
-        depth_write: &GpuTexture,
-        previous_view_proj: [[f32; 4]; 4],
-        previous_inv_view_proj: [[f32; 4]; 4],
-        history_read: &GpuTexture,
-        history_write: &GpuTexture,
-        count_read: &GpuTexture,
-        count_write: &GpuTexture,
-        filter_scratch: &GpuTexture,
-        output: &GpuTexture,
-        reset: bool,
-    ) {
-        for object in current_objects {
-            validate_instance_source_address(
-                object.instances_addr,
-                object.instances_buffer.map(GpuBuffer::gpu_address),
-            )
-            .unwrap_or_else(|message| panic!("{message}"));
-        }
-
-        let mut bindings: ArrayVec<GpuBinding<'_>, SUBSURFACE_BINDING_COUNT> = ArrayVec::new();
-        bindings.push(GpuBinding::Bytes {
-            binding: 1,
-            data: subsurface_params_bytes(params),
-        });
-        bindings.push(GpuBinding::Buffer {
-            binding: 2,
-            buffer: normal_sources,
-            offset: 0,
-        });
-        bindings.push(GpuBinding::Buffer {
-            binding: 3,
-            buffer: materials,
-            offset: 0,
-        });
-        bindings.push(GpuBinding::Buffer {
-            binding: 4,
-            buffer: lights,
-            offset: 0,
-        });
-        bindings.push(GpuBinding::Buffer {
-            binding: 5,
-            buffer: gi_materials,
-            offset: 0,
-        });
-        bindings.push(GpuBinding::Texture {
-            binding: 0,
-            texture: depth,
-        });
-        bindings.push(GpuBinding::Texture {
-            binding: 1,
-            texture: environment,
-        });
-        bindings.push(GpuBinding::Texture {
-            binding: 2,
-            texture: raw_output,
-        });
-        bindings.push(GpuBinding::Texture {
-            binding: 3,
-            texture: guide,
-        });
-        for i in 0..MAX_RT_MATERIAL_TEXTURES {
-            let texture = material_textures
-                .get(i)
-                .copied()
-                .unwrap_or(&self.dummy_alpha_tex);
-            bindings.push(GpuBinding::Texture {
-                binding: 4 + i as u32,
-                texture,
-            });
-        }
-
-        // Keep the full-resolution pass bounded by the same deterministic
-        // 8x8 planner and measured-time budget as the lighting trace. The
-        // tile is the shader's binding(6) inline snapshot; each tile commits
-        // as its own command buffer.
-        let query_units = u64::from(params.query_units_per_pixel.max(1));
-        let shape = trace_shape_key(
-            TraceKind::Subsurface,
-            accel,
-            params.render_size,
-            query_units,
-            &[],
-        );
-        let (timing_slot, limits) = self.trace_timing.borrow_mut().begin(shape);
-        let limits = floor_to_workgroup(limits, SHADOW_WORKGROUP);
-        let regions = plan_trace_regions(
-            params.render_size[0],
-            params.render_size[1],
-            SHADOW_WORKGROUP[0],
-            SHADOW_WORKGROUP[1],
-            query_units,
-            limits,
-        )
-        .expect("validated subsurface dimensions must produce a tile plan");
-        encoder.commit_and_continue(device);
-        for region in regions {
-            encoder.dispatch_compute_with_accel(
-                &self.subsurface_pipeline,
-                0,
-                accel,
-                &bindings,
-                current_objects
-                    .iter()
-                    .filter(|object| object.instances_addr != 0)
-                    .map(|object| {
-                        object
-                            .instances_buffer
-                            .expect("validated RT wired instance source buffer")
-                    }),
-                Some((6, trace_region_bytes(&region))),
-                dispatch_groups_2d(region.extent, SHADOW_WORKGROUP),
-                "trace_subsurface",
-            );
-            self.trace_timing.borrow_mut().record(
-                timing_slot,
-                &encoder.cmd_buf,
-                region_pixels(&region),
-                limits.max_pixels_per_tile,
-            );
-            encoder.commit_and_continue(device);
-        }
-
-        let reconstruction = SubsurfaceReconstructionParams {
-            inv_view_proj: params.inv_view_proj,
-            previous_view_proj,
-            previous_inv_view_proj,
-            size: params.render_size,
-            reset: u32::from(reset),
-            max_history: 64,
-            step: 1,
-            pixel_radius: 4.5,
-            filter_strength: 1.0,
-            _pad: 0,
-        };
-        encoder.dispatch_compute(
-            &self.subsurface_reconstruct_pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 1,
-                    data: subsurface_reconstruction_params_bytes(&reconstruction),
-                },
-                GpuBinding::Texture {
-                    binding: 0,
-                    texture: raw_output,
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: guide,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: history_read,
-                },
-                GpuBinding::Texture {
-                    binding: 3,
-                    texture: history_write,
-                },
-                GpuBinding::Texture {
-                    binding: 4,
-                    texture: count_read,
-                },
-                GpuBinding::Texture {
-                    binding: 5,
-                    texture: count_write,
-                },
-                GpuBinding::Texture {
-                    binding: 6,
-                    texture: output,
-                },
-                GpuBinding::Texture {
-                    binding: 7,
-                    texture: depth,
-                },
-                GpuBinding::Texture {
-                    binding: 8,
-                    texture: guide_read,
-                },
-                GpuBinding::Texture {
-                    binding: 9,
-                    texture: depth_read,
-                },
-                GpuBinding::Texture {
-                    binding: 10,
-                    texture: depth_write,
-                },
-            ],
-            dispatch_groups_2d(params.render_size, SHADOW_WORKGROUP),
-            "node.render_scene subsurface reconstruct",
-        );
-        let mut filter_params = reconstruction;
-        filter_params.step = 1;
-        encoder.dispatch_compute(
-            &self.subsurface_filter_pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 1,
-                    data: subsurface_reconstruction_params_bytes(&filter_params),
-                },
-                GpuBinding::Texture {
-                    binding: 0,
-                    texture: depth,
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: guide,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: output,
-                },
-                GpuBinding::Texture {
-                    binding: 3,
-                    texture: filter_scratch,
-                },
-            ],
-            dispatch_groups_2d(params.render_size, SHADOW_WORKGROUP),
-            "node.render_scene subsurface filter step1",
-        );
-        filter_params.step = 2;
-        encoder.dispatch_compute(
-            &self.subsurface_filter_pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 1,
-                    data: subsurface_reconstruction_params_bytes(&filter_params),
-                },
-                GpuBinding::Texture {
-                    binding: 0,
-                    texture: depth,
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: guide,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: filter_scratch,
-                },
-                GpuBinding::Texture {
-                    binding: 3,
-                    texture: output,
-                },
-            ],
-            dispatch_groups_2d(params.render_size, SHADOW_WORKGROUP),
-            "node.render_scene subsurface filter step2",
-        );
     }
 
     /// RT-T1-B value-test-only entry point (`docs/RAYTRACING_DESIGN.md` section 8
@@ -2746,10 +2365,6 @@ fn bytemuck_bytes(params: &ShadowRayParams) -> &[u8] {
             std::mem::size_of::<ShadowRayParams>(),
         )
     }
-}
-
-fn subsurface_params_bytes(params: &SubsurfaceParams) -> &[u8] {
-    bytemuck::bytes_of(params)
 }
 
 fn accumulate_params_bytes(params: &AccumulateParams) -> &[u8] {

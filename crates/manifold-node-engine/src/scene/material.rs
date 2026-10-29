@@ -81,30 +81,15 @@ impl Default for MaterialMapInfo {
     }
 }
 
-/// Subsurface transport model used by the PBR material. The renderer owns
-/// the implementation; this shared value only carries the authored controls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SubsurfaceMode {
-    /// Cheap diffusion approximation for realtime surfaces.
-    #[default]
-    Diffusion,
-    /// Higher-cost volumetric random-walk scattering.
-    RandomWalk,
-}
-
 /// Shared subsurface-scattering controls carried by [`Material`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Subsurface {
-    /// Fraction of the surface response that participates in subsurface transport.
+    /// How much of the diffuse light scatters under the surface, 0 to 1.
     pub weight: f32,
-    /// World-space transport mean-free path for red, green, and blue channels.
+    /// How far light travels under the surface before it leaves, in metres, for red, green and blue.
     pub radius: [f32; 3],
-    /// Single-scattering albedo for red, green, and blue channels.
+    /// The colour the scattered light gives the surface, red, green and blue.
     pub color: [f32; 3],
-    /// Henyey-Greenstein anisotropy parameter.
-    pub anisotropy: f32,
-    pub mode: SubsurfaceMode,
-    pub samples: u32,
 }
 
 impl Default for Subsurface {
@@ -113,9 +98,6 @@ impl Default for Subsurface {
             weight: 0.0,
             radius: [0.01, 0.005, 0.0025],
             color: [0.9, 0.8, 0.7],
-            anisotropy: 0.0,
-            mode: SubsurfaceMode::Diffusion,
-            samples: 8,
         }
     }
 }
@@ -620,7 +602,6 @@ mod tests {
         ];
         for material in materials {
             assert_eq!(material.subsurface, Subsurface::default());
-            assert_eq!(material.subsurface.mode, SubsurfaceMode::Diffusion);
         }
     }
 

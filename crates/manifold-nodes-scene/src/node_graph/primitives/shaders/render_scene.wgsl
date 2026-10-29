@@ -146,7 +146,18 @@ struct MaterialMapUniform {
     sampling: vec4<u32>,
 };
 struct MaterialMaps { maps: array<MaterialMapUniform, 19>, };
-@group(0) @binding(51) var<uniform> subsurface_binding: vec4<f32>;
+// A draw's subsurface scattering (`render_scene/subsurface.rs`).
+struct SubsurfaceLook {
+    // (weight, slot): the slot is the draw's place among the scattering
+    // draws plus one, and 0 for a draw that does not scatter.
+    weight_slot: vec4<f32>,
+    // The colour the scattered light gives the surface.
+    color: vec4<f32>,
+    // Burley's profile distance d for red, green and blue, metres.
+    distance: vec4<f32>,
+}
+@group(0) @binding(51) var<uniform> subsurface_look: SubsurfaceLook;
+// The scattered diffuse light, its slot in alpha.
 @group(0) @binding(52) var subsurface_radiance: texture_2d<f32>;
 @group(0) @binding(50) var<uniform> material_maps: MaterialMaps;
 
@@ -1578,14 +1589,17 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     }
     var diffuse_component = (direct.diffuse + diffuse_ibl) * (1.0 - diffuse_transmission)
         + direct.translucent + translucent_ibl;
-    if subsurface_binding.x > 0.0 {
+    if subsurface_look.weight_slot.x > 0.0 {
+        // subsurface light pass (only in its pipeline, `SUBSURFACE_LIGHT_SPECIALIZATIONS`)
+        // A pixel another scattering surface covered in the light pass keeps
+        // its plain diffuse.
         let scattered = textureLoad(subsurface_radiance, vec2<i32>(in.clip_pos.xy), 0);
-        if scattered.a < 0.0 {
-            // An open boundary or exhausted random walk must be visible;
-            // never silently show a different transport mode as successful.
-            diffuse_component = vec3<f32>(1.0, 0.0, 1.0);
-        } else if scattered.a == subsurface_binding.y {
-            diffuse_component = mix(diffuse_component, kd_ibl * scattered.rgb, subsurface_binding.x);
+        if scattered.a == subsurface_look.weight_slot.y {
+            diffuse_component = mix(
+                diffuse_component,
+                subsurface_look.color.rgb * scattered.rgb,
+                subsurface_look.weight_slot.x,
+            );
         }
     }
     let transmission_factor = resolve_transmission_factor(in.uv);
@@ -1614,6 +1628,55 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // exp2(exposure_ev), see fs_unlit.
     let rgb = apply_fog(lit, in.world_pos) * exp2(u.scene_params.z);
     return apply_appearance(rgb, albedo.a, in.appearance_weight);
+}
+
+// Light from behind that crosses a thin part of a scattering surface and
+// leaves on the side the camera sees (Jimenez et al. 2010). The light's
+// shadow map gives the thickness it crossed and Burley's profile how much of
+// each colour gets through. A light without a shadow map, or with
+// ray-traced shadows in place of the maps, has no thickness to read and
+// sends none.
+fn subsurface_through(world_pos: vec3<f32>, n: vec3<f32>, distance: vec3<f32>) -> vec3<f32> {
+    var through = vec3<f32>(0.0);
+    if u.scene_params.w > 0.5 && u.rt_flags.w > 0.5 {
+        return through;
+    }
+    let light_count = u32(u.scene_params.x);
+    for (var i = 0u; i < light_count; i = i + 1u) {
+        let l_dir = light_direction_attenuation(i, world_pos);
+        let l_col = lights[i * LIGHT_STRIDE + 1u];
+        let back = dot(-n, l_dir.xyz);
+        if back <= 0.0 || l_dir.w <= 0.0 || l_col.w < 0.0 {
+            continue;
+        }
+        let slot = i32(l_col.w + 0.5);
+        if casters[slot].shadow.z <= 0.0 {
+            continue;
+        }
+        // The point s metres toward the light lands at here + s · toward in
+        // the caster's clip space.
+        let here = casters[slot].view_proj * vec4<f32>(world_pos, 1.0);
+        let toward = casters[slot].view_proj * vec4<f32>(l_dir.xyz, 0.0);
+        if here.w <= 0.0 {
+            continue;
+        }
+        let ndc = here.xyz / here.w;
+        let suv = vec2<f32>(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5);
+        if any(suv < vec2<f32>(0.0)) || any(suv > vec2<f32>(1.0)) || ndc.z > 1.0 || ndc.z < 0.0 {
+            continue;
+        }
+        // The first surface the light meets, at the depth its map stores:
+        // (here.z + s toward.z) / (here.w + s toward.w) = first.
+        let first = plain_shadow_depth(slot, suv);
+        let across = toward.z - first * toward.w;
+        if abs(across) < 1e-12 {
+            continue;
+        }
+        let thickness = max((first * here.w - here.z) / across, 0.0);
+        let through_profile = 0.25 * (exp(-thickness / distance) + 3.0 * exp(-thickness / (3.0 * distance)));
+        through += through_profile * l_col.rgb * back * l_dir.w / PI;
+    }
+    return through;
 }
 
 // Cel — Lambert N·L quantized into cel_bands discrete steps, summed over

@@ -591,7 +591,7 @@ impl RenderScene {
                     },
                     GpuBinding::Bytes {
                         binding: 51,
-                        data: bytemuck::bytes_of(&draw.subsurface_binding),
+                        data: bytemuck::bytes_of(&draw.subsurface_look),
                     },
                     GpuBinding::Texture {
                         binding: 52,
@@ -610,6 +610,15 @@ impl RenderScene {
                 ])
             })
             .collect();
+        // The scattering draws' light, spread before this pass reads it.
+        if draws.iter().any(|draw| draw.subsurface_look.scatters())
+            && let Err(error) =
+                self.subsurface_pass
+                    .encode(ctx.gpu_encoder().native_enc, pre, draws, &binding_sets)
+        {
+            Self::fail_frame(ctx, None, error);
+            return None;
+        }
         // Split into the existing
         // opaque/mask group (order unchanged — a zero-Blend scene produces
         // byte-identical `draw_calls` to before this phase) and the sorted

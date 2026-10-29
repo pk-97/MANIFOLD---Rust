@@ -512,7 +512,7 @@ impl RenderScene {
                 uniforms,
                 map_uniforms: material_map_uniforms(&material),
                 subsurface: material.subsurface,
-                subsurface_binding: [0.0; 4],
+                subsurface_look: Default::default(),
                 pipeline,
                 base_color_map,
                 normal_map,
@@ -834,7 +834,6 @@ impl RenderScene {
     /// cached; this is the same invalidation used by `clear_state`, without
     /// restarting the jitter sequence during a transient empty scene.
     pub(super) fn invalidate_temporal_history(&mut self) {
-        self.subsurface_pass.reset();
         self.selection.reset();
         self.rt_history_ping = 0;
         self.rt_irr_needs_reset = true;

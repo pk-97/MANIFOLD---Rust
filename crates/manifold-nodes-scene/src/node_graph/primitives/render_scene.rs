@@ -1939,7 +1939,7 @@ struct ObjectDraw<'ctx> {
     uniforms: RenderSceneUniforms,
     map_uniforms: [MaterialMapUniform; 19],
     subsurface: manifold_node_engine::scene::material::Subsurface,
-    subsurface_binding: [f32; 4],
+    subsurface_look: subsurface::SubsurfaceLook,
     pipeline: manifold_gpu::GpuRenderPipeline,
     base_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
     /// The four new optional
@@ -3082,8 +3082,7 @@ impl RenderScene {
             return;
         }
 
-        let mut has_subsurface = false;
-        let mut opaque_index = 0u32;
+        let mut scattering = 0u32;
         for draw in &mut draws {
             let requested = draw.kind == MaterialKind::Pbr && draw.subsurface.weight > 0.0;
             if requested && draw.points {
@@ -3098,24 +3097,24 @@ impl RenderScene {
                 Self::fail_frame(
                     ctx,
                     Some(draw.slot),
-                    "Subsurface scattering requires an opaque PBR surface; use its scattering colour and radius for translucency instead of alpha Blend or glass transmission.",
+                    "Subsurface scattering needs an opaque surface. For light through a clear material, use Glass.",
                 );
                 return;
             }
-            if !draw.routes_to_transparent() && draw.instance_count > 0 {
-                if requested {
-                    draw.subsurface_binding =
-                        [draw.subsurface.weight, (opaque_index + 1) as f32, 0.0, 0.0];
-                    has_subsurface = true;
+            if requested && draw.instance_count > 0 {
+                scattering += 1;
+                if scattering > subsurface::MAX_SCATTERING {
+                    Self::fail_frame(
+                        ctx,
+                        Some(draw.slot),
+                        "At most 64 objects can scatter light under their surface in one scene.",
+                    );
+                    return;
                 }
-                opaque_index += 1;
+                draw.subsurface_look = subsurface::SubsurfaceLook::of(&draw.subsurface, scattering);
             }
         }
-        if !has_subsurface {
-            self.subsurface_pass.reset();
-        }
-        let prepare_rt =
-            rt_enabled || has_subsurface || ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
+        let prepare_rt = rt_enabled || ctx.gpu.as_ref().is_some_and(|gpu| gpu.preparing);
         Self::collect_rt_objects(&draws, prepare_rt, rt_objects);
         let rt_tables = if prepare_rt
             && !rt_objects.is_empty()
@@ -3200,28 +3199,8 @@ impl RenderScene {
         // ---- E2a/RT-D3 opaque camera-depth prepass (BUG-trh7 stage 2,
         // `opaque_depth_snapshot_pass`) — Pass B's depth test source and the
         // RT shadow-ray pass's depth source.
-        self.opaque_depth_snapshot_pass(ctx, &pre, &opaque_draws, has_transmission, has_subsurface);
+        self.opaque_depth_snapshot_pass(ctx, &pre, &opaque_draws, has_transmission);
 
-        if has_subsurface {
-            let Some((textures, _, _)) = rt_tables.as_ref() else {
-                Self::fail_frame(
-                    ctx,
-                    None,
-                    "Subsurface scattering has no current-frame geometry acceleration data.",
-                );
-                return;
-            };
-            if !self.subsurface_trace(
-                ctx,
-                &pre,
-                &opaque_draws,
-                rt_objects,
-                gi_materials_data,
-                textures,
-            ) {
-                return;
-            }
-        }
         if has_transmission {
             let gpu = ctx.gpu_encoder();
             if let Err(error) = self.volume_optics.encode(

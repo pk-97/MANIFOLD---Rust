@@ -259,7 +259,6 @@ impl RenderScene {
         pre: &FramePrelude<'ctx>,
         opaque_draws: &[&ObjectDraw<'ctx>],
         has_transmission: bool,
-        has_subsurface: bool,
     ) {
         let FramePrelude {
             view_proj,
@@ -267,7 +266,7 @@ impl RenderScene {
             ..
         } = *pre;
         let identity_stub = self.identity_instance_stub.as_ref().expect("ensured");
-        if has_transmission || rt_enabled || has_subsurface {
+        if has_transmission || rt_enabled {
             let opaque_depth_pipeline = self
                 .shadow_pipeline
                 .as_ref()

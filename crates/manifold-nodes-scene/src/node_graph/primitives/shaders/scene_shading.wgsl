@@ -901,6 +901,8 @@ struct PbrDirect {
     total: vec3<f32>,
     // The diffuse part of `total` alone (transmission replaces it).
     diffuse: vec3<f32>,
+    // `diffuse` before the albedo: the light subsurface scattering spreads.
+    diffuse_light: vec3<f32>,
     coat: vec3<f32>,
     sheen: vec3<f32>,
     // Diffuse transmission from lights behind the surface.
@@ -962,6 +964,7 @@ fn pbr_direct_lighting(s: PbrSurface) -> PbrDirect {
     // Accumulated in parallel with `direct` from the same already-computed
     // terms, never substituted into it, so it cannot perturb `direct`.
     var direct_diffuse = vec3<f32>(0.0);
+    var direct_diffuse_light = vec3<f32>(0.0);
     var direct_sheen = vec3<f32>(0.0);
     var direct_translucent = vec3<f32>(0.0);
     let light_count = u32(u.scene_params.x);
@@ -1026,6 +1029,7 @@ fn pbr_direct_lighting(s: PbrSurface) -> PbrDirect {
             * select(1.0, s.relief_light[min(i, 3u)], i < 4u);
         direct = direct + (diffuse + specular) * l_col.rgb * n_dot_l * l_dir.w * vis3;
         direct_diffuse = direct_diffuse + diffuse * l_col.rgb * n_dot_l * l_dir.w * vis3;
+        direct_diffuse_light += kd / PI * l_col.rgb * n_dot_l * l_dir.w * vis3;
 
         // Coat lobe: same D_GGX/G_Smith shape at clearcoat_roughness,
         // fixed F0 = 0.04, no diffuse term (a clear lacquer has none). `Nc`
@@ -1059,7 +1063,7 @@ fn pbr_direct_lighting(s: PbrSurface) -> PbrDirect {
                 * l_col.rgb * back_l * l_dir.w * vis3;
         }
     }
-    return PbrDirect(direct, direct_diffuse, direct_coat, direct_sheen, direct_translucent);
+    return PbrDirect(direct, direct_diffuse, direct_diffuse_light, direct_coat, direct_sheen, direct_translucent);
 }
 
 // Prefiltered environment radiance along a reflection, roughness picking the

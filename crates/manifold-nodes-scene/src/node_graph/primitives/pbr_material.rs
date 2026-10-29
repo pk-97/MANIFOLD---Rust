@@ -32,7 +32,7 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::material::{
-    AlphaMode, MapSamplerDesc, Material, MaterialKind, MaterialMapInfo, Subsurface, SubsurfaceMode,
+    AlphaMode, MapSamplerDesc, Material, MaterialKind, MaterialMapInfo, Subsurface,
 };
 
 const ALPHA_MODES: &[&str] = &["Opaque", "Mask", "Blend"];
@@ -56,7 +56,7 @@ fn finite_clamped(value: f32, fallback: f32, min: f32, max: f32) -> f32 {
 manifold_node_engine::primitive! {
     name: PbrMaterial,
     type_id: "node.pbr_material",
-    purpose: "Physically based surface material with metallic/roughness, normal maps, clearcoat, sheen, anisotropy, iridescence, glass transmission, and subsurface scattering. Subsurface weight replaces diffuse reflection; colour is the scattering albedo and RGB radius is the transport mean-free path in world units. Diffusion is the cheaper approximation; Random Walk follows multiple scattering inside a closed mesh and can cost much more. Samples trade speed for noise. Both scattering modes require an opaque surface; open Random Walk geometry or an exhausted transport bound is shown in magenta. Surface highlights and emission are retained.",
+    purpose: "Physically based surface material with metallic/roughness, normal maps, clearcoat, sheen, anisotropy, iridescence, glass transmission, and subsurface scattering. Subsurface weight replaces diffuse reflection; colour is the scattering albedo and RGB radius is the transport mean-free path in world units. Surface highlights and emission are retained.",
     inputs: {
         color_r: ScalarF32 optional,
         color_g: ScalarF32 optional,
@@ -122,7 +122,7 @@ manifold_node_engine::primitive! {
         translucency_color_g: ScalarF32 optional,
         translucency_color_b: ScalarF32 optional,
         // Shared subsurface controls. Continuous values have optional
-        // scalar ports; transport mode and sample count are params only.
+        // scalar ports.
         subsurface_weight: ScalarF32 optional,
         subsurface_radius_r: ScalarF32 optional,
         subsurface_radius_g: ScalarF32 optional,
@@ -130,7 +130,6 @@ manifold_node_engine::primitive! {
         subsurface_color_r: ScalarF32 optional,
         subsurface_color_g: ScalarF32 optional,
         subsurface_color_b: ScalarF32 optional,
-        subsurface_anisotropy: ScalarF32 optional,
         // KHR_texture_transform,
         // per-map — one folded 2×3 affine
         // `uv' = (m00*u + m01*v + tx, m10*u + m11*v + ty)` per map family
@@ -1197,9 +1196,6 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("subsurface_color_r"), label: "Subsurface Color R", ty: ParamType::Float, default: ParamValue::Float(0.9), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("subsurface_color_g"), label: "Subsurface Color G", ty: ParamType::Float, default: ParamValue::Float(0.8), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("subsurface_color_b"), label: "Subsurface Color B", ty: ParamType::Float, default: ParamValue::Float(0.7), range: Some((0.0, 1.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("subsurface_anisotropy"), label: "Subsurface Anisotropy", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-0.95, 0.95)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("subsurface_mode"), label: "Subsurface Mode", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["Diffusion", "Random Walk"] },
-        ParamDef { name: Cow::Borrowed("subsurface_samples"), label: "Subsurface Samples", ty: ParamType::Int, default: ParamValue::Float(8.0), range: Some((1.0, 64.0)), enum_values: &[] },
         ParamDef {
             name: Cow::Borrowed("volume_geometry"),
             label: "Geometric Volume",
@@ -1445,27 +1441,6 @@ impl Primitive for PbrMaterial {
             finite_clamped("subsurface_color_g", subsurface_defaults.color[1], 0.0, 1.0),
             finite_clamped("subsurface_color_b", subsurface_defaults.color[2], 0.0, 1.0),
         ];
-        let subsurface_anisotropy = finite_clamped(
-            "subsurface_anisotropy",
-            subsurface_defaults.anisotropy,
-            -0.95,
-            0.95,
-        );
-        let subsurface_mode = match ctx.params.get("subsurface_mode") {
-            Some(ParamValue::Enum(0)) => SubsurfaceMode::Diffusion,
-            Some(ParamValue::Enum(1)) => SubsurfaceMode::RandomWalk,
-            Some(ParamValue::Float(value)) if value.is_finite() && value.round() == 1.0 => {
-                SubsurfaceMode::RandomWalk
-            }
-            _ => subsurface_defaults.mode,
-        };
-        let subsurface_samples = match ctx.params.get("subsurface_samples") {
-            Some(ParamValue::Float(value)) if value.is_finite() => {
-                value.round().clamp(1.0, 64.0) as u32
-            }
-            _ => subsurface_defaults.samples,
-        };
-
         // A saved Off mode gates evaluated output only. Authored factors,
         // maps, and their drivers remain untouched in the graph.
         if coat_mode == 1 {
@@ -1917,9 +1892,6 @@ impl Primitive for PbrMaterial {
             weight: subsurface_weight,
             radius: subsurface_radius,
             color: subsurface_color,
-            anisotropy: subsurface_anisotropy,
-            mode: subsurface_mode,
-            samples: subsurface_samples,
         };
         material.base_color_uv_transform = base_color_uv_transform;
         material.normal_uv_transform = normal_uv_transform;
@@ -2090,19 +2062,13 @@ mod tests {
             ("subsurface_color_r", 0.95),
             ("subsurface_color_g", 0.65),
             ("subsurface_color_b", 0.35),
-            ("subsurface_anisotropy", -0.4),
-            ("subsurface_samples", 23.0),
         ] {
             params.insert(Cow::Borrowed(name), ParamValue::Float(value));
         }
-        params.insert(Cow::Borrowed("subsurface_mode"), ParamValue::Enum(1));
         let material = run_material(params, None);
         assert_eq!(material.subsurface.weight, 0.75);
         assert_eq!(material.subsurface.radius, [0.12, 0.08, 0.04]);
         assert_eq!(material.subsurface.color, [0.95, 0.65, 0.35]);
-        assert_eq!(material.subsurface.anisotropy, -0.4);
-        assert_eq!(material.subsurface.mode, SubsurfaceMode::RandomWalk);
-        assert_eq!(material.subsurface.samples, 23);
 
         let mut invalid = ParamValues::default();
         for name in [
@@ -2113,15 +2079,9 @@ mod tests {
             "subsurface_color_r",
             "subsurface_color_g",
             "subsurface_color_b",
-            "subsurface_anisotropy",
         ] {
             invalid.insert(Cow::Borrowed(name), ParamValue::Float(f32::NAN));
         }
-        invalid.insert(Cow::Borrowed("subsurface_mode"), ParamValue::Enum(99));
-        invalid.insert(
-            Cow::Borrowed("subsurface_samples"),
-            ParamValue::Float(f32::NAN),
-        );
         assert_eq!(
             run_material(invalid, None).subsurface,
             Subsurface::default()
@@ -2129,14 +2089,12 @@ mod tests {
     }
 
     #[test]
-    fn subsurface_feature_mode_gates_weight_but_preserves_transport_mode() {
+    fn subsurface_feature_mode_gates_weight() {
         let mut params = ParamValues::default();
         params.insert(Cow::Borrowed("subsurface_weight"), ParamValue::Float(0.75));
-        params.insert(Cow::Borrowed("subsurface_mode"), ParamValue::Enum(1));
 
         let follow = run_material(params.clone(), None).subsurface;
         assert_eq!(follow.weight, 0.75);
-        assert_eq!(follow.mode, SubsurfaceMode::RandomWalk);
 
         let mut off = params.clone();
         off.insert(
@@ -2145,7 +2103,6 @@ mod tests {
         );
         let off = run_material(off, None).subsurface;
         assert_eq!(off.weight, 0.0);
-        assert_eq!(off.mode, SubsurfaceMode::RandomWalk);
 
         let mut removed = params;
         removed.insert(
@@ -2154,7 +2111,6 @@ mod tests {
         );
         let removed = run_material(removed, None).subsurface;
         assert_eq!(removed.weight, 0.0);
-        assert_eq!(removed.mode, SubsurfaceMode::RandomWalk);
     }
 
     #[test]

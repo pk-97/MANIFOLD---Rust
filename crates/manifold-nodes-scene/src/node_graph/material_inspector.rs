@@ -48,10 +48,7 @@ pub fn material_param_role(type_id: &str, param_name: &str) -> Option<MaterialPa
         | "subsurface_radius_b"
         | "subsurface_color_r"
         | "subsurface_color_g"
-        | "subsurface_color_b"
-        | "subsurface_anisotropy"
-        | "subsurface_mode"
-        | "subsurface_samples" => Some(MaterialGroup::Feature(MaterialFeature::Subsurface)),
+        | "subsurface_color_b" => Some(MaterialGroup::Feature(MaterialFeature::Subsurface)),
         "translucency_color_r" | "translucency_color_g" | "translucency_color_b" => {
             Some(MaterialGroup::Feature(MaterialFeature::Translucency))
         }
@@ -284,7 +281,7 @@ mod tests {
     #[test]
     fn material_inspector_schema_covers_pbr() {
         let params = PbrMaterial::PARAMS;
-        assert_eq!(params.len(), 297);
+        assert_eq!(params.len(), 299);
         let mut names = std::collections::HashSet::<&str>::new();
         let mut feature_modes = 0;
         let mut map_families = [0usize; 5];
@@ -315,7 +312,7 @@ mod tests {
         assert!(material_param_role("node.phong_material", "color_r").is_none());
         assert!(material_param_role("node.pbr_material", "subsurface_unknown").is_none());
         assert_eq!(
-            material_param_role("node.pbr_material", "subsurface_mode"),
+            material_param_role("node.pbr_material", "subsurface_weight"),
             Some(MaterialParamRole::Scalar(MaterialGroup::Feature(
                 MaterialFeature::Subsurface
             )))

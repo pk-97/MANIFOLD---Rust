@@ -25,7 +25,7 @@ pub fn request_conservative_trace_tiles() {
 }
 
 /// Dispatch shapes with their own cost estimate: the mask trace, the
-/// lighting trace and subsurface, plus one spare for a quality change.
+/// lighting trace, plus one spare for a quality change.
 const BUDGET_SLOTS: usize = 4;
 /// Buffers awaiting readback. Past this the oldest is dropped unmeasured.
 const PENDING_CAPACITY: usize = 64;
