@@ -61,12 +61,8 @@
 // reaches half a cell into it, so the water's surface meets the wall's face
 // at an angle behind the face instead of lying on it, where the two would
 // draw in patches over each other; deeper in, no node through the wall reads
-// as near the water. With `mirror` (Matter) a blob near a solid also adds
-// its reflection across the solid's surface to the nodes outside it, so a
-// body resting on a floor or against a wall meets it in a crease, and no
-// blob draws as a film. A free
-// slot and the canonical element hold the far value, FIELD_FAR_CELLS (3)
-// cells.
+// as near the water. A free slot and the canonical element hold the far
+// value, FIELD_FAR_CELLS (3) cells.
 
 // How far, in cells, water reaches into a solid.
 const PV_WALL_REACH: f32 = 0.5;
@@ -93,8 +89,7 @@ struct Params {
     film_reach: f32,
     film_half: f32,
     film_wide: f32,
-    // 1: blobs near a solid also add their reflection across it (Matter).
-    mirror: u32,
+    pad0: u32,
 }
 
 struct FluidParticle {
@@ -319,7 +314,7 @@ fn cs_main(
             // the next: its centre, shape and weight's size blend, and its
             // box covers both.
             var film = 0.0;
-            if params.mirror == 0u && counts[b] < params.fade_end {
+            if counts[b] < params.fade_end {
                 let near = pv_solid_at(centre, h);
                 let steep = length(near.xyz);
                 if near.w < params.film_reach && steep > 0.0 {
@@ -363,70 +358,20 @@ fn cs_main(
             // neighbours, where the smoothing's weight is full.
             let count = mix(counts[b], params.fade_end, film) * PV_FIXED_COUNT;
             let moving = sorted[b].velocity * PV_FIXED_VELOCITY;
-            // Mirror (Matter): a blob within its weight's reach of a solid
-            // also adds its reflection across the solid's surface, as if the
-            // solid were a mirror, so a body resting on a floor or against a
-            // wall meets it in a crease instead of rounding off above it.
-            // Only nodes outside every solid take the reflection. A node
-            // above a flat solid that the reflection reaches is nearer the
-            // blob itself, so the tiles that walk the blob hold every node
-            // its reflection reaches. A mirrored body draws no films: its
-            // few-neighbour blobs at an edge mirror too.
-            var copies = 1u;
-            var mirror_n = vec3<f32>(0.0);
-            var mirror_depth = 0.0;
-            if params.mirror != 0u {
-                let near = pv_solid_at(centre, h);
-                let steep = length(near.xyz);
-                if near.w > 0.0 && near.w < support.x && steep > 0.0 {
-                    copies = 2u;
-                    mirror_n = near.xyz / steep;
-                    mirror_depth = near.w;
-                }
-            }
-            for (var copy = 0u; copy < copies; copy = copy + 1u) {
-            var c = centre;
-            var dg = diag;
-            var od = off;
-            var mv = moving;
-            var lo = lo_node;
-            var hi = hi_node;
-            if copy == 1u {
-                // H A H with H = I - 2 n nᵀ, the reflection's shape.
-                let n = mirror_n;
-                let u = pv_apply(diag, off, n);
-                let s = dot(n, u);
-                c = centre - 2.0 * mirror_depth * n;
-                dg = diag - 4.0 * n * u + 4.0 * s * n * n;
-                od = off
-                    - 2.0 * vec3<f32>(n.x * u.y + u.x * n.y, n.x * u.z + u.x * n.z, n.y * u.z + u.y * n.z)
-                    + 4.0 * s * vec3<f32>(n.x * n.y, n.x * n.z, n.y * n.z);
-                mv = moving - 2.0 * dot(moving, n) * n;
-                let mirror_first = vec3<i32>(floor((c - support) / h + vec3<f32>(0.5)));
-                let mirror_last = vec3<i32>(floor((c + support) / h + vec3<f32>(0.5))) + vec3<i32>(1);
-                lo = max(mirror_first, t0);
-                hi = min(mirror_last, t0 + vec3<i32>(7));
-                if any(lo > hi) {
-                    continue;
-                }
-            }
-            for (var nz = lo.z; nz <= hi.z; nz = nz + 1) {
-                for (var ny = lo.y; ny <= hi.y; ny = ny + 1) {
-                    for (var nx = lo.x; nx <= hi.x; nx = nx + 1) {
+            for (var nz = lo_node.z; nz <= hi_node.z; nz = nz + 1) {
+                for (var ny = lo_node.y; ny <= hi_node.y; ny = ny + 1) {
+                    for (var nx = lo_node.x; nx <= hi_node.x; nx = nx + 1) {
                         let node = vec3<i32>(nx, ny, nz);
-                        if copy == 1u && solid[ts_cell_at(node)] < 0.0 {
-                            continue;
-                        }
                         let p = (vec3<f32>(node) - vec3<f32>(0.5)) * h;
-                        let q = pv_apply(dg, od, c - p);
+                        let q = pv_apply(diag, off, centre - p);
                         let m = size * q;
                         let s2 = dot(m, m) / (blend * blend);
                         // The gradient scale |A q| / |q|; at the centre,
                         // where it has no direction, the mean axis.
                         let reach_q = length(q);
-                        var g = (dg.x + dg.y + dg.z) / 3.0;
+                        var g = (diag.x + diag.y + diag.z) / 3.0;
                         if reach_q > 1.0e-6 * blend {
-                            g = length(pv_apply(dg, od, q)) / reach_q;
+                            g = length(pv_apply(diag, off, q)) / reach_q;
                         }
                         if s2 >= 1.0 {
                             // Most visits are no nearer than one already
@@ -449,12 +394,11 @@ fn cs_main(
                         atomicAdd(&pv_sum[base + 4u], i32(round(wq * r)));
                         atomicAdd(&pv_sum[base + 5u], i32(round(w * g * PV_FIXED)));
                         atomicAdd(&pv_sum[base + 6u], i32(round(w * count)));
-                        atomicAdd(&pv_sum[base + 7u], i32(round(w * mv.x)));
-                        atomicAdd(&pv_sum[base + 8u], i32(round(w * mv.y)));
-                        atomicAdd(&pv_sum[base + 9u], i32(round(w * mv.z)));
+                        atomicAdd(&pv_sum[base + 7u], i32(round(w * moving.x)));
+                        atomicAdd(&pv_sum[base + 8u], i32(round(w * moving.y)));
+                        atomicAdd(&pv_sum[base + 9u], i32(round(w * moving.z)));
                     }
                 }
-            }
             }
         }
     }

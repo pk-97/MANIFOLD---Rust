@@ -191,12 +191,10 @@ const SMOOTH_CARRY_CELLS: f32 = 2.0;
 
 /// Matter holds no one-particle sheets, so its smoothing lets thin bumps of
 /// stray particles melt back into the surface instead of keeping them as
-/// fins (node.field_smooth_blend's Keep Sheets), and its blobs mirror across
-/// floors, walls and colliders, so a body meets them in a crease
-/// (node.particle_volume's Mirror Solids). The field is carried into the
-/// solids before it is smoothed too, so the smoothing finds the body's sides
-/// running on into the floor instead of air under it and keeps the crease
-/// instead of curling the bottom edge up.
+/// fins (node.field_smooth_blend's Keep Sheets). The field is carried into
+/// the solids before it is smoothed too, so the smoothing finds the body's
+/// sides running on into the floor instead of air under it and does not
+/// curl the bottom edge up.
 fn solid_surface(b: &mut Builder, surface: usize) {
     let group = b
         .nodes
@@ -205,15 +203,12 @@ fn solid_surface(b: &mut Builder, surface: usize) {
         .and_then(|node| node.group.as_mut())
         .expect("the surface group");
     for node in &mut group.nodes {
-        let (name, value) = match node.type_id.as_str() {
-            "node.field_smooth_blend" => ("keep_sheets", false),
-            "node.particle_volume" => ("mirror_solids", true),
-            _ => continue,
-        };
-        node.params.insert(
-            name.to_owned(),
-            manifold_core::effect_graph_def::SerializedParamValue::Bool { value },
-        );
+        if node.type_id.as_str() == "node.field_smooth_blend" {
+            node.params.insert(
+                "keep_sheets".to_owned(),
+                manifold_core::effect_graph_def::SerializedParamValue::Bool { value: false },
+            );
+        }
     }
     let [input, closed, after] = [
         "system.group_input",
