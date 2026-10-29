@@ -10,6 +10,10 @@ fn wet_map(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let map = map_words() * 4;
     x.provide("map", map);
     x.hold(map);
+    // The sand's share field, a pooled cell field, while a Sand is wired.
+    if x.bytes("sand").is_some() {
+        x.hold(elements * 4);
+    }
     Ok(())
 }
 inventory::submit! {

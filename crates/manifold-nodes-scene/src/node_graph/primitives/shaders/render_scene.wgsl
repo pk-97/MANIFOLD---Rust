@@ -1480,7 +1480,12 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         grain = sand_grain(in.world_pos, N, albedo.rgb, mr.x, u.surface.x);
         N = grain.normal;
     }
-    let wet = look_wet_surface(in.clip_pos.xy, grain.albedo, grain.roughness);
+    var wet = look_wet_surface(in.clip_pos.xy, grain.albedo, grain.roughness);
+    if u.surface.x > 0.0 {
+        // Water drains into sand and holds between the grains, leaving no
+        // film on top: wet sand darkens but keeps its grains' roughness.
+        wet.roughness = grain.roughness;
+    }
     albedo = vec4<f32>(wet.albedo, albedo.a);
     // Specular anti-aliasing (Kaplanyan 2016, with Filament's constants):
     // normal detail finer than a pixel widens the highlight instead of

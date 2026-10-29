@@ -13,6 +13,11 @@
 //   cs_mark        a thread a particle: a particle within two radii of a solid
 //                  finds the decal of the merge cell and facing it touches
 //                  through the hash and wets it again, or starts a new one
+// With a Sand wired, its packed grains are a surface too:
+//   cs_sand_clear  a thread a display element: no sand
+//   cs_sand        a thread a grain: its rest volume shared trilinearly onto
+//                  the display nodes round it
+//   cs_mark_sand   cs_mark against the nearer of the solid and the sand
 // Drying is computed where a decal is drawn, from the age of its last touch,
 // so nothing runs over the decals while the water is still.
 //
@@ -42,7 +47,8 @@ struct Params {
     // The water a contact adds to a decal: its share of WD_FULL for the
     // display time since the last run.
     hit: u32,
-    pad0: u32,
+    // A wired Sand's grains at binding 5, 0 with none.
+    sand: u32,
     pad1: u32,
     pad2: u32,
 }
@@ -59,6 +65,10 @@ struct WetParticle {
 @group(0) @binding(2) var<storage, read> solid: array<f32>;
 @group(0) @binding(3) var<storage, read> tiles: array<u32>;
 @group(0) @binding(4) var<storage, read_write> map: array<atomic<u32>>;
+// A wired Sand's grains this frame, and their volume share at each display
+// node in SAND_FIXED units of a whole cell.
+@group(0) @binding(5) var<storage, read> sand: array<WetParticle>;
+@group(0) @binding(6) var<storage, read_write> sand_share: array<atomic<u32>>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
 fn ts_table_entries() -> u32 { let n = 4u * max(params.pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
@@ -69,6 +79,8 @@ const WET_REACH_RADII: f32 = 2.0;
 // The solid reads 1e30 in a tile no slot holds; capped so a trilinear mix
 // stays finite.
 const WET_SOLID_FAR: f32 = 1.0e4;
+// Fixed-point units of one whole display cell of sand in `sand_share`.
+const SAND_FIXED: f32 = 65536.0;
 // Hash slots a contact or a compacted decal probes from its cell's slot.
 const WET_PROBES: u32 = 8u;
 // A contact wets a decal whose normal is within about 45 degrees of its own.
@@ -231,6 +243,68 @@ fn wet_solid_at(x: vec3<f32>) -> WetSolid {
     return WetSolid(value, slope / params.cell);
 }
 
+// The sand's distance at x the way `wet_solid_at` reads the solid's: a node
+// is cell * (1 - 2 share) from the sand's surface, -1 cell packed, +1 cell
+// with no grain.
+fn wet_sand_at(x: vec3<f32>) -> WetSolid {
+    let g = x / params.cell + vec3<f32>(0.5);
+    let lower = floor(g);
+    let f = g - lower;
+    let base = vec3<i32>(lower);
+    var value = 0.0;
+    var slope = vec3<f32>(0.0);
+    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
+        let o = vec3<i32>(i32(corner & 1u), i32((corner >> 1u) & 1u), i32((corner >> 2u) & 1u));
+        let wx = select(1.0 - f.x, f.x, o.x == 1);
+        let wy = select(1.0 - f.y, f.y, o.y == 1);
+        let wz = select(1.0 - f.z, f.z, o.z == 1);
+        let toward = select(vec3<f32>(-1.0), vec3<f32>(1.0), o == vec3<i32>(1));
+        let share = f32(atomicLoad(&sand_share[ts_cell_at(base + o)])) / SAND_FIXED;
+        let v = params.cell * (1.0 - 2.0 * min(share, 1.0));
+        value = value + wx * wy * wz * v;
+        slope = slope + v * toward * vec3<f32>(wy * wz, wx * wz, wx * wy);
+    }
+    return WetSolid(value, slope / params.cell);
+}
+
+@compute @workgroup_size(64)
+fn cs_sand_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x < ts_pool_len() {
+        atomicStore(&sand_share[gid.x], 0u);
+    }
+}
+
+@compute @workgroup_size(64)
+fn cs_sand(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x >= params.sand {
+        return;
+    }
+    let grain = sand[gid.x].position_radius;
+    let r = grain.w / params.cell;
+    if !(r > 0.0) {
+        return;
+    }
+    let g = grain.xyz / params.cell + vec3<f32>(0.5);
+    let base = vec3<i32>(floor(g));
+    let home = ts_cell_at(base);
+    // A grain whose own tile the display does not hold is far from the water.
+    if home == ts_canon() {
+        return;
+    }
+    ts_home(home);
+    let f = g - floor(g);
+    let share = SAND_FIXED * 4.18879 * r * r * r;
+    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
+        let o = vec3<u32>(corner & 1u, (corner >> 1u) & 1u, corner >> 2u);
+        let idx = ts_cell_at(base + vec3<i32>(o));
+        if idx == ts_canon() {
+            continue;
+        }
+        let w = select(1.0 - f, f, o == vec3<u32>(1u));
+        atomicAdd(&sand_share[idx], u32(share * w.x * w.y * w.z + 0.5));
+    }
+}
+
 @compute @workgroup_size(64)
 fn cs_mark(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
@@ -241,7 +315,30 @@ fn cs_mark(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !(p.w > 0.0) {
         return;
     }
-    let near = wet_solid_at(p.xyz);
+    wet_mark(p, wet_solid_at(p.xyz));
+}
+
+@compute @workgroup_size(64)
+fn cs_mark_sand(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if i >= params.capacity {
+        return;
+    }
+    let p = particles[i].position_radius;
+    if !(p.w > 0.0) {
+        return;
+    }
+    var near = wet_solid_at(p.xyz);
+    let grains = wet_sand_at(p.xyz);
+    if grains.distance < near.distance {
+        near = grains;
+    }
+    wet_mark(p, near);
+}
+
+// A particle at p (xyz, radius w) within two radii of the surface `near`
+// describes wets the decal it touches.
+fn wet_mark(p: vec4<f32>, near: WetSolid) {
     let steep = length(near.gradient);
     if near.distance > WET_REACH_RADII * p.w || !(steep > 0.0) {
         return;

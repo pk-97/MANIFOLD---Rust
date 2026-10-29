@@ -81,7 +81,9 @@ struct WetMapUniforms {
     cell: f32,
     keep: f32,
     hit: u32,
-    pad: [u32; 3],
+    /// A wired Sand's grains this frame, 0 with none.
+    sand: u32,
+    pad: [u32; 2],
 }
 
 /// What the last run saw: the decals carry on from it only at the same epoch
@@ -121,6 +123,9 @@ manifold_node_engine::primitive! {
         sim_cell_size: ScalarF32 optional,
         cell_size: ScalarF32 optional,
         pool_tiles: ScalarF32 optional,
+        // A Sand's grains, so water marks the sand where it touches it.
+        sand: Array(FluidParticle) optional,
+        sand_count: ScalarF32 optional,
     },
     outputs: {
         map: Array(u32),
@@ -144,6 +149,9 @@ manifold_node_engine::primitive! {
     extra_fields: {
         kernels: Option<Kernels> = None,
         map: Option<GpuBuffer> = None,
+        // A wired Sand's share at each display node, a pooled cell field;
+        // held only while a Sand is wired.
+        sand_share: Option<GpuBuffer> = None,
         last: Option<LastRun> = None,
         frames_since_compact: u32 = 0,
     },
@@ -156,6 +164,9 @@ struct Kernels {
     compact: GpuComputePipeline,
     finish: GpuComputePipeline,
     mark: GpuComputePipeline,
+    sand_clear: GpuComputePipeline,
+    sand: GpuComputePipeline,
+    mark_sand: GpuComputePipeline,
 }
 
 impl Kernels {
@@ -168,11 +179,39 @@ impl Kernels {
             compact: make("cs_compact"),
             finish: make("cs_finish"),
             mark: make("cs_mark"),
+            sand_clear: make("cs_sand_clear"),
+            sand: make("cs_sand"),
+            mark_sand: make("cs_mark_sand"),
         }
     }
 }
 
 impl WetMap {
+    /// The sand's share field of `bytes`, while a Sand is `wired`; dropped
+    /// when it is not. Every run clears it before the grains add to it.
+    fn ensure_sand_share(
+        &mut self,
+        device: &GpuDevice,
+        wired: bool,
+        bytes: u64,
+    ) -> Result<(), String> {
+        if !wired {
+            self.sand_share = None;
+            return Ok(());
+        }
+        if self.sand_share.as_ref().is_some_and(|b| b.size == bytes) {
+            return Ok(());
+        }
+        self.sand_share = None;
+        manifold_node_engine::load::expand::admit_world_bytes(
+            device.modifier_memory_snapshot(),
+            bytes,
+        )
+        .map_err(|error| error.to_string())?;
+        self.sand_share = Some(device.try_create_buffer(bytes, BufferUse::Gpu)?);
+        Ok(())
+    }
+
     /// The map, made once and zeroed: a zeroed map holds no decal.
     fn ensure_state(&mut self, device: &GpuDevice) -> Result<(), String> {
         if self.map.is_some() {
@@ -282,6 +321,13 @@ impl Primitive for WetMap {
             _ => ctx.time.delta.0 as f32,
         };
         let hit = contact_hit(elapsed);
+        let sand = ctx.inputs.array("sand");
+        let sand_count = sand.map_or(0, |grains| {
+            ctx.scalar_or_param("sand_count", 0.0).round().clamp(
+                0.0,
+                (grains.size / size_of::<FluidParticle>() as u64) as f32,
+            ) as u32
+        });
         let uniforms = WetMapUniforms {
             now: time,
             drying,
@@ -292,12 +338,15 @@ impl Primitive for WetMap {
             cell: pool.cell_size,
             keep: keep_seconds(drying),
             hit,
-            pad: [0; 3],
+            sand: sand_count,
+            pad: [0; 2],
         };
         let prepared = {
             let gpu = ctx.gpu_encoder();
             self.kernels.get_or_insert_with(|| Kernels::new(gpu.device));
-            self.ensure_state(gpu.device)
+            self.ensure_state(gpu.device).and_then(|()| {
+                self.ensure_sand_share(gpu.device, sand.is_some(), pool.elements() * 4)
+            })
         };
         if let Err(error) = prepared {
             ctx.error(format!(
@@ -343,13 +392,48 @@ impl Primitive for WetMap {
             enc.dispatch_compute(&kernels.finish, &bindings, [1, 1, 1], "node.wet_map.finish");
             enc.compute_memory_barrier_buffers();
         }
-        if capacity > 0 && hit > 0 {
-            enc.dispatch_compute(
-                &kernels.mark,
-                &bindings,
-                [capacity.div_ceil(THREADS), 1, 1],
-                "node.wet_map.mark",
-            );
+        match (sand.zip(self.sand_share.as_ref()), capacity > 0 && hit > 0) {
+            (Some((grains, share)), true) if sand_count > 0 => {
+                let with_sand = [
+                    bindings[0],
+                    buffer(1, particles),
+                    buffer(2, solid),
+                    buffer(3, tiles),
+                    buffer(4, map),
+                    buffer(5, grains),
+                    buffer(6, share),
+                ];
+                let elements = u32::try_from(pool.elements()).unwrap_or(u32::MAX);
+                enc.dispatch_compute(
+                    &kernels.sand_clear,
+                    &with_sand,
+                    [elements.div_ceil(THREADS), 1, 1],
+                    "node.wet_map.sand_clear",
+                );
+                enc.compute_memory_barrier_buffers();
+                enc.dispatch_compute(
+                    &kernels.sand,
+                    &with_sand,
+                    [sand_count.div_ceil(THREADS), 1, 1],
+                    "node.wet_map.sand",
+                );
+                enc.compute_memory_barrier_buffers();
+                enc.dispatch_compute(
+                    &kernels.mark_sand,
+                    &with_sand,
+                    [capacity.div_ceil(THREADS), 1, 1],
+                    "node.wet_map.mark",
+                );
+            }
+            (_, true) => {
+                enc.dispatch_compute(
+                    &kernels.mark,
+                    &bindings,
+                    [capacity.div_ceil(THREADS), 1, 1],
+                    "node.wet_map.mark",
+                );
+            }
+            _ => {}
         }
         self.frames_since_compact = if compact || restart {
             0
@@ -379,6 +463,9 @@ mod tests {
             "cs_compact",
             "cs_finish",
             "cs_mark",
+            "cs_sand_clear",
+            "cs_sand",
+            "cs_mark_sand",
         ] {
             assert!(
                 module.entry_points.iter().any(|point| point.name == entry),

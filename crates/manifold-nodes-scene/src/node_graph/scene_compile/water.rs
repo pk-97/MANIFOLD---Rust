@@ -57,33 +57,38 @@ pub(crate) fn items_of(
     found
 }
 
-/// The Sand template's particle frame and the Water template's step: sand
-/// reaches the water from one to the other.
+/// The Sand template's particle frame, and the Water template's step and
+/// wet map: sand reaches the water from the one to the others.
 const SAND_FRAME: &str = "frame";
-const WATER_STEP: &str = "step";
+const WATER_SAND_READERS: [&str; 2] = ["step", "water_wetness"];
 
 /// Emit every Water and Sand and its sources. With no water solver linked,
 /// they draw nothing. The first Sand is porous to every Water: its particles
 /// this frame reach each water's step, which slows the water inside the
-/// sand, so water soaks into a pile instead of passing through it.
+/// sand, so water soaks into a pile instead of passing through it, and each
+/// water's wet map, which marks the sand where the water touches it.
 pub(crate) fn emit_all(b: &mut Builder<'_>) {
     let mut sand = None;
-    let mut steps = Vec::new();
+    let mut readers = Vec::new();
     for (item, group) in waters(b.doc) {
         if let Some(family) = water_family(&item.fields) {
             let ids = emit(b, &item, group.as_ref(), &family);
             match item.kind() {
                 ItemKind::Sand => sand = sand.or(ids.get(SAND_FRAME).copied()),
-                ItemKind::Water => steps.extend(ids.get(WATER_STEP).copied()),
+                ItemKind::Water => readers.extend(
+                    WATER_SAND_READERS
+                        .iter()
+                        .filter_map(|n| ids.get(*n).copied()),
+                ),
                 _ => {}
             }
         }
     }
     if let Some(frame) = sand {
         let [points, count] = manifold_core::liquid_domain::SAND_INPUTS;
-        for step in steps {
-            b.wire(frame, "particles_b", step, points);
-            b.wire(frame, "count_b", step, count);
+        for reader in readers {
+            b.wire(frame, "particles_b", reader, points);
+            b.wire(frame, "count_b", reader, count);
         }
     }
 }
