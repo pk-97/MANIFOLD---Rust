@@ -67,9 +67,9 @@
 mod construction;
 mod field_objects;
 mod frame_setup;
+mod frustum;
 mod gas_objects;
 mod gas_volume;
-mod frustum;
 mod item_pick;
 mod live_draw_args;
 mod pass2_draw;

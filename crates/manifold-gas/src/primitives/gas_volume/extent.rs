@@ -4,8 +4,11 @@ use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_node_engine::primitive::PrimitiveSpec;
 
 fn gas_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let geometry = gas_geometry(|name, default| x.scalar(name, default), x.transform("domain"))
-        .map_err(Verdict::Refused)?;
+    let geometry = gas_geometry(
+        |name, default| x.scalar(name, default),
+        x.transform("domain"),
+    )
+    .map_err(Verdict::Refused)?;
     // The light reads 0 until a flame burns.
     for (name, value) in geometry
         .outputs()

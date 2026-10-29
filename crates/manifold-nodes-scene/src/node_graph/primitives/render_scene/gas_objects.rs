@@ -36,9 +36,10 @@ impl RenderScene {
             return Some(None);
         }
         let bytes = packed_bytes(gas.dims);
-        let (Some(state), Some(velocity)) =
-            (inputs.array_slot(gas.state), inputs.array_slot(gas.velocity))
-        else {
+        let (Some(state), Some(velocity)) = (
+            inputs.array_slot(gas.state),
+            inputs.array_slot(gas.velocity),
+        ) else {
             return Self::fail_field(
                 ctx,
                 n,

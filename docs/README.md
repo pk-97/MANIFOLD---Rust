@@ -13,6 +13,7 @@
 - `EFFECT_CHAIN_LIFECYCLE.md`: effect chain state across rebuilds
 - `SCENE_RENDER_MODE_DESIGN.md`: 3D render mode lifecycle
 - `SCENE_PANEL_VS_INSPECTOR_CARDS.md`: what the scene panel and inspector each own
+- `SMOKE_AND_FIRE_MAP.md`: the Smoke and Fire items, gas solver, renderer and Quality costs
 - `DEVELOPMENT_REFERENCE.md`: crates and common traps
 
 ## Guides

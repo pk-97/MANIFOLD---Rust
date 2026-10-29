@@ -1,4 +1,4 @@
-//! Smoke and Fire (SMOKE_FIRE_DESIGN.md): each is a transform that is the
+//! Smoke and Fire (docs/SMOKE_AND_FIRE_MAP.md): each is a transform that is the
 //! box, a value node that is the cell, one `node.gas_volume` that simulates
 //! the gas in the box, and one `node.scene_object` that draws the solver's
 //! fields as a volume. The cell follows the World's Cell Size times the

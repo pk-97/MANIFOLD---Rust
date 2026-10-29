@@ -1,4 +1,4 @@
-//! Smoke and Fire (SMOKE_FIRE_DESIGN.md): one gas solver, `node.gas_volume`,
+//! Smoke and Fire (docs/SMOKE_AND_FIRE_MAP.md): one gas solver, `node.gas_volume`,
 //! in a box of cells, drawn by a volume `node.scene_object`. The item's
 //! Transform is the box, sitting on the ground, and its Quality picks the
 //! cells on the World's grid ([`Quality::cell_scale`]). The simulation rows
@@ -77,7 +77,7 @@ const SMOKE: Start = Start {
     smoke: [0.85, 0.85, 0.85],
     density: 30.0,
     albedo: 0.9,
-    detail: 0.6,
+    detail: 0.0,
     burns: false,
     burn_rate: 0.0,
     heat_release: 0.0,
@@ -106,7 +106,7 @@ const FIRE: Start = Start {
     smoke: [0.25, 0.24, 0.23],
     density: 25.0,
     albedo: 0.55,
-    detail: 0.5,
+    detail: 0.0,
     burns: true,
     burn_rate: 6.0,
     heat_release: 2.0,
@@ -382,7 +382,7 @@ const fn rows(s: Start) -> [PropertyRow; 60] {
             "How much of the light that hits the smoke bounces on instead of being absorbed. Low is dark soot, high is white steam.",
         ),
         look("gas_detail", "Detail", s.detail).tip(
-            "How much fine swirling texture the smoke gets below the simulation's cells, carried along by the flow. 0 shows the simulation as it is.",
+            "How much fine swirling texture the smoke gets below the simulation's cells, carried along by the flow. 0 shows the simulation as it is and costs nothing; at High the simulation has its own detail, so raise it for close-up renders.",
         ),
         flame(
             s.burns,

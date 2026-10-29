@@ -1,6 +1,6 @@
 //! `node.gas_volume` — the gas solver of Smoke and Fire: a dense, axis-aligned
 //! box of cells advanced once a frame on the GPU (see
-//! docs/SMOKE_FIRE_DESIGN.md). The kernels are in `shaders/gas_step.wgsl`.
+//! docs/SMOKE_AND_FIRE_MAP.md). The kernels are in `shaders/gas_step.wgsl`.
 //!
 //! The box floor is a wall; the sides and top are open. The fields stay on
 //! the GPU. The node publishes the packed state and velocity of every cell as
@@ -855,7 +855,8 @@ impl GasVolume {
         let mut result = last;
         if dt > 0.0 {
             let (a, b) = ((last + 1) % RING, (last + 2) % RING);
-            let advection = binding_list(uniform_bytes, buffers, Roles { input: last, a, b }, light);
+            let advection =
+                binding_list(uniform_bytes, buffers, Roles { input: last, a, b }, light);
             pass(
                 enc,
                 &pipelines.advect,
@@ -979,7 +980,9 @@ impl Primitive for GasVolume {
             }
         };
         let reset = ctx.scalar_or_param("reset", 0.0);
-        let reset_edge = self.previous_reset.is_some_and(|previous| previous != reset);
+        let reset_edge = self
+            .previous_reset
+            .is_some_and(|previous| previous != reset);
         self.previous_reset = Some(reset);
         let restart = std::mem::take(&mut self.restart) || reset_edge;
         let dt = step_seconds(ctx.time.delta.0 as f32, settings.speed);
@@ -1184,7 +1187,8 @@ mod tests {
         assert_eq!(settings.speed, 1.0);
         assert_eq!(settings.rate, 4.0);
         assert_eq!(settings.soot, 0.6);
-        let fire = gas_settings(|name, default| if name == "kind" { 1.0 } else { default }).unwrap();
+        let fire =
+            gas_settings(|name, default| if name == "kind" { 1.0 } else { default }).unwrap();
         assert_eq!(fire.kind, 1);
         let error = gas_settings(|name, default| if name == "rate" { f32::NAN } else { default })
             .unwrap_err();
@@ -1255,7 +1259,10 @@ mod tests {
         assert!(light.position[0] < 0.0);
         let temperature = groups.iter().map(|g| g.0 * g.2).sum::<f64>() / power;
         assert!((f64::from(light.temperature) - temperature).abs() < 2e-4);
-        assert_eq!(decode_light(&[0; LIGHT_WORDS], origin), LightReadout::default());
+        assert_eq!(
+            decode_light(&[0; LIGHT_WORDS], origin),
+            LightReadout::default()
+        );
     }
 
     #[test]
