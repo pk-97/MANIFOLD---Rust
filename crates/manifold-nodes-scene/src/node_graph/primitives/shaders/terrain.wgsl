@@ -11,7 +11,7 @@
 // hollow, so after each batch the loose soil slides (`snapshot_main`, then
 // `slide_main`): soil left steeper than its angle of repose moves down to
 // the neighbours below it. `fade_main` scales the erosion when the land under
-// it changes. `vertices_main` writes each cell as a vertex.
+// it changes. `vertices_main` writes each cell as a vertex with its normal.
 
 struct TerrainUniforms {
     // Cells along a side.
@@ -355,19 +355,38 @@ fn slide_main(@builtin(global_invocation_id) id: vec3<u32>) {
     add_erosion(c, -moved);
 }
 
+// A grid point's place, its column and row clamped to the map.
+fn vertex_position(col: i32, row: i32) -> vec3<f32> {
+    let last = i32(u.res) - 1;
+    let c = vec2<u32>(vec2<i32>(clamp(col, 0, last), clamp(row, 0, last)));
+    let j = c.y * u.res + c.x;
+    let h = base[j] + f32(atomicLoad(&erosion[j])) / EROSION_FIX;
+    let xz = cell_xz(c);
+    return vec3<f32>(xz.x, h * u.height, xz.y);
+}
+
 @compute @workgroup_size(256)
 fn vertices_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x;
     if i >= u.res * u.res {
         return;
     }
-    let c = vec2<u32>(i % u.res, i / u.res);
-    let h = base[i] + f32(atomicLoad(&erosion[i])) / EROSION_FIX;
-    let xz = cell_xz(c);
+    let col = i32(i % u.res);
+    let row = i32(i / u.res);
+    // The normal from the neighbours on either side across and along the
+    // grid, up where they collapse.
+    let dx = vertex_position(col + 1, row) - vertex_position(col - 1, row);
+    let dy = vertex_position(col, row + 1) - vertex_position(col, row - 1);
+    let n = cross(dy, dx);
+    let len = length(n);
+    var normal = vec3<f32>(0.0, 1.0, 0.0);
+    if len >= 1e-8 {
+        normal = n / len;
+    }
     vertices[i] = MeshVertex(
-        vec3<f32>(xz.x, h * u.height, xz.y),
-        vec3<f32>(0.0, 1.0, 0.0),
-        vec2<f32>(c) / f32(u.res - 1u),
+        vertex_position(col, row),
+        normal,
+        vec2<f32>(f32(col), f32(row)) / f32(u.res - 1u),
         vec2<f32>(0.0),
         vec4<f32>(0.0),
         vec4<f32>(1.0),

@@ -8,7 +8,8 @@
 //! carved while those move live. Weathering is the rain in drops per cell:
 //! raising it rains the rest, lowering it scales the carving down. Height
 //! scales the finished land without rain. Once settled the node costs
-//! nothing. Feed it to `node.make_triangles`, which works out the normals.
+//! nothing and its vertices hold. Each vertex carries its normal, from its
+//! neighbours across the grid.
 
 use std::borrow::Cow;
 
@@ -18,6 +19,7 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::mesh_change::{MeshOutputRule, MeshRevisionRule};
 
 const SHADER: &str = include_str!("shaders/terrain.wgsl");
 const THREADS: u32 = 256;
@@ -212,15 +214,23 @@ manifold_node_engine::primitive! {
         // started (each drop's randomness, never reused).
         done: f64 = 0.0,
         spawned: u32 = 0,
-        // The Height the vertices were last written at; None when the
-        // height map changed since.
-        drawn: Option<f32> = None,
+        // The Height and executor epoch the vertices were last written at.
+        drawn: Option<(f32, u64)> = None,
     },
 }
 
 impl Primitive for Terrain {
     fn prepare_pipelines(&mut self, device: &GpuDevice) {
         self.pipelines.get_or_insert_with(|| Pipelines::build(device));
+    }
+
+    /// The grid's triangles never change; only its points move, so a morph
+    /// refits the ray-tracing structure instead of rebuilding it.
+    fn mesh_output_rule(&self, _port: &str) -> MeshOutputRule<'_> {
+        MeshOutputRule {
+            topology: MeshRevisionRule::Fixed,
+            positions: MeshRevisionRule::Written,
+        }
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
@@ -274,12 +284,6 @@ impl Primitive for Terrain {
             ));
             return;
         }
-        let (Some(pipelines), Some(buffers)) = (self.pipelines.as_ref(), self.buffers.as_ref())
-        else {
-            return;
-        };
-        let gpu = ctx.gpu_encoder();
-
         let reshaped = self.shape != Some(shape);
         let (mut keep, mut done) = carving_after(self.shape, shape, self.done);
         if done > budget {
@@ -289,6 +293,20 @@ impl Primitive for Terrain {
         let droplets = (budget - done)
             .ceil()
             .min(f64::from(DROPLETS_PER_BATCH * BATCHES_PER_FRAME)) as u32;
+        let changed = reshaped || keep < 1.0 || droplets > 0;
+        let drawn = (height, ctx.rebuild_epoch);
+        // Settled and drawn at this Height: the vertices hold, so the shadow
+        // cache and ray-tracing structure keep. A state-carrying rebuild
+        // carries a new epoch, so it writes them once.
+        if !changed && self.drawn == Some(drawn) && ctx.outputs_retained() {
+            ctx.mark_outputs_unchanged();
+            return;
+        }
+        let (Some(pipelines), Some(buffers)) = (self.pipelines.as_ref(), self.buffers.as_ref())
+        else {
+            return;
+        };
+        let gpu = ctx.gpu_encoder();
         let spacing = shape.size / (res - 1) as f32;
         let uniforms = TerrainUniforms {
             res,
@@ -343,14 +361,11 @@ impl Primitive for Terrain {
             }
             first += batch.droplets;
         }
-        let changed = reshaped || keep < 1.0 || droplets > 0;
-        if changed || self.drawn != Some(height) {
-            dispatch(enc, &pipelines.vertices, &uniforms, cells, "node.terrain vertices");
-        }
+        dispatch(enc, &pipelines.vertices, &uniforms, cells, "node.terrain vertices");
         self.shape = Some(shape);
         self.done = done + f64::from(droplets);
         self.spawned = self.spawned.wrapping_add(droplets);
-        self.drawn = Some(height);
+        self.drawn = Some(drawn);
     }
 }
 
