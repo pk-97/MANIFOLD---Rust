@@ -61,6 +61,11 @@ pub const LIQUID_COLLIDER: &str = include_str!("primitives/shaders/liquid_collid
 /// including body provides `cb_node` and `cb_triangle`.
 pub const COLLIDER_BVH: &str = include_str!("primitives/shaders/collider_bvh.wgsl");
 
+/// A shaped Initial Fill's inside test for every solver's fill; needs
+/// [`LIQUID_POSE`], [`LIQUID_COLLIDER`] and [`COLLIDER_BVH`] and the
+/// including body's gathered `regions`.
+pub const LIQUID_FILL_SHAPE: &str = include_str!("primitives/shaders/liquid_fill_shape.wgsl");
+
 /// A collider, source, drain or coupled body during one tick. 128 bytes.
 /// The domain uploads one per body per tick of the frame, holding the tick's
 /// start pose and its motion over the tick; the solver turns that into the

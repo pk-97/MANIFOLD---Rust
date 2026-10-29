@@ -990,8 +990,8 @@ fn matter_body_reaction_counts_field_velocity() {
 
 /// BUG-n97i (coupled MPM loses momentum at the collider push-out), D30: the
 /// momentum node.grid_to_matter's push-out takes from each point lands in the
-/// dynamic body's reaction words. A still grid at Liveliness 1 leaves each
-/// point's own velocity, so the push-out is the only velocity change; the
+/// dynamic body's reaction words. A grid moving at the points' own velocity
+/// leaves each point that velocity, so the push-out is the only change; the
 /// words must equal Σ inv_mass·m·(v_in − v_out) and its turning moment about
 /// the centre of mass, and the (s/n)-weighted copies, within the hashed
 /// rounding (under one count per add). A prescribed body (inv_mass 0) and
@@ -1070,7 +1070,11 @@ fn matter_push_out_reaction_matches_removed_momentum() {
         &["points_out", "reaction_out"],
         |_, _| {},
     );
-    bench.fill(1, &vec![MatterGridNode::default(); pool as usize]);
+    let moving = MatterGridNode {
+        velocity_mass: [v0[0], v0[1], v0[2], 1.0],
+        ..MatterGridNode::default()
+    };
+    bench.fill(1, &vec![moving; pool as usize]);
     bench.fill(8, &table.words);
     bench.fill(3, &[shape]);
     bench.fill(4, &atlas);
@@ -1078,7 +1082,6 @@ fn matter_push_out_reaction_matches_removed_momentum() {
         ("pool_tiles", table.pool_tiles as f32),
         ("cell_size", dx),
         ("step_dt", dt),
-        ("liveliness", 1.0),
         ("active_count", points.len() as f32),
         ("body_count", 1.0),
         ("density", density),
@@ -1106,7 +1109,8 @@ fn matter_push_out_reaction_matches_removed_momentum() {
         assert_eq!(after.id, before.id, "no point leaves the lattice");
         let lost: [f64; 3] =
             std::array::from_fn(|a| f64::from(before.velocity[a]) - f64::from(after.velocity[a]));
-        if lost == [0.0; 3] {
+        // The stencil's weights sum to 1 only to f32 rounding.
+        if lost.iter().all(|l| l.abs() < 1.0e-5) {
             continue;
         }
         pushed += 1;

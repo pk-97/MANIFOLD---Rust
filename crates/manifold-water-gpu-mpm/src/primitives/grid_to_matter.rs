@@ -22,7 +22,6 @@ use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, Li
 struct ToMatterUniforms {
     cell_size: f32,
     step_dt: f32,
-    liveliness: f32,
     mu: f32,
     lambda: f32,
     alpha: f32,
@@ -48,12 +47,13 @@ struct ToMatterUniforms {
     dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
+    _pad2: u32,
 }
 
 manifold_node_engine::primitive! {
     name: GridToMatter,
     type_id: "node.grid_to_matter",
-    purpose: "Transfer the resolved matter grid back to its points (MLS-MPM grid-to-particle): each live point gathers velocity and its affine velocity field from its 27-node stencil, blends toward a FLIP update by Liveliness, moves with the gathered velocity, and runs its material stage: its elastic deformation advects with the gathered velocity gradient, the Drucker-Prager return map keeps it inside the sand's yield cone (cohesion shifts the cone's tip into tension and softens with plastic strain), and the point keeps its new deformation, volume ratio, plastic state and Kirchhoff stress. A point that ends inside a collider steps out onto its surface and loses the velocity pointing into it; a dynamic body gains the momentum the point lost, added to its reaction words. A point whose cell has no tile in the pool is removed (id 0, volume ratio 0, counted by node.matter_stats); a point beyond an Open face of the bounds box, or below the kill height, is removed too (id 0, volume ratio kept).",
+    purpose: "Transfer the resolved matter grid back to its points (MLS-MPM grid-to-particle): each live point gathers velocity and its affine velocity field from its 27-node stencil, takes the gathered velocity as its own (pure APIC), moves with it, and runs its material stage: its elastic deformation advects with the gathered velocity gradient, the Drucker-Prager return map keeps it inside the sand's yield cone (cohesion shifts the cone's tip into tension and softens with plastic strain), and the point keeps its new deformation, volume ratio, plastic state and Kirchhoff stress. A point that ends inside a collider steps out onto its surface and loses the velocity pointing into it; a dynamic body gains the momentum the point lost, added to its reaction words. A point whose cell has no tile in the pool is removed (id 0, volume ratio 0, counted by node.matter_stats); a point beyond an Open face of the bounds box, or below the kill height, is removed too (id 0, volume ratio kept).",
     inputs: {
         points: Array(MatterPoint) required,
         grid: Array(MatterGridNode) required,
@@ -66,7 +66,6 @@ manifold_node_engine::primitive! {
         tiles: Array(u32) required,
         cell_size: ScalarF32 optional,
         step_dt: ScalarF32 optional,
-        liveliness: ScalarF32 optional,
         mu: ScalarF32 optional,
         lambda: ScalarF32 optional,
         alpha: ScalarF32 optional,
@@ -93,7 +92,6 @@ manifold_node_engine::primitive! {
     params: [
         ParamDef { name: Cow::Borrowed("cell_size"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(0.0625), range: Some((1.0e-4, 100.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("step_dt"), label: "Substep (s)", ty: ParamType::Float, default: ParamValue::Float(4.9e-4), range: Some((0.0, 1.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("liveliness"), label: "FLIP Ratio", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("mu"), label: "Shear Modulus (Pa)", ty: ParamType::Float, default: ParamValue::Float(1.36e5), range: Some((0.0, 1.0e9)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("lambda"), label: "Lamé λ (Pa)", ty: ParamType::Float, default: ParamValue::Float(2.04e5), range: Some((0.0, 1.0e9)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("alpha"), label: "Friction α", ty: ParamType::Float, default: ParamValue::Float(0.386), range: Some((0.0, 2.0)), enum_values: &[] },
@@ -118,7 +116,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("kill_height"), label: "Kill Height", ty: ParamType::Float, default: ParamValue::Float(f32::MIN), range: Some((f32::MIN, f32::MAX)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Removal is a short pool (the point's cell has no stored tile), an Open face of the bounds box or the kill height. Wire tiles from the same step as grid. Region body of the Live Matter group, after node.matter_grid_update and node.matter_body_reaction. points/points_out alias the node.matter_state point buffer (updated in place); grid is read as a gather. Liveliness 0 is APIC (calm, dissipative); toward 1 it keeps more of each point's own velocity change (livelier splashes, more noise). Positions always advect with the gathered velocity. bodies comes from node.matter_move_bodies (the substep-end pose node.matter_grid_update also reads); shapes, atlas and body_count from node.matter_domain. With bodies unwired no collider is read. reaction/reaction_out alias the domain's reaction words after node.matter_body_reaction (wire its reaction_out here, and this reaction_out into node.matter_state's reaction_in); density, momentum_unit, substeps_per_tick and dynamic_count come from node.matter_domain, tick_index and substep_in_tick from node.matter_state. Without a reaction slot covering every body, or with dynamic_count 0, no reaction is written.",
+    composition_notes: "Removal is a short pool (the point's cell has no stored tile), an Open face of the bounds box or the kill height. Wire tiles from the same step as grid. Region body of the Live Matter group, after node.matter_grid_update and node.matter_body_reaction. points/points_out alias the node.matter_state point buffer (updated in place); grid is read as a gather. Positions always advect with the gathered velocity. bodies comes from node.matter_move_bodies (the substep-end pose node.matter_grid_update also reads); shapes, atlas and body_count from node.matter_domain. With bodies unwired no collider is read. reaction/reaction_out alias the domain's reaction words after node.matter_body_reaction (wire its reaction_out here, and this reaction_out into node.matter_state's reaction_in); density, momentum_unit, substeps_per_tick and dynamic_count come from node.matter_domain, tick_index and substep_in_tick from node.matter_state. Without a reaction slot covering every body, or with dynamic_count 0, no reaction is written.",
     examples: ["SandBoxDrop", "SandColumn"],
     picker: { label: "Grid to Matter", category: Atom },
     summary: "Moves each liquid particle with the grid's velocities and updates how compressed it is.",
@@ -185,7 +183,6 @@ impl Primitive for GridToMatter {
             .clamp(0.0, 63.0) as i32;
         let kill_height = ctx.scalar_or_param("kill_height", f32::MIN);
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
-        let liveliness = ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0);
         let [mu, lambda, alpha, cohesion, softening] = [
             ("mu", 1.36e5),
             ("lambda", 2.04e5),
@@ -276,7 +273,6 @@ impl Primitive for GridToMatter {
         let uniforms = ToMatterUniforms {
             cell_size,
             step_dt,
-            liveliness,
             mu,
             lambda,
             alpha,
@@ -302,6 +298,7 @@ impl Primitive for GridToMatter {
             dispatch_count: active,
             _pad0: 0,
             _pad1: 0,
+            _pad2: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,

@@ -270,6 +270,9 @@ pub enum Unit {
     SizeMultiple,
     /// A multiple of a modifier target's radius: a mask's centre and size.
     Radius,
+    Degrees,
+    Kilopascals,
+    KilogramsPerCubicMetre,
 }
 
 impl Unit {
@@ -288,6 +291,9 @@ impl Unit {
             Self::PerSecond => " /s",
             Self::SizeMultiple => "× size",
             Self::Radius => " × radius",
+            Self::Degrees => "°",
+            Self::Kilopascals => " kPa",
+            Self::KilogramsPerCubicMetre => " kg/m³",
         }
     }
 
@@ -309,6 +315,9 @@ impl Unit {
             Self::PerSecond => "/s",
             Self::SizeMultiple => "",
             Self::Radius => "",
+            Self::Degrees => "°",
+            Self::Kilopascals => "kPa",
+            Self::KilogramsPerCubicMetre => "kg/m³",
         }
     }
 }

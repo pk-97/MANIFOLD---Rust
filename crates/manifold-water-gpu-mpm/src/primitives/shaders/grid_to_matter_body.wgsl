@@ -11,11 +11,9 @@ fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 
 // node.grid_to_matter — fusable BUFFER body. One thread per material point gathers its 27-node stencil from
 // the resolved grid (`buf_grid`, Element2 = MatterGridNode):
-//   v_pic = Σ w·v_i
-//   v_p  ← β·(v_p + Σ w·(v_i − v_before_i)) + (1 − β)·v_pic     (β = Liveliness)
-//   C_p  = (4/dx²)·Σ w·v_i ⊗ d_i,   x_p += dt·v_pic
-// Positions advect with v_pic (AFLIP, Fei et al. 2021, as Blatny & Gaume 2025
-// implement it). Then the material stage (matter_material.wgsl): F advects by
+//   v_p = Σ w·v_i,   C_p = (4/dx²)·Σ w·v_i ⊗ d_i,   x_p += dt·v_p
+// Pure APIC: sand needs no FLIP blend, and APIC keeps its angular momentum.
+// Then the material stage (matter_material.wgsl): F advects by
 // C over dt, the return map keeps it inside the yield cone, and the record
 // takes the new F, J = det F, its plastic state (volume correction in
 // affine_x.w, plastic strain in f_x.w) and the Kirchhoff stress P2G spreads.
@@ -95,7 +93,6 @@ fn body(
     e_points: Element,
     cell_size: f32,
     step_dt: f32,
-    liveliness: f32,
     mu: f32,
     lambda: f32,
     alpha: f32,
@@ -142,7 +139,6 @@ fn body(
     let w2 = 0.5 * (f - vec3<f32>(0.5)) * (f - vec3<f32>(0.5));
 
     var v_pic = vec3<f32>(0.0);
-    var flip_delta = vec3<f32>(0.0);
     var b0 = vec3<f32>(0.0);
     var b1 = vec3<f32>(0.0);
     var b2 = vec3<f32>(0.0);
@@ -161,7 +157,6 @@ fn body(
                 let g = buf_grid[ts_cell_at(node)];
                 let vi = g.velocity_mass.xyz;
                 v_pic = v_pic + weight * vi;
-                flip_delta = flip_delta + weight * (vi - g.velocity_before.xyz);
                 b0 = b0 + weight * vi.x * d;
                 b1 = b1 + weight * vi.y * d;
                 b2 = b2 + weight * vi.z * d;
@@ -172,7 +167,7 @@ fn body(
     let c0 = k * b0;
     let c1 = k * b1;
     let c2 = k * b2;
-    p.velocity = liveliness * (p.velocity + flip_delta) + (1.0 - liveliness) * v_pic;
+    p.velocity = v_pic;
     p.position = p.position + step_dt * v_pic;
     let mass = p.affine_y.w * density;
     let counts = 16777216.0 / momentum_unit;

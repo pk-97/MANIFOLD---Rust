@@ -1,5 +1,5 @@
 //! `node.matter_fill` — seed a matter domain's points: a pool of the lowest authored cells plus one
-//! box, in cell order. Mesh fills join in P3b.
+//! box, in cell order, the box kept to a shaped fill's shape.
 
 use manifold_gpu::BufferUse;
 use std::borrow::Cow;
@@ -15,7 +15,9 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
-use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::bodies::{
+    LIQUID_COLLIDER, LIQUID_FILL_SHAPE, LIQUID_POSE, LiquidBody, LiquidShape,
+};
 
 /// Most cells per axis the `fill_cells_*` wires may carry.
 const MAX_FILL_CELLS: u32 = 4096;
@@ -99,14 +101,14 @@ struct FillUniforms {
     seed: i32,
     body_count: i32,
     epoch: i32,
+    fill_region: i32,
     dispatch_count: u32,
-    _pad0: u32,
 }
 
 manifold_node_engine::primitive! {
     name: MatterFill,
     type_id: "node.matter_fill",
-    purpose: "Seed material points at rest in cell order: every authored cell below the pool height, then one box of cells above it. Each cell holds 2³ or 3³ points, one per sub-cell, jittered by a seeded hash; ids count births from 1. Outputs the points and their count.",
+    purpose: "Seed material points at rest in cell order: every authored cell below the pool height, then one box of cells above it. Each cell holds 2³ or 3³ points, one per sub-cell, jittered by a seeded hash; ids count births from 1. A shaped fill (fill_region's row of regions) keeps only the box seeds inside its shape. Outputs the points and their count.",
     inputs: {
         fill_min_x: ScalarF32 optional, fill_min_y: ScalarF32 optional, fill_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -122,6 +124,8 @@ manifold_node_engine::primitive! {
         atlas: Array(u32) optional,
         collider_nodes: Array(Vec4Vertex) optional,
         collider_triangles: Array(Vec4Vertex) optional,
+        regions: Array(LiquidBody) optional,
+        fill_region: ScalarF32 optional,
         body_count: ScalarF32 optional,
         epoch: ScalarF32 optional,
     },
@@ -148,9 +152,10 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_215.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, MAX_LIQUID_BODIES as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("epoch"), label: "Epoch", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_215.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("fill_region"), label: "Fill Region", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0, 16_777_215.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Feeds node.matter_state's seed (copied in when the domain's epoch changes) and its count. Cell boxes are in the authored domain's cells, from node.matter_domain's fill outputs (fill_min, fill_cells); the box is clipped above the pool so no cell seeds twice. Points per Cell is 8 or 27.",
+    composition_notes: "Feeds node.matter_state's seed (copied in when the domain's epoch changes) and its count. Cell boxes are in the authored domain's cells, from node.matter_domain's fill outputs (fill_min, fill_cells); the box is clipped above the pool so no cell seeds twice. Points per Cell is 8 or 27. Wire regions and fill_region from node.matter_domain beside the collider arrays; without them the box fills whole.",
     examples: ["SandColumn"],
     picker: { label: "Matter Fill", category: Atom },
     summary: "Places the liquid's starting particles in the domain: a pool on the floor plus one box.",
@@ -159,11 +164,11 @@ manifold_node_engine::primitive! {
     aliases: ["seed matter", "matter fill", "initial fill", "pool"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/matter_fill_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH, MATTER_TREE],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH, MATTER_TREE, LIQUID_FILL_SHAPE],
     extra_fields: {
         buffer: Option<GpuBuffer> = None,
-        filled: Option<([u32; 18], usize)> = None,
+        filled: Option<([u32; 19], usize)> = None,
     },
 }
 
@@ -245,8 +250,15 @@ impl Primitive for MatterFill {
             ctx.inputs.array("collider_triangles"),
         );
         let body_count = int("body_count", 0.0).min(MAX_LIQUID_BODIES as u32) as i32;
-        // With colliders the seeds depend on their pose at the epoch's start.
-        let epoch = if body_count > 0 { int("epoch", 0.0) } else { 0 };
+        let fill_region = ctx.scalar_or_param("fill_region", -1.0).round();
+        let regions = ctx.inputs.array("regions");
+        // With colliders or a shaped fill the seeds depend on their pose at
+        // the epoch's start.
+        let epoch = if body_count > 0 || fill_region >= 0.0 {
+            int("epoch", 0.0)
+        } else {
+            0
+        };
         let cells = grid.cells;
         let column =
             std::array::from_fn(|d| [column[d][0].min(cells[d]), column[d][1].min(cells[d])]);
@@ -292,23 +304,41 @@ impl Primitive for MatterFill {
         }
         let gpu = ctx.gpu_encoder();
         let buffer = self.buffer.as_ref().expect("fill storage prepared");
-        // Without all five collider arrays no body is read; the points buffer
-        // fills their slots.
-        let (bodies, shapes, atlas, collider_nodes, collider_triangles, body_count) =
-            match colliders {
-                (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)) => {
-                    let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64) as i32;
-                    (
-                        bodies,
-                        shapes,
-                        atlas,
-                        nodes,
-                        triangles,
-                        body_count.min(rows),
-                    )
-                }
-                _ => (buffer, buffer, buffer, buffer, buffer, 0),
-            };
+        // Without all five collider arrays no body or region is read; the
+        // points buffer fills their slots.
+        let row_count = |rows: &GpuBuffer| rows.size / std::mem::size_of::<LiquidBody>() as u64;
+        let (
+            bodies,
+            shapes,
+            atlas,
+            collider_nodes,
+            collider_triangles,
+            body_count,
+            regions,
+            fill_region,
+        ) = match (colliders, regions) {
+            ((Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)), regions) => {
+                let (regions, fill_region) = match regions {
+                    Some(regions)
+                        if fill_region >= 0.0 && (fill_region as u64) < row_count(regions) =>
+                    {
+                        (regions, fill_region as i32)
+                    }
+                    _ => (buffer, -1),
+                };
+                (
+                    bodies,
+                    shapes,
+                    atlas,
+                    nodes,
+                    triangles,
+                    body_count.min(row_count(bodies) as i32),
+                    regions,
+                    fill_region,
+                )
+            }
+            _ => (buffer, buffer, buffer, buffer, buffer, 0, buffer, -1),
+        };
         let key = [
             grid.min[0].to_bits(),
             grid.min[1].to_bits(),
@@ -328,6 +358,7 @@ impl Primitive for MatterFill {
             seed,
             body_count as u32,
             epoch,
+            fill_region as u32,
         ];
         // A pure function of its params: refill only when one changes.
         if self.filled == Some((key, buffer.identity_key())) {
@@ -353,8 +384,8 @@ impl Primitive for MatterFill {
             seed: seed as i32,
             body_count,
             epoch: epoch as i32,
+            fill_region,
             dispatch_count: count,
-            _pad0: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -390,6 +421,11 @@ impl Primitive for MatterFill {
                 },
                 GpuBinding::Buffer {
                     binding: 6,
+                    buffer: regions,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 7,
                     buffer,
                     offset: 0,
                 },

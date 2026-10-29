@@ -6,7 +6,7 @@ fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 // node.matter_grid_update — fusable BUFFER body. One thread per pooled world-tile
 // node (the canonical node, past the last slot, resolves to the zero element); node
 // p sits at world p·cell_size, found through the world-tile table (`buf_tiles`):
-//   v_before = momentum / mass                       (Liveliness reads it)
+//   v_before = momentum / mass       (node.matter_body_reaction replays from it)
 //   v = v_before + dt · (g + forces(x))              (forces from tick_index's lattice)
 //   v += impulses(x)                                 (substep 0 of impulse_tick)
 // where forces and impulses are trilinear reads of the domain's coarse field

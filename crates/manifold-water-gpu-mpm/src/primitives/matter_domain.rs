@@ -55,7 +55,7 @@ use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{
     DomainWalls, LiquidRigidOwner, PendingTick, SharedSolids, SharesSolids, takes_reaction,
 };
-use manifold_water_liquid::fluid_role::{FluidRole, InitialFill, take_initial_fill};
+use manifold_water_liquid::fluid_role::{FluidRole, FluidRoleKind, InitialFill, take_initial_fill};
 use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_rigid::coupled_frame::{CoupledRigidInputs, RigidFrame, RigidPresentation};
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
@@ -295,7 +295,7 @@ pub(crate) fn matter_geometry(
 manifold_node_engine::primitive! {
     name: MatterDomain,
     type_id: "node.matter_domain",
-    purpose: "Define a live GPU liquid domain with the shared liquid scene contract: the axis-aligned domain box, cell size, six closed faces, initial fill height and the box an Initial Fill role places, gravity, simulation speed, reset and seed, plus the sand dials Points per Cell, Stiffness, Friction Angle, Cohesion (kPa), Density and Liveliness; its Sources param sets how many role inputs (role_0, role_1, ...) it takes. Outputs the grid box's first corner and cell counts, the first node of its margin, the fill boxes, this frame's fixed 60 Hz ticks and substeps per tick, the epoch and the display clock for the Live Matter atoms. Paired with a physics world in the same scene, it owns that world and couples its bodies both ways: they join the body rows, the liquid's push on them comes back through the reaction array, and the world steps once per fluid tick after the GPU has finished it.",
+    purpose: "Define a live GPU liquid domain with the shared liquid scene contract: the axis-aligned domain box, cell size, six closed faces, initial fill height and the box an Initial Fill role places, gravity, simulation speed, reset and seed, plus the sand dials Points per Cell, Stiffness, Friction Angle, Cohesion (kPa) and Density; its Sources param sets how many role inputs (role_0, role_1, ...) it takes. Outputs the grid box's first corner and cell counts, the first node of its margin, the fill boxes, this frame's fixed 60 Hz ticks and substeps per tick, the epoch and the display clock for the Live Matter atoms. Paired with a physics world in the same scene, it owns that world and couples its bodies both ways: they join the body rows, the liquid's push on them comes back through the reaction array, and the world steps once per fluid tick after the GPU has finished it.",
     inputs: {
         domain: Transform optional,
         cell_metres: ScalarF32 optional,
@@ -310,7 +310,6 @@ manifold_node_engine::primitive! {
         friction_angle: ScalarF32 optional,
         cohesion: ScalarF32 optional,
         density: ScalarF32 optional,
-        liveliness: ScalarF32 optional,
         acceleration_field: VectorField optional,
     },
     outputs: {
@@ -340,7 +339,6 @@ manifold_node_engine::primitive! {
         cohesion: ScalarF32,
         softening: ScalarF32,
         wall_friction: ScalarF32,
-        liveliness: ScalarF32,
         density: ScalarF32,
         limited_by_substeps: ScalarF32,
         pool_tiles: ScalarF32,
@@ -357,7 +355,8 @@ manifold_node_engine::primitive! {
         field_spacing: ScalarF32,
         force_lattices: ScalarF32,
         impulse_tick: ScalarF32,
-        bodies: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
+        fill_region: ScalarF32,
+        bodies: Array(LiquidBody), regions: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
         collider_nodes: Array(Vec4Vertex), collider_triangles: Array(Vec4Vertex),
         reaction: Array(i32),
         forces: Array(f32), impulses: Array(f32),
@@ -386,11 +385,10 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("friction_angle"), label: "Friction Angle", ty: ParamType::Float, default: ParamValue::Float(SAND_FRICTION_ANGLE), range: Some(FRICTION_ANGLE_RANGE), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("cohesion"), label: "Cohesion (kPa)", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some(COHESION_KPA_RANGE), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("density"), label: "Density (kg/m³)", ty: ParamType::Float, default: ParamValue::Float(SAND_DENSITY), range: Some(DENSITY_RANGE), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("liveliness"), label: "FLIP Ratio", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("roles"), label: "Sources", ty: ParamType::Int, default: ParamValue::Float(manifold_water_liquid::DEFAULT_ROLE_PORTS as f32), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The Live Matter group's source of truth: wire its fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, cell size, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Friction Angle, Cohesion, Density and Liveliness are live. Stiffness sets how firm the grains are and costs substeps (Stiffness 0.5 → 14, 1 → 21, 2 → 35 at 64³ in 4 m); the material leaves as mu, lambda, alpha, cohesion (a tensile log strain) and softening for node.grid_to_matter, mu and lambda for node.matter_stats, and wall_friction (tan of the Friction Angle) for node.matter_grid_update and node.matter_body_reaction; a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most two ticks per display frame and reports dropped time; export runs every tick. Bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.liquid_solid_distance. Until every body's distance lattice is built the liquid holds. An Initial Fill seeds the water; Inflow and Outflow roles are refused. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most two ticks per display frame; live and export wait for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Scene forces arrive on acceleration_field and scene impulses through the impulse hooks; both are sampled on a coarse field lattice (a quarter of the cells per axis): wire forces, impulses and the six field scalars into node.matter_grid_update and node.matter_body_reaction. Forces act every substep; an impulse changes the water's velocity once, on the first substep of impulse_tick, the first tick after the frame it was fired. A hit fired while paused or at Simulation Speed 0 is discarded, never replayed on resume; a restart cancels hits not yet applied. Rigid targets of an impulse reach the coupled bodies.",
+    composition_notes: "The Live Matter group's source of truth: wire its fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, cell size, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Friction Angle, Cohesion and Density are live. Stiffness sets how firm the grains are and costs substeps (Stiffness 0.5 → 14, 1 → 21, 2 → 35 at 64³ in 4 m); the material leaves as mu, lambda, alpha, cohesion (a tensile log strain) and softening for node.grid_to_matter, mu and lambda for node.matter_stats, and wall_friction (tan of the Friction Angle) for node.matter_grid_update and node.matter_body_reaction; a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most two ticks per display frame and reports dropped time; export runs every tick. Bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.liquid_solid_distance. Until every body's distance lattice is built the liquid holds. An Initial Fill seeds the water; Inflow and Outflow roles are refused. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most two ticks per display frame; live and export wait for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Scene forces arrive on acceleration_field and scene impulses through the impulse hooks; both are sampled on a coarse field lattice (a quarter of the cells per axis): wire forces, impulses and the six field scalars into node.matter_grid_update and node.matter_body_reaction. Forces act every substep; an impulse changes the water's velocity once, on the first substep of impulse_tick, the first tick after the frame it was fired. A hit fired while paused or at Simulation Speed 0 is discarded, never replayed on resume; a restart cancels hits not yet applied. Rigid targets of an impulse reach the coupled bodies.",
     examples: ["SandColumn", "SandBoxDrop"],
     picker: { label: "Matter Domain", category: Atom },
     summary: "Sets up a live GPU liquid: its box, cell size, walls, starting fill, gravity and how the water behaves.",
@@ -411,7 +409,8 @@ manifold_node_engine::primitive! {
         fill_cells: (u32, [[u32; 2]; 3]) = (0, [[0; 2]; 3]),
         limited: bool = false,
         published: Option<[f32; OUTPUTS.len()]> = None,
-        bodies: LiquidBodies = LiquidBodies::default(),
+        // A shaped fill's role is a region row, so the fill reads its shape.
+        bodies: LiquidBodies = LiquidBodies::with_regions(),
         // The role inputs, one per source: the `roles` param sizes them.
         role_ports: manifold_water_liquid::RolePorts = manifold_water_liquid::RolePorts::default(),
         // Another water's solids, when this one does not own the world.
@@ -628,7 +627,6 @@ const OUTPUTS: [&str; 67] = [
     "cohesion",
     "softening",
     "wall_friction",
-    "liveliness",
     "density",
     "limited_by_substeps",
     "momentum_unit",
@@ -661,10 +659,11 @@ const OUTPUTS: [&str; 67] = [
     "wall_velocity_hi_x",
     "wall_velocity_hi_y",
     "wall_velocity_hi_z",
+    "fill_region",
 ];
 const TICKS: usize = 22;
 const EPOCH: usize = 24;
-const IMPULSE_TICK: usize = 47;
+const IMPULSE_TICK: usize = 46;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
 const _: () = assert!(matches!(OUTPUTS[EPOCH].as_bytes(), b"epoch"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
@@ -692,6 +691,7 @@ impl Primitive for MatterDomain {
         matches!(
             port,
             "bodies"
+                | "regions"
                 | "shapes"
                 | "atlas"
                 | "collider_nodes"
@@ -722,6 +722,7 @@ impl Primitive for MatterDomain {
         matches!(
             port_name,
             "bodies"
+                | "regions"
                 | "shapes"
                 | "atlas"
                 | "collider_nodes"
@@ -798,16 +799,20 @@ impl Primitive for MatterDomain {
         }
         let role_pending = self.role_ports.read(&ctx.inputs);
         let mut roles = self.role_ports.take();
-        // The Initial Fill seeds the water; the bodies never see it. Matter
-        // fills a box, so a shaped fill is refused by name.
-        let fill = match take_initial_fill(&mut roles) {
-            Ok(Some(InitialFill {
-                shape: Some(slot), ..
-            })) => {
-                roles[slot] = None;
-                Err("MPM fills a box; set the Fill's Shape to Box".to_owned())
+        // The Initial Fill seeds the sand; a box fill never reaches the
+        // bodies, and a shaped one stays as a region row for its shape. Sand
+        // only fills, so an Inflow or Outflow is refused by name.
+        let flows = |role: &Option<FluidRole>| {
+            role.as_ref()
+                .is_some_and(|role| role.kind != FluidRoleKind::InitialFill)
+        };
+        let fill = if roles.iter().any(flows) {
+            for role in roles.iter_mut().filter(|role| flows(role)) {
+                *role = None;
             }
-            fill => fill.map(|fill| fill.map(|fill| fill.column)),
+            Err("Sand fills only; Inflow and Drain are Water's".to_owned())
+        } else {
+            take_initial_fill(&mut roles)
         };
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
@@ -1156,20 +1161,21 @@ impl MatterDomain {
         &mut self,
         ctx: &EffectNodeContext<'_, '_>,
         roles: &[Option<FluidRole>],
-        fill: Result<Option<Transform>, String>,
+        fill: Result<Option<InitialFill>, String>,
     ) -> Result<Option<[f32; OUTPUTS.len()]>, String> {
         let geometry = fill
             .map_err(|reason| format!("Matter: {reason}"))
-            .and_then(|column| {
+            .and_then(|fill| {
+                let column = fill.map(|fill| fill.column);
                 matter_geometry(
                     |name, default| ctx.scalar_or_param(name, default),
                     ctx.params,
                     ctx.inputs.transform("domain"),
                     column,
                 )
-                .map(|geometry| (geometry, column))
+                .map(|geometry| (geometry, column, fill.and_then(|fill| fill.shape)))
             });
-        let (geometry, column) = match geometry {
+        let (geometry, column, shaped) = match geometry {
             Ok(found) => found,
             Err(reason) => {
                 self.setup_report.refuse(&reason);
@@ -1191,7 +1197,6 @@ impl MatterDomain {
             "friction_angle",
             "cohesion",
             "density",
-            "liveliness",
         ]
         .map(|name| ctx.scalar_or_param(name, 0.0));
         if !speed.is_finite()
@@ -1505,10 +1510,6 @@ impl MatterDomain {
             ("cohesion", material.cohesion as f32),
             ("softening", COHESION_SOFTENING),
             ("wall_friction", material.wall_friction() as f32),
-            (
-                "liveliness",
-                ctx.scalar_or_param("liveliness", 0.0).clamp(0.0, 1.0),
-            ),
             ("density", density),
             (
                 "limited_by_substeps",
@@ -1519,6 +1520,14 @@ impl MatterDomain {
             ("body_rows", rows),
             ("first_tick", first_tick as f32),
             ("dynamic_count", dynamic_count as f32),
+            // The shaped fill's region row in a tick, -1 for a box or none:
+            // the fill seeds only the box cells inside its shape.
+            (
+                "fill_region",
+                shaped
+                    .and_then(|slot| self.bodies.region_of(slot))
+                    .map_or(-1.0, |row| row as f32),
+            ),
         ];
         let mut values = [0.0; OUTPUTS.len()];
         let mut written = 0u128;

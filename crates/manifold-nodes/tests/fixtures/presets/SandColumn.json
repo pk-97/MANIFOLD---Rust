@@ -76,19 +76,6 @@
         "cardVisible": true
       },
       {
-        "id": "liveliness",
-        "name": "FLIP Ratio",
-        "min": 0.0,
-        "max": 1.0,
-        "defaultValue": 0.0,
-        "wholeNumbers": false,
-        "isToggle": false,
-        "isTrigger": false,
-        "formatString": "F2",
-        "section": "Fluid",
-        "cardVisible": true
-      },
-      {
         "id": "points_per_cell",
         "name": "Particles per Cell",
         "min": 0.0,
@@ -254,19 +241,6 @@
           "kind": "node",
           "nodeId": "matter_domain",
           "param": "cohesion"
-        },
-        "convert": {
-          "type": "Float"
-        }
-      },
-      {
-        "id": "liveliness",
-        "label": "FLIP Ratio",
-        "defaultValue": 0.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "matter_domain",
-          "param": "liveliness"
         },
         "convert": {
           "type": "Float"
@@ -978,10 +952,6 @@
               "cohesion": {
                 "type": "Float",
                 "value": 0.0
-              },
-              "liveliness": {
-                "type": "Float",
-                "value": 0.0
               }
             }
           },
@@ -1294,12 +1264,6 @@
             "fromPort": "density",
             "toNode": 8,
             "toPort": "density"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "liveliness",
-            "toNode": 7,
-            "toPort": "liveliness"
           },
           {
             "fromNode": 1,

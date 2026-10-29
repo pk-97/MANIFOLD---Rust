@@ -114,8 +114,8 @@ impl KnownItem for MatterPoint {
 pub struct MatterGridNode {
     /// Velocity after forces and boundaries; w = mass in kg (0 = empty).
     pub velocity_mass: [f32; 4],
-    /// Velocity before forces (momentum / mass), for Liveliness; w = 1 when the
-    /// resolve clamped this node's velocity.
+    /// Velocity before forces (momentum / mass), which node.matter_body_reaction
+    /// replays forces from; w = 1 when the resolve clamped this node's velocity.
     pub velocity_before: [f32; 4],
 }
 

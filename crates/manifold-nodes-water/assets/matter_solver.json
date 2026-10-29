@@ -34,10 +34,6 @@
         "cohesion": {
           "type": "Float",
           "value": 0.0
-        },
-        "liveliness": {
-          "type": "Float",
-          "value": 0.0
         }
       }
     },
@@ -333,12 +329,6 @@
     },
     {
       "fromNode": 1,
-      "fromPort": "liveliness",
-      "toNode": 7,
-      "toPort": "liveliness"
-    },
-    {
-      "fromNode": 1,
       "fromPort": "cohesion",
       "toNode": 7,
       "toPort": "cohesion"
@@ -552,6 +542,18 @@
       "fromPort": "collider_triangles",
       "toNode": 2,
       "toPort": "collider_triangles"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "regions",
+      "toNode": 2,
+      "toPort": "regions"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "fill_region",
+      "toNode": 2,
+      "toPort": "fill_region"
     },
     {
       "fromNode": 1,

@@ -23,7 +23,7 @@ use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_water_liquid::bodies::{
-    COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape,
+    COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_FILL_SHAPE, LIQUID_POSE, LiquidBody, LiquidShape,
 };
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::primitives::sort_particles_into_cells::int_param;
@@ -248,7 +248,7 @@ manifold_node_engine::primitive! {
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/liquid_fill_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH, LIQUID_FILL_SHAPE],
     extra_fields: {
         buffer: Option<GpuBuffer> = None,
         filled: Option<([u32; 27], usize)> = None,

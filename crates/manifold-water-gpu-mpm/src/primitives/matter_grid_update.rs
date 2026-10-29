@@ -62,7 +62,7 @@ struct GridUpdateUniforms {
 manifold_node_engine::primitive! {
     name: MatterGridUpdate,
     type_id: "node.matter_grid_update",
-    purpose: "Resolve the matter grid: turn each node's accumulated momentum into velocity, add gravity and the scene's acceleration field (read from a coarse force lattice), add the scene's impulses once on the first substep of their tick (from a coarse impulse lattice), stop velocity into the Bounds box's Wall faces on every node on or past the plane (relative to the wall's speed), project velocity out of colliders (a node inside a body moving into it keeps the body's normal velocity and friction-limited sliding), and clamp each component to 0.9 cells per substep. Keeps the pre-force velocity for the Liveliness blend.",
+    purpose: "Resolve the matter grid: turn each node's accumulated momentum into velocity, add gravity and the scene's acceleration field (read from a coarse force lattice), add the scene's impulses once on the first substep of their tick (from a coarse impulse lattice), stop velocity into the Bounds box's Wall faces on every node on or past the plane (relative to the wall's speed), project velocity out of colliders (a node inside a body moving into it keeps the body's normal velocity and friction-limited sliding), and clamp each component to 0.9 cells per substep. Keeps the pre-force velocity for node.matter_body_reaction.",
     inputs: {
         accum: Array(i32) required,
         grid: Array(MatterGridNode) required,

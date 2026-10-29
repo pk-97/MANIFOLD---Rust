@@ -61,61 +61,6 @@ pub fn liquid_domains_in(nodes: &[EffectGraphNode]) -> Vec<NestedLiquidDomain> {
     out
 }
 
-/// Water-panel params for product GPU liquid domains, under FLIP's names where
-/// the meaning is shared. The retired
-/// CPU FLIP node remains recognised above for saved graphs and reference
-/// proofs, but it no longer contributes product controls.
-pub const LIQUID_DIAL_PARAMS: &[(&str, &[&str])] = &[
-    (
-        MATTER_DOMAIN_TYPE_ID,
-        &[
-            "seed",
-            "domain_size",
-            "fill_height",
-            "gravity_x",
-            "gravity",
-            "gravity_z",
-            "air_drag",
-            "speed",
-            "reset",
-            "cell_metres",
-            "grid_budget_mcells",
-            "closed_neg_x",
-            "closed_pos_x",
-            "closed_neg_y",
-            "closed_pos_y",
-            "closed_neg_z",
-            "closed_pos_z",
-            "bounds",
-            "points_per_cell",
-            "stiffness",
-            "cohesion",
-            "liveliness",
-        ],
-    ),
-    (
-        GPU_FLIP_DOMAIN_TYPE_ID,
-        &[
-            "domain_size",
-            "fill_height",
-            "gravity_x",
-            "gravity",
-            "gravity_z",
-            "air_drag",
-            "speed",
-            "reset",
-            "cell_metres",
-            "closed_neg_x",
-            "closed_pos_x",
-            "closed_neg_y",
-            "closed_pos_y",
-            "closed_neg_z",
-            "closed_pos_z",
-            "bounds",
-        ],
-    ),
-];
-
 /// The liquid domain an object's surface is built from. Water is recognised
 /// by its particle producer, not by the port that feeds the object: the walk
 /// starts at the object's `field` producer (a level set the renderer marches),
@@ -175,15 +120,6 @@ pub fn liquid_domain_of(
     Ok(domain)
 }
 
-/// The water-panel params of `type_id`, or `None` when it is not a liquid
-/// domain.
-pub fn liquid_dial_params(type_id: &str) -> Option<&'static [&'static str]> {
-    LIQUID_DIAL_PARAMS
-        .iter()
-        .find(|(domain, _)| *domain == type_id)
-        .map(|(_, params)| *params)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,22 +176,5 @@ mod tests {
                 },
             ]
         );
-    }
-
-    #[test]
-    fn liquid_dial_params_cover_every_domain() {
-        for type_id in [MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID] {
-            assert!(
-                liquid_dial_params(type_id).is_some_and(|params| !params.is_empty()),
-                "{type_id} has no water-panel row in LIQUID_DIAL_PARAMS"
-            );
-        }
-        assert!(liquid_dial_params(FLIP_DOMAIN_TYPE_ID).is_none());
-        for (type_id, _) in LIQUID_DIAL_PARAMS {
-            assert!(
-                is_liquid_domain(type_id),
-                "{type_id} has dials but is not a liquid domain"
-            );
-        }
     }
 }

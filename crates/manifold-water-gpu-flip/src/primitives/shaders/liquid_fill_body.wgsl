@@ -88,24 +88,6 @@ fn liquid_fill_solid_node(y: vec3<f32>, lo: vec3<f32>, hi: vec3<f32>, faces: u32
     return d;
 }
 
-// Whether shaped fill region `r` holds `x`: its lattice distance at or below
-// 0, scaled to metres; a point the lattice does not cover is outside.
-fn liquid_fill_in_shape(x: vec3<f32>, r: i32) -> bool {
-    let bd = buf_regions[u32(r)];
-    let shape_index = i32(bd.accel_shape.w);
-    if shape_index < 0 {
-        return false;
-    }
-    let sh = buf_shapes[u32(shape_index)];
-    if sh.tree == 1u {
-        let local = liquid_rotate(vec4<f32>(-bd.rotation.xyz, bd.rotation.w), x - bd.position_inv_mass.xyz);
-        return cb_phi(sh.tree_node, sh.tree_triangle, local, 4.0 * lf_cell, lf_cell) <= 0.0;
-    }
-    let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
-    let g = liquid_lattice_coord(x, bd.position_inv_mass.xyz, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
-    return liquid_lattice_holds(g, dims) && liquid_lattice_distance(sh.atlas_offset, dims, g) * sh.scale_min.w <= 0.0;
-}
-
 // Whether the engine's solid holds `x`: the solid distance read from the grid
 // of nodes `h` apart that starts 1.5 cells outside the box at `box_lo`.
 fn liquid_fill_in_native_solid(x: vec3<f32>, box_lo: vec3<f32>, h: f32, lo: vec3<f32>, hi: vec3<f32>, faces: u32, body_count: i32) -> bool {
@@ -188,7 +170,7 @@ fn body(
         vec3<f32>(bounds_lo_x, bounds_lo_y, bounds_lo_z),
         vec3<f32>(bounds_hi_x, bounds_hi_y, bounds_hi_z),
         u32(closed_faces), body_count);
-    let outside = idx >= pool_count && fill_region >= 0 && !liquid_fill_in_shape(x, fill_region);
+    let outside = idx >= pool_count && fill_region >= 0 && !liquid_fill_in_shape(x, fill_region, cell_size);
     let radius = select(0.31017524 * cell_size, 0.0, solid || outside);
     out.position_radius = vec4<f32>(x, radius);
     out.id = idx + 1u;

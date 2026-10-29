@@ -4,7 +4,7 @@
 //! Sand; the card is the shared domain and surface rows plus Matter's dials
 //! (MATTER_SAND_DESIGN.md).
 
-use manifold_foundation::scene_surface::{CardBand, ControlGroup};
+use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
 use super::fields::{FieldRow, MATERIAL_BINDING};
 use super::water::{
@@ -18,7 +18,7 @@ use super::{PropertyRow, perform, row, setup};
 
 use ControlGroup::Simulation;
 
-pub static SAND_ROWS: [PropertyRow; 32] = [
+pub static SAND_ROWS: [PropertyRow; 35] = [
     POS_X,
     POS_Y,
     POS_Z,
@@ -41,6 +41,18 @@ pub static SAND_ROWS: [PropertyRow; 32] = [
     row("stiffness", DOMAIN, Simulation, perform(CardBand::Scene, 2))
         .name("Stiffness")
         .tip("How stiff the grains are. Higher is firmer and costs more steps a frame"),
+    row("friction_angle", DOMAIN, Simulation, perform(CardBand::Scene, 3))
+        .name("Friction Angle")
+        .unit(Unit::Degrees)
+        .tip("How steep a pile holds. Sand flows below it and stops at it"),
+    row("cohesion", DOMAIN, Simulation, perform(CardBand::Scene, 4))
+        .name("Cohesion")
+        .unit(Unit::Kilopascals)
+        .tip("0 is dry sand. Higher holds a cliff, about half a metre per kPa; drop it live to bring the cliff down"),
+    row("density", DOMAIN, Simulation, setup())
+        .name("Density")
+        .unit(Unit::KilogramsPerCubicMetre)
+        .tip("How heavy the sand is, which sets how bodies sink into it"),
     row("points_per_cell", DOMAIN, Simulation, setup()).name("Particles per Cell"),
     row("seed", DOMAIN, Simulation, setup()).name("Seed"),
     SURFACE_DETAIL,

@@ -29,7 +29,6 @@ pub(crate) struct SceneSettings {
     pub gravity: [f32; 3],
     pub stiffness: f32,
     pub cohesion: f32,
-    pub liveliness: f32,
     pub seed: u32,
     pub points_per_cell_27: bool,
     pub closed: [bool; 6],
@@ -53,7 +52,6 @@ impl Default for SceneSettings {
             gravity: [0.0, -9.81, 0.0],
             stiffness: 1.0,
             cohesion: 0.0,
-            liveliness: 0.0,
             seed: 0,
             points_per_cell_27: false,
             closed: [true; 6],
@@ -213,7 +211,6 @@ impl MatterScene {
             (domain, "momentum_unit"),
             (update, "momentum_unit"),
         );
-        wire(&mut graph, (domain, "liveliness"), (g2p, "liveliness"));
 
         wire(&mut graph, (fill, "points"), (state, "seed"));
         for (node, port) in [
@@ -330,11 +327,6 @@ impl MatterScene {
             ParamValue::Float(settings.stiffness),
         );
         set(&mut graph, "cohesion", ParamValue::Float(settings.cohesion));
-        set(
-            &mut graph,
-            "liveliness",
-            ParamValue::Float(settings.liveliness),
-        );
         set(&mut graph, "seed", ParamValue::Float(settings.seed as f32));
         set(
             &mut graph,

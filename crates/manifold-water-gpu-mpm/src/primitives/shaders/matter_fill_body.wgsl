@@ -8,9 +8,11 @@
 // holds fill_cells_x/y/z cells. A seed inside an enabled collider at its pose
 // when the epoch starts (rows 0..body_count of `bodies`, sampled from its
 // shape's lattice in the atlas) is left an unused slot, id 0, so ids stay
-// sorted. `bodies` (LiquidBody → Element), `shapes` (LiquidShape → Element2)
-// `atlas` and the collider trees (Vec4Vertex → Element3) are gathered; the
-// output is MatterPoint (Element4).
+// sorted. With fill_region at or above 0 the box is a shaped fill's: a box
+// seed outside region row fill_region of `regions` (liquid_fill_shape.wgsl)
+// is an unused slot too. `bodies` and `regions` (LiquidBody → Element),
+// `shapes` (LiquidShape → Element2), `atlas` and the collider trees
+// (Vec4Vertex → Element3) are gathered; the output is MatterPoint (Element4).
 fn matter_fill_hash(x: u32) -> u32 {
     let s = x * 747796405u + 2891336453u;
     let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
@@ -82,6 +84,7 @@ fn body(
     seed: i32,
     body_count: i32,
     epoch: i32,
+    fill_region: i32,
 ) -> Element4 {
     let ppc = u32(points_per_cell);
     var per_axis = 2u;
@@ -114,7 +117,8 @@ fn body(
     let local = vec3<f32>(cell) + (vec3<f32>(s) + jitter) / f32(per_axis);
     var p: Element4;
     p.position = vec3<f32>(fill_min_x, fill_min_y, fill_min_z) + local * cell_size;
-    p.id = select(idx + 1u, 0u, mf_inside_collider(p.position, body_count, cell_size));
+    let outside = cell_index >= pool_total && fill_region >= 0 && !liquid_fill_in_shape(p.position, fill_region, cell_size);
+    p.id = select(idx + 1u, 0u, outside || mf_inside_collider(p.position, body_count, cell_size));
     p.velocity = vec3<f32>(0.0);
     p.volume_ratio = 1.0;
     p.affine_x = vec4<f32>(0.0);

@@ -8,8 +8,7 @@
 //!
 //! A Fill fills its shape once, and a Water or Sand takes one: the Fill
 //! choice is disabled with its reason beside another Fill (section 7.10).
-//! Sand fills a box and only fills, so a shaped Fill, Inflow and Drain are
-//! disabled in a Sand.
+//! Sand only fills, so Inflow and Drain are disabled in a Sand.
 
 use manifold_foundation::param_range::HardLimit;
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
@@ -250,17 +249,11 @@ pub fn choice_unavailable(
         || water_of(doc, item).is_some_and(|parent| matches!(parent.fields, ItemFields::Sand(_)));
     match (field, key) {
         ("role", "fill") if fields.role != SourceRole::Fill => {
-            if fields.shape != SourceShape::Box && sand() {
-                return Some("Sand fills a box; set Shape to Box first");
-            }
             let water = water_of(doc, item)?;
             let filled = water.children.iter().any(|child| {
                 child.id != item.id && matches!(&child.fields, ItemFields::WaterSource(s) if s.role == SourceRole::Fill)
             });
             filled.then_some(crate::scene_doc::ONE_FILL)
-        }
-        ("shape", "sphere" | "model") if fields.role == SourceRole::Fill && sand() => {
-            Some("Sand fills a box")
         }
         ("role", "inflow" | "drain") if sand() => {
             Some("Sand fills only; Inflow and Drain are Water's")
