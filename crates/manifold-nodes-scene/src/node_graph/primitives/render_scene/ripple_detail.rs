@@ -120,7 +120,7 @@ pub(super) struct RippleDetail {
 
 impl RippleDetail {
     /// The sampler and the 1x1 stand-ins a field without ripples binds.
-    fn ensure_common(&mut self, device: &GpuDevice) {
+    pub(super) fn ensure_common(&mut self, device: &GpuDevice) {
         if self.sampler.is_none() {
             self.sampler = Some(device.create_sampler(&GpuSamplerDesc {
                 min_filter: GpuFilterMode::Linear,

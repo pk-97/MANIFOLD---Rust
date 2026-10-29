@@ -3236,10 +3236,12 @@ impl RenderScene {
 
         // The water's ripple detail, before the caustics bend the sun's light
         // by it and the water shade lights the surface with it. A frame with
-        // no water holds no ripple tiles.
+        // no water holds no ripple tiles, only the stand-ins a clear mesh's
+        // caustics bind.
         let seconds = ctx.time.seconds.0 as f32;
         if fields.is_empty() {
             self.ripple_detail.reset();
+            self.ripple_detail.ensure_common(ctx.gpu_encoder().device);
         } else {
             let gpu = ctx.gpu_encoder();
             self.ripple_detail
@@ -3269,6 +3271,7 @@ impl RenderScene {
             gpu.native_enc,
             sun,
             &fields,
+            &draws,
             &self.ripple_detail,
             seconds,
         ) {
