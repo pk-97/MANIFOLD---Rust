@@ -210,15 +210,15 @@ pub static ADD_ENTRIES: [AddEntry; 66] = [
     entry("sand", "Matter", "Sand", ItemKind::Sand, "Sand", || {
         ItemFields::default_for(ItemKind::Sand)
     }),
-    // Snow draws as grains as sand does; the others flow or hold as one
-    // body, so they draw their surface.
+    // Sand draws as grains; the others draw their surface, snow's grains
+    // being far below a cell and shaded into it.
     entry(
         "matter.snow",
         "Matter",
         "Snow",
         ItemKind::Sand,
         "Snow",
-        || matter(Matter::Snow, WaterDraw::Particles),
+        || matter(Matter::Snow, WaterDraw::Surface),
     ),
     entry(
         "matter.clay",
@@ -624,10 +624,38 @@ pub const FORCE_STARTS: [(&str, &[(&str, f32)]); 3] = [
     ),
 ];
 
+/// Each Matter's surface: built at half the cell for edges a few
+/// centimetres sharp, and smoothed as the material is. Snow keeps its
+/// crumbs, clay its tool marks and mud its lumps; goo and jelly settle
+/// glassy smooth.
+pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 5] = [
+    (
+        "matter.snow",
+        &[("surface_detail", 1.0), ("surface_smoothness", 0.5)],
+    ),
+    (
+        "matter.clay",
+        &[("surface_detail", 1.0), ("surface_smoothness", 0.8)],
+    ),
+    (
+        "matter.mud",
+        &[("surface_detail", 1.0), ("surface_smoothness", 1.0)],
+    ),
+    (
+        "matter.goo",
+        &[("surface_detail", 1.0), ("surface_smoothness", 2.0)],
+    ),
+    (
+        "matter.jelly",
+        &[("surface_detail", 1.0), ("surface_smoothness", 1.5)],
+    ),
+];
+
 /// The card values the entry `key` starts at, beyond its recipe's defaults.
 pub fn entry_starts(key: &str) -> &'static [(&'static str, f32)] {
     FORCE_STARTS
         .iter()
+        .chain(&MATTER_STARTS)
         .find(|(entry, _)| *entry == key)
         .map_or(&[], |(_, starts)| starts)
 }

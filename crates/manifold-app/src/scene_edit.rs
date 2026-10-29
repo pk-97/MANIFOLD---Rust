@@ -320,22 +320,22 @@ pub(crate) fn add(
             id.clone(),
             fields,
         )));
-        let look = matter.map_or(&[][..], scene_schema::matter_look);
+        // The template's look, with what the Sand is made of over it.
+        let mut look = scene_schema::water_look(entry.kind);
+        for (property, value) in matter.map_or(&[][..], scene_schema::matter_look) {
+            match look.iter_mut().find(|(name, _)| name == property) {
+                Some((_, old)) => *old = *value,
+                None => look.push(((*property).to_owned(), *value)),
+            }
+        }
         commands.extend(
-            scene_schema::water_look(entry.kind)
-                .into_iter()
+            look.into_iter()
                 .filter(|(property, _)| {
                     let family = scene_schema::MATERIAL_FAMILY;
                     !family.automatic.contains(&property.as_str())
                         && !family.internal.iter().any(|(param, _)| param == property)
                 })
-                .map(|(property, value)| {
-                    let value = look
-                        .iter()
-                        .find(|(name, _)| *name == property)
-                        .map_or(value, |(_, own)| *own);
-                    write(layer, &material_id, &property, 0.0, value)
-                }),
+                .map(|(property, value)| write(layer, &material_id, &property, 0.0, value)),
         );
     }
     // A Material added inside a Water or Sand is that item's look.

@@ -154,52 +154,77 @@ pub static SAND_ROWS: [PropertyRow; 48] = [
 
 pub static SAND_FIELDS: [FieldRow; 3] = [BOUNDS_FIELD, DRAW_FIELD, MATERIAL_BINDING];
 
-/// What a new item of `matter` looks like, written over the Sand template's
-/// look on its own Material: fresh snow's high, faintly blue albedo; matte
-/// terracotta clay; dark, wet-glossy mud; amber goo and red jelly that light
-/// passes through, at honey's and gelatin's refractive index.
+/// What a new item of `matter` looks like on its own Material, over the
+/// Sand template's look, each from what the material is made of:
+/// - Snow: ice grains (IOR 1.31) a fraction of a millimetre across at about
+///   0.9 albedo, rough and sparkling. Real snow also carries light
+///   centimetres inside, but the renderer's subsurface is noisy and costs
+///   about 16 ms a frame on a metre of it, so it stays off.
+/// - Clay: terracotta, satin.
+/// - Mud: dark wet soil under a film of water (a clear coat at water's
+///   IOR), gritty below it.
+/// - Goo: honey, clear (transmission 1) with its amber from absorption
+///   through its own thickness, at honey's IOR 1.49.
+/// - Jelly: gelatin, clear and absorbing red, at IOR 1.34.
 pub fn matter_look(matter: Matter) -> &'static [(&'static str, f32)] {
     match matter {
         Matter::Sand => &[],
         Matter::Snow => &[
-            ("color_r", 0.90),
+            ("color_r", 0.9),
             ("color_g", 0.92),
             ("color_b", 0.95),
-            ("roughness", 0.75),
+            ("roughness", 0.8),
+            ("specular", 0.5),
             ("ior", 1.31),
-            ("grain", 1.0),
+            ("grain", 0.4),
         ],
         Matter::Clay => &[
-            ("color_r", 0.45),
-            ("color_g", 0.17),
-            ("color_b", 0.09),
-            ("roughness", 0.75),
+            ("color_r", 0.42),
+            ("color_g", 0.16),
+            ("color_b", 0.085),
+            ("roughness", 0.6),
+            ("specular", 0.35),
             ("grain", 0.0),
         ],
         Matter::Mud => &[
-            ("color_r", 0.11),
-            ("color_g", 0.07),
-            ("color_b", 0.04),
-            ("roughness", 0.25),
-            ("grain", 0.0),
+            ("color_r", 0.075),
+            ("color_g", 0.05),
+            ("color_b", 0.03),
+            ("roughness", 0.65),
+            ("ior", 1.33),
+            ("grain", 1.0),
+            ("clearcoat", 0.8),
+            ("clearcoat_roughness", 0.12),
         ],
         Matter::Goo => &[
-            ("color_r", 0.80),
-            ("color_g", 0.45),
-            ("color_b", 0.08),
-            ("roughness", 0.08),
-            ("transmission", 0.85),
+            ("color_r", 1.0),
+            ("color_g", 0.9),
+            ("color_b", 0.7),
+            ("roughness", 0.02),
             ("ior", 1.49),
             ("grain", 0.0),
+            ("transmission", 1.0),
+            ("volume_geometry", 1.0),
+            ("volume_thickness", 1.0),
+            ("volume_attenuation_color_r", 0.95),
+            ("volume_attenuation_color_g", 0.55),
+            ("volume_attenuation_color_b", 0.08),
+            ("volume_attenuation_distance", 0.25),
         ],
         Matter::Jelly => &[
-            ("color_r", 0.75),
-            ("color_g", 0.06),
-            ("color_b", 0.12),
-            ("roughness", 0.06),
-            ("transmission", 0.85),
-            ("ior", 1.35),
+            ("color_r", 1.0),
+            ("color_g", 0.8),
+            ("color_b", 0.8),
+            ("roughness", 0.02),
+            ("ior", 1.34),
             ("grain", 0.0),
+            ("transmission", 1.0),
+            ("volume_geometry", 1.0),
+            ("volume_thickness", 1.0),
+            ("volume_attenuation_color_r", 0.85),
+            ("volume_attenuation_color_g", 0.05),
+            ("volume_attenuation_color_b", 0.1),
+            ("volume_attenuation_distance", 0.25),
         ],
     }
 }
