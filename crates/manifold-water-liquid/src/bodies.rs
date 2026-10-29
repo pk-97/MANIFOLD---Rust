@@ -295,9 +295,10 @@ pub fn pack_distance_atlas(values: &[f32], out: &mut Vec<u32>) {
     }
 }
 
-/// A body's pose `t` seconds after its tick-start row: translation along the
-/// linear velocity, rotation by the constant angular velocity (the slerp
-/// between the tick's end poses). `liquid_pose.wgsl` computes the same in f32.
+/// A body's pose `t` seconds after its tick-start row (before it, for a
+/// negative `t`): translation along the linear velocity, rotation by the
+/// constant angular velocity (the slerp between the tick's end poses).
+/// `liquid_pose.wgsl` computes the same in f32 for `t` from 0.
 #[inline]
 pub fn body_pose_at(body: &LiquidBody, t: f32) -> ([f32; 3], [f32; 4]) {
     let p = body.position_inv_mass;
@@ -306,7 +307,7 @@ pub fn body_pose_at(body: &LiquidBody, t: f32) -> ([f32; 3], [f32; 4]) {
     let w = body.angular_velocity;
     let angle = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt() * t;
     let q = body.rotation;
-    if angle <= 0.0 {
+    if angle == 0.0 {
         return (position, q);
     }
     let scale = (0.5 * angle).sin() / (angle / t);

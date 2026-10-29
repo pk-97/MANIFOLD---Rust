@@ -2,10 +2,14 @@
 //! box of cells advanced on the GPU once a tick of the World's clock (see
 //! docs/SMOKE_AND_FIRE_MAP.md). The kernels are in `shaders/gas_step.wgsl`.
 //!
-//! The box floor is a wall; the sides and top are open. The fields stay on
-//! the GPU. The node publishes the packed state and velocity of every cell as
-//! provided arrays, and reads the flames' light back from a ring of small
-//! buffers, two frames late.
+//! The box floor is a wall; the sides and top are open. The scene's Colliders
+//! and Bodies are solids the air flows round and a moving body pushes: the
+//! gas takes them from the water that owns the World, as a second water
+//! does, or from the World itself when no water owns it
+//! (`liquid::coupling::SharedSolids`). The fields stay on the GPU. The node
+//! publishes the packed state and velocity of every cell as provided arrays,
+//! and reads the flames' light back from a ring of small buffers, two frames
+//! late.
 
 use std::borrow::Cow;
 use std::fmt::Display;
@@ -25,11 +29,16 @@ use manifold_node_engine::scene::transform::Transform;
 use manifold_nodes_physics::force_lattice::{LatticeBuffers, LatticeUpload, felt_field};
 use manifold_nodes_physics::hits::{TakesHits, TakesHitsRegistration};
 use manifold_nodes_physics::tick_sampled::{TickSampled, TickSampledRegistration};
-use manifold_physics::clock::{LiveLoad, SimulationClock};
+use manifold_physics::clock::{ClockFrame, LiveLoad, SimulationClock};
 use manifold_physics::force_lattice::{ForceLattice, TickForces};
 use manifold_physics::input::{AppliedEvent, EventStamp};
 use manifold_physics::tick_hits::TickHits;
 use manifold_physics::{FieldValue, PlayedTime, Seconds, TickStamp, VectorField};
+use manifold_water_liquid::bodies::{
+    BodiesStatus, COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBodies, LiquidShape,
+};
+use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
+use manifold_water_liquid::coupling::{LiquidRigidOwner, SharedSolids, SharesSolids};
 
 /// Most cells along one axis of the box.
 const MAX_AXIS_CELLS: u32 = 512;
@@ -62,23 +71,28 @@ const LIGHT_FIXED_SCALE: f32 = 16384.0;
 const BLACKBODY_BYTES: u64 = BLACKBODY_ENTRIES as u64 * 16;
 
 /// The shader's constants, composed ahead of the kernels so the Rust values
-/// stay the only copy.
-fn shader_constants() -> String {
+/// stay the only copy. `solids` builds the kernels that see the scene's
+/// solids.
+fn shader_constants(solids: bool) -> String {
     format!(
         "const BLACKBODY_ENTRIES: u32 = {BLACKBODY_ENTRIES}u;\n\
          const BLACKBODY_MIN_KELVIN: f32 = {BLACKBODY_MIN_KELVIN:?};\n\
          const BLACKBODY_MAX_KELVIN: f32 = {BLACKBODY_MAX_KELVIN:?};\n\
          const LIGHT_FIXED_SCALE: f32 = {LIGHT_FIXED_SCALE:?};\n\
-         const LIGHT_WORDS: u32 = {LIGHT_WORDS}u;\n"
+         const LIGHT_WORDS: u32 = {LIGHT_WORDS}u;\n\
+         const SOLIDS: bool = {solids};\n"
     )
 }
 
-static SHADER: LazyLock<String> = LazyLock::new(|| {
-    format!(
-        "{}\n{}",
-        shader_constants(),
-        include_str!("shaders/gas_step.wgsl")
-    )
+/// The kernels without solids, then with them.
+static SHADERS: LazyLock<[String; 2]> = LazyLock::new(|| {
+    [false, true].map(|solids| {
+        format!(
+            "{}\n{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{COLLIDER_BVH}\n{}",
+            shader_constants(solids),
+            include_str!("shaders/gas_step.wgsl")
+        )
+    })
 });
 
 macro_rules! gas_param {
@@ -365,7 +379,11 @@ struct GasUniforms {
     force_base: u32,
     impulse_on: u32,
     impulse_base: u32,
+    solid_base: u32,
+    solid_count: u32,
     pad2: u32,
+    pad3: u32,
+    pad4: u32,
 }
 
 impl GasUniforms {
@@ -412,7 +430,11 @@ impl GasUniforms {
             force_base: step.forces.unwrap_or(0) * nodes,
             impulse_on: u32::from(step.impulses.is_some()),
             impulse_base: step.impulses.unwrap_or(0) * nodes,
+            solid_base: step.solids.map_or(0, |solids| solids.base),
+            solid_count: step.solids.map_or(0, |solids| solids.count),
             pad2: 0,
+            pad3: 0,
+            pad4: 0,
         }
     }
 }
@@ -478,8 +500,14 @@ pub struct GasBuffers {
     velocity_out: GpuBuffer,
     lights: [GpuBuffer; RING],
     blackbody: GpuBuffer,
-    /// What the force binding holds while no scene force reaches the gas.
+    /// What the force and solid bindings hold while nothing reaches them.
     no_forces: GpuBuffer,
+    /// Two words a cell: the solid there, while the scene has solids.
+    solid: Option<GpuBuffer>,
+    /// The static solids `solid` holds, by [`static_hash`].
+    static_written: Option<u64>,
+    /// One word: where the source sits on the static solids.
+    source_floor: GpuBuffer,
 }
 
 impl GasBuffers {
@@ -526,7 +554,40 @@ impl GasBuffers {
             ],
             blackbody,
             no_forces: make(32, BufferUse::Gpu)?,
+            solid: None,
+            static_written: None,
+            source_floor: make(16, BufferUse::Gpu)?,
         })
+    }
+
+    /// Keep the solid field while the scene has solids, admitted against the
+    /// World's budget; drop it when it has none.
+    fn keep_solid(
+        &mut self,
+        device: &GpuDevice,
+        geometry: &GasGeometry,
+        wanted: bool,
+    ) -> Result<(), String> {
+        if !wanted {
+            self.solid = None;
+            self.static_written = None;
+            return Ok(());
+        }
+        if self.solid.is_none() {
+            let bytes = geometry.cells() * 8;
+            manifold_node_engine::load::expand::admit_world_bytes(
+                device.modifier_memory_snapshot(),
+                bytes,
+            )
+            .map_err(|error| refusal(geometry, bytes, error))?;
+            self.solid = Some(
+                device
+                    .try_create_buffer(bytes, BufferUse::Gpu)
+                    .map_err(|error| refusal(geometry, bytes, error))?,
+            );
+            self.static_written = None;
+        }
+        Ok(())
     }
 }
 
@@ -546,12 +607,15 @@ pub struct Pipelines {
     clear_sums: GpuComputePipeline,
     publish: GpuComputePipeline,
     clear: GpuComputePipeline,
+    /// The kernels that write the solid field, built with the solids only.
+    solids_static: Option<GpuComputePipeline>,
+    solids: Option<GpuComputePipeline>,
 }
 
 impl Pipelines {
-    fn build(device: &GpuDevice) -> Self {
-        let make =
-            |entry: &str| device.create_compute_pipeline(SHADER.as_str(), entry, "node.gas_volume");
+    fn build(device: &GpuDevice, solids: bool) -> Self {
+        let source = SHADERS[usize::from(solids)].as_str();
+        let make = |entry: &str| device.create_compute_pipeline(source, entry, "node.gas_volume");
         Self {
             advect: make("cs_advect"),
             advect_back: make("cs_advect_back"),
@@ -567,6 +631,8 @@ impl Pipelines {
             clear_sums: make("cs_clear_sums"),
             publish: make("cs_publish"),
             clear: make("cs_clear"),
+            solids_static: solids.then(|| make("cs_solids_static")),
+            solids: solids.then(|| make("cs_solids")),
         }
     }
 }
@@ -598,7 +664,8 @@ fn binding_list<'a>(
     roles: Roles,
     light: &'a GpuBuffer,
     lattices: [&'a GpuBuffer; 2],
-) -> [GpuBinding<'a>; 16] {
+    solids: &SolidBuffers<'a>,
+) -> [GpuBinding<'a>; 23] {
     let bind = |binding: u32, buffer: &'a GpuBuffer| GpuBinding::Buffer {
         binding,
         buffer,
@@ -624,7 +691,49 @@ fn binding_list<'a>(
         bind(13, &buffers.blackbody),
         bind(14, lattices[0]),
         bind(15, lattices[1]),
+        bind(16, solids.bodies),
+        bind(17, solids.shapes),
+        bind(18, solids.atlas),
+        bind(19, solids.nodes),
+        bind(20, solids.triangles),
+        bind(21, solids.cells),
+        bind(22, &buffers.source_floor),
     ]
+}
+
+/// What the solid bindings hold: the scene's bodies, shapes, lattices and
+/// trees and the solid field, or the placeholder while it has none.
+struct SolidBuffers<'a> {
+    bodies: &'a GpuBuffer,
+    shapes: &'a GpuBuffer,
+    atlas: &'a GpuBuffer,
+    nodes: &'a GpuBuffer,
+    triangles: &'a GpuBuffer,
+    cells: &'a GpuBuffer,
+}
+
+impl<'a> SolidBuffers<'a> {
+    fn of(buffers: &'a GasBuffers, bodies: &'a LiquidBodyBuffers) -> Self {
+        let none = &buffers.no_forces;
+        match (&buffers.solid, bodies.bodies()) {
+            (Some(cells), Some(rows)) => Self {
+                bodies: rows,
+                shapes: bodies.shapes().unwrap_or(none),
+                atlas: bodies.atlas().unwrap_or(none),
+                nodes: bodies.collider_nodes().unwrap_or(none),
+                triangles: bodies.collider_triangles().unwrap_or(none),
+                cells,
+            },
+            _ => Self {
+                bodies: none,
+                shapes: none,
+                atlas: none,
+                nodes: none,
+                triangles: none,
+                cells: none,
+            },
+        }
+    }
 }
 
 /// One dispatch over the whole box, then a barrier for the next one.
@@ -764,7 +873,8 @@ manifold_node_engine::primitive! {
     boundary_reason: CrossFrameState,
     extra_fields: {
         buffers: Option<GasBuffers> = None,
-        pipelines: Option<Pipelines> = None,
+        // Without solids, then with them.
+        pipelines: Option<[Pipelines; 2]> = None,
         // Which of the three velocity and state buffers holds the last result.
         current: usize = 0,
         // The World's fixed ticks: the gas steps once a tick, so a force or
@@ -784,6 +894,12 @@ manifold_node_engine::primitive! {
         impulses: Vec<[f32; 4]> = Vec::new(),
         impulses_dirty: bool = false,
         lattices: LatticeBuffers = LatticeBuffers::default(),
+        // The scene's Colliders and Bodies, handed over before the gas runs;
+        // their shapes and lattices at the gas's cell, a row per body per
+        // tick, and the GPU copies.
+        solids: SharedSolids = SharedSolids::default(),
+        bodies: LiquidBodies = LiquidBodies::default(),
+        body_buffers: LiquidBodyBuffers = LiquidBodyBuffers::default(),
     },
 }
 
@@ -802,13 +918,49 @@ fn publish(ctx: &mut EffectNodeContext<'_, '_>, geometry: &GasGeometry, light: &
     }
 }
 
-/// One tick of a frame: its simulated seconds and the force and impulse
-/// lattices it reads, by index, if any.
+/// One tick of a frame: its simulated seconds, the force and impulse
+/// lattices it reads, by index, and its solids' rows, if any.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Step {
     dt: f32,
     forces: Option<u32>,
     impulses: Option<u32>,
+    solids: Option<StepSolids>,
+}
+
+/// A tick's body rows: `count` of them from row `base`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StepSolids {
+    base: u32,
+    count: u32,
+}
+
+/// The Collider meshes as the first tick places them, every shape, the
+/// trees' sizes and the box: a change of any rewrites the static solids.
+fn static_hash(bodies: &LiquidBodies, geometry: &GasGeometry) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    let shapes = bodies.shapes();
+    bytemuck::cast_slice::<LiquidShape, u8>(shapes).hash(&mut hasher);
+    bodies.collider_nodes().len().hash(&mut hasher);
+    bodies.collider_triangles().len().hash(&mut hasher);
+    for row in &bodies.last_rows()[..bodies.count().min(bodies.last_rows().len())] {
+        let shape = row.accel_shape[3];
+        if shape >= 0.0 && shapes.get(shape as usize).is_some_and(|s| s.tree == 1) {
+            bytemuck::bytes_of(row).hash(&mut hasher);
+        }
+    }
+    geometry.origin.map(f32::to_bits).hash(&mut hasher);
+    geometry.dims.hash(&mut hasher);
+    geometry.cell.to_bits().hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Simulated seconds of the frame's tick `tick`.
+fn tick_seconds(frame: &ClockFrame, tick: u32) -> f32 {
+    frame
+        .interval(u64::from(tick))
+        .map_or(0.0, |interval| interval.duration().0) as f32
 }
 
 /// The force lattice over the box: a node every `FORCE_LATTICE_STRIDE` cells
@@ -846,19 +998,68 @@ impl GasVolume {
         self.forces
             .prepare(lattice, field.as_ref(), &self.clock, &frame)?;
         let hit_ticks = self.lay_impulses(lattice, frame.first_sequence, frame.ticks)?;
+        let solids = self.lay_solids(geometry.cell, &frame, ctx.sim_step.offline());
+        // The next frame takes the solids anew.
+        self.solids.used();
+        let solids = solids?;
         let lattices = self.forces.lattices() as u32;
         self.steps.clear();
         for tick in 0..frame.ticks {
-            let seconds = frame
-                .interval(u64::from(tick))
-                .map_or(0.0, |interval| interval.duration().0) as f32;
             self.steps.push(Step {
-                dt: seconds.clamp(0.0, MAX_STEP_SECONDS),
+                dt: tick_seconds(&frame, tick).clamp(0.0, MAX_STEP_SECONDS),
                 forces: (lattices > 0).then(|| tick.min(lattices - 1)),
                 impulses: hit_ticks.then_some(tick),
+                solids: solids.map(|count| StepSolids {
+                    base: tick * count,
+                    count,
+                }),
             });
         }
         Ok(frame.restarted)
+    }
+
+    /// Lay this frame's solids: their shapes at the gas's cell and a row per
+    /// body per tick, each carried to its tick's start. Returns the bodies a
+    /// tick, or None when the scene has none, the frame has no tick, or
+    /// (live) while a shape's tree is still building.
+    fn lay_solids(
+        &mut self,
+        cell: f32,
+        frame: &ClockFrame,
+        offline: bool,
+    ) -> Result<Option<u32>, String> {
+        if let Some(reason) = self.solids.refused() {
+            return Err(format!("Gas Volume: the scene's solids: {reason}"));
+        }
+        if self.solids.geometries().is_empty() || frame.ticks == 0 {
+            return Ok(None);
+        }
+        if self
+            .bodies
+            .prepare(&[], self.solids.geometries(), cell, offline)?
+            == BodiesStatus::Pending
+        {
+            return Ok(None);
+        }
+        self.bodies
+            .rows(frame.first_sequence, frame.ticks, self.solids.rows())?;
+        // The owner water's rows sit at the first tick's start; a
+        // free-running World's at the frame's end.
+        let mut seconds = if self.solids.at_frame_end() {
+            -(0..frame.ticks)
+                .map(|tick| tick_seconds(frame, tick))
+                .sum::<f32>()
+        } else {
+            0.0
+        };
+        for tick in 0..frame.ticks {
+            if seconds != 0.0 {
+                self.bodies
+                    .set_coupled_rows(tick as usize, self.solids.rows_after(seconds))?;
+            }
+            seconds += tick_seconds(frame, tick);
+        }
+        Ok(Some(self.bodies.count() as u32))
     }
 
     /// Lay this frame's hits, one impulse lattice per tick of the frame from
@@ -943,8 +1144,10 @@ impl GasVolume {
         offline: bool,
     ) -> Result<(), String> {
         let device = gpu.device;
+        // Both sets at once, so a solid joining mid-show never waits on a
+        // build.
         if self.pipelines.is_none() {
-            self.pipelines = Some(Pipelines::build(device));
+            self.pipelines = Some([false, true].map(|solids| Pipelines::build(device, solids)));
         }
         let resized = self
             .buffers
@@ -962,6 +1165,20 @@ impl GasVolume {
                 geometry.dims[2]
             );
         }
+        let first_solids = self.steps.iter().find_map(|step| step.solids);
+        let stored = self.buffers.as_mut().expect("buffers were just allocated");
+        stored.keep_solid(device, geometry, first_solids.is_some())?;
+        // The Collider meshes are read through their trees, so they are
+        // written only when they or the box change; the moving solids, a
+        // lattice each, every tick. With neither, the rows stay as they are.
+        let static_hash = first_solids.map(|_| static_hash(&self.bodies, geometry));
+        let rewrite_static = static_hash.is_some() && stored.static_written != static_hash;
+        let moving = first_solids.is_some() && self.bodies.shapes().iter().any(|s| s.tree != 1);
+        if rewrite_static || moving {
+            self.body_buffers
+                .upload(gpu, &self.bodies, true, "node.gas_volume.bodies")?;
+        }
+        stored.static_written = static_hash;
         let clear = resized || restart;
         if clear {
             self.current = 0;
@@ -973,11 +1190,13 @@ impl GasVolume {
         let lattice = force_lattice(geometry);
         self.upload_lattices(gpu, lattice, offline)?;
         let buffers = self.buffers.as_ref().expect("buffers were just allocated");
-        let pipelines = self.pipelines.as_ref().expect("pipelines were just built");
+        let pipelines = &self.pipelines.as_ref().expect("pipelines were just built")
+            [usize::from(first_solids.is_some())];
         let lattices = [
             self.lattices.forces().unwrap_or(&buffers.no_forces),
             self.lattices.impulses().unwrap_or(&buffers.no_forces),
         ];
+        let solids = SolidBuffers::of(buffers, &self.body_buffers);
 
         // The light written two frames ago, once its frame has retired.
         let clock = device.frame_clock();
@@ -1000,6 +1219,7 @@ impl GasVolume {
             dt: 0.0,
             forces: None,
             impulses: None,
+            solids: first_solids,
         };
 
         if clear {
@@ -1013,6 +1233,7 @@ impl GasVolume {
                     roles,
                     light,
                     lattices,
+                    &solids,
                 );
                 pass(
                     enc,
@@ -1027,6 +1248,27 @@ impl GasVolume {
         let mut last = self.current;
         let mut uniforms =
             GasUniforms::new(geometry, settings, self.sim_time as f32, lattice, still);
+        if rewrite_static {
+            enc.clear_buffer(&buffers.source_floor);
+            let bindings = binding_list(
+                bytemuck::bytes_of(&uniforms),
+                buffers,
+                Roles::new(last, (last + 1) % RING),
+                light,
+                lattices,
+                &solids,
+            );
+            pass(
+                enc,
+                pipelines
+                    .solids_static
+                    .as_ref()
+                    .expect("solids build their kernels"),
+                &bindings,
+                groups,
+                "node.gas_volume.solids_static",
+            );
+        }
         for &step in self.steps.iter().filter(|step| step.dt > 0.0) {
             uniforms = GasUniforms::new(geometry, settings, self.sim_time as f32, lattice, step);
             let uniform_bytes = bytemuck::bytes_of(&uniforms);
@@ -1037,7 +1279,20 @@ impl GasVolume {
                 Roles { input: last, a, b },
                 light,
                 lattices,
+                &solids,
             );
+            if moving {
+                pass(
+                    enc,
+                    pipelines
+                        .solids
+                        .as_ref()
+                        .expect("solids build their kernels"),
+                    &advection,
+                    groups,
+                    "node.gas_volume.solids",
+                );
+            }
             pass(
                 enc,
                 &pipelines.advect,
@@ -1059,8 +1314,14 @@ impl GasVolume {
                 face_groups,
                 "node.gas_volume.maccormack",
             );
-            let working =
-                binding_list(uniform_bytes, buffers, Roles::new(last, b), light, lattices);
+            let working = binding_list(
+                uniform_bytes,
+                buffers,
+                Roles::new(last, b),
+                light,
+                lattices,
+                &solids,
+            );
             // Swirl at 0 confines nothing: its two passes don't run.
             let swirl = settings.vorticity > 0.0;
             for (pipeline, grid, label, runs) in [
@@ -1123,6 +1384,7 @@ impl GasVolume {
             Roles::new(self.current, last),
             light,
             lattices,
+            &solids,
         );
         pass(
             enc,
@@ -1229,6 +1491,18 @@ impl TakesHits for GasVolume {
 
 inventory::submit! { TakesHitsRegistration::new::<GasVolume>() }
 
+/// A gas owns no rigid world: it takes the scene's solids from the water
+/// that does, or from the World.
+impl SharesSolids for GasVolume {
+    fn rigid_owner(&self) -> Option<&LiquidRigidOwner> {
+        None
+    }
+
+    fn shared_solids_mut(&mut self) -> &mut SharedSolids {
+        &mut self.solids
+    }
+}
+
 impl Primitive for GasVolume {
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(port, "state" | "velocity")
@@ -1299,8 +1573,9 @@ impl Primitive for GasVolume {
 mod tests {
     use super::*;
 
-    fn valid_shader() -> naga::Module {
-        let module = naga::front::wgsl::parse_str(&SHADER).expect("gas shader parses");
+    fn valid_shader(solids: bool) -> naga::Module {
+        let module =
+            naga::front::wgsl::parse_str(&SHADERS[usize::from(solids)]).expect("gas shader parses");
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -1312,27 +1587,30 @@ mod tests {
 
     #[test]
     fn shader_is_valid_wgsl_with_every_entry_point() {
-        let module = valid_shader();
-        for entry in [
-            "cs_advect",
-            "cs_advect_back",
-            "cs_maccormack",
-            "cs_sources",
-            "cs_forces",
-            "cs_curl",
-            "cs_confine",
-            "cs_divergence",
-            "cs_pressure_red",
-            "cs_pressure_black",
-            "cs_project",
-            "cs_clear_sums",
-            "cs_publish",
-            "cs_clear",
-        ] {
-            assert!(
-                module.entry_points.iter().any(|point| point.name == entry),
-                "missing {entry}"
-            );
+        for module in [valid_shader(false), valid_shader(true)] {
+            for entry in [
+                "cs_advect",
+                "cs_advect_back",
+                "cs_maccormack",
+                "cs_sources",
+                "cs_forces",
+                "cs_curl",
+                "cs_confine",
+                "cs_divergence",
+                "cs_pressure_red",
+                "cs_pressure_black",
+                "cs_project",
+                "cs_clear_sums",
+                "cs_publish",
+                "cs_clear",
+                "cs_solids_static",
+                "cs_solids",
+            ] {
+                assert!(
+                    module.entry_points.iter().any(|point| point.name == entry),
+                    "missing {entry}"
+                );
+            }
         }
     }
 
@@ -1377,10 +1655,14 @@ mod tests {
             force_base,
             impulse_on,
             impulse_base,
+            solid_base,
+            solid_count,
             pad2,
+            pad3,
+            pad4,
         );
-        assert_eq!(std::mem::size_of::<GasUniforms>(), 176);
-        let module = valid_shader();
+        assert_eq!(std::mem::size_of::<GasUniforms>(), 192);
+        let module = valid_shader(true);
         let params = module
             .types
             .iter()

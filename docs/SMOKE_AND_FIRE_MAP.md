@@ -38,6 +38,18 @@ The gas runs the World's fixed ticks (`SimulationClock`, at most 1/20 s a
 tick), so a force or a hit lands on the same step at any frame rate, and
 World Speed and Reset reach it as they reach water.
 
+0. Solids: the World's Colliders and Bodies, taken as a second water takes
+   them (`SharedSolids`): from the water that owns the World, or straight
+   from the World when no water does (`WorldSolidsPair`, rows at the end of
+   the frame's ticks, carried back to each tick). A Collider's mesh is
+   voxelised through its tree only when it or the box changes; bodies and
+   hulls are sampled from their lattices each tick and give the cell their
+   velocity. A solid cell holds no gas, its faces move with the solid, and
+   the solve leaves it out (the count of open neighbours rides in the low
+   bits of the divergence). The source sits on the static solids under its
+   centre, so a box floor sunk in the ground emits from the ground's top.
+   The kernels are built twice, with and without solids: smoke with no
+   solid runs none of their code.
 1. Advect velocity and state: MacCormack with the min/max clamp. Air that
    comes in through an open face arrives still, so no wind at a face can
    feed itself (with the edge's own velocity, a crosswind grew over seconds
@@ -114,6 +126,6 @@ not cells. High is the live default; Extra High is for renders.
 
 ## Not built
 
-Solids pushing smoke, water putting fire out, fire on a mesh's surface,
+Smoke pushing bodies back, water putting fire out, fire on a mesh's surface,
 smoke casting shadows on the scene, nodes owning 3D textures (the solver
 publishes packed arrays and the renderer unpacks them).

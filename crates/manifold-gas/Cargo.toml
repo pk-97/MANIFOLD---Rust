@@ -10,6 +10,7 @@ manifold-gpu = { path = "../manifold-gpu" }
 manifold-node-engine = { path = "../manifold-node-engine" }
 manifold-nodes-physics = { path = "../manifold-nodes-physics" }
 manifold-physics = { path = "../manifold-physics" }
+manifold-water-liquid = { path = "../manifold-water-liquid" }
 bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 inventory = "0.3"
 log = { workspace = true }

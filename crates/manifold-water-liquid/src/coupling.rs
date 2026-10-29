@@ -24,7 +24,6 @@ use manifold_physics::{BodyHandle, BodyImpulse, PhysicsWorld, Seconds, TickStamp
 
 use super::bodies::{BodySupports, LiquidBody, pack_supports, unpack_supports};
 use crate::fluid_role::PreparedFluidGeometry;
-#[cfg(test)]
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_node_engine::scene::transform::Transform;
@@ -286,7 +285,17 @@ impl LiquidRigidOwner {
             bodies,
             geometries,
             uncoupled,
-        } = bind(&rigid, &walled, colliders, capacity, known)?;
+        } = bind(
+            &rigid,
+            &walled,
+            world_bodies(
+                &rigid,
+                |slot| colliders.contains_body(slot),
+                colliders.groups(),
+            ),
+            capacity,
+            known,
+        )?;
         let mut frame = RigidFrame::default();
         layout.prepare_output(&mut frame);
         layout.capture(world, &mut frame)?;
@@ -445,7 +454,11 @@ impl LiquidRigidOwner {
         } = bind(
             &self.rigid,
             &self.walled,
-            &self.colliders,
+            world_bodies(
+                &self.rigid,
+                |slot| self.colliders.contains_body(slot),
+                self.colliders.groups(),
+            ),
             self.capacity,
             known,
         )?;
@@ -705,34 +718,43 @@ fn fixed_motion(before: &LiquidBody, now: &mut LiquidBody, dt: f32) {
     }
 }
 
-/// Each colliding body and copy the liquid takes, in slot order then each
-/// group's copies, up to `capacity`, with its hull: `known` hands back a
-/// hull already built, else it is built from the world. Returns the bodies,
-/// their hulls, and how many colliding bodies are past the capacity.
-fn bind(
-    rigid: &RigidSimulation,
-    walled: &RigidSceneInputs,
-    colliders: &RigidImpulseTargets,
-    capacity: usize,
-    known: impl Fn(Source, BodyHandle, u32) -> Option<(Arc<PreparedFluidGeometry>, f32)>,
-) -> Result<Bound, String> {
-    let world = rigid
-        .native_world()
-        .ok_or("Liquid coupling: the rigid world was not prepared")?;
-    let mut selected: Vec<(BodyHandle, Source)> = rigid
+/// The world's installed bodies whose slots `body` selects, in slot order,
+/// then the copies of each of `groups`.
+fn world_bodies<'a>(
+    rigid: &'a RigidSimulation,
+    body: impl Fn(usize) -> bool + 'a,
+    groups: impl Iterator<Item = usize> + 'a,
+) -> impl Iterator<Item = (BodyHandle, Source)> + 'a {
+    rigid
         .native_handles()
         .iter()
         .enumerate()
-        .filter(|(index, _)| colliders.contains_body(*index))
+        .filter(move |(index, _)| body(*index))
         .filter_map(|(index, handle)| handle.map(|handle| (handle, Source::Body(index))))
-        .chain(colliders.groups().flat_map(|group| {
+        .chain(groups.flat_map(|group| {
             rigid
                 .native_copy_handles(group)
                 .iter()
                 .flatten()
                 .map(move |&handle| (handle, Source::Group(group)))
         }))
-        .collect();
+}
+
+/// Each colliding body and copy `colliders` selects, in slot order then each
+/// group's copies, up to `capacity`, with its hull: `known` hands back a
+/// hull already built, else it is built from the world. Returns the bodies,
+/// their hulls, and how many colliding bodies are past the capacity.
+fn bind(
+    rigid: &RigidSimulation,
+    walled: &RigidSceneInputs,
+    colliders: impl Iterator<Item = (BodyHandle, Source)>,
+    capacity: usize,
+    known: impl Fn(Source, BodyHandle, u32) -> Option<(Arc<PreparedFluidGeometry>, f32)>,
+) -> Result<Bound, String> {
+    let world = rigid
+        .native_world()
+        .ok_or("Liquid coupling: the rigid world was not prepared")?;
+    let mut selected: Vec<(BodyHandle, Source)> = colliders.collect();
     let uncoupled = selected.len().saturating_sub(capacity);
     selected.truncate(capacity);
     let mut bodies = Vec::with_capacity(selected.len());
@@ -1065,12 +1087,14 @@ fn quaternion_angle(a: [f32; 4], b: [f32; 4]) -> f32 {
         .atan2(r[3].abs())
 }
 
-/// The solids one Water's rigid owner shares with every other Water in its
-/// scene (SCENE_DOCUMENT_DESIGN.md section 7.8 (Physics and collision
-/// shapes)): each Collider's and Body's hull and its row at the first tick
-/// of this frame, held to its motion (no inverse mass or inertia). The other
-/// water flows round them; only the owner's water pushes the bodies back,
-/// since Box3D steps inside one liquid's ticks.
+/// The solids one Water's rigid owner shares with every other Water and
+/// every Smoke and Fire in its scene (SCENE_DOCUMENT_DESIGN.md section 7.8
+/// (Physics and collision shapes)): each Collider's and Body's hull and its
+/// row at the first tick of this frame, held to its motion (no inverse mass
+/// or inertia). The others flow round them; only the owner's water pushes
+/// the bodies back, since Box3D steps inside one liquid's ticks. With no
+/// water to own it, the World runs free and a gas takes its solids from it
+/// ([`Self::copy_from_world`]).
 #[derive(Default)]
 pub struct SharedSolids {
     geometries: Vec<Arc<PreparedFluidGeometry>>,
@@ -1079,8 +1103,30 @@ pub struct SharedSolids {
     uncoupled: usize,
     /// Copied from the owner this frame, before this water runs.
     fresh: bool,
+    /// The rows are a free-running world's latest state, at the end of this
+    /// frame's ticks, not the owner's at the first tick's start.
+    at_frame_end: bool,
+    /// The free-running world's bodies the hulls belong to, in row order.
+    world: Vec<Coupled>,
+    /// Why the free-running world's solids could not be taken this frame.
+    refused: Option<String>,
     /// Scratch for a later tick's rows.
     advanced: Vec<LiquidBody>,
+}
+
+/// A body held to its motion: no inverse mass or inertia, so nothing that
+/// takes its row pushes it.
+fn held(row: &LiquidBody) -> LiquidBody {
+    let mut held = *row;
+    held.position_inv_mass[3] = 0.0;
+    for inertia in [
+        &mut held.inv_inertia_x,
+        &mut held.inv_inertia_y,
+        &mut held.inv_inertia_z,
+    ] {
+        inertia[..3].fill(0.0);
+    }
+    held
 }
 
 impl SharedSolids {
@@ -1091,23 +1137,97 @@ impl SharedSolids {
         self.contacts.clear();
         self.uncoupled = 0;
         self.fresh = true;
+        self.at_frame_end = false;
+        self.world.clear();
+        self.refused = None;
         let Some(owner) = owner else { return };
         self.geometries.extend(owner.geometries().iter().cloned());
-        self.rows.extend(owner.rows().iter().map(|row| {
-            let mut held = *row;
-            held.position_inv_mass[3] = 0.0;
-            for inertia in [
-                &mut held.inv_inertia_x,
-                &mut held.inv_inertia_y,
-                &mut held.inv_inertia_z,
-            ] {
-                inertia[..3].fill(0.0);
-            }
-            held
-        }));
+        self.rows.extend(owner.rows().iter().map(held));
         self.contacts
             .resize(self.rows.len(), [[0.0; 4]; super::bodies::SUPPORT_VEC4S]);
         self.uncoupled = owner.uncoupled();
+    }
+
+    /// Take a free-running world's solids for this frame: every body and copy
+    /// it holds, up to the bodies a liquid holds, held to their motion at the
+    /// world's latest tick. A hull is built once and kept while its body's
+    /// shape is unchanged; a world not built yet has none. A failure leaves
+    /// none and says why ([`Self::refused`]).
+    pub fn copy_from_world(&mut self, rigid: &RigidSimulation, inputs: &RigidSceneInputs) {
+        self.rows.clear();
+        self.contacts.clear();
+        self.fresh = true;
+        self.at_frame_end = true;
+        self.refused = self.take_world(rigid, inputs).err();
+        if self.refused.is_some() {
+            self.world.clear();
+            self.geometries.clear();
+            self.rows.clear();
+            self.contacts.clear();
+        }
+    }
+
+    fn take_world(
+        &mut self,
+        rigid: &RigidSimulation,
+        inputs: &RigidSceneInputs,
+    ) -> Result<(), String> {
+        let Some(world) = rigid.native_world() else {
+            self.world.clear();
+            self.geometries.clear();
+            self.uncoupled = 0;
+            return Ok(());
+        };
+        let groups = inputs.groups.len();
+        if !self.binds_world(rigid, world, groups) {
+            let previous = std::mem::take(&mut self.world);
+            let hulls = std::mem::take(&mut self.geometries);
+            let known = |source: Source, _: BodyHandle, revision: u32| {
+                previous
+                    .iter()
+                    .zip(&hulls)
+                    .find(|(body, _)| body.source == source && body.revision == revision)
+                    .map(|(body, hull)| (Arc::clone(hull), body.face_area))
+            };
+            let every = world_bodies(rigid, |_| true, 0..groups);
+            let bound = bind(rigid, inputs, every, MAX_LIQUID_BODIES, known)?;
+            self.world = bound.bodies;
+            self.geometries = bound.geometries;
+            self.uncoupled = bound.uncoupled;
+        }
+        let mut crowded = 0;
+        capture_rows(
+            world,
+            &self.world,
+            &mut self.rows,
+            &mut self.contacts,
+            &mut crowded,
+        )?;
+        for row in &mut self.rows {
+            *row = held(row);
+        }
+        Ok(())
+    }
+
+    /// Whether the bound world bodies are still the world's, in the order
+    /// [`bind`] takes them, each with the shape its hull was built from.
+    fn binds_world(&self, rigid: &RigidSimulation, world: &PhysicsWorld, groups: usize) -> bool {
+        let mut current = world_bodies(rigid, |_| true, 0..groups).take(MAX_LIQUID_BODIES);
+        self.world.iter().all(|body| {
+            current.next() == Some((body.handle, body.source))
+                && world.shape_revision(body.handle).ok() == Some(body.revision)
+        }) && current.next().is_none()
+    }
+
+    /// Why the free-running world's solids could not be taken this frame.
+    pub fn refused(&self) -> Option<&str> {
+        self.refused.as_deref()
+    }
+
+    /// Whether the rows sit at the end of this frame's ticks (a free-running
+    /// world's), not at its first tick's start (the owner water's).
+    pub fn at_frame_end(&self) -> bool {
+        self.at_frame_end
     }
 
     /// The hulls this frame, or none when the owner did not run first.
@@ -1128,8 +1248,9 @@ impl SharedSolids {
         self.uncoupled
     }
 
-    /// The rows `seconds` after the first tick's start, each body carried
-    /// along its motion: a later tick of this frame starts there.
+    /// The rows `seconds` after they were taken (before, when negative),
+    /// each body carried along its motion: a later tick of this frame starts
+    /// there.
     pub fn rows_after(&mut self, seconds: f32) -> &[LiquidBody] {
         self.advanced.clear();
         self.advanced.extend(self.rows.iter().map(|row| {

@@ -1,7 +1,8 @@
 // The gas solver's step: one box of cells holding smoke or fire, advanced one
 // frame by the kernels below in command order (the host composes the
-// BLACKBODY_*, LIGHT_FIXED_SCALE and LIGHT_WORDS constants ahead of this
-// source).
+// BLACKBODY_*, LIGHT_FIXED_SCALE, LIGHT_WORDS and SOLIDS constants ahead of
+// this source; it builds the kernels once with SOLIDS and once without, so a
+// box with no solid in the scene runs none of their code).
 //
 // Cell (x, y, z) is element i = x + nx (y + ny z) of every cell field; its
 // centre is origin + (c + 1/2) h. Velocity is staggered (a MAC grid): node
@@ -11,7 +12,9 @@
 // one compact stencil and no cell-to-cell zigzag hides from the solve. The
 // floor (y = 0) is a wall, the sides and the top are open. Velocity is metres
 // per second, state is x density (soot), y temperature (0 ambient, 1 a hot
-// flame), z fuel and w flame.
+// flame), z fuel and w flame. A cell inside one of the scene's solids holds
+// no gas, its faces move with the solid, and the pressure solve treats it as
+// a wall.
 //
 // Roles rotate: the host names three velocity and three state buffers and
 // binds them as vel_in/state_in (last frame's result), vel_a/state_a and
@@ -58,7 +61,13 @@ struct Params {
     force_base: u32,
     impulse_on: u32,
     impulse_base: u32,
+    // The scene's solids this tick (SOLIDS): `solid_count` body rows from
+    // row `solid_base` of `bodies`.
+    solid_base: u32,
+    solid_count: u32,
     pad2: u32,
+    pad3: u32,
+    pad4: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -70,6 +79,9 @@ struct Params {
 @group(0) @binding(6) var<storage, read_write> state_b: array<vec4<f32>>;
 @group(0) @binding(7) var<storage, read_write> curl: array<vec4<f32>>;
 @group(0) @binding(8) var<storage, read_write> pressure: array<f32>;
+// With solids, a cell's divergence carries in its three lowest bits how many
+// of its six neighbours are not solid (cs_divergence): 0 for a cell the
+// pressure solve leaves alone. It costs the divergence a millionth of itself.
 @group(0) @binding(9) var<storage, read_write> divergence: array<f32>;
 // Two words per cell: density and temperature, then fuel and flame, each pair
 // packed as two halves. The velocity's pairs are (u, v) then (w, 0).
@@ -82,6 +94,60 @@ struct Params {
 @group(0) @binding(14) var<storage, read> forces: array<vec4<f32>>;
 // One vec4 a lattice node: a hit's velocity change in m/s (xyz).
 @group(0) @binding(15) var<storage, read> impulses: array<vec4<f32>>;
+
+// The scene's Colliders and Bodies as every solver that flows round them
+// reads them (liquid::bodies): a row per body per tick, its shape, the
+// shapes' distance lattices two halves a word, and a Collider mesh's tree.
+struct LiquidBody {
+    position_inv_mass: vec4<f32>,
+    rotation: vec4<f32>,
+    linear_velocity: vec4<f32>,
+    angular_velocity: vec4<f32>,
+    inv_inertia_x: vec4<f32>,
+    inv_inertia_y: vec4<f32>,
+    inv_inertia_z: vec4<f32>,
+    accel_shape: vec4<f32>,
+}
+
+struct LiquidShape {
+    origin_spacing: vec4<f32>,
+    dims_x: u32,
+    dims_y: u32,
+    dims_z: u32,
+    atlas_offset: u32,
+    scale_min: vec4<f32>,
+    tree_node: u32,
+    tree_triangle: u32,
+    tree: u32,
+    tree_pad: u32,
+}
+
+@group(0) @binding(16) var<storage, read> bodies: array<LiquidBody>;
+@group(0) @binding(17) var<storage, read> shapes: array<LiquidShape>;
+@group(0) @binding(18) var<storage, read> atlas: array<u32>;
+@group(0) @binding(19) var<storage, read> collider_nodes: array<vec4<f32>>;
+@group(0) @binding(20) var<storage, read> collider_triangles: array<vec4<f32>>;
+// Two words a cell: the solid's velocity there, (x, y) then (z, kind) as
+// halves. Kind 0 is air, 1 inside a Collider's mesh (cs_solids_static), 2
+// inside a body or a hull (cs_solids).
+@group(0) @binding(21) var<storage, read_write> solid: array<u32>;
+// The source sits on the static solids under it: one word, the box's height
+// in cells less the lowest air cell of the column through the source's
+// centre (cs_solids_static), so the largest is the lowest.
+@group(0) @binding(22) var<storage, read_write> source_floor: array<atomic<u32>>;
+
+fn liquid_atlas_half(index: u32) -> f32 {
+    let pair = unpack2x16float(atlas[index / 2u]);
+    return select(pair.x, pair.y, (index & 1u) == 1u);
+}
+
+fn cb_node(i: u32) -> vec4<f32> {
+    return collider_nodes[i];
+}
+
+fn cb_triangle(i: u32) -> vec4<f32> {
+    return collider_triangles[i];
+}
 
 // How fast a flame fades once its fuel is gone.
 const FLAME_SECONDS: f32 = 0.06;
@@ -363,6 +429,57 @@ fn centre_velocity_a(c: vec3<u32>) -> vec3<f32> {
     ));
 }
 
+// ---- Solids -------------------------------------------------------------------
+
+// Cell `i`'s solid: its velocity (xyz) and kind (w, 0 for air).
+fn solid_at(i: u32) -> vec4<f32> {
+    return vec4<f32>(unpack2x16float(solid[2u * i]), unpack2x16float(solid[2u * i + 1u]));
+}
+
+fn is_solid(i: u32) -> bool {
+    return SOLIDS && unpack2x16float(solid[2u * i + 1u]).y > 0.0;
+}
+
+// Whether the face normal to `axis` at node `c` touches a solid, and the
+// solid's velocity across it there (the mean of two solids).
+struct SolidFace {
+    touches: bool,
+    flow: f32,
+}
+
+fn solid_face(c: vec3<u32>, axis: u32) -> SolidFace {
+    var face = SolidFace(false, 0.0);
+    if !SOLIDS {
+        return face;
+    }
+    var sum = 0.0;
+    var count = 0.0;
+    if c[axis] < params.dims[axis] {
+        let s = solid_at(cell_index(c));
+        if s.w > 0.0 {
+            sum += s[axis];
+            count += 1.0;
+        }
+    }
+    if c[axis] > 0u {
+        let s = solid_at(cell_index(c - unit(axis)));
+        if s.w > 0.0 {
+            sum += s[axis];
+            count += 1.0;
+        }
+    }
+    face.touches = count > 0.0;
+    face.flow = sum / max(count, 1.0);
+    return face;
+}
+
+// The velocity across the face normal to `axis` at node `c` as the pressure
+// solve sees it: a face touching a solid moves with it.
+fn face_flow(c: vec3<u32>, axis: u32) -> f32 {
+    let face = solid_face(c, axis);
+    return select(vel_a[face_index(c)][axis], face.flow, face.touches);
+}
+
 // The eight lattice nodes round world point `p` and their trilinear
 // weights, clamped to the lattice.
 struct Corners {
@@ -524,15 +641,109 @@ fn cs_maccormack(@builtin(global_invocation_id) gid: vec3<u32>) {
     vel_b[f] = v;
 }
 
+// ---- Solids (each tick, before advection) -------------------------------------
+
+// Every cell air, or inside a Collider's mesh (kind 1, at rest): the meshes
+// are read through their trees, so this runs only when they or the box
+// change. The mesh is about the body's centre of mass, at its scale.
+@compute @workgroup_size(4, 4, 4)
+fn cs_solids_static(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !inside(gid) {
+        return;
+    }
+    let x = cell_centre(gid);
+    var kind = 0.0;
+    for (var b = 0u; b < params.solid_count; b++) {
+        let body = bodies[params.solid_base + b];
+        let shape_index = i32(body.accel_shape.w);
+        if shape_index < 0 {
+            continue;
+        }
+        let shape = shapes[u32(shape_index)];
+        if shape.tree != 1u {
+            continue;
+        }
+        let q = body.rotation;
+        let local = liquid_rotate(vec4<f32>(-q.xyz, q.w), x - body.position_inv_mass.xyz);
+        if cb_phi(shape.tree_node, shape.tree_triangle, local, 2.0 * params.h, 0.5 * params.h) < 0.0 {
+            kind = 1.0;
+            break;
+        }
+    }
+    let i = cell_index(gid);
+    solid[2u * i] = 0u;
+    solid[2u * i + 1u] = pack2x16float(vec2<f32>(0.0, kind));
+    if kind == 0.0 && gid.x == params.dims.x / 2u && gid.z == params.dims.z / 2u {
+        atomicMax(&source_floor[0], params.dims.y - gid.y);
+    }
+}
+
+// The moving solids at this tick's start: a cell inside a body or a
+// Collider's hull takes the velocity of the one it is deepest in (kind 2); a
+// cell inside a Collider's mesh keeps it, and the rest is air.
+@compute @workgroup_size(4, 4, 4)
+fn cs_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !inside(gid) {
+        return;
+    }
+    let i = cell_index(gid);
+    if unpack2x16float(solid[2u * i + 1u]).y == 1.0 {
+        return;
+    }
+    let x = cell_centre(gid);
+    var deepest = 0.0;
+    var velocity = vec3<f32>(0.0);
+    var kind = 0.0;
+    for (var b = 0u; b < params.solid_count; b++) {
+        let body = bodies[params.solid_base + b];
+        let shape_index = i32(body.accel_shape.w);
+        if shape_index < 0 {
+            continue;
+        }
+        let shape = shapes[u32(shape_index)];
+        if shape.tree == 1u {
+            continue;
+        }
+        let dims = vec3<u32>(shape.dims_x, shape.dims_y, shape.dims_z);
+        let g = liquid_lattice_coord(x, body.position_inv_mass.xyz, body.rotation, shape.origin_spacing, shape.scale_min.xyz);
+        // The lattice pads its shape, so a point past it is outside.
+        if !liquid_lattice_holds(g, dims) {
+            continue;
+        }
+        let d = liquid_shape_distance(shape.atlas_offset, dims, g, shape.origin_spacing.w, shape.scale_min.xyz);
+        if d < deepest {
+            deepest = d;
+            kind = 2.0;
+            velocity = liquid_body_velocity(
+                body.linear_velocity.xyz,
+                body.angular_velocity.xyz,
+                body.position_inv_mass.xyz,
+                x,
+            );
+        }
+    }
+    solid[2u * i] = pack2x16float(velocity.xy);
+    solid[2u * i + 1u] = pack2x16float(vec2<f32>(velocity.z, kind));
+}
+
 // ---- Sources, burning and forces (on R) -------------------------------------
 
-// How strongly the source emits at world point `pos`: a squashed ellipsoid at
+// How far the source sits above the box's floor: on the static solids under
+// its centre, a box floor sunk in the ground lifting it to the ground's top.
+fn source_lift() -> f32 {
+    if !SOLIDS {
+        return 0.0;
+    }
+    return f32(params.dims.y - min(atomicLoad(&source_floor[0]), params.dims.y)) * params.h;
+}
+
+// How strongly the source emits at world point `pos`: a squashed ellipsoid on
 // the floor's centre, broken up by noise that drifts along with time.
 fn source_weight(pos: vec3<f32>) -> f32 {
     let box_centre_xz = params.origin.xz + 0.5 * vec2<f32>(params.dims.xz) * params.h;
     let source_centre = vec3<f32>(
         box_centre_xz.x,
-        params.origin.y + max(2.0 * params.h, 0.15 * params.source_size),
+        params.origin.y + source_lift() + max(2.0 * params.h, 0.15 * params.source_size),
         box_centre_xz.y,
     );
     let radii = vec3<f32>(
@@ -573,6 +784,12 @@ fn cs_sources(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let i = cell_index(gid);
+    // No gas inside a solid.
+    if is_solid(i) {
+        state_a[i] = vec4<f32>(0.0);
+        curl[i] = vec4<f32>(0.0);
+        return;
+    }
     let pos = cell_centre(gid);
     var s = state_a[i];
 
@@ -782,7 +999,9 @@ fn cs_confine(@builtin(global_invocation_id) gid: vec3<u32>) {
 // ---- Pressure projection (on R) ---------------------------------------------
 
 // Pressure of the cell at `c`, which may lie one past the box: the floor has
-// no pressure gradient through it, an open face is atmosphere (0).
+// no pressure gradient through it, an open face is atmosphere (0). A solid
+// holds 0 and is left out of its neighbours' count (cs_divergence), so no
+// gradient runs through it either.
 fn neighbour_pressure(c: vec3<i32>, own: f32) -> f32 {
     if c.y < 0 {
         return own;
@@ -794,22 +1013,50 @@ fn neighbour_pressure(c: vec3<i32>, own: f32) -> f32 {
     return pressure[cell_index(vec3<u32>(c))];
 }
 
+// Whether the cell at `c`, which may lie one past the box, is a solid.
+fn solid_neighbour(c: vec3<i32>) -> bool {
+    let dims = vec3<i32>(params.dims);
+    if any(c < vec3<i32>(0)) || any(c >= dims) {
+        return false;
+    }
+    return is_solid(cell_index(vec3<u32>(c)));
+}
+
 // The flow out of each cell through its six faces, less the expansion the
-// flames ask for. The floor's faces are closed.
+// flames ask for. The floor's faces are closed, and a face touching a solid
+// moves with it. With solids, the count of open neighbours rides in the low
+// bits: a solid cell is not solved and holds pressure 0.
 @compute @workgroup_size(4, 4, 4)
 fn cs_divergence(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !inside(gid) {
         return;
     }
     let i = cell_index(gid);
-    let own = vel_a[face_index(gid)];
-    let floor_v = select(own.y, 0.0, gid.y == 0u);
+    if is_solid(i) {
+        divergence[i] = 0.0;
+        pressure[i] = 0.0;
+        return;
+    }
+    let floor_v = select(face_flow(gid, 1u), 0.0, gid.y == 0u);
     let out = vec3<f32>(
-        vel_a[face_index(gid + unit(0u))].x - own.x,
-        vel_a[face_index(gid + unit(1u))].y - floor_v,
-        vel_a[face_index(gid + unit(2u))].z - own.z,
+        face_flow(gid + unit(0u), 0u) - face_flow(gid, 0u),
+        face_flow(gid + unit(1u), 1u) - floor_v,
+        face_flow(gid + unit(2u), 2u) - face_flow(gid, 2u),
     );
-    divergence[i] = (out.x + out.y + out.z) / params.h - params.expansion * state_a[i].w;
+    let flow = (out.x + out.y + out.z) / params.h - params.expansion * state_a[i].w;
+    if !SOLIDS {
+        divergence[i] = flow;
+        return;
+    }
+    let c = vec3<i32>(gid);
+    var open = 6u;
+    for (var axis = 0u; axis < 3u; axis++) {
+        var e = vec3<i32>(0);
+        e[axis] = 1;
+        open -= select(0u, 1u, solid_neighbour(c + e)) + select(0u, 1u, solid_neighbour(c - e));
+    }
+    // A cell sealed in by solids keeps 0: it has no pressure to find.
+    divergence[i] = bitcast<f32>((bitcast<u32>(flow) & ~7u) | open);
 }
 
 // One colour of a red-black Gauss-Seidel sweep with over-relaxation: a cell
@@ -830,8 +1077,18 @@ fn pressure_sweep(gid: vec3<u32>, colour: u32) {
         + neighbour_pressure(c - vec3<i32>(0, 1, 0), own)
         + neighbour_pressure(c + vec3<i32>(0, 0, 1), own)
         + neighbour_pressure(c - vec3<i32>(0, 0, 1), own);
-    let solved = (sum - params.h * params.h * divergence[i]) / 6.0;
-    pressure[i] = mix(own, solved, SOR_OMEGA);
+    // Every load first, so they go out together.
+    let flow = divergence[i];
+    if !SOLIDS {
+        pressure[i] = mix(own, (sum - params.h * params.h * flow) / 6.0, SOR_OMEGA);
+        return;
+    }
+    let bits = bitcast<u32>(flow);
+    let open = bits & 7u;
+    if open != 0u {
+        let solved = (sum - params.h * params.h * bitcast<f32>(bits & ~7u)) / f32(open);
+        pressure[i] = mix(own, solved, SOR_OMEGA);
+    }
 }
 
 @compute @workgroup_size(4, 4, 4)
@@ -845,7 +1102,8 @@ fn cs_pressure_black(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // Each face loses the pressure difference across it, the open faces against
-// the atmosphere's 0; nothing flows through the floor.
+// the atmosphere's 0; nothing flows through the floor, and a face touching a
+// solid moves with it.
 @compute @workgroup_size(4, 4, 4)
 fn cs_project(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !in_faces(gid) {
@@ -861,6 +1119,11 @@ fn cs_project(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         if axis == 1u && gid.y == 0u {
             v.y = 0.0;
+            continue;
+        }
+        let face = solid_face(gid, axis);
+        if face.touches {
+            v[axis] = face.flow;
             continue;
         }
         var below = c;

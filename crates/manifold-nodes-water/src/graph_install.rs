@@ -10,6 +10,9 @@ use manifold_node_engine::load::expand::SceneModifierExpandError;
 use manifold_node_engine::load::graph_loader::GraphBuildError;
 use manifold_node_engine::load::instantiation::GraphInstantiationHook;
 use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::primitive::PrimitiveSpec;
+
+use manifold_gas::primitives::gas_volume::GasVolume;
 
 pub mod coupling;
 
@@ -53,6 +56,10 @@ fn install_coupled_scenes(
         .nodes
         .iter()
         .any(|node| node.type_id == "node.physics_world");
+    let has_gas = def
+        .nodes
+        .iter()
+        .any(|node| node.type_id == <GasVolume as PrimitiveSpec>::TYPE_ID);
     if has_fluid && has_rigid {
         let bindings = coupling::prepare_coupled_scenes(def, registry)
             .map_err(GraphBuildError::SceneModifier)?;
@@ -68,6 +75,29 @@ fn install_coupled_scenes(
             for observer in &binding.observers {
                 let observer = runtime_node(def, id_map, observer)?;
                 crate::physics_scene::add_shared_solids(graph, fluid, observer).map_err(failed)?;
+            }
+        }
+    }
+    // Smoke and Fire flow round the same solids, from the water that owns
+    // the World or from the World itself.
+    if has_gas && has_rigid {
+        let failed = |error| GraphBuildError::InvalidWire {
+            wire_index: usize::MAX,
+            reason: format!("failed to hand a gas its solids: {error}"),
+        };
+        for (gas, source) in
+            coupling::prepare_gas_solids(def, registry).map_err(GraphBuildError::SceneModifier)?
+        {
+            let gas = runtime_node(def, id_map, &gas)?;
+            match source {
+                coupling::GasSolids::Water(water) => {
+                    let water = runtime_node(def, id_map, &water)?;
+                    crate::physics_scene::add_shared_solids(graph, water, gas).map_err(failed)?;
+                }
+                coupling::GasSolids::World(world) => {
+                    let world = runtime_node(def, id_map, &world)?;
+                    crate::physics_scene::add_world_solids(graph, world, gas).map_err(failed)?;
+                }
             }
         }
     }

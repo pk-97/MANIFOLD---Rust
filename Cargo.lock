@@ -2734,6 +2734,7 @@ dependencies = [
  "manifold-node-engine",
  "manifold-nodes-physics",
  "manifold-physics",
+ "manifold-water-liquid",
  "naga",
 ]
 
