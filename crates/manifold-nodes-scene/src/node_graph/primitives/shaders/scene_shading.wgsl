@@ -842,6 +842,9 @@ struct PbrSurface {
     sheen_roughness: f32,
     // KHR_materials_diffuse_transmission: rgb colour, a factor.
     translucency: vec4<f32>,
+    // How much of each of the first four lights the surface's own carved
+    // relief lets through (parallax self-shadowing); 1 where nothing is carved.
+    relief_light: vec4<f32>,
 }
 
 // Light visibility per channel: the shadow factor, except the designated
@@ -1019,7 +1022,8 @@ fn pbr_direct_lighting(s: PbrSurface) -> PbrDirect {
         let kd = (1.0 - f_max) * (1.0 - metallic);
         let diffuse = kd * albedo.rgb / PI;
 
-        let vis3 = light_visibility(l_col.w, world_pos, frag_xy);
+        let vis3 = light_visibility(l_col.w, world_pos, frag_xy)
+            * select(1.0, s.relief_light[min(i, 3u)], i < 4u);
         direct = direct + (diffuse + specular) * l_col.rgb * n_dot_l * l_dir.w * vis3;
         direct_diffuse = direct_diffuse + diffuse * l_col.rgb * n_dot_l * l_dir.w * vis3;
 

@@ -35,6 +35,7 @@ fn look_foam(
         0.0, 0.01,
         vec3<f32>(0.0), 0.0,
         vec4<f32>(0.0),
+        vec4<f32>(1.0),
     );
     // `fs_pbr`'s own diffuse: the direct diffuse plus the irradiance times the
     // albedo (its diffuse energy split is one with no specular lobe).

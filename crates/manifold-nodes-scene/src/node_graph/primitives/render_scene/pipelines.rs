@@ -170,6 +170,15 @@ impl RenderScene {
         ),
     ];
 
+    /// The parallax variant: traces the height field in `begin_box` for a
+    /// material with Depth. Every other draw compiles without the trace,
+    /// because its registers alone slow every PBR pixel even when the trace
+    /// never runs. Only valid for a draw where `parallax_surface` holds.
+    pub(super) const PARALLAX_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[(
+        "    // parallax trace (only in the parallax pipeline, `PARALLAX_SPECIALIZATIONS`)\n",
+        "    p = box_parallax(p, px, py, n, s, mat3x3<f32>(ax, ay, az), world_pos, pixel);\n",
+    )];
+
     /// The solid depth-only variant of `shaders/shadow_depth.wgsl`: drops the
     /// cutout and appearance-fade `discard` block that all three fragment
     /// entries share. A fragment shader that can discard defeats Apple's
@@ -346,7 +355,8 @@ impl RenderScene {
     /// `opaque_fast` selects the solid-surface variant (see
     /// `OPAQUE_FAST_SPECIALIZATIONS`): no `discard` and no alpha-to-coverage.
     /// The caller must only set it for a non-blend draw where `solid_surface`
-    /// holds.
+    /// holds. `parallax` selects the height-tracing variant (see
+    /// `PARALLAX_SPECIALIZATIONS`), set where `parallax_surface` holds.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn pipeline_for(
         &mut self,
@@ -358,6 +368,7 @@ impl RenderScene {
         blend: bool,
         points: bool,
         opaque_fast: bool,
+        parallax: bool,
     ) -> &manifold_gpu::GpuRenderPipeline {
         if points {
             // D8: the points pipeline is the plain variant — no aux, no
@@ -373,6 +384,7 @@ impl RenderScene {
                     false,
                     false,
                     true,
+                    false,
                     false,
                     MSAA_SAMPLES,
                 ))
@@ -402,6 +414,7 @@ impl RenderScene {
                 blend,
                 false,
                 opaque_fast,
+                parallax,
                 MSAA_SAMPLES,
             ))
             .or_insert_with(|| {
@@ -413,6 +426,7 @@ impl RenderScene {
                     emit_denoise_feed,
                     blend,
                     opaque_fast,
+                    parallax,
                 )
             })
     }
@@ -420,6 +434,7 @@ impl RenderScene {
     /// Compile one Pass A pipeline variant. The one constructor behind both
     /// `pipeline_for` and `prewarm_pipelines`, so they can never disagree on
     /// a variant's source, blend state or alpha-to-coverage.
+    #[allow(clippy::too_many_arguments)]
     fn create_variant(
         device: &manifold_gpu::GpuDevice,
         kind: MaterialKind,
@@ -428,6 +443,7 @@ impl RenderScene {
         emit_denoise_feed: bool,
         blend: bool,
         opaque_fast: bool,
+        parallax: bool,
     ) -> manifold_gpu::GpuRenderPipeline {
         let fs_entry = match kind {
             MaterialKind::Unlit => "fs_unlit",
@@ -442,28 +458,18 @@ impl RenderScene {
         // alpha exactly 1, so its coverage is every sample and it stays off
         // too.
         let alpha_to_coverage = !blend && !opaque_fast;
-        let (aux_specs, aux_formats, label) =
-            match Self::aux_variant(emit_velocity, emit_ao_mask, emit_denoise_feed) {
-                Some(aux) => aux,
-                None if opaque_fast => (&[][..], &[][..], "node.render_scene"),
-                None => {
-                    return device.create_render_pipeline(
-                        &manifold_gpu::RenderPipelineDesc::new(
-                            RENDER_SCENE_WGSL.as_str(),
-                            "vs_main",
-                            fs_entry,
-                            "node.render_scene",
-                        )
-                        .color(manifold_gpu::GpuTextureFormat::Rgba16Float, blend_state)
-                        .depth(manifold_gpu::GpuTextureFormat::Depth32Float)
-                        .samples(MSAA_SAMPLES)
-                        .alpha_to_coverage(alpha_to_coverage),
-                    );
-                }
-            };
+        let (aux_specs, aux_formats, label) = Self::aux_variant(
+            emit_velocity,
+            emit_ao_mask,
+            emit_denoise_feed,
+        )
+        .unwrap_or((&[][..], &[][..], "node.render_scene"));
         let mut specs = aux_specs.to_vec();
         if opaque_fast {
             specs.extend_from_slice(Self::OPAQUE_FAST_SPECIALIZATIONS);
+        }
+        if parallax {
+            specs.extend_from_slice(Self::PARALLAX_SPECIALIZATIONS);
         }
         device.create_render_pipeline(
             &manifold_gpu::RenderPipelineDesc::new(
@@ -490,7 +496,7 @@ impl RenderScene {
         kind: MaterialKind,
     ) -> &manifold_gpu::GpuRenderPipeline {
         self.pipelines
-            .entry((kind, false, false, false, true, false, false, 1))
+            .entry((kind, false, false, false, true, false, false, false, 1))
             .or_insert_with(|| Self::create_pass_b_pipeline(device, kind))
     }
 
@@ -547,11 +553,17 @@ impl RenderScene {
         // per distinct shader source: the blend and Pass B pipelines share
         // their source with the plain variant, so they run after it in the
         // same job and reuse its cached MSL instead of compiling it again.
-        // PBR jobs go first because they are the slow ones. Each cold PBR
+        // PBR jobs go first because they are the slow ones, and PBR alone
+        // has the parallax variants. Each cold PBR
         // compile holds over 2 GB inside spirv-opt, so the worker count is
         // capped to keep a cold start near 10 GB.
         let mut jobs = Vec::new();
-        for kind in [MaterialKind::Pbr, MaterialKind::Cel, MaterialKind::Unlit] {
+        for (kind, parallax) in [
+            (MaterialKind::Pbr, false),
+            (MaterialKind::Pbr, true),
+            (MaterialKind::Cel, false),
+            (MaterialKind::Unlit, false),
+        ] {
             for opaque_fast in [false, true] {
                 for aux in [
                     (false, false, false),
@@ -563,7 +575,7 @@ impl RenderScene {
                     (false, true, true),
                     (true, true, true),
                 ] {
-                    jobs.push((kind, aux, opaque_fast));
+                    jobs.push((kind, aux, opaque_fast, parallax));
                 }
             }
         }
@@ -572,7 +584,7 @@ impl RenderScene {
         std::thread::scope(|scope| {
             for _ in 0..WORKERS {
                 scope.spawn(|| {
-                    while let Some(&(kind, (velocity, ao_mask, denoise), opaque_fast)) =
+                    while let Some(&(kind, (velocity, ao_mask, denoise), opaque_fast, parallax)) =
                         jobs.get(next_job.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
                     {
                         Self::create_variant(
@@ -583,12 +595,13 @@ impl RenderScene {
                             denoise,
                             false,
                             opaque_fast,
+                            parallax,
                         );
                         if !opaque_fast {
                             Self::create_variant(
-                                device, kind, velocity, ao_mask, denoise, true, false,
+                                device, kind, velocity, ao_mask, denoise, true, false, parallax,
                             );
-                            if !(velocity || ao_mask || denoise) {
+                            if !(velocity || ao_mask || denoise || parallax) {
                                 Self::create_pass_b_pipeline(device, kind);
                             }
                         }

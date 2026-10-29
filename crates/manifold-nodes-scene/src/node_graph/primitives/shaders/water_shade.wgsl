@@ -72,6 +72,7 @@ fn fs_water(@builtin(position) pos: vec4<f32>) -> WaterOut {
         0.0, 0.01,
         vec3<f32>(0.0), 0.0,
         vec4<f32>(0.0),
+        vec4<f32>(1.0),
     );
     let direct = pbr_direct_lighting(surface);
     let ibl = pbr_ibl(surface);

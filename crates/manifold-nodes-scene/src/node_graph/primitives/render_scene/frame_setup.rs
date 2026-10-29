@@ -451,6 +451,7 @@ impl RenderScene {
                 && !points
                 && fill_mode == manifold_gpu::GpuTriangleFillMode::Fill
                 && solid_surface(&uniforms);
+            let parallax = parallax_surface(material.kind, &uniforms);
             let pipeline = {
                 let gpu = ctx.gpu_encoder();
                 self.pipeline_for(
@@ -462,6 +463,7 @@ impl RenderScene {
                     is_blend || is_transmissive,
                     points,
                     opaque_fast,
+                    parallax,
                 )
                 .clone()
             };

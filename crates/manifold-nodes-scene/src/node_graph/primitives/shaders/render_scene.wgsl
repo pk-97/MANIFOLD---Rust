@@ -568,6 +568,13 @@ struct BoxSide {
 var<private> box_sides: array<BoxSide, 3>;
 var<private> box_weights: vec3<f32>;
 
+// What the parallax hit lets through: each of the first four lights' share
+// past the carved relief, and the ambient share in its crevice. Worked out
+// at the hit so only these five stay live through the fragment; 1 where
+// parallax did not run.
+var<private> relief_light: vec4<f32> = vec4<f32>(1.0);
+var<private> relief_crevice: f32 = 1.0;
+
 fn box_hash(c: vec2<i32>) -> vec3<f32> {
     var h = bitcast<u32>(c.x) * 1664525u + bitcast<u32>(c.y) * 1013904223u + 374761393u;
     h = (h ^ (h >> 15u)) * 2246822519u;
@@ -648,7 +655,8 @@ fn box_side_st(p: vec3<f32>, s: vec3<f32>, a: u32) -> vec2<f32> {
 // strongest tile and stops where it meets it; the box point moves there, so
 // every map, side and tile reads the carved spot. Steps follow the shift in
 // pixels, and a shift under half a pixel returns at once.
-fn box_parallax(p: vec3<f32>, px: vec3<f32>, py: vec3<f32>, n: vec3<f32>, s: vec3<f32>, v: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
+fn box_parallax(p: vec3<f32>, px: vec3<f32>, py: vec3<f32>, n: vec3<f32>, s: vec3<f32>, axes: mat3x3<f32>, world_pos: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
+    let v = transpose(axes) * normalize(u.camera_pos.xyz - world_pos);
     let vn = dot(v, n);
     if vn < 0.05 {
         return p;
@@ -743,7 +751,51 @@ fn box_parallax(p: vec3<f32>, px: vec3<f32>, py: vec3<f32>, n: vec3<f32>, s: vec
     // The height crosses the ray between the last step above it and this one.
     let span = gap - prev_gap;
     let t = select(-prev_gap / span, 0.0, span <= 0.0);
-    return p + down * mix(prev_d, d, t);
+    let hit = mix(prev_d, d, t);
+    let uv = start + dir * hit;
+    let height = 1.0 - hit;
+    for (var i = 0u; i < min(u32(u.scene_params.x), 4u); i++) {
+        let l = transpose(axes) * light_direction_attenuation(i, world_pos).xyz;
+        relief_light[i] = relief_shadow(l, uv, height, lod, a, r, s, n);
+    }
+    relief_crevice = relief_occlusion(uv, height, lod);
+    return p + down * hit;
+}
+
+// How much of the light along `l` (box frame, towards the light) the carved
+// surface lets reach the parallax hit at `uv` and `height` on side `side`
+// (turned by `turn` in its tile, facing `signs`, normal `n`): four heights
+// between the hit and the top along the light, read together; the highest
+// one over the ray shades it.
+fn relief_shadow(l: vec3<f32>, uv: vec2<f32>, height: f32, lod: f32, side: u32, turn: vec2<f32>, signs: vec3<f32>, n: vec3<f32>) -> f32 {
+    let ln = dot(l, n);
+    let rise = 1.0 - height;
+    if ln <= 0.0 || rise <= 0.0 {
+        return 1.0;
+    }
+    let up = l * (u.relief.x * u.surface.z / ln);
+    let dir = box_turn(box_side_st(up, signs, side), turn);
+    let es = vec4<f32>(0.125, 0.375, 0.625, 0.875) * rise;
+    let hs = vec4<f32>(
+        textureSampleLevel(normal_map, normal_sampler, uv + dir * es.x, lod).a,
+        textureSampleLevel(normal_map, normal_sampler, uv + dir * es.y, lod).a,
+        textureSampleLevel(normal_map, normal_sampler, uv + dir * es.z, lod).a,
+        textureSampleLevel(normal_map, normal_sampler, uv + dir * es.w, lod).a,
+    );
+    let over = hs - (vec4<f32>(height) + es);
+    return 1.0 - clamp(max(max(over.x, over.y), max(over.z, over.w)) * 8.0, 0.0, 1.0);
+}
+
+// Ambient light reaching the parallax hit at `uv` and `height`. A spot
+// lower than the height around it (a mip four levels or more up) sits in a
+// crevice; how dark goes with the crevice's real depth over its width, so a
+// shallow relief barely darkens.
+fn relief_occlusion(uv: vec2<f32>, height: f32, trace_lod: f32) -> f32 {
+    let lod = max(trace_lod + 2.0, 4.0);
+    let around = textureSampleLevel(normal_map, normal_sampler, uv, lod).a;
+    let width = exp2(lod) / f32(textureDimensions(normal_map).x);
+    let steepness = u.relief.x * u.surface.z / width;
+    return clamp(1.0 - (around - height) * steepness, 0.0, 1.0);
 }
 
 // Set this fragment's box frame. Every fragment entry calls it first, in
@@ -763,11 +815,7 @@ fn begin_box(box_pos: vec3<f32>, box_normal: vec3<f32>, ax: vec3<f32>, ay: vec3<
     w = select(w, vec3<f32>(0.0), w < vec3<f32>(0.02));
     box_weights = w / (w.x + w.y + w.z);
     let s = select(vec3<f32>(-1.0), vec3<f32>(1.0), n >= vec3<f32>(0.0));
-    if u.relief.x > 0.0 && u.texture_flags.x > 0.5 {
-        let view = normalize(u.camera_pos.xyz - world_pos);
-        let v = vec3<f32>(dot(view, ax), dot(view, ay), dot(view, az));
-        p = box_parallax(p, px, py, n, s, v, pixel);
-    }
+    // parallax trace (only in the parallax pipeline, `PARALLAX_SPECIALIZATIONS`)
     box_sides[0] = box_side(box_side_st(p, s, 0u), box_side_st(px, s, 0u), box_side_st(py, s, 0u), -s.x * az, ay);
     box_sides[1] = box_side(box_side_st(p, s, 1u), box_side_st(px, s, 1u), box_side_st(py, s, 1u), s.y * ax, -az);
     box_sides[2] = box_side(box_side_st(p, s, 2u), box_side_st(px, s, 2u), box_side_st(py, s, 2u), s.z * ax, ay);
@@ -1362,6 +1410,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         in.world_pos, in.clip_pos.xy, V, N, Nc, albedo.rgb, metallic, roughness,
         base_f0, base_f90, iridescence, anisotropy_strength, aniso_t, aniso_b,
         clearcoat, clearcoat_roughness, sheen_color, sheen_roughness, translucency,
+        relief_light,
     );
     let direct = pbr_direct_lighting(surface);
     let ibl = pbr_ibl(surface);
@@ -1373,7 +1422,14 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     let kd_ibl = (1.0 - f_view_max) * (1.0 - metallic);
     // Occlusion darkens the diffuse IBL term ONLY, never direct lighting or
     // specular IBL. Unwired = 1.0 (no darkening).
-    let occlusion = resolve_occlusion(in.uv);
+    // A parallax crevice shades every ambient term, its reflections too:
+    // the carved surface itself hides the sky from it.
+    let crevice = relief_crevice;
+    let occlusion = resolve_occlusion(in.uv) * crevice;
+    // Horizon occlusion (as Marmoset and Filament do it): a reflection a bump
+    // tilts below the real surface sees the surface, not the sky, so it fades.
+    let horizon = clamp(1.0 + dot(reflect(-V, N), geometric_N), 0.0, 1.0);
+    let reflection_seen = crevice * horizon * horizon;
     let diffuse_ibl = kd_ibl * albedo.rgb * ibl.irradiance * occlusion;
 
     let diffuse_transmission = translucency.a;
@@ -1408,9 +1464,9 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
         ) * (1.0 - metallic);
         diffuse_component = mix(diffuse_component, transmitted_diffuse, transmission_factor);
     }
-    let ambient = rt_or_flat_ambient(albedo.rgb, in.clip_pos.xy);
+    let ambient = rt_or_flat_ambient(albedo.rgb, in.clip_pos.xy) * crevice;
     let emissive = resolve_emissive(in.uv);
-    let base_rgb = (direct.total - direct.diffuse + ibl.specular + diffuse_component + ambient)
+    let base_rgb = (direct.total - direct.diffuse + ibl.specular * reflection_seen + diffuse_component + ambient)
         * ibl.sheen_base_scale + direct.sheen + ibl.sheen + emissive;
     let cc_n_dot_v = max(dot(Nc, V), 0.001);
     let clearcoat_fresnel = CLEARCOAT_F0 + (1.0 - CLEARCOAT_F0)

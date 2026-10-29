@@ -592,6 +592,29 @@ fn opaque_fast_variants_have_no_discard_and_validate() {
     }
 }
 
+/// The parallax variant is a text edit of the shader: its marker must sit in
+/// the source exactly once, and the edited shader must still validate.
+#[test]
+fn parallax_variant_traces_and_validates() {
+    let base = RENDER_SCENE_WGSL.as_str();
+    let mut src = base.to_string();
+    for &(pattern, replacement) in RenderScene::PARALLAX_SPECIALIZATIONS {
+        assert_eq!(base.matches(pattern).count(), 1, "parallax marker");
+        src = src.replace(pattern, replacement);
+    }
+    let module = naga::front::wgsl::parse_str(&src).expect("parallax variant must parse");
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    );
+    if let Err(e) = validator.validate(&module) {
+        panic!(
+            "parallax variant failed validation:\n{}",
+            e.emit_to_string(&src)
+        );
+    }
+}
+
 /// Every velocity-writing variant is a text edit of the shader, and its
 /// vertex stage reads last frame's vertex positions from `@binding(56)` and
 /// last frame's instance records from `@binding(57)`; the copy kernel that
