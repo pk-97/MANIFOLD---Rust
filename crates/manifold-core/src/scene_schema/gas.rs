@@ -70,12 +70,12 @@ const SMOKE: Start = Start {
     source_heat: 0.6,
     buoyancy: 2.0,
     weight: 0.2,
-    vorticity: 2.0,
-    turbulence: 0.6,
+    vorticity: 3.0,
+    turbulence: 1.0,
     dissipation: 0.15,
     cooling: 0.6,
     smoke: [0.85, 0.85, 0.85],
-    density: 8.0,
+    density: 30.0,
     albedo: 0.9,
     detail: 0.6,
     burns: false,
@@ -99,12 +99,12 @@ const FIRE: Start = Start {
     source_heat: 1.0,
     buoyancy: 6.0,
     weight: 0.1,
-    vorticity: 3.0,
-    turbulence: 1.5,
+    vorticity: 5.0,
+    turbulence: 2.5,
     dissipation: 0.3,
     cooling: 1.8,
     smoke: [0.25, 0.24, 0.23],
-    density: 12.0,
+    density: 25.0,
     albedo: 0.55,
     detail: 0.5,
     burns: true,
@@ -483,7 +483,7 @@ mod tests {
         assert_eq!(default(&fire, "pos_y"), Some(1.5));
         assert_eq!(default(&fire, "scale_y"), Some(3.0));
         assert_eq!(default(&smoke, "pos_y"), Some(2.0));
-        assert_eq!(default(&smoke, "gas_density"), Some(8.0));
+        assert_eq!(default(&smoke, "gas_density"), Some(30.0));
         // A Smoke has no flames and does not burn.
         assert!(
             row_for(&smoke, "gas_flame_brightness")

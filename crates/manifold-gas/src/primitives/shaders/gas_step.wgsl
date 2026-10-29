@@ -67,8 +67,13 @@ const FUEL_DECAY: f32 = 0.5;
 const MAX_TEMPERATURE: f32 = 1.5;
 // Over-relaxation of the pressure sweeps.
 const SOR_OMEGA: f32 = 1.6;
-// The open faces fade the gas over this many cells.
-const OPEN_FADE_CELLS: f32 = 2.0;
+// The open faces absorb: over this share of the box next to a side or the
+// top the gas fades at up to SPONGE_RATE per second, so it thins out before
+// it reaches a face and the box never shows. The last cell empties.
+const SPONGE_SHARE: f32 = 0.15;
+const SPONGE_RATE: f32 = 30.0;
+// Turbulence stirs at this share of the source's size, at least four cells.
+const TURBULENCE_SOURCE_SHARE: f32 = 0.5;
 // Gravity the buoyancy and weight rates are quoted at.
 const REFERENCE_GRAVITY: f32 = 9.81;
 // Temperature range of a flame in kelvin, at normalised temperature 0 and 1.
@@ -142,30 +147,12 @@ fn blend_state_in(t: Taps) -> vec4<f32> {
     return sum;
 }
 
-fn blend_vel_a(t: Taps) -> vec4<f32> {
-    var sum = vec4<f32>(0.0);
-    for (var k = 0u; k < 8u; k++) {
-        sum += t.weight[k] * vel_a[t.index[k]];
-    }
-    return sum;
-}
-
 fn blend_state_a(t: Taps) -> vec4<f32> {
     var sum = vec4<f32>(0.0);
     for (var k = 0u; k < 8u; k++) {
         sum += t.weight[k] * state_a[t.index[k]];
     }
     return sum;
-}
-
-fn range_vel_in(t: Taps) -> Range {
-    var r = Range(vel_in[t.index[0]], vel_in[t.index[0]]);
-    for (var k = 1u; k < 8u; k++) {
-        let v = vel_in[t.index[k]];
-        r.lo = min(r.lo, v);
-        r.hi = max(r.hi, v);
-    }
-    return r;
 }
 
 fn range_state_in(t: Taps) -> Range {
@@ -254,7 +241,7 @@ fn cs_advect(@builtin(global_invocation_id) gid: vec3<u32>) {
     state_a[i] = blend_state_in(t);
 }
 
-// MacCormack's second look: the advected fields carried forward again.
+// MacCormack's second look: the advected state carried forward again.
 @compute @workgroup_size(4, 4, 4)
 fn cs_advect_back(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !inside(gid) {
@@ -262,14 +249,14 @@ fn cs_advect_back(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let i = cell_index(gid);
     let ahead = vec3<f32>(gid) + params.dt * vel_in[i].xyz / params.h;
-    let t = taps(ahead);
-    vel_b[i] = vec4<f32>(blend_vel_a(t).xyz, 0.0);
-    state_b[i] = blend_state_a(t);
+    state_b[i] = blend_state_a(taps(ahead));
 }
 
-// The error-corrected result, held between the extremes of the eight cells
-// the air came from. A thread reads only its own vel_b/state_b, so it
-// writes the result in place.
+// The error-corrected state, held between the extremes of the eight cells
+// the air came from. The velocity keeps its semi-Lagrangian value: velocity
+// sits at cell centres, where the pressure solve cannot see a cell-to-cell
+// zigzag, and the plain advection's smoothing is what keeps one from growing.
+// A thread reads only its own vel_b/state_b, so it writes the result in place.
 @compute @workgroup_size(4, 4, 4)
 fn cs_maccormack(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !inside(gid) {
@@ -278,11 +265,9 @@ fn cs_maccormack(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = cell_index(gid);
     let back = vec3<f32>(gid) - params.dt * vel_in[i].xyz / params.h;
     let t = taps(back);
-    let rv = range_vel_in(t);
     let rs = range_state_in(t);
-    let v = vel_a[i] + 0.5 * (vel_in[i] - vel_b[i]);
     let s = state_a[i] + 0.5 * (state_in[i] - state_b[i]);
-    vel_b[i] = vec4<f32>(clamp(v.xyz, rv.lo.xyz, rv.hi.xyz), 0.0);
+    vel_b[i] = vel_a[i];
     state_b[i] = clamp(s, rs.lo, rs.hi);
 }
 
@@ -351,7 +336,8 @@ fn cs_sources(@builtin(global_invocation_id) gid: vec3<u32>) {
     if params.turbulence > 0.0 {
         let gas = saturate(s.x + s.y + s.z);
         if gas > 0.0 {
-            let q = pos / (4.0 * params.h) + vec3<f32>(0.0, -0.5 * params.time, 0.0);
+            let scale = max(4.0 * params.h, TURBULENCE_SOURCE_SHARE * params.source_size);
+            let q = pos / scale + vec3<f32>(0.0, -0.5 * params.time, 0.0);
             v += params.dt * params.turbulence * gas * curl_noise(q);
         }
     }
@@ -360,14 +346,19 @@ fn cs_sources(@builtin(global_invocation_id) gid: vec3<u32>) {
     s.y *= exp(-params.cooling * params.dt);
     s.z *= exp(-FUEL_DECAY * params.dt);
 
-    // What reaches the sides or the top leaves: it fades over the last cells.
+    // What reaches the sides or the top leaves through the sponge band.
     let to_face = vec3<u32>(
         min(gid.x, params.dims.x - 1u - gid.x),
         params.dims.y - 1u - gid.y,
         min(gid.z, params.dims.z - 1u - gid.z),
     );
-    let nearest = min(to_face.x, min(to_face.y, to_face.z));
-    s *= min((f32(nearest) + 0.5) / OPEN_FADE_CELLS, 1.0);
+    let band = max(vec3<f32>(2.0), SPONGE_SHARE * vec3<f32>(params.dims));
+    let depth = saturate(vec3<f32>(1.0) - vec3<f32>(to_face) / band);
+    let sponge = max(depth.x, max(depth.y, depth.z));
+    s *= exp(-SPONGE_RATE * sponge * sponge * params.dt);
+    if min(to_face.x, min(to_face.y, to_face.z)) == 0u {
+        s = vec4<f32>(0.0);
+    }
 
     // At most four cells a step, so the next advection stays in reach.
     let limit = 4.0 * params.h / max(params.dt, 1e-4);

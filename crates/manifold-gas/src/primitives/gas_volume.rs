@@ -211,11 +211,6 @@ impl Quality {
             Self::ExtraHigh => 80,
         }
     }
-
-    /// Low advects semi-Lagrangian; the rest correct it (MacCormack).
-    fn maccormack(self) -> bool {
-        self != Self::Low
-    }
 }
 
 /// What the node's params and wires say, other than the box.
@@ -714,8 +709,8 @@ manifold_node_engine::primitive! {
         gas_param!("source_heat", "Source Heat", Float, 0.6, 0.0, 2.0),
         gas_param!("buoyancy", "Buoyancy (m/s²)", Float, 2.0, 0.0, 50.0),
         gas_param!("weight", "Weight (m/s²)", Float, 0.2, 0.0, 20.0),
-        gas_param!("vorticity", "Swirl", Float, 2.0, 0.0, 20.0),
-        gas_param!("turbulence", "Turbulence (m/s²)", Float, 0.6, 0.0, 30.0),
+        gas_param!("vorticity", "Swirl", Float, 3.0, 0.0, 20.0),
+        gas_param!("turbulence", "Turbulence (m/s²)", Float, 1.0, 0.0, 30.0),
         gas_param!("dissipation", "Smoke Fade (1/s)", Float, 0.15, 0.0, 10.0),
         gas_param!("cooling", "Cooling (1/s)", Float, 0.6, 0.0, 20.0),
         gas_param!("burn_rate", "Burn Rate (1/s)", Float, 6.0, 0.0, 50.0),
@@ -853,24 +848,21 @@ impl GasVolume {
                 groups,
                 "node.gas_volume.advect",
             );
-            result = a;
-            if settings.quality.maccormack() {
-                pass(
-                    enc,
-                    &pipelines.advect_back,
-                    &advection,
-                    groups,
-                    "node.gas_volume.advect_back",
-                );
-                pass(
-                    enc,
-                    &pipelines.maccormack,
-                    &advection,
-                    groups,
-                    "node.gas_volume.maccormack",
-                );
-                result = b;
-            }
+            pass(
+                enc,
+                &pipelines.advect_back,
+                &advection,
+                groups,
+                "node.gas_volume.advect_back",
+            );
+            pass(
+                enc,
+                &pipelines.maccormack,
+                &advection,
+                groups,
+                "node.gas_volume.maccormack",
+            );
+            result = b;
             let working = binding_list(uniform_bytes, buffers, Roles::new(last, result), light);
             for (pipeline, label) in [
                 (&pipelines.sources, "node.gas_volume.sources"),
@@ -1186,11 +1178,9 @@ mod tests {
     }
 
     #[test]
-    fn quality_sets_the_pressure_sweeps_and_the_advection() {
+    fn quality_sets_the_pressure_sweeps() {
         let pairs = [0.0, 1.0, 2.0, 3.0].map(|q| Quality::from_param(q).pressure_pairs());
         assert_eq!(pairs, [20, 30, 50, 80]);
-        assert!(!Quality::Low.maccormack());
-        assert!(Quality::Medium.maccormack() && Quality::ExtraHigh.maccormack());
         assert_eq!(Quality::from_param(-4.0), Quality::Low);
         assert_eq!(Quality::from_param(9.0), Quality::ExtraHigh);
     }

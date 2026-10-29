@@ -28,20 +28,23 @@ Fields, as 3D textures (hardware trilinear for advection and the march):
 1. Emit: in the source (a squashed sphere, Source Size across) add density
    or fuel, temperature and an upward inflow speed, modulated by animated
    noise so the inflow breaks up.
-2. Advect velocity, state and detail coordinates: MacCormack with the
-   min/max clamp (semi-Lagrangian on Low).
+2. Advect: velocity semi-Lagrangian, state MacCormack with the min/max
+   clamp. Velocity sits at cell centres, where the
+   pressure solve cannot see a cell-to-cell zigzag; corrected velocity let
+   one grow into streaks, and the plain advection's smoothing stops it.
 3. Burn (Fire): `burn = fuel·(1 − e^(−rate·dt))` where temperature is past
    ignition; fuel −= burn, temperature += burn·heat, density += burn·soot,
    flame = max(flame·e^(−dt/τ), burn·k). Burning also expands: the
    pressure solve takes `burn·expansion` as its divergence target.
 4. Forces: buoyancy along −gravity, `(buoyancy·T − weight·density)`;
-   vorticity confinement `ε·h·(N×ω)`; a curl-noise push at about four
-   cells (Turbulence).
+   vorticity confinement `ε·h·(N×ω)` (Swirl); a curl-noise push at half
+   the source's size, at least four cells (Turbulence).
 5. Project: divergence, red-black Gauss-Seidel on the warm-started
    pressure (iterations per Quality), subtract the gradient. Floor closed,
    other faces open (p = 0).
-6. Fade: density and temperature decay, and both fade to zero over the
-   last two cells of the open faces.
+6. Fade: density and temperature decay. A sponge band over the 15% of the
+   box next to each side and the top fades the gas at up to 30 per second,
+   so it thins out before a face and the box never shows.
 
 The detail coordinates reset to identity every period P on two phases half
 a period apart (advected textures): the renderer blends the two, so
@@ -82,7 +85,6 @@ the flame colour, its power following the flames.
 |---|---|---|---|---|
 | cell | 2× World | 1× | ½× | ¼× |
 | pressure iterations | 20 | 30 | 50 | 80 |
-| advection | semi-Lagrangian | MacCormack | MacCormack | MacCormack |
 | march samples per cell | 0.75 | 1 | 1.5 | 2 |
 | light volume | ½ res, 16 steps | ½ res, 24 | full, 48 | full, 64 |
 | detail octaves | 1 | 2 | 3 | 4 |
