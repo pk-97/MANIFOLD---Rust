@@ -1278,16 +1278,24 @@ impl RenderScene {
                                 [&Self::sampler_cache_key(draw.sampler_descs[0])],
                         },
                     ];
-                    let depth_draw = draw.camera_live(manifold_gpu::Draw::new(
-                        if shadow_uniforms.discard_free() {
-                            &solid_depth_pipeline
-                        } else {
-                            &shadow_pipeline
-                        },
-                        &shadow_bindings,
-                        draw.vertex_count,
-                        draw.instance_count,
-                    ));
+                    // The prepass places its vertices in its own shader, which
+                    // can round a triangle's depth a hair nearer than the
+                    // colour pass does; the colour pass then fails GreaterEqual
+                    // there and the scene behind shows through as specks. A
+                    // few units farther (reversed depth) keeps the nearest
+                    // surface, far short of any face behind it.
+                    let depth_draw = draw
+                        .camera_live(manifold_gpu::Draw::new(
+                            if shadow_uniforms.discard_free() {
+                                &solid_depth_pipeline
+                            } else {
+                                &shadow_pipeline
+                            },
+                            &shadow_bindings,
+                            draw.vertex_count,
+                            draw.instance_count,
+                        ))
+                        .depth_bias(-16.0, -1.0, 0.0);
 
                     #[cfg(feature = "fluid-perf-proofs")]
                     gpu.native_enc
