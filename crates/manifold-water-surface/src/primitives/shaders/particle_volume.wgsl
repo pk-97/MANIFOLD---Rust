@@ -23,7 +23,8 @@
 // up) draws as a flat disc centred on the solid's surface below it, `film_wide` across the
 // surface and `film_half` along its normal, so the film's discs blend into
 // one flat sheet `film_half` high with the rest of the water's look, where
-// their own ellipsoids would leave holes and bumps. A node that gathers less
+// their own ellipsoids would leave holes and bumps. The same thin water on a
+// wall or overhang is thinner than a display cell and is not drawn. A node that gathers less
 // than PV_MIN_WEIGHT reads its distance to the nearest blob that visits it,
 // (|q| - r) / g for that blob alone, at most 3 * blob_reach: the blend
 // reaches only half a short axis past a flattened blob's surface, often less
@@ -162,10 +163,13 @@ const PV_MIN_WEIGHT: f32 = 1.0e-3;
 // A film lies only on a solid that faces up: fully where the surface's
 // normal is at least this far up (slopes to about 45 degrees), not at all
 // where it is at most PV_FILM_WALL_UP (walls, overhangs and ceilings). Thin
-// water running down a wall draws as its own drops, never as a pane in the
+// water running down a wall is not drawn (`drawn`), never as a pane in the
 // wall's face.
 const PV_FILM_FLOOR_UP: f32 = 0.7;
 const PV_FILM_WALL_UP: f32 = 0.3;
+// Wall water drawn at under this share of its size is skipped: it is under a
+// display node across.
+const PV_LEAST_DRAWN: f32 = 0.05;
 // How far a film disc's weight reaches, times the disc: FILM_BLEND in
 // manifold-water-liquid's field_build.rs.
 const PV_FILM_BLEND: f32 = 1.2;
@@ -322,8 +326,14 @@ fn cs_main(
             // that, and from 0 on a wall to 1 on a floor (PV_FILM_WALL_UP,
             // PV_FILM_FLOOR_UP), so no blob jumps between the two shapes from
             // one frame to the next: its centre, shape and weight's size
-            // blend, and its box covers both.
+            // blend, and its box covers both. The same thin water on a wall,
+            // an overhang or a ceiling is thinner than a display cell can
+            // draw, so it is not drawn: `drawn` falls with the film's
+            // rise in thinness and closeness but on a wall, and the blob
+            // shrinks with it, its weight too, until it goes. The wet marks
+            // (node.wet_map, from the particles) show where it runs.
             var film = 0.0;
+            var drawn = 1.0;
             if counts[b] < params.fade_end {
                 let near = pv_solid_at(centre, h);
                 let steep = length(near.xyz);
@@ -331,7 +341,12 @@ fn cs_main(
                     let thin = (params.fade_end - counts[b]) / (params.fade_end - params.fade_start);
                     let close = 2.0 * (params.film_reach - near.w) / params.film_reach;
                     let facing = smoothstep(PV_FILM_WALL_UP, PV_FILM_FLOOR_UP, near.y / steep);
-                    film = smoothstep(0.0, 1.0, min(thin, 1.0)) * smoothstep(0.0, 1.0, min(close, 1.0)) * facing;
+                    let sheet = smoothstep(0.0, 1.0, min(thin, 1.0)) * smoothstep(0.0, 1.0, min(close, 1.0));
+                    film = sheet * facing;
+                    drawn = 1.0 - sheet * (1.0 - facing);
+                }
+                if drawn < PV_LEAST_DRAWN {
+                    continue;
                 }
                 if film > 0.0 {
                     let n = near.xyz / steep;
@@ -348,6 +363,7 @@ fn cs_main(
                     support = max(support, PV_FILM_BLEND * sqrt(vec3<f32>(wide2) + n * n * (half2 - wide2)));
                 }
             }
+            support = support * drawn;
             // Native support is a grid-aligned box including its outer
             // interpolation node, cut to the tile.
             let first = vec3<i32>(floor((centre - support) / h + vec3<f32>(0.5)));
@@ -364,6 +380,9 @@ fn cs_main(
                 off = shape_off_diagonal.xyz;
                 size = shape_off_diagonal.w;
             }
+            // Wall water shrinks about its centre, its weight with it.
+            diag = diag / drawn;
+            off = off / drawn;
             // A film's flat sheet rests on its solid, so the smoothing may
             // move it as it moves bulk water: its disc counts as fade_end
             // neighbours, where the smoothing's weight is full.
