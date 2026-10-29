@@ -125,7 +125,7 @@ impl StepState {
         self.narrow_band.reserve(device, pool, narrow_band)?;
         // Every share is taken in the step that adds it, so a fresh zeroed
         // field per pool is all the sand needs; unwired, none is held.
-        let share = pool_len(pool) * 4;
+        let share = pool_len(pool) * SAND_CORNER_BYTES;
         if !sand {
             self.sand_share = None;
         } else if self.sand_share.as_ref().is_none_or(|b| b.size != share) {

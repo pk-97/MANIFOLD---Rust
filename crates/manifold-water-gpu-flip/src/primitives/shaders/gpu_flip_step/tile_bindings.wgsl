@@ -36,9 +36,11 @@
 // A wired Sand's particles this frame, `u.sand_count` of them.
 @group(0) @binding(72) var<storage, read> sand_points: array<FluidParticle>;
 
-// The sand's volume share at each held cell's low corner in SAND_FIXED
-// units, added by `sand_corners` and taken (reset to 0) by `sand_drag` in
-// the same step.
+// The sand at each held cell's low corner, SAND_WORDS words a corner: its
+// volume share in SAND_FIXED units, then its momentum along x, y and z in
+// SAND_MOMENTUM_FIXED units (i32 in the u32 words). Added by `sand_corners`
+// and taken (reset to 0) by `sand_drag` in the same step.
+const SAND_WORDS: u32 = 4u;
 @group(0) @binding(73) var<storage, read_write> sand_share: array<atomic<u32>>;
 
 // Slots handed out this build (world_tiles.rs TileLists::fresh).

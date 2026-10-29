@@ -125,6 +125,10 @@ manifold_core::testkit_visible! { pub(crate) const STEP_SHADER: &str = concat!(
 ); }
 const NAME: &str = "GPU FLIP Step";
 
+/// A wired Sand's bytes at each pool corner: its share and its momentum
+/// along each axis (the shader's `SAND_WORDS` words).
+pub(crate) const SAND_CORNER_BYTES: u64 = 16;
+
 manifold_core::testkit_visible! {
 /// Layers of valid faces the step's face grid holds around the water at
 /// least: both extensions run `band_layers` ≥ 5.
