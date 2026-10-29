@@ -41,6 +41,19 @@ pub enum NodeFileLoad {
 /// The picture files a texture field takes and a texture source reads whole.
 pub const PICTURE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tga", "bmp", "exr", "hdr"];
 
+/// The files a Material's texture file takes: a picture, or a MaterialX
+/// material file (`materialx`) whose pictures are every map.
+pub const MATERIAL_FILE_EXTENSIONS: [&str; PICTURE_EXTENSIONS.len() + 1] = {
+    let mut extensions = [""; PICTURE_EXTENSIONS.len() + 1];
+    let mut i = 0;
+    while i < PICTURE_EXTENSIONS.len() {
+        extensions[i] = PICTURE_EXTENSIONS[i];
+        i += 1;
+    }
+    extensions[i] = "mtlx";
+    extensions
+};
+
 /// Whether `path` names a picture by its extension.
 pub fn is_picture(path: &str) -> bool {
     std::path::Path::new(path)

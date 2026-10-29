@@ -1674,21 +1674,34 @@ fn texture_image_index(texture: &gltf::Texture<'_>) -> Result<usize, String> {
 /// every requested dependency first prevents edited or deleted external images
 /// from being hidden by a live cache entry. Decode uses these exact bytes.
 pub(crate) struct GltfTextureSnapshot {
-    encoded: Vec<u8>,
-    format: Result<image::ImageFormat, String>,
+    base: SnapshotBase,
+    /// Pictures whose red channel the decode writes into channel `.2` of the
+    /// base: a material file's packed textures (`material_file`).
+    channels: Vec<(Vec<u8>, Result<image::ImageFormat, String>, usize)>,
     pub identity: [u8; 32],
+}
+
+/// What a texture starts from: an encoded picture, or one texel filling
+/// the size of its first channel picture.
+enum SnapshotBase {
+    Picture(Vec<u8>, Result<image::ImageFormat, String>),
+    Fill([u8; 4]),
 }
 
 /// The encoded image `texture_index` of a glTF document names, or the whole
 /// file when it is a picture (PNG, JPG and the rest): a picture is its own
 /// one image, so a Material's File texture reads it as it reads a model's
 /// map. The file's own bytes decide which it is; the extension only names a
-/// picture format that has no signature (TGA).
+/// picture format that has no signature (TGA). A MaterialX file's texture
+/// `texture_index` is the pictures it stacks.
 pub(crate) fn parse_texture_snapshot(
     path: &std::path::Path,
     texture_index: u32,
 ) -> Result<GltfTextureSnapshot, String> {
     use sha2::{Digest, Sha256};
+    if manifold_core::materialx::is_materialx(&path.to_string_lossy()) {
+        return material_file_snapshot(path, texture_index);
+    }
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let picture = image::guess_format(&bytes).or_else(|_| image::ImageFormat::from_path(path));
     let (encoded, format) = match picture {
@@ -1707,8 +1720,52 @@ pub(crate) fn parse_texture_snapshot(
     }
     hash.update(&encoded);
     Ok(GltfTextureSnapshot {
-        encoded,
-        format,
+        base: SnapshotBase::Picture(encoded, format),
+        channels: Vec::new(),
+        identity: hash.finalize().into(),
+    })
+}
+
+/// Texture `texture_index` of the MaterialX file at `path`: the bytes of
+/// every picture it stacks, and an identity over all of them and where each
+/// lands.
+fn material_file_snapshot(
+    path: &std::path::Path,
+    texture_index: u32,
+) -> Result<GltfTextureSnapshot, String> {
+    use sha2::{Digest, Sha256};
+    let texture = super::gltf_import::material_file::texture(path, texture_index)?;
+    let mut hash = Sha256::new();
+    hash.update(b"manifold.material-file-texture-snapshot.v1");
+    let mut read = |picture: &std::path::Path, slot: u8| {
+        let bytes =
+            std::fs::read(picture).map_err(|e| format!("{}: {e}", picture.display()))?;
+        let format = image::guess_format(&bytes)
+            .or_else(|_| image::ImageFormat::from_path(picture))
+            .map_err(|e| format!("{}: {e}", picture.display()));
+        hash.update([slot]);
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(&bytes);
+        Ok::<_, String>((bytes, format))
+    };
+    let base = match &texture.whole {
+        Some(picture) => {
+            let (bytes, format) = read(picture, 4)?;
+            SnapshotBase::Picture(bytes, format)
+        }
+        None => SnapshotBase::Fill(texture.fill),
+    };
+    let mut channels = Vec::with_capacity(texture.channels.len());
+    for (picture, channel) in &texture.channels {
+        let (bytes, format) = read(picture, *channel as u8)?;
+        channels.push((bytes, format, *channel));
+    }
+    if let SnapshotBase::Fill(fill) = &base {
+        hash.update(fill);
+    }
+    Ok(GltfTextureSnapshot {
+        base,
+        channels,
         identity: hash.finalize().into(),
     })
 }
@@ -1816,12 +1873,40 @@ fn texture_encoded(
     Ok((encoded, format))
 }
 
+/// Decode a snapshot to RGBA8: its base picture, or its fill at the size of
+/// its first channel picture, with each channel picture's red written into
+/// its channel.
 pub(crate) fn decode_texture_snapshot(
     snapshot: GltfTextureSnapshot,
 ) -> Result<(u32, u32, Vec<u8>), String> {
     #[cfg(test)]
     TEXTURE_DECODE_COUNT.with(|count| count.set(count.get() + 1));
-    let decoded = image::load_from_memory_with_format(&snapshot.encoded, snapshot.format?)
+    let (mut texture, fill) = match snapshot.base {
+        SnapshotBase::Picture(encoded, format) => (Some(decode_picture(&encoded, format)?), [0; 4]),
+        SnapshotBase::Fill(fill) => (None, fill),
+    };
+    for (encoded, format, channel) in snapshot.channels {
+        let (w, h, picture) = decode_picture(&encoded, format)?;
+        let (tw, th, target) =
+            texture.get_or_insert_with(|| (w, h, fill.repeat((w * h) as usize)));
+        if (*tw, *th) != (w, h) {
+            return Err(format!(
+                "a packed picture is {w}x{h} but the texture is {tw}x{th}"
+            ));
+        }
+        for (texel, source) in target.chunks_exact_mut(4).zip(picture.chunks_exact(4)) {
+            texel[channel] = source[0];
+        }
+    }
+    texture.ok_or_else(|| "the texture names no picture".to_owned())
+}
+
+/// Decode one encoded picture to RGBA8.
+fn decode_picture(
+    encoded: &[u8],
+    format: Result<image::ImageFormat, String>,
+) -> Result<(u32, u32, Vec<u8>), String> {
+    let decoded = image::load_from_memory_with_format(encoded, format?)
         .map_err(|e| format!("glTF image decode failed: {e}"))?;
     let format = match &decoded {
         image::DynamicImage::ImageLuma8(_) => gltf::image::Format::R8,

@@ -239,6 +239,8 @@ fn filter_name(extensions: &[String]) -> &'static str {
     };
     if is(manifold_core::file_loader::PICTURE_EXTENSIONS) {
         "Pictures"
+    } else if is(&manifold_core::file_loader::MATERIAL_FILE_EXTENSIONS) {
+        "Pictures and Materials"
     } else if is(&["glb", "gltf"]) {
         "Models"
     } else {

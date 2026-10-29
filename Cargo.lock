@@ -2681,6 +2681,7 @@ dependencies = [
  "log",
  "manifold-foundation",
  "ringbuf",
+ "roxmltree",
  "serde",
  "serde_json",
  "sha2",

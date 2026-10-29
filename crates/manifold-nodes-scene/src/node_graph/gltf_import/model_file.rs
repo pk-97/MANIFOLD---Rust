@@ -175,9 +175,13 @@ pub(crate) fn picture_size(doc: &SceneDoc, path: &str) -> Option<(u32, u32)> {
         .map(|size| (size.0, size.1))
 }
 
-/// Read the facts of a file a document names: a picture's size, or a
-/// model's facts ([`read_facts`]). On the worker only.
+/// Read the facts of a file a document names: a picture's size, a material
+/// file's one material, or a model's facts ([`read_facts`]). On the worker
+/// only.
 pub fn read_file_facts(path: &Path) -> Result<(ModelFacts, Vec<String>), String> {
+    if manifold_core::materialx::is_materialx(&path.to_string_lossy()) {
+        return super::material_file::read_facts(path);
+    }
     if image::ImageFormat::from_path(path).is_err() {
         return read_facts(path);
     }

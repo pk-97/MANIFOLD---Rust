@@ -61,6 +61,7 @@ mod rt_r3_heldout_gltf;
 mod rt_t1b_vertex_normals;
 mod rt_t38_multibounce;
 mod rt_w0_gbuffer;
+mod scene_library_material;
 mod scene_loop_copies;
 mod scene_swarm;
 mod substeps;

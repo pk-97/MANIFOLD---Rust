@@ -434,6 +434,7 @@ fn folded(m: transform::Mat4) -> Option<ImportedTransform> {
     })
 }
 
+pub(crate) mod material_file;
 pub(crate) mod model_file;
 pub use model_file::{read_facts, read_file_facts, world_bounds};
 

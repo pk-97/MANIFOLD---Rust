@@ -148,12 +148,12 @@ const TEXTURE_SOURCES: &[Choice] = &[
     },
 ];
 
-/// A model file's material keeps its file's maps until another source is
-/// picked.
+/// A model or material file's material keeps its file's maps until another
+/// source is picked.
 const MODEL_TEXTURE_SOURCES: &[Choice] = &[
     Choice {
         key: "model",
-        label: "From Model File",
+        label: "From Material File",
     },
     Choice {
         key: "none",
@@ -329,7 +329,7 @@ pub static MATERIAL_FIELDS: [FieldRow; 5] = [
         label: "Texture File",
         section: Material,
         control: FieldControl::File {
-            extensions: crate::file_loader::PICTURE_EXTENSIONS,
+            extensions: &crate::file_loader::MATERIAL_FILE_EXTENSIONS,
         },
         applies: file,
         disabled: enabled,
@@ -341,8 +341,17 @@ pub static MATERIAL_FIELDS: [FieldRow; 5] = [
             _ => FieldValue::File(String::new()),
         },
         write: |fields, value| match (fields, value) {
+            // A MaterialX file is a whole material: its one material reads
+            // as a model file's does, every map at once.
             (ItemFields::Material(m), FieldValue::File(path)) => {
-                m.texture = TextureSource::File { path: path.clone() };
+                m.texture = if crate::materialx::is_materialx(path) {
+                    TextureSource::Model {
+                        file: path.clone(),
+                        material: Some(0),
+                    }
+                } else {
+                    TextureSource::File { path: path.clone() }
+                };
                 Ok(())
             }
             _ => Err(wrong_value("texture_file", value)),

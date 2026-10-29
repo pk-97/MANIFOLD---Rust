@@ -8,6 +8,7 @@ publish = false
 manifold-foundation = { path = "../manifold-foundation" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+roxmltree = "0.20"
 uuid = { workspace = true }
 ahash = { workspace = true }
 arc-swap = { workspace = true }

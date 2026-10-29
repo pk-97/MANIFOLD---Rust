@@ -1,4 +1,5 @@
-//! Copy glTF resources as one portable asset through the existing collector.
+//! Copy glTF resources, or a MaterialX file with its pictures, as one portable
+//! asset through the existing collector.
 
 use super::{CollectError, path_is_inside, sha256_file};
 use serde_json::Value;
@@ -21,6 +22,8 @@ pub(super) struct MeshBundle {
     binary_tail: Option<usize>,
     resources: Vec<Resource>,
     relative_uris: bool,
+    // A `.mtlx` is copied byte-for-byte; its pictures keep their relative paths.
+    materialx: bool,
     pub hash: [u8; 32],
 }
 
@@ -29,6 +32,9 @@ impl MeshBundle {
     /// Only formats owned by the glTF importer are inspected here; the core
     /// file-loader inventory still decides which authored assets are meshes.
     pub fn read(source: &Path) -> Result<Option<Self>, CollectError> {
+        if manifold_core::materialx::is_materialx(&source.to_string_lossy()) {
+            return Self::read_materialx(source);
+        }
         if !source
             .extension()
             .and_then(|s| s.to_str())
@@ -144,12 +150,89 @@ impl MeshBundle {
             binary_tail,
             resources,
             relative_uris,
+            materialx: false,
+            hash: digest.finalize().into(),
+        }))
+    }
+
+    /// The material file stays byte-for-byte; each picture it names is copied
+    /// to the same relative path beside it. A picture that is absolute or
+    /// climbs out of the folder cannot be bundled without rewriting the file.
+    fn read_materialx(source: &Path) -> Result<Option<Self>, CollectError> {
+        let error = |message: String| {
+            CollectError::Io(format!("collect material {}: {message}", source.display()))
+        };
+        let original = std::fs::read(source).map_err(|e| error(e.to_string()))?;
+        let material = manifold_core::materialx::read(source).map_err(&error)?;
+        let mut resources: Vec<Resource> = Vec::new();
+        let mut digest = Sha256::new();
+        digest.update(b"manifold.collect.materialx-bundle.v1");
+        digest.update((original.len() as u64).to_le_bytes());
+        digest.update(&original);
+        for map in &material.maps {
+            let written = Path::new(&map.relative);
+            let outside = || {
+                error(format!(
+                    "names {}, which is outside its folder; Collect keeps a material's pictures beside it",
+                    map.relative
+                ))
+            };
+            if written.is_absolute() || written.has_root() {
+                return Err(outside());
+            }
+            let mut relative = PathBuf::new();
+            for part in written.components() {
+                match part {
+                    std::path::Component::Normal(name) => relative.push(name),
+                    std::path::Component::CurDir => {}
+                    _ => return Err(outside()),
+                }
+            }
+            if relative.as_os_str().is_empty() {
+                return Err(error(format!("names an empty picture path {:?}", map.relative)));
+            }
+            if resources.iter().any(|r| r.relative == relative) {
+                continue;
+            }
+            let canonical = std::fs::canonicalize(&map.path).map_err(|e| {
+                error(format!(
+                    "picture {:?} ({}): {e}",
+                    map.relative,
+                    map.path.display()
+                ))
+            })?;
+            if !canonical.is_file() {
+                return Err(error(format!("picture {:?} is not a file", map.relative)));
+            }
+            let hash = sha256_file(&canonical)?;
+            let text = relative.to_string_lossy();
+            digest.update((text.len() as u64).to_le_bytes());
+            digest.update(text.as_bytes());
+            digest.update(hash);
+            resources.push(Resource {
+                source: canonical,
+                relative,
+                hash,
+            });
+        }
+        if resources.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            source: source.to_path_buf(),
+            original,
+            document: Value::Null,
+            binary_tail: None,
+            resources,
+            relative_uris: true,
+            materialx: true,
             hash: digest.finalize().into(),
         }))
     }
 
     pub fn is_portable_in(&self, project: &Path) -> bool {
         self.relative_uris
+            && (!self.materialx || path_is_inside(&self.source, project))
             && self
                 .resources
                 .iter()
@@ -181,14 +264,22 @@ impl MeshBundle {
                 )));
             }
         }
-        let json = serde_json::to_vec(&self.document).map_err(|e| error(e.to_string()))?;
+        let json = if self.materialx {
+            Vec::new()
+        } else {
+            serde_json::to_vec(&self.document).map_err(|e| error(e.to_string()))?
+        };
         let target = directory.join(self.source.file_name().expect("model is a file"));
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&target)
             .map_err(|e| error(format!("create {}: {e}", target.display())))?;
-        let written = if let Some(tail) = self.binary_tail {
+        let written = if self.materialx {
+            file.write_all(&self.original)
+                .map_err(|e| error(format!("write {}: {e}", target.display())))?;
+            self.original.len() as u64
+        } else if let Some(tail) = self.binary_tail {
             let padded_json_length = json
                 .len()
                 .checked_add(3)
@@ -269,6 +360,50 @@ mod tests {
         );
         assert!(!destination.join("model.gltf").exists());
         assert_eq!(std::fs::read(resource).unwrap(), b"new");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn materialx_copies_its_pictures_beside_it() {
+        let root = std::env::temp_dir().join(format!(
+            "manifold-collect-materialx-{}",
+            std::process::id()
+        ));
+        let src = root.join("src");
+        std::fs::create_dir_all(src.join("textures")).unwrap();
+        let mtlx = br#"<?xml version="1.0"?>
+<materialx version="1.38">
+  <tiledimage name="color_img" type="color3">
+    <input name="file" type="filename" value="textures/a_color.jpg"/>
+  </tiledimage>
+  <tiledimage name="rough_img" type="float">
+    <input name="file" type="filename" value="./b_rough.jpg"/>
+  </tiledimage>
+  <standard_surface name="surf" type="surfaceshader">
+    <input name="base_color" type="color3" nodename="color_img"/>
+    <input name="specular_roughness" type="float" nodename="rough_img"/>
+  </standard_surface>
+  <surfacematerial name="mat" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="surf"/>
+  </surfacematerial>
+</materialx>
+"#;
+        std::fs::write(src.join("m.mtlx"), mtlx).unwrap();
+        std::fs::write(src.join("textures/a_color.jpg"), b"color bytes").unwrap();
+        std::fs::write(src.join("b_rough.jpg"), b"rough").unwrap();
+        let bundle = MeshBundle::read(&src.join("m.mtlx")).unwrap().unwrap();
+        assert!(bundle.is_portable_in(&root));
+        let dst = root.join("out");
+        std::fs::create_dir(&dst).unwrap();
+        let (path, bytes) = bundle.copy_to(&dst).unwrap();
+        assert_eq!(path, dst.join("m.mtlx"));
+        assert_eq!(bytes, (mtlx.len() + 11 + 5) as u64);
+        assert_eq!(std::fs::read(&path).unwrap(), mtlx);
+        assert_eq!(
+            std::fs::read(dst.join("textures/a_color.jpg")).unwrap(),
+            b"color bytes"
+        );
+        assert_eq!(std::fs::read(dst.join("b_rough.jpg")).unwrap(), b"rough");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -55,6 +55,7 @@ pub mod liquid_setup;
 pub mod macro_bank;
 pub mod marker;
 pub mod material_inspector;
+pub mod materialx;
 pub mod math;
 pub mod midi;
 pub mod param_lookup;
