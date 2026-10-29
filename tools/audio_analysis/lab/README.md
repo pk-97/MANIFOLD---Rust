@@ -57,6 +57,14 @@ predictions) and `release.py export TRAIN_ID --set FAMILY --ship` (the model fil
 goldens). A config using a part the app does not run (`runtime_parts.json`) is refused before anything trains.
 `release.py train CONFIG --provisional` makes a throwaway release in minutes on the CPU, for building Rust against it.
 
+**Linux with an NVIDIA card.** On the box, from a checkout: `lab/linux_setup.sh MAC_HOST`. It links the Mac paths the
+song list, labels and catalogue store (`/Users/peterkiemann` to the Linux home, the Mac's Dropbox folder to
+`~/Dropbox`), makes a venv at `~/.venvs/manifold-lab` with the lab's packages, copies the lab caches and label files
+from the Mac over ssh (about 52 GB), and lists any song file still missing. Song bounces and Ableton sets come from
+the Linux Dropbox app syncing Music Production. Activate the venv, then `lab/preflight.py PLAN.json`: check 2 trains
+a tiny net on the card, so a torch build that cannot drive it fails there. Nets train on CUDA when torch sees an
+NVIDIA card, else on the Mac GPU.
+
 **Test.** `lab/test_lab.py` (scorer and input parity against saves of the retired runners, kick labels and parts
 against the kick records, the release tool against the shipped v1 goldens and the model file contract, plus the
 guards; about 25 s).

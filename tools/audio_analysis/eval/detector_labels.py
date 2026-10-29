@@ -249,9 +249,10 @@ def stem_hits(x, sr, band=(150, 10000)):
 
 def refuse_online(path):
     """Exits on an online-only (dataless) Dropbox file: reading it downloads it, which needs Peter's OK."""
-    import os
     import sys
-    if os.stat(path).st_flags & 0x40000000:
+
+    from tools.audio_analysis.catalog.catalog import is_dataless
+    if is_dataless(path):
         sys.exit(f'online-only file, not read (ask Peter before downloading): {path}')
 
 

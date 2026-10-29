@@ -27,7 +27,7 @@ class FakeProbe:
 
     def __init__(self, runs):
         self.runs = runs
-        self.dirty, self.mps_ok, self.free, self.broken = [], (True, ''), 80e9, {}
+        self.dirty, self.gpu_ok, self.free, self.broken = [], (True, 'a net trains on mps (the Mac GPU)'), 80e9, {}
         self.misses = {}                 # (config, release) -> [(song, artifact)]
         self.keys = {'ida.p', 'idb.p'}   # the fake verdict store
         self.gpu_state = (True, 'GPU free', True)
@@ -36,8 +36,8 @@ class FakeProbe:
     def git_dirty(self):
         return self.dirty
 
-    def mps(self):
-        return self.mps_ok
+    def net_device(self):
+        return self.gpu_ok
 
     def free_bytes(self):
         return self.free
@@ -103,12 +103,12 @@ class PreflightTests(unittest.TestCase):
                                 ('kick_b', True)])
         self.assertEqual(exams, ['snare-old'])
 
-    def test_dirty_tree_mps_and_disk_fail(self):
-        self.probe.dirty, self.probe.mps_ok, self.probe.free = [' M a.py'], (False, 'no MPS'), 10 * 2 ** 30
+    def test_dirty_tree_gpu_and_disk_fail(self):
+        self.probe.dirty, self.probe.gpu_ok, self.probe.free = [' M a.py'], (False, 'no GPU'), 10 * 2 ** 30
         rows = self.rows()
         self.assertEqual(self.verdicts(rows)[:3], [False] * 3)
         self.assertEqual(rows[0][3], [' M a.py'])
-        self.assertIn('no MPS', rows[1][2])
+        self.assertIn('no GPU', rows[1][2])
         self.assertIn('10 GiB free', rows[2][2])
 
     def test_unresolvable_config_fails_check_4_and_is_not_inspected(self):

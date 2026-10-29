@@ -3,7 +3,8 @@
 of experiments needs no one at the keyboard. Nothing clever: no retries, no judgment, no config edits. The first step
 that exits non-zero ends the queue; the steps after it stay unrun and the summary says so.
 
-One exception, the paging watchdog: every 5 seconds the machine's pageout counter (vm_stat) is read; if it has risen
+One exception, the paging watchdog: every 5 seconds the machine's pageout counter (vm_stat on the Mac, /proc/vmstat
+on Linux) is read; if it has risen
 at every sample for --swap-watch-seconds (default 60, 0 off) the machine is paging for real, so the step's process
 group and every descendant are killed, the step is recorded as exit 137 and the queue goes on to the next step. A
 healthy run can hold 20+ GB of clean memory-mapped spectra without paging, so resident size is not the trigger; it is
@@ -112,7 +113,7 @@ def stamp(t):
 
 def tree_rss(root):
     """(resident KB of root and all its descendants, their pids), from one ps listing; (0, []) when root is gone."""
-    out = subprocess.run(['ps', '-axo', 'pid=,ppid=,rss='], capture_output=True, text=True).stdout
+    out = subprocess.run(['ps', '-eo', 'pid=,ppid=,rss='], capture_output=True, text=True).stdout
     kids, rss = {}, {}
     for ln in out.splitlines():
         f = ln.split()
@@ -129,9 +130,17 @@ def tree_rss(root):
     return sum(rss[p] for p in pids), pids
 
 
-def vm_sample():
-    """(pageouts since boot, swap used in MB): vm_stat's Pageouts counter and sysctl vm.swapusage. The one place
-    the machine is read, so preflight and the watchdog see the same numbers."""
+def vm_sample(system=sys.platform, read=lambda p: Path(p).read_text()):
+    """(pageouts since boot, swap used in MB). The one place the machine is read, so preflight and the watchdog see
+    the same numbers. The Mac: vm_stat's Pageouts counter and sysctl vm.swapusage. Linux: /proc/vmstat's pswpout
+    (pages written to swap) and SwapTotal - SwapFree from /proc/meminfo."""
+    if system == 'linux':
+        vm, mem = read('/proc/vmstat'), read('/proc/meminfo')
+        po = re.search(r'^pswpout (\d+)', vm, re.M)
+        kb = [re.search(rf'^{k}:\s+(\d+) kB', mem, re.M) for k in ('SwapTotal', 'SwapFree')]
+        if not po or not all(kb):
+            raise RuntimeError(f'cannot read paging counters: /proc/vmstat gave {vm[:80]!r}, /proc/meminfo gave {mem[:80]!r}')
+        return int(po.group(1)), (int(kb[0].group(1)) - int(kb[1].group(1))) / 1024
     vm = subprocess.run(['vm_stat'], capture_output=True, text=True).stdout
     swap = subprocess.run(['sysctl', '-n', 'vm.swapusage'], capture_output=True, text=True).stdout
     po = re.search(r'^Pageouts:\s+(\d+)', vm, re.M)

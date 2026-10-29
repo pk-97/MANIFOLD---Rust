@@ -32,7 +32,6 @@ SKIP_WHY = (('imported', 'project imports (samples)'), ('recorded', 'project rec
             ('project info', 'Ableton project info'), ('folder info', 'Ableton folder info'), ('preset', 'plugin presets'),
             ('__macosx', 'archive junk'))
 AUDIO = {'.wav', '.mp3', '.aif', '.aiff', '.flac', '.m4a'}
-DATALESS = 0x40000000
 REFERENCE = re.compile(r'original mix|acapella|accapella|\[vocals\]|\[music\]|\(vocals\)|_\(vocals\)|-vocals|diy acapella|mp3 320|'
                        r'\(instrumental\)|studio acapella|edmlake|^audio \[|the_weeknd|_-_', re.I)
 
@@ -118,7 +117,7 @@ def scan(con, music=None, meta=True):
         rel = parents[1:] if parents and parents[0] == 'Ableton Projects' else parents
         role, variant = catalog.classify(os.path.basename(path), rel, False)
         st = os.stat(path)
-        dataless = bool(st.st_flags & catalog.SF_DATALESS)
+        dataless = catalog.dataless(st)
         if meta or dataless:
             m = catalog.file_meta(path, prev.get(path))
             if not dataless and not (prev.get(path) and prev[path].get('sha256')):
@@ -139,7 +138,7 @@ def scan(con, music=None, meta=True):
             st = os.stat(path)
             old = con.execute('SELECT mtime_ns FROM als_files WHERE path=?', (path,)).fetchone()
             row = dict(path=path, project_dir=project_dir(path, music) or str(Path(path).parent), name=os.path.basename(path),
-                       size=st.st_size, mtime_ns=st.st_mtime_ns, local=0 if st.st_flags & DATALESS else 1)
+                       size=st.st_size, mtime_ns=st.st_mtime_ns, local=0 if catalog.dataless(st) else 1)
             if old and old[0] != st.st_mtime_ns:
                 row.update(scanned_mtime_ns=None, verdict=None, error=None)
             catalog.upsert(con, 'als_files', ('path',), row)
@@ -205,14 +204,14 @@ def download(con, paths, why):
         if not p.startswith(music) or os.path.isdir(p) or (ext not in AUDIO and ext != '.als'):
             raise SystemExit(f'refusing {p}: not an audio file or Ableton set inside the music folder')
         st = os.stat(p)
-        if not st.st_flags & DATALESS:
+        if not catalog.dataless(st):
             print(f'  already local: {os.path.basename(p)}')
             continue
         with open(p, 'rb') as f:
             while f.read(1 << 24):
                 pass
         st2 = os.stat(p)
-        if st2.st_flags & DATALESS:
+        if catalog.dataless(st2):
             print(f'  still online-only after reading: {p}')
             continue
         at = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')

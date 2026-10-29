@@ -34,7 +34,6 @@ PROJECTS = {  # song -> project folder; duplicates of goal songs or of each othe
     'linear': '2025/Linear Project', 'motion': '2025/Motion Project',
     'push': '2025/Push Project', 'stagnate': '2025/Stagnate Project', 'weight': '2025/Weight Project'}
 AUDIO = ('.wav', '.mp3', '.aif', '.aiff', '.flac', '.m4a')
-SF_DATALESS = 0x40000000  # an online-only Dropbox file: reading it downloads it, which needs Peter's OK
 # Song -> (set, bounce) under the music folder. All In For You (all_in_for_you, the Growth project folder) is left out:
 # its sets' kick notes hit the T2 kick stem before the 164-110-164 bpm ramps and miss it after them, and the grid fit
 # picks the live-edit block after the song's end (27 of 129 kicks) over the song itself (BUG-fffrv (album and EP songs)).
@@ -153,7 +152,8 @@ def one(song, recorded=None):
     from tools.audio_analysis.lab.offsets import prove_seconds
     als, wip = source(song, recorded)
     row = dict(song=song, als=str(als), wip=str(wip))
-    online = [str(p) for p in (als, wip) if os.stat(p).st_flags & SF_DATALESS]
+    from tools.audio_analysis.catalog.catalog import is_dataless
+    online = [str(p) for p in (als, wip) if is_dataless(p)]
     if online:
         return dict(row, status=f'not proven (online-only, not read: {online})')
     res = extract(str(als))

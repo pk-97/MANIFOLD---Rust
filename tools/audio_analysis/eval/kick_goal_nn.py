@@ -191,9 +191,13 @@ class Net(nn.Module):
 
 
 def device():
-    """KICK_GOAL_NN_DEVICE=cpu|mps; default the GPU when there is one."""
+    """KICK_GOAL_NN_DEVICE=cpu|mps|cuda; default the GPU when there is one (an NVIDIA card, else the Mac's)."""
     want = os.environ.get('KICK_GOAL_NN_DEVICE')
-    return torch.device(want or ('mps' if torch.backends.mps.is_available() else 'cpu'))
+    if want:
+        return torch.device(want)
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    return torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
 
 
 def draw_weights(song, idx, y):
@@ -247,8 +251,8 @@ def train(songs, seed, synth=(), epochs=EPOCHS, synth_share=0.5, swa_epochs=0, b
                 ys.append(np.full(len(pick), y, np.float32))
             if picks:
                 drawn.append((song, np.concatenate(picks, axis=1)))
-        # Songs stay on the CPU: each epoch's slices are cut there bit-identically to MPS, and only the per-batch
-        # tensors move to the net's device (an MPS index tensor cannot index a CPU tensor) inside the loop.
+        # Songs stay on the CPU: each epoch's slices are cut there bit-identically to the GPU, and only the per-batch
+        # tensors move to the net's device (a GPU index tensor cannot index a CPU tensor) inside the loop.
         at = torch.from_numpy(np.concatenate([d for _, d in drawn], axis=1))
         parts = at.split([d.shape[1] for _, d in drawn], dim=1)
         x = torch.cat([song.slices(p[0], p[1]) for (song, _), p in zip(drawn, parts)])

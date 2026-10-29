@@ -44,7 +44,7 @@ CONTRACT = 2
 RATE, HOP = 48000, 256
 CLIP = 1e-6  # every logit clip (models.combine, the D17 net average)
 # The fixture audio is not in git: the main checkout's path.
-FIXTURES = Path('/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/audio')
+FIXTURES = ROOT / 'tests/fixtures/audio'
 LEAD_SILENCE_S = .5
 TEARS, APRICOTS = ('tears_140bpm', 0.0, 0.0), ('apricots_128bpm', 0.0, 0.0)
 QUIET = [('silence', .75), ('bad_guy_128bpm', 0.0, 2.0)]

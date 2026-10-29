@@ -43,7 +43,7 @@ STEMS_ROOT = ABL / 'STEMS'
 REMIX_PACKS = MUSIC / 'Old Albums Remix Stems And Extras'
 RELEASES = (MUSIC / 'EMERGENCE - ALBUM 2026', MUSIC / 'Interim - LS X EE - EP', MUSIC / 'Album Draft 2027')
 ENV_CACHE = Path.home() / '.cache/manifold/detector-lab/catalog'
-SF_DATALESS = 0x40000000
+SF_DATALESS = 0x40000000  # the Mac's st_flags bit for an online-only (File Provider) file
 AUDIO_EXT = {'.wav', '.mp3', '.aif', '.aiff', '.flac', '.m4a'}
 JUNK_DIRS = {'groups'}
 JUNK_SUB = ('sample', 'backup', 'project info', 'folder info', '__macosx')   # packs and project internals
@@ -214,8 +214,14 @@ def parse_version(name, parents=()):
 
 # ---- files: metadata, never opening online-only files ---------------------------------------------------------------
 
+def dataless(st):
+    """An online-only file (from its stat): reading it downloads it, which needs Peter's OK. Only the Mac's File
+    Provider makes these; Linux has no st_flags, and its Dropbox keeps every synced file on disk."""
+    return bool(getattr(st, 'st_flags', 0) & SF_DATALESS)
+
+
 def is_dataless(path):
-    return bool(os.stat(path).st_flags & SF_DATALESS)
+    return dataless(os.stat(path))
 
 
 def sha256_file(path):
@@ -324,7 +330,7 @@ def scan_audio(root, depth, stem_root=False):
                 continue
             if e.is_dir(follow_symlinks=False):
                 if (level < depth and e.name.lower() not in JUNK_DIRS and not any(x in e.name.lower() for x in JUNK_SUB)
-                        and not (e.stat().st_flags & SF_DATALESS)):
+                        and not dataless(e.stat())):
                     walk(e.path, level + 1, parents + [e.name])
             elif Path(e.name).suffix.lower() in AUDIO_EXT:
                 out.append((e.path, parents, stem_root))

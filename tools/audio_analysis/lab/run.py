@@ -261,7 +261,7 @@ def build(cfg, lab, songs, dev, log=print):
         extra = tuple(components.frame(song, m) for m in cfg.net['channels'])
         neg_w, pos_w = row_weights(cfg, song, s, onset, y, partner, songs.get(song.parent))
         data[t] = Song(cache.spectrum(song), onset, emit + ahead, mask, y, t, hard, extra, neg_w, pos_w)
-        # Every song stays on the CPU: slices() cuts bit-identically there, so no Song holds MPS pool memory and
+        # Every song stays on the CPU: slices() cuts bit-identically there, so no Song holds GPU memory and
         # train() moves only the per-batch tensors to the net's device. Gain copies and probes were already cut here.
         log(f'{t}: {len(cand)} candidates, {int(mask.sum())} training rows')
     return data
@@ -452,9 +452,9 @@ def why_no_gpu(dev):
         return None
     if os.environ.get('KICK_GOAL_NN_DEVICE') == 'cpu':
         return 'KICK_GOAL_NN_DEVICE=cpu is set in the environment'
-    if not torch.backends.mps.is_built():
-        return 'this torch build has no MPS support'
-    return 'torch reports MPS unavailable here (no Metal GPU visible to this process, e.g. a sandboxed or remote session)'
+    if not torch.backends.cuda.is_built() and not torch.backends.mps.is_built():
+        return 'this torch build has no GPU support (neither CUDA nor MPS)'
+    return 'torch sees no GPU here (no NVIDIA or Metal device visible to this process, e.g. a sandboxed or remote session)'
 
 
 def check_device(dev, cpu=False):

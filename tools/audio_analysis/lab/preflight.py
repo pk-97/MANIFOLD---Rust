@@ -4,7 +4,8 @@ reason; a failed check lists what is missing under it; exit 1 if any failed. It 
 writes nothing.
 
   1  tools/audio_analysis has no uncommitted change (release.py refuses a dirty tree)
-  2  torch reports MPS here (run.py refuses to train a net on the CPU)
+  2  a net trains on the GPU here: one tiny forward and backward pass on the device run.py would use (it refuses
+     the CPU), so a torch build that cannot drive this card fails now, not hours into a queue
   3  the home volume has the build free-space reserve (MIN_FREE_BYTES) free
   4  every config in a run, compare or release step resolves: run.py --plan prints its run id
   5  every snare-family config: its exam and holdout songs are in the kick verdict store (lab/kick_verdict.py)
@@ -89,16 +90,20 @@ class Probe:
             raise RuntimeError(r.stderr.strip())
         return r.stdout.splitlines()
 
-    def mps(self):
-        """(available, why not)."""
-        if os.environ.get('KICK_GOAL_NN_DEVICE') == 'cpu':
-            return False, 'KICK_GOAL_NN_DEVICE=cpu is set in the environment'
+    def net_device(self):
+        """(usable, the device or why not), after one tiny training step there."""
         import torch
-        if torch.backends.mps.is_available():
-            return True, ''
-        if not torch.backends.mps.is_built():
-            return False, 'this torch build has no MPS support'
-        return False, 'torch reports MPS unavailable in this process (no Metal GPU visible here)'
+
+        from tools.audio_analysis.eval.kick_goal_nn import BANDS, SLICE, Net, device
+        from tools.audio_analysis.lab.run import why_no_gpu
+        dev = device()
+        why = why_no_gpu(dev)
+        if why:
+            return False, why
+        net = Net().to(dev)
+        net(torch.zeros(4, net.conv[0].in_channels, BANDS, SLICE, device=dev)).sum().backward()
+        name = torch.cuda.get_device_name(dev) if dev.type == 'cuda' else 'the Mac GPU'
+        return True, f'a net trains on {dev.type} ({name})'
 
     def free_bytes(self):
         return shutil.disk_usage(Path.home()).free
@@ -134,7 +139,7 @@ class Probe:
     def memory(self):
         """(RAM bytes, pageouts since boot, swap used MB), the watchdog's own reading (overnight.vm_sample)."""
         from tools.audio_analysis.lab import overnight
-        ram = int(subprocess.run(['sysctl', '-n', 'hw.memsize'], capture_output=True, text=True).stdout)
+        ram = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
         return (ram, *overnight.vm_sample())
 
     def gpu(self):
@@ -194,10 +199,10 @@ def check(plan_path, probe, load_plan):
         add(False, 'tools/audio_analysis committed', f'git status failed: {e}')
 
     try:
-        ok, why = probe.mps()
-        add(ok, 'MPS available', 'torch reports MPS' if ok else why)
+        ok, what = probe.net_device()
+        add(ok, 'GPU for nets', what)
     except Exception as e:
-        add(False, 'MPS available', f'torch import failed: {e}')
+        add(False, 'GPU for nets', f'a tiny net failed on the GPU: {e}')
 
     free = probe.free_bytes()
     add(free >= MIN_FREE_BYTES, 'free disk', f'{free / GIB:.0f} GiB free on the home volume'

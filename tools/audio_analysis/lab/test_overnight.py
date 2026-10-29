@@ -214,9 +214,14 @@ class ExecuteTests(unittest.TestCase):
         real = overnight.subprocess.run
         overnight.subprocess.run = lambda cmd, **kw: R(outs[cmd[0]])
         try:
-            self.assertEqual(overnight.vm_sample(), (2153167, 1955.44))
+            self.assertEqual(overnight.vm_sample('darwin'), (2153167, 1955.44))
         finally:
             overnight.subprocess.run = real
+
+    def test_vm_sample_reads_proc_on_linux(self):
+        files = {'/proc/vmstat': 'pgpgout 98765\npswpin 120\npswpout 4567\n',
+                 '/proc/meminfo': 'MemTotal:       98000000 kB\nSwapTotal:       8388604 kB\nSwapFree:        7340028 kB\n'}
+        self.assertEqual(overnight.vm_sample('linux', files.get), (4567, 1024.0))
 
 
 class KilledStepTests(unittest.TestCase):
