@@ -51,6 +51,7 @@ fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let reaction = MAX_LIQUID_BODIES as u64 * u64::from(REACTION_WORDS) * 4;
     for (port, bytes) in [
         ("bodies", size_of::<LiquidBody>() as u64),
+        ("regions", size_of::<LiquidBody>() as u64),
         ("shapes", size_of::<LiquidShape>() as u64),
         ("atlas", 4),
         ("collider_nodes", 16),

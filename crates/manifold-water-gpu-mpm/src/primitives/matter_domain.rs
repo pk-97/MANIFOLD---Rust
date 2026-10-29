@@ -24,9 +24,9 @@ use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::matter::{
     COHESION_SOFTENING, FRICTION_ANGLE_RANGE, MATTER_KINDS, MAX_SUBSTEPS, MatterDials, MatterKind,
     MatterMaterial, RADIUS_SCALE, REACTION_WORDS, SAND_DENSITY, SAND_FRICTION_ANGLE,
-    SNOW_HARDENING, damping_fitting_cap, field_min, free_fall_speed, lattice_nodes, matter_nodes,
-    matter_pool_tiles,
-    momentum_unit, stiffness_fitting_cap, substeps_for_interval, substeps_per_tick,
+    SNOW_HARDENING, damping_fitting_cap, field_min, free_fall_speed, matter_nodes,
+    matter_pool_tiles, momentum_unit, stiffness_fitting_cap, substeps_for_interval,
+    substeps_per_tick,
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::fluid_domain::{
@@ -224,8 +224,8 @@ pub(crate) fn fill_region(
 /// from `params`), the grid box moved onto whole world cells and the Bounds
 /// box as placed. With Bounds off the grid starts from the Fill's own box,
 /// else the hidden one ([`unbounded_seed`]) and Fill Height, which fills the
-/// Bounds box from its floor, is 0. Refused by name when the box's nodes are
-/// over Grid Budget or the fill is not a usable shape.
+/// Bounds box from its floor, is 0. Refused by name when the box holds more
+/// tiles than a World counts or the fill is not a usable shape.
 pub(crate) fn matter_geometry(
     read: impl Fn(&str, f32) -> f32,
     params: &ParamValues,
@@ -255,11 +255,6 @@ pub(crate) fn matter_geometry(
         None => box_about([0.0, 0.5 * domain_size, 0.0], [domain_size; 3]),
     };
     let nodes = matter_nodes(layout.cells);
-    let budget = match params.get("grid_budget_mcells") {
-        Some(ParamValue::Float(budget)) => *budget,
-        _ => 8.0,
-    };
-    admit_lattice(nodes, budget)?;
     let fill_height = if bounds {
         read("fill_height", DEFAULT_FILL_HEIGHT)
     } else {
@@ -282,7 +277,7 @@ pub(crate) fn matter_geometry(
         points_per_cell,
         seed: seed.round().clamp(0.0, 16_777_215.0) as u32,
     };
-    let pool_tiles = matter_pool_tiles(nodes, (f64::from(budget) * 1e6) as u64);
+    let pool_tiles = matter_pool_tiles(nodes)?;
     Ok(MatterGeometry {
         layout,
         bounds_box,
@@ -368,7 +363,6 @@ manifold_node_engine::primitive! {
     params: [
         ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16777215.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("cell_metres"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(DEFAULT_CELL_SIZE), range: Some(CELL_SIZE_METRES), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("grid_budget_mcells"), label: "Grid Budget", ty: ParamType::Float, default: ParamValue::Float(8.0), range: Some((0.01, 512.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("domain_size"), label: "Domain Size", ty: ParamType::Float, default: ParamValue::Float(4.0), range: Some((0.5, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("bounds"), label: "Bounds", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_neg_x"), label: "Left Wall", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
@@ -570,21 +564,6 @@ fn reaction_words(buffer: Option<&GpuBuffer>) -> Option<&[i32]> {
     // SAFETY: shared, 4-byte aligned storage whose last GPU writer has
     // retired (the caller checked the frame clock or waited on the GPU).
     Some(unsafe { std::slice::from_raw_parts(words, (buffer.size / 4) as usize) })
-}
-
-/// The Grid Budget gate: a box of `nodes` per axis ([`matter_nodes`]) with
-/// more than `budget_mcells` million nodes in all is refused by name before
-/// anything downstream sizes or dispatches over it.
-pub(crate) fn admit_lattice(nodes: [u32; 3], budget_mcells: f32) -> Result<(), String> {
-    let nodes = lattice_nodes(nodes) as f64;
-    if !budget_mcells.is_finite() || budget_mcells <= 0.0 || nodes > f64::from(budget_mcells) * 1e6
-    {
-        return Err(format!(
-            "Matter lattice needs {:.3} million nodes; Grid Budget is {budget_mcells:.3} million. Increase Grid Budget or raise Cell Size. GPU time grows with node count.",
-            nodes / 1e6
-        ));
-    }
-    Ok(())
 }
 
 impl Coupling {

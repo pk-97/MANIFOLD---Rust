@@ -8,7 +8,7 @@ use manifold_core::fluid_domain::FluidDomainLayout;
 use manifold_core::liquid_setup::LATTICE_PADDING_CELLS;
 use manifold_node_engine::channel_names::well_known;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
-use manifold_node_engine::scene::world_tiles::{TILE, TILE_CELLS, pool_len};
+use manifold_node_engine::scene::world_tiles::{TILE, pool_len};
 use manifold_physics::clock::TICK;
 use manifold_water_liquid::world_tiles::{Reach, run_tiles};
 
@@ -645,12 +645,19 @@ pub fn field_min(layout: &FluidDomainLayout) -> [f32; 3] {
 
 /// Tiles Matter's pool holds for a box with `nodes` per axis
 /// ([`matter_nodes`]): every tile its nodes can touch, wherever it sits on the
-/// world lattice, and the ring round them; or the whole tiles `budget_nodes`
-/// buys, at least one.
-pub fn matter_pool_tiles(nodes: [u32; 3], budget_nodes: u64) -> u32 {
+/// world lattice, and the ring round them. Past what a pool wire counts the
+/// box is refused by name; the World's budget admits the grid itself when it
+/// is allocated.
+pub fn matter_pool_tiles(nodes: [u32; 3]) -> Result<u32, String> {
     let ring = u64::from(MATTER_REACH.ring_max);
     let wanted: u64 = nodes.iter().map(|&n| run_tiles(n) + 2 * ring).product();
-    wanted.min(budget_nodes / u64::from(TILE_CELLS)).max(1) as u32
+    let most = u64::from(manifold_water_liquid::tile_pool::MAX_POOL_TILES);
+    if wanted > most {
+        return Err(format!(
+            "Matter: the box needs {wanted} tiles of grid; a World holds at most {most}. Raise Cell Size or shrink the box."
+        ));
+    }
+    Ok(wanted.max(1) as u32)
 }
 
 /// The `pool_tiles` an atom over Matter's pooled grid reads, at least one,
@@ -892,49 +899,13 @@ mod tests {
     }
 
     /// The pool holds every tile a 64³ box's 71 nodes can touch and the ring
-    /// round them (10 + 2 per axis), or what a smaller budget buys.
+    /// round them (10 + 2 per axis); a box past what a pool counts is refused.
     #[test]
-    fn matter_pool_covers_the_box_and_its_ring_within_the_budget() {
+    fn matter_pool_covers_the_box_and_its_ring() {
         let layout = manifold_core::fluid_domain::domain_layout(None, 4.0, 0.0625).unwrap();
         let nodes = matter_nodes(layout.cells);
         assert_eq!(nodes, [71; 3]);
-        assert_eq!(matter_pool_tiles(nodes, u64::MAX), 12 * 12 * 12);
-        assert_eq!(matter_pool_tiles(nodes, 100 * 512 + 7), 100);
-        assert_eq!(matter_pool_tiles(nodes, 0), 1);
-    }
-}
-
-#[cfg(test)]
-mod grid_budget_tests {
-    use super::{lattice_nodes, matter_nodes};
-    use manifold_core::fluid_domain::domain_layout;
-
-    use crate::primitives::matter_domain::admit_lattice;
-
-    /// MPM's lattice arithmetic at every resolution the domain allows: Grid
-    /// Budget admits or names the refusal, and the default budget stops at
-    /// 193 (200³ nodes).
-    #[test]
-    fn matter_grid_budget_gates_every_resolution() {
-        let mut largest_default = 0;
-        for resolution in 8..=512 {
-            let layout = domain_layout(None, 4.0, 4.0 / f64::from(resolution)).expect("layout");
-            let per_axis = matter_nodes(layout.cells);
-            let nodes = lattice_nodes(per_axis);
-            for budget in [8.0f32, 512.0] {
-                let fits = nodes as f64 <= f64::from(budget) * 1e6;
-                match admit_lattice(per_axis, budget) {
-                    Ok(()) => assert!(fits, "res {resolution}"),
-                    Err(error) => assert!(
-                        !fits && error.contains("Grid Budget"),
-                        "res {resolution}: {error}"
-                    ),
-                }
-            }
-            if admit_lattice(per_axis, 8.0).is_ok() {
-                largest_default = resolution;
-            }
-        }
-        assert_eq!(largest_default, 193);
+        assert_eq!(matter_pool_tiles(nodes), Ok(12 * 12 * 12));
+        assert!(matter_pool_tiles([1 << 16; 3]).is_err());
     }
 }

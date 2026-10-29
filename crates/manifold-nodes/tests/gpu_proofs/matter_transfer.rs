@@ -125,7 +125,7 @@ impl Chain {
             field_min(layout),
             matter_nodes(layout.cells),
         );
-        let pool_tiles = matter_pool_tiles(nodes, u64::MAX);
+        let pool_tiles = matter_pool_tiles(nodes).unwrap();
         let pool = pool_len(pool_tiles) as u32;
         let mut graph = Graph::new();
         let pts = graph.add_node(Box::new(HostArray::new::<MatterPoint>(points.len() as u32)));

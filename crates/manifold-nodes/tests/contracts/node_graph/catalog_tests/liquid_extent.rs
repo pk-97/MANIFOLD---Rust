@@ -179,10 +179,7 @@ fn liquid_presets_all_extent_checked() {
     refusals.sort();
     for (id, (resolution, reason)) in &refusals {
         println!("{id}: first refused at resolution {resolution}: {reason}");
-        assert!(
-            reason.contains("Cell Size") || reason.contains("Grid Budget"),
-            "{id}: {reason}"
-        );
+        assert!(reason.contains("Cell Size"), "{id}: {reason}");
     }
 }
 
