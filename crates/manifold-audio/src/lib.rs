@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod beats;
 pub mod capture;
 pub mod detectors;
 pub mod directory;

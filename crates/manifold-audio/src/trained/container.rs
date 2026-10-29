@@ -136,7 +136,7 @@ impl Container {
             let width = match code {
                 0 | 4 => 8,
                 1 | 2 => 4,
-                3 => 2,
+                3 | 6 => 2,
                 5 => 1,
                 c => return Err(ContainerError::BadDtype(c)),
             };
@@ -147,6 +147,8 @@ impl Container {
                 2 => Data::I32(decode(raw, i32::from_le_bytes)),
                 3 => Data::I16(decode(raw, i16::from_le_bytes)),
                 4 => Data::I64(decode(raw, i64::from_le_bytes)),
+                // Half-precision weights widen to f32 on load; readers see an f32 array.
+                6 => Data::F32(decode(raw, |b| half::f16::from_le_bytes(b).to_f32())),
                 _ => Data::U8(raw.to_vec()),
             };
             entries.insert(name, Array { shape, data });

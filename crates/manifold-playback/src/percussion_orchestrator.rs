@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
+use manifold_audio::beats::{Grid, NoGrid, song_grid};
 use manifold_audio::detectors::{EventKind, candidates};
 use manifold_core::ClipId;
 use manifold_core::audio_clip_detection::{AudioClipDetection, confidence_from_probability};
@@ -18,8 +19,11 @@ use manifold_core::percussion_analysis::{
 use manifold_core::percussion_binding::ProjectPercussionBindingResolver;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
-use manifold_editing::command::Command;
-use manifold_editing::commands::clip::DeleteClipCommand;
+use manifold_core::units::{Beats, Seconds};
+use manifold_editing::command::{Command, CompositeCommand};
+use manifold_editing::commands::clip::{
+    ChangeClipRecordedBpmCommand, DeleteClipCommand, MoveClipCommand,
+};
 use manifold_editing::service::EditingService;
 
 use crate::audio_decoder::decode_audio_to_pcm;
@@ -39,12 +43,18 @@ const COLOR_GREEN: StatusColor = [0.5, 0.95, 0.6, 1.0];
 const COLOR_ORANGE: StatusColor = [1.0, 0.75, 0.35, 1.0];
 const COLOR_RED: StatusColor = [1.0, 0.4, 0.35, 1.0];
 
+/// What Detect finds in a song: its kick and snare hits and its beat grid.
+struct Analysis {
+    hits: PercussionAnalysisData,
+    grid: Result<Grid, NoGrid>,
+}
+
 /// One Detect in flight: the clip, the file it read, and the thread's answer once it arrives.
 struct DetectRun {
     clip_id: ClipId,
     audio_path: String,
-    rx: Receiver<Result<PercussionAnalysisData, String>>,
-    result: Option<Result<PercussionAnalysisData, String>>,
+    rx: Receiver<Result<Analysis, String>>,
+    result: Option<Result<Analysis, String>>,
 }
 
 pub struct PercussionImportOrchestrator {
@@ -138,8 +148,21 @@ impl PercussionImportOrchestrator {
                 );
             }
             Ok(analysis) => {
+                let (tempo, color) = match &analysis.grid {
+                    Ok(grid) => {
+                        Self::apply_grid(&run.clip_id, grid, project, editing_service);
+                        (format!("{:.2} BPM", grid.bpm()), COLOR_GREEN)
+                    }
+                    Err(no_grid) => (no_grid.to_string(), COLOR_ORANGE),
+                };
                 Self::auto_route_unset_instruments(&run.clip_id, project);
-                self.plan_and_apply_for_clip(&run.clip_id, &analysis, project, editing_service);
+                let placed = self.plan_and_apply_for_clip(
+                    &run.clip_id,
+                    &analysis.hits,
+                    project,
+                    editing_service,
+                );
+                self.set_status(&format!("Placed {placed} clips, {tempo}"), color, 6.0);
             }
             Err(e) => {
                 log::error!("[Detect] {}: {e}", run.audio_path);
@@ -153,8 +176,8 @@ impl PercussionImportOrchestrator {
         self.running.as_ref().is_some_and(|r| r.result.is_some())
     }
 
-    /// Detect on one audio clip: runs the trained kick and snare detectors over its file on a background
-    /// thread. The clip must already exist; Detect is a manual action, not automatic on drop.
+    /// Detect on one audio clip: finds its beat grid and runs the trained kick and snare detectors over its file on
+    /// a background thread. The clip must already exist; Detect is a manual action, not automatic on drop.
     pub fn detect_clip(&mut self, clip_id: ClipId, project: &Project) {
         if self.running.is_some() {
             self.set_status("Detection already running", COLOR_ORANGE, 2.0);
@@ -172,12 +195,13 @@ impl PercussionImportOrchestrator {
             return;
         }
 
+        let beats_per_bar = project.settings.time_signature_numerator.max(1) as u32;
         let (tx, rx) = mpsc::channel();
         let path = audio_path.clone();
         let spawned = std::thread::Builder::new()
             .name("detect-clip".into())
             .spawn(move || {
-                let _ = tx.send(analyse(&path));
+                let _ = tx.send(analyse(&path, beats_per_bar));
             });
         if let Err(e) = spawned {
             log::error!("[Detect] could not start the Detect thread: {e}");
@@ -190,7 +214,7 @@ impl PercussionImportOrchestrator {
             rx,
             result: None,
         });
-        self.status_message = "Detecting kicks and snares".to_string();
+        self.status_message = "Detecting beats, kicks and snares".to_string();
         self.status_color = COLOR_BLUE;
         self.status_animate = true;
         self.status_clear_time = -1.0;
@@ -244,7 +268,10 @@ impl PercussionImportOrchestrator {
             self.set_status("Replan: detect first", COLOR_ORANGE, 3.0);
             return;
         };
-        self.plan_and_apply_for_clip(&clip_id, &analysis, project, editing_service);
+        match self.plan_and_apply_for_clip(&clip_id, &analysis, project, editing_service) {
+            0 => self.set_status("No accepted triggers", COLOR_ORANGE, 6.0),
+            placed => self.set_status(&format!("Placed {placed} clips"), COLOR_GREEN, 5.0),
+        }
     }
 
     /// Remove every trigger this audio clip produced (tagged `detection_source`), as one undoable step. Leaves
@@ -294,16 +321,16 @@ impl PercussionImportOrchestrator {
 
     /// Cache `analysis` on the clip, build the clip-anchored options from its `DetectionConfig`, plan, and place
     /// its triggers (tagged with the clip id, clearing only this clip's prior triggers). Shared by Detect and
-    /// Replan. Returns whether any clips were placed.
+    /// Replan. Returns how many clips it placed.
     fn plan_and_apply_for_clip(
         &mut self,
         clip_id: &ClipId,
         analysis: &PercussionAnalysisData,
         project: &mut Project,
         editing_service: &mut EditingService,
-    ) -> bool {
+    ) -> usize {
         let Some(clip) = clip_in(project, clip_id) else {
-            return false;
+            return 0;
         };
         let anchor = ClipDetectionAnchor::from_clip(clip, project);
         let config = {
@@ -337,8 +364,7 @@ impl PercussionImportOrchestrator {
         }
 
         if plan.accepted_events() == 0 {
-            self.set_status("No accepted triggers", COLOR_ORANGE, 6.0);
-            return false;
+            return 0;
         }
 
         let result = PercussionImportService::new().apply_placement_plan(
@@ -347,17 +373,59 @@ impl PercussionImportOrchestrator {
             Some(&options),
             Some(clip_id),
         );
-        if result.success
-            && let Some(cmd) = result.undo_command
-        {
+        if !result.success {
+            return 0;
+        }
+        if let Some(cmd) = result.undo_command {
             editing_service.record(cmd);
         }
-        self.set_status(
-            &format!("Placed {} clips", result.added_clips),
-            COLOR_GREEN,
-            5.0,
-        );
-        result.success
+        result.added_clips.max(0) as usize
+    }
+
+    /// Sets the clip's source tempo from `grid` (a manual BPM stays; see `ChangeClipRecordedBpmCommand::new_detected`),
+    /// then moves the clip by under half a bar so the song's downbeats land on the project's bar lines. One undo step.
+    fn apply_grid(
+        clip_id: &ClipId,
+        grid: &Grid,
+        project: &mut Project,
+        editing_service: &mut EditingService,
+    ) {
+        let mut tempo: Box<dyn Command> = Box::new(ChangeClipRecordedBpmCommand::new_detected(
+            clip_id.clone(),
+            grid.bpm() as f32,
+        ));
+        tempo.execute(project);
+        let mut steps = vec![tempo];
+        let layer = project
+            .timeline
+            .layers
+            .iter()
+            .find(|l| l.clips.iter().any(|c| c.id == *clip_id))
+            .map(|l| l.layer_id.clone());
+        if let (Some(clip), Some(layer)) = (clip_in(project, clip_id).cloned(), layer) {
+            let bar = Beats(f64::from(project.settings.time_signature_numerator.max(1)));
+            let downbeat = Seconds(grid.downbeat_at_or_after(clip.in_point.0));
+            let at = project.source_clock().beat_at_source(&clip, downbeat);
+            let mut start = clip.start_beat + bar * (at / bar).round() - at;
+            if start < Beats::ZERO {
+                start += bar;
+            }
+            if (start - clip.start_beat).0.abs() > 1e-9 {
+                let mut shift: Box<dyn Command> = Box::new(MoveClipCommand::new(
+                    clip_id.clone(),
+                    clip.start_beat,
+                    start,
+                    layer.clone(),
+                    layer,
+                ));
+                shift.execute(project);
+                steps.push(shift);
+            }
+        }
+        editing_service.record(Box::new(CompositeCommand::new(
+            steps,
+            "Detect tempo".to_string(),
+        )));
     }
 
     fn set_status(&mut self, message: &str, color: StatusColor, clear_after_seconds: f32) {
@@ -389,11 +457,24 @@ fn clip_in<'p>(project: &'p Project, clip_id: &ClipId) -> Option<&'p TimelineCli
         .find(|clip| clip.id == *clip_id)
 }
 
-/// Decodes `path`, averages it to mono, and runs the shipped kick and snare detectors over the whole file. Each
-/// candidate becomes a hit at its onset, with the model's probability as a Detect confidence.
-fn analyse(path: &str) -> Result<PercussionAnalysisData, String> {
+/// Decodes `path`, averages it to mono, and runs the beat tracker beside the shipped kick and snare detectors over
+/// the whole file. Each detector candidate becomes a hit at its onset, with the model's probability as a Detect
+/// confidence.
+fn analyse(path: &str, beats_per_bar: u32) -> Result<Analysis, String> {
     let audio = decode_audio_to_pcm(path)?;
-    let events = candidates(&audio.mono(), audio.sample_rate)
+    let mono = audio.mono();
+    let (events, grid) = std::thread::scope(|s| {
+        let grid = s.spawn(|| song_grid(&mono, audio.sample_rate, beats_per_bar));
+        (hits(&mono, audio.sample_rate), grid.join())
+    });
+    Ok(Analysis {
+        hits: PercussionAnalysisData::new(events),
+        grid: grid.map_err(|_| "the beat tracker panicked".to_string())?,
+    })
+}
+
+fn hits(mono: &[f32], rate: u32) -> Vec<PercussionEvent> {
+    candidates(mono, rate)
         .into_iter()
         .map(|c| {
             let trigger_type = match c.kind {
@@ -406,8 +487,7 @@ fn analyse(path: &str) -> Result<PercussionAnalysisData, String> {
                 confidence_from_probability(c.p, c.cutoff),
             )
         })
-        .collect();
-    Ok(PercussionAnalysisData::new(events))
+        .collect()
 }
 
 #[cfg(test)]
@@ -531,5 +611,54 @@ mod tests {
         PercussionImportOrchestrator::new().replan_clip(clip_id, &mut project, &mut es);
         let after: usize = project.timeline.layers.iter().map(|l| l.clips.len()).sum();
         assert_eq!(before, after, "no cached analysis -> nothing placed");
+    }
+
+    #[test]
+    fn grid_sets_tempo_and_puts_downbeats_on_bar_lines() {
+        let mut project = Project::default();
+        let aidx = project
+            .timeline
+            .add_layer("Audio", LayerType::Audio, PresetTypeId::NONE);
+        // Dropped off the grid, trimmed into the song, with warp on at a guessed tempo.
+        let mut clip = TimelineClip::new_audio(
+            "song.wav".into(),
+            Beats(9.3),
+            Beats(32.0),
+            Seconds(5.0),
+            Seconds(240.0),
+        );
+        clip.recorded_bpm = 120.0;
+        clip.audio_warp_enabled = Some(true);
+        clip.audio_bpm_automatic = true;
+        let clip_id = clip.id.clone();
+        project.timeline.layers[aidx].restore_clip(clip);
+        project.timeline.mark_clip_lookup_dirty();
+        let grid = Grid {
+            period_s: 60.0 / 126.7,
+            downbeat_s: 0.83,
+            beats_per_bar: 4,
+        };
+
+        let mut es = EditingService::new();
+        PercussionImportOrchestrator::apply_grid(&clip_id, &grid, &mut project, &mut es);
+
+        let clip = project.timeline.find_clip(&clip_id).unwrap().clone();
+        assert!((clip.recorded_bpm - 126.7).abs() < 1e-3);
+        assert!(
+            (clip.start_beat.0 - 9.3).abs() < 2.0,
+            "moved under half a bar"
+        );
+        let first = Seconds(grid.downbeat_at_or_after(clip.in_point.0));
+        for bar in 0..4 {
+            let downbeat = first + Seconds(bar as f64 * 4.0 * grid.period_s);
+            let at = project.source_clock().beat_at_source(&clip, downbeat).0;
+            assert!(
+                (at / 4.0 - (at / 4.0).round()).abs() < 1e-6,
+                "downbeat at beat {at}"
+            );
+        }
+        assert!(es.undo(&mut project), "tempo and move are one undo step");
+        let clip = project.timeline.find_clip(&clip_id).unwrap();
+        assert_eq!((clip.recorded_bpm, clip.start_beat), (120.0, Beats(9.3)));
     }
 }

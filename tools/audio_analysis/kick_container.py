@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 MAGIC = b'MKICK001'
-DTYPES = {0: np.float64, 1: np.float32, 2: np.int32, 3: np.int16, 4: np.int64, 5: np.uint8}
+DTYPES = {0: np.float64, 1: np.float32, 2: np.int32, 3: np.int16, 4: np.int64, 5: np.uint8, 6: np.float16}
 CODES = {np.dtype(v): k for k, v in DTYPES.items()}
 
 

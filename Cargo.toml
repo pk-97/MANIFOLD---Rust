@@ -79,6 +79,10 @@ opt-level = 2
 [profile.dev.package.symphonia-codec-aac]
 opt-level = 2
 
+# The Beat This! network spends nearly all its time in matrix products.
+[profile.dev.package.matrixmultiply]
+opt-level = 3
+
 # Optimise image decode + resize even in debug builds. The pure-Rust `image`
 # stack (decode codecs + imageops resize) runs 50-100x slower without
 # optimisation — a large still took multiple seconds to fit in debug, stalling

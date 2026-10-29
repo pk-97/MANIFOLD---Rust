@@ -9,3 +9,4 @@ here runs inside the app.
 - `catalog/`: the catalogue of Peter's Ableton sets and bounces that songs are picked from.
 - `kick_container.py`: writes the model container the Rust reader (`crates/manifold-audio/src/trained/container.rs`)
   loads.
+- `beat_this_export.py`: converts the Beat This! checkpoint into the beat tracker's weights and test fixture.
