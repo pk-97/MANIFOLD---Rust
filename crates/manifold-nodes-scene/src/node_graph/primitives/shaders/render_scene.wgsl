@@ -242,6 +242,14 @@ struct VsOut {
     @location(6) appearance_weight: f32,
     @location(8) vertex_color: vec4<f32>,
     @location(9) @interpolate(flat) instance_scale: f32,
+    // Box mapping's frame (`begin_box`): the position along the object's
+    // own axes in metres, the normal in that frame, and where each of those
+    // axes points in the world. Zero unless the material is box mapped.
+    @location(10) box_pos: vec3<f32>,
+    @location(11) box_normal: vec3<f32>,
+    @location(12) @interpolate(flat) box_axis_x: vec3<f32>,
+    @location(13) @interpolate(flat) box_axis_y: vec3<f32>,
+    @location(14) @interpolate(flat) box_axis_z: vec3<f32>,
 };
 
 // world = model · T_instance · instance_inner. Object space passes an
@@ -330,6 +338,19 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     );
     let model_sign = select(1.0, -1.0, dot(u.model[0].xyz, cofactor[0]) < 0.0);
     out.world_normal = normalize(cofactor * inst_normal * model_sign);
+    // Box mapping's frame: the object's (and the copy's) rotation and
+    // placement removed, its scale kept, so a tile is the same size in
+    // metres on every shape and stays on a moving object. A mirrored copy's
+    // axes carry the mirror, so its texture reads as the reflection.
+    if u.surface.y > 0.5 {
+        let model_scale = vec3<f32>(length(u.model[0].xyz), length(u.model[1].xyz), length(u.model[2].xyz));
+        out.box_pos = local_pos * abs(inst.pos_scale.w) * model_scale;
+        out.box_normal = local_normal / max(model_scale, vec3<f32>(1e-6));
+        let axes = mat3x3<f32>(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz) * rot;
+        out.box_axis_x = normalize(axes[0] * msign.x);
+        out.box_axis_y = normalize(axes[1] * msign.y);
+        out.box_axis_z = normalize(axes[2] * msign.z);
+    }
     out.uv = vec4<f32>(v.uv, v._pad2);
     // BUG-wfxe: tangent transforms with the same instance-rotation + model
     // chain as the normal (a direction); the mirror marker flips it with
@@ -376,6 +397,11 @@ struct VsOutPoints {
     @location(7) point_size: f32,
     @location(8) vertex_color: vec4<f32>,
     @location(9) @interpolate(flat) instance_scale: f32,
+    @location(10) box_pos: vec3<f32>,
+    @location(11) box_normal: vec3<f32>,
+    @location(12) @interpolate(flat) box_axis_x: vec3<f32>,
+    @location(13) @interpolate(flat) box_axis_y: vec3<f32>,
+    @location(14) @interpolate(flat) box_axis_z: vec3<f32>,
 };
 
 // Points mode draws the SAME vertex buffers with point topology — every
@@ -399,6 +425,11 @@ fn vs_points(
         u.render_mode.x,
         o.vertex_color,
         o.instance_scale,
+        o.box_pos,
+        o.box_normal,
+        o.box_axis_x,
+        o.box_axis_y,
+        o.box_axis_z,
     );
 }
 
@@ -473,6 +504,9 @@ fn resolve_normal(uv: vec4<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>,
             return normalize(textureSampleBias(normal_map, normal_sampler, uv.xy, u.render_mode.y).xyz);
         }
         let n = normalize(vertex_normal);
+        if u.surface.y > 0.5 {
+            return box_normal(n);
+        }
         let uv_t = material_uv(uv, 1u);
         let sampled = textureSampleBias(normal_map, normal_sampler, uv_t, u.render_mode.y).rgb;
         var tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
@@ -497,10 +531,205 @@ fn apply_uv_transform(uv: vec2<f32>, m: vec4<f32>, t: vec4<f32>) -> vec2<f32> {
     );
 }
 
+
+// ===== Box mapping and repeat breaking =====
+
+// A box-mapped material (Mapping Box, u.surface.y) reads its core maps (base
+// colour, normal, metal-rough, occlusion, emission) projected from the
+// three axes of the object's own space instead of from the mesh's UVs, one
+// texture repeat per Tile Size metres (u.surface.z is its inverse). Each
+// side weighs in by how squarely the surface faces its axis, and a side that
+// barely shows is skipped. Every side reads its texture unmirrored from
+// outside the object, image up along +Y on the four walls and toward -Z on
+// the top and bottom.
+//
+// Break Repeats (u.surface.w) reads each side through hex tiling
+// (Mikkelsen, "Practical Real-Time Hex-Tiling", JCGT 2022): the side's plane
+// is cut into hexagons about half a texture repeat across, each reads the
+// texture shifted by its own hash and turned by up to Break Repeats of a
+// half turn, and neighbours blend across the seams, so a large surface
+// shows no grid. The blend is geometric only, so every map shares it and
+// bumps stay on their bricks. Samples take explicit gradients, so the mip
+// level is the one the plain coordinate would pick and skipped tiles can
+// branch.
+struct BoxSide {
+    // The hex tiles' coordinates, or the plain coordinate in [0].
+    st: array<vec2<f32>, 3>,
+    // Each tile's turn as (cos, sin).
+    turn: array<vec2<f32>, 3>,
+    blend: vec3<f32>,
+    dx: vec2<f32>,
+    dy: vec2<f32>,
+    // World directions of the side's texture right and image up.
+    t: vec3<f32>,
+    b: vec3<f32>,
+};
+
+var<private> box_sides: array<BoxSide, 3>;
+var<private> box_weights: vec3<f32>;
+
+fn box_hash(c: vec2<i32>) -> vec3<f32> {
+    var h = bitcast<u32>(c.x) * 1664525u + bitcast<u32>(c.y) * 1013904223u + 374761393u;
+    h = (h ^ (h >> 15u)) * 2246822519u;
+    h = (h ^ (h >> 13u)) * 3266489917u;
+    h = h ^ (h >> 16u);
+    let a = h * 747796405u + 2891336453u;
+    let b = (a ^ (a >> 16u)) * 2246822519u;
+    return vec3<f32>(f32(h >> 8u), f32(a >> 8u), f32(b >> 8u)) / 16777216.0;
+}
+
+fn box_turn(v: vec2<f32>, r: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(r.x * v.x - r.y * v.y, r.y * v.x + r.x * v.y);
+}
+
+// One side: its plain coordinate, or its three hex tiles and their blend.
+fn box_side(st: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, t: vec3<f32>, b: vec3<f32>) -> BoxSide {
+    var side: BoxSide;
+    side.dx = dx;
+    side.dy = dy;
+    side.t = t;
+    side.b = b;
+    let amount = u.surface.w;
+    if amount <= 0.0 {
+        side.st[0] = st;
+        side.turn[0] = vec2<f32>(1.0, 0.0);
+        side.blend = vec3<f32>(1.0, 0.0, 0.0);
+        return side;
+    }
+    // Mikkelsen's TriangleGrid: skew the plane into a triangle grid whose
+    // corners are the hexagons' centres, and weigh the three corners of the
+    // triangle this point sits in.
+    let g = st * 3.4641016;
+    let skewed = vec2<f32>(g.x - 0.57735027 * g.y, 1.15470054 * g.y);
+    let base = floor(skewed);
+    let f = fract(skewed);
+    let z = 1.0 - f.x - f.y;
+    let s = step(0.0, -z);
+    let s2 = 2.0 * s - 1.0;
+    let w = vec3<f32>(-z * s2, s - f.y * s2, s - f.x * s2);
+    let corners = array<vec2<f32>, 3>(
+        base + vec2<f32>(s, s),
+        base + vec2<f32>(s, 1.0 - s),
+        base + vec2<f32>(1.0 - s, s),
+    );
+    var blend = pow(max(w, vec3<f32>(0.0)), vec3<f32>(7.0));
+    blend = blend / (blend.x + blend.y + blend.z);
+    blend = select(blend, vec3<f32>(0.0), blend < vec3<f32>(0.02));
+    side.blend = blend / (blend.x + blend.y + blend.z);
+    for (var k = 0u; k < 3u; k++) {
+        let corner = corners[k];
+        let h = box_hash(vec2<i32>(corner));
+        // The hexagon's centre in texture coordinates.
+        let centre = vec2<f32>(corner.x + 0.5 * corner.y, 0.8660254 * corner.y) / 3.4641016;
+        let angle = (h.z * 2.0 - 1.0) * 3.14159265 * amount;
+        let r = vec2<f32>(cos(angle), sin(angle));
+        side.turn[k] = r;
+        side.st[k] = box_turn(st - centre, r) + centre + h.xy;
+    }
+    return side;
+}
+
+// Set this fragment's box frame. Every fragment entry calls it first, in
+// uniform control flow, since it takes screen derivatives. The mip bias
+// scales the gradients as textureSampleBias would.
+fn begin_box(box_pos: vec3<f32>, box_normal: vec3<f32>, ax: vec3<f32>, ay: vec3<f32>, az: vec3<f32>) {
+    if u.surface.y < 0.5 {
+        return;
+    }
+    let p = box_pos * u.surface.z;
+    let bias = exp2(u.render_mode.y);
+    let px = dpdx(p) * bias;
+    let py = dpdy(p) * bias;
+    let n = normalize(box_normal);
+    var w = pow(abs(n), vec3<f32>(4.0));
+    w = w / (w.x + w.y + w.z);
+    w = select(w, vec3<f32>(0.0), w < vec3<f32>(0.02));
+    box_weights = w / (w.x + w.y + w.z);
+    let s = select(vec3<f32>(-1.0), vec3<f32>(1.0), n >= vec3<f32>(0.0));
+    box_sides[0] = box_side(
+        vec2<f32>(-s.x * p.z, -p.y),
+        vec2<f32>(-s.x * px.z, -px.y),
+        vec2<f32>(-s.x * py.z, -py.y),
+        -s.x * az,
+        ay,
+    );
+    box_sides[1] = box_side(
+        vec2<f32>(s.y * p.x, p.z),
+        vec2<f32>(s.y * px.x, px.z),
+        vec2<f32>(s.y * py.x, py.z),
+        s.y * ax,
+        -az,
+    );
+    box_sides[2] = box_side(
+        vec2<f32>(s.z * p.x, -p.y),
+        vec2<f32>(s.z * px.x, -px.y),
+        vec2<f32>(s.z * py.x, -py.y),
+        s.z * ax,
+        ay,
+    );
+}
+
+fn box_sample(tex: texture_2d<f32>, samp: sampler) -> vec4<f32> {
+    var sum = vec4<f32>(0.0);
+    for (var a = 0u; a < 3u; a++) {
+        let w = box_weights[a];
+        if w <= 0.0 {
+            continue;
+        }
+        let side = box_sides[a];
+        for (var k = 0u; k < 3u; k++) {
+            let h = side.blend[k];
+            if h <= 0.0 {
+                continue;
+            }
+            let r = side.turn[k];
+            sum += (w * h) * textureSampleGrad(tex, samp, side.st[k], box_turn(side.dx, r), box_turn(side.dy, r));
+        }
+    }
+    return sum;
+}
+
+// The normal map read box-mapped, bending the surface normal `n`. Each
+// tile's tangent slope turns back by the tile's own turn, and each side's
+// slope lies along that side's texture right and image up in the world.
+fn box_normal(n: vec3<f32>) -> vec3<f32> {
+    var z = 0.0;
+    var slope = vec3<f32>(0.0);
+    for (var a = 0u; a < 3u; a++) {
+        let w = box_weights[a];
+        if w <= 0.0 {
+            continue;
+        }
+        let side = box_sides[a];
+        var xy = vec2<f32>(0.0);
+        var tz = 0.0;
+        for (var k = 0u; k < 3u; k++) {
+            let h = side.blend[k];
+            if h <= 0.0 {
+                continue;
+            }
+            let r = side.turn[k];
+            let tn = textureSampleGrad(normal_map, normal_sampler, side.st[k], box_turn(side.dx, r), box_turn(side.dy, r)).rgb * 2.0 - vec3<f32>(1.0);
+            xy += h * box_turn(tn.xy, r);
+            tz += h * tn.z;
+        }
+        slope += w * (side.t * xy.x + side.b * xy.y);
+        z += w * tz;
+    }
+    return normalize(n * z + slope * u.normal_uv_t.z);
+}
+
+// A core map's texel: box-mapped, or at the map's own UVs.
+fn core_map(tex: texture_2d<f32>, samp: sampler, uv: vec4<f32>, index: u32) -> vec4<f32> {
+    if u.surface.y > 0.5 {
+        return box_sample(tex, samp);
+    }
+    return textureSampleBias(tex, samp, material_uv(uv, index), u.render_mode.y);
+}
+
 fn resolve_albedo(uv: vec4<f32>, color: vec4<f32>) -> vec4<f32> {
     if u.texture_flags.z > 0.5 {
-        let uv_t = material_uv(uv, 0u);
-        let t = textureSampleBias(base_color_map, base_color_sampler, uv_t, u.render_mode.y);
+        let t = core_map(base_color_map, base_color_sampler, uv, 0u);
         return u.base_color * t * color;
     }
     return u.base_color * color;
@@ -513,8 +742,7 @@ fn resolve_albedo(uv: vec4<f32>, color: vec4<f32>) -> vec4<f32> {
 // (roughness, metallic).
 fn resolve_mr(uv: vec4<f32>) -> vec2<f32> {
     if u.texture_flags2.x > 0.5 {
-        let uv_t = material_uv(uv, 2u);
-        let t = textureSampleBias(mr_map, mr_sampler, uv_t, u.render_mode.y);
+        let t = core_map(mr_map, mr_sampler, uv, 2u);
         // glTF's packed channels multiply the material factors.  A texture
         // is a modulation map, not a replacement for the authored values.
         return vec2<f32>(
@@ -540,8 +768,7 @@ fn resolve_mr(uv: vec4<f32>) -> vec2<f32> {
 // table.
 fn resolve_occlusion(uv: vec4<f32>) -> f32 {
     if u.texture_flags2.y > 0.5 {
-        let uv_t = material_uv(uv, 3u);
-        return mix(1.0, textureSampleBias(occlusion_map, occlusion_sampler, uv_t, u.render_mode.y).r, u.occlusion_uv_t.z);
+        return mix(1.0, core_map(occlusion_map, occlusion_sampler, uv, 3u).r, u.occlusion_uv_t.z);
     }
     return 1.0;
 }
@@ -556,8 +783,7 @@ fn resolve_occlusion(uv: vec4<f32>) -> f32 {
 fn resolve_emissive(uv: vec4<f32>) -> vec3<f32> {
     let strength = u.emission.w;
     if u.texture_flags2.z > 0.5 {
-        let uv_t = material_uv(uv, 4u);
-        let t = textureSampleBias(emissive_map, emissive_sampler, uv_t, u.render_mode.y).rgb;
+        let t = core_map(emissive_map, emissive_sampler, uv, 4u).rgb;
         return u.emission.rgb * strength * t;
     }
     return u.emission.rgb * strength;
@@ -802,7 +1028,7 @@ fn transmission_diffuse(
 
 // ===== Sand grain =====
 
-// A material with a grain size (u.grain.x, metres) shades as packed grains:
+// A material with a grain size (u.surface.x, metres) shades as packed grains:
 // world space is cut into Voronoi cells, one jittered seed per lattice cell,
 // searched over the 2×2×2 cells round the point (seeds stay in the middle of
 // their cell, so the nearest is always among them). One flat loop: the
@@ -901,6 +1127,7 @@ fn sand_grain(world_pos: vec3<f32>, n: vec3<f32>, albedo: vec3<f32>, roughness: 
 // light loop (matches render_3d_mesh.wgsl exactly).
 @fragment
 fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
+    begin_box(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z);
     let albedo = resolve_albedo(in.uv, in.vertex_color);
     if appearance_discard(in.appearance_weight) {
         discard;
@@ -925,6 +1152,7 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
 // and the only well-defined choice when light_count can be 0.
 @fragment
 fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
+    begin_box(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z);
     if u.volume_optics.x > 0.5 {
         let nearest = textureLoad(volume_nearest, vec2<i32>(in.clip_pos.xy), 0);
         if in.clip_pos.z < nearest - max(nearest * 0.00001, 0.0000001) { discard; }
@@ -950,8 +1178,8 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // because materials are shared. After the cutout test, which stays on
     // the material's own alpha.
     var grain = Grain(albedo.rgb, N, mr.x);
-    if u.grain.x > 0.0 {
-        grain = sand_grain(in.world_pos, N, albedo.rgb, mr.x, u.grain.x);
+    if u.surface.x > 0.0 {
+        grain = sand_grain(in.world_pos, N, albedo.rgb, mr.x, u.surface.x);
         N = grain.normal;
     }
     let wet = look_wet_surface(in.clip_pos.xy, grain.albedo, grain.roughness);
@@ -1089,6 +1317,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 // every wired light; ambient + emission added exactly once.
 @fragment
 fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
+    begin_box(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z);
     let albedo = resolve_albedo(in.uv, in.vertex_color);
     if appearance_discard(in.appearance_weight) {
         discard;

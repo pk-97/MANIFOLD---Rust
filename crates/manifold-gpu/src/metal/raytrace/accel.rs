@@ -1950,7 +1950,12 @@ pub fn ensure_normal_sources<'a>(
             material_attributes: obj.material_attributes,
             extra_tex_indices,
             inner_matrix: model_matrix_from_transform(obj.instance_inner),
-            _pad_row: [0; 24],
+            inner_offset: [
+                obj.instance_inner[3][0],
+                obj.instance_inner[3][1],
+                obj.instance_inner[3][2],
+            ],
+            _pad_row: [0; 19],
         };
         // D11: canonical row at [0, N).
         unsafe {

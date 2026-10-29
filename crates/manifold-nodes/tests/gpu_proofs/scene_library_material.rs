@@ -2,7 +2,8 @@
 //! long box and a sphere wear a real ambientCG brick material read from its
 //! MaterialX file (`tests/fixtures/materials/Bricks090`, pictures shrunk to
 //! 512 px), and the brick picture reaches the cube's face.
-//! `SCENE_MATERIAL_PNG_DIR=dir` saves the still.
+//! `SCENE_MATERIAL_PNG_DIR=dir` saves the stills, box-mapped ones among them
+//! and one over a ray-traced mirror floor.
 
 use std::path::Path;
 
@@ -33,9 +34,10 @@ fn brick_file() -> String {
     .to_owned()
 }
 
-/// The base scene with a long box and a sphere beside its cube, every one
-/// drawing with the cube's Material, whose texture is `texture`.
-fn scene(texture: TextureSource) -> SceneDoc {
+/// The base scene with a long box and a sphere beside its cube, on a wide
+/// floor, every one drawing with the cube's Material, whose texture is
+/// `texture`. A `mirror` floor draws with its own Material, `mirror`.
+fn scene(texture: TextureSource, mirror: bool) -> SceneDoc {
     let mut doc = SceneDoc::base();
     if let TextureSource::Model { file, .. } = &texture {
         let (facts, warnings) =
@@ -52,12 +54,29 @@ fn scene(texture: TextureSource) -> SceneDoc {
         panic!("the base scene has the cube's Material")
     };
     material.texture = texture;
-    for (id, shape) in [("long", Shape::Cube), ("ball", Shape::Sphere)] {
+    if mirror {
+        let at = doc.items.len();
+        doc.insert(
+            None,
+            at,
+            Item::new(ItemId::new("mirror"), "mirror", ItemFields::default_for(ItemKind::Material)),
+        )
+        .unwrap();
+    }
+    for (id, shape) in [
+        ("long", Shape::Cube),
+        ("ball", Shape::Sphere),
+        ("floor", Shape::Cube),
+    ] {
         let ItemFields::Object(mut fields) = ItemFields::default_for(ItemKind::Object) else {
             unreachable!()
         };
         fields.shape = shape;
-        fields.material = Some(ItemId::new(BASE_CUBE_MATERIAL));
+        fields.material = Some(ItemId::new(if mirror && id == "floor" {
+            "mirror"
+        } else {
+            BASE_CUBE_MATERIAL
+        }));
         let at = doc.items.len();
         doc.insert(None, at, Item::new(ItemId::new(id), id, ItemFields::Object(fields)))
             .unwrap();
@@ -65,9 +84,10 @@ fn scene(texture: TextureSource) -> SceneDoc {
     doc
 }
 
-/// Render `doc` until every picture has loaded, as the load pre-roll does,
-/// and read the frame back as RGBA8.
-fn render(doc: SceneDoc, still: &str) -> Vec<u8> {
+/// Render `doc` with card `rows` written until every picture has loaded, as
+/// the load pre-roll does, and for at least `frames` frames, and read the
+/// frame back as RGBA8.
+fn render(doc: SceneDoc, rows: &[(&str, f32)], still: &str, frames: u32) -> Vec<u8> {
     let mut layer =
         Layer::new_generator("Scene".into(), PresetTypeId::from_string("Scene".into()), 0);
     layer
@@ -83,9 +103,16 @@ fn render(doc: SceneDoc, still: &str) -> Vec<u8> {
         ("long.scale_y", 0.6),
         ("long.pos_y", -0.2),
         ("ball.pos_x", 3.4),
+        ("floor.pos_y", -0.55),
+        ("floor.scale_x", 16.0),
+        ("floor.scale_y", 0.1),
+        ("floor.scale_z", 16.0),
         ("camera.distance", 9.0),
-    ] {
-        assert!(fx.set_base_param(id, value), "the scene has a {id} row");
+    ]
+    .iter()
+    .chain(rows)
+    {
+        assert!(fx.set_base_param(id, *value), "the scene has a {id} row");
     }
     let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
     let registry = PrimitiveRegistry::with_builtin();
@@ -139,7 +166,7 @@ fn render(doc: SceneDoc, still: &str) -> Vec<u8> {
         );
         encoder.commit_and_wait().expect("GPU work completes");
         frame += 1;
-        if frame > 4 && !runtime.warmup_pending() {
+        if frame > frames && !runtime.warmup_pending() {
             break;
         }
         assert!(frame < 2000, "the pictures load");
@@ -172,14 +199,38 @@ fn face_spread(rgba: &[u8]) -> f64 {
 /// shows mortar lines a plain face does not.
 #[test]
 fn a_materialx_brick_material_draws_its_pictures() {
-    let brick = render(
-        scene(TextureSource::Model {
-            file: brick_file(),
-            material: Some(0),
-        }),
-        "brick",
-    );
-    let plain = render(scene(TextureSource::None), "plain");
+    let brick_doc = |mirror| {
+        scene(
+            TextureSource::Model {
+                file: brick_file(),
+                material: Some(0),
+            },
+            mirror,
+        )
+    };
+    let brick = render(brick_doc(false), &[], "brick", 4);
+    if std::env::var("SCENE_MATERIAL_PNG_DIR").is_ok() {
+        let boxed = [("cube-material.mapping", 1.0)];
+        render(brick_doc(false), &boxed, "brick_box_only", 4);
+        render(
+            brick_doc(false),
+            &[("cube-material.mapping", 1.0), ("cube-material.break_repeats", 0.5)],
+            "brick_box_break",
+            4,
+        );
+        let mirror = [
+            ("cube-material.mapping", 1.0),
+            ("mirror.metallic", 1.0),
+            ("mirror.roughness", 0.02),
+            ("world.rt_enabled", 1.0),
+            ("world.rt_reflections", 1.0),
+        ];
+        render(brick_doc(true), &mirror, "brick_box_rt", 90);
+        let mut broken = mirror.to_vec();
+        broken.push(("cube-material.break_repeats", 0.5));
+        render(brick_doc(true), &broken, "brick_break_rt", 90);
+    }
+    let plain = render(scene(TextureSource::None, false), &[], "plain", 4);
     let (brick, plain) = (face_spread(&brick), face_spread(&plain));
     assert!(
         brick > 4.0 * plain.max(0.5),

@@ -372,6 +372,10 @@ const _: () = assert!(std::mem::size_of::<ShadowRayParams>() == 160);
 pub struct RtMaterialAttributes {
     pub uv1_offset: u32,
     pub color_offset: u32,
+    /// Box mapping, as the raster's `u.surface.zw`: 1 / Tile Size in metres
+    /// (0 = the maps read their UVs) and the Break Repeats amount. In the
+    /// candidate-walk record, since a box-mapped cut-out reads it there.
+    pub box_mapping: [f32; 2],
     /// Sampling metadata for base, normal, metallic-roughness, occlusion,
     /// emission, anisotropy, specular-weight, and specular-color maps.
     pub sampling: [[u32; 4]; 20],
@@ -388,6 +392,7 @@ impl Default for RtMaterialAttributes {
         Self {
             uv1_offset: u32::MAX,
             color_offset: u32::MAX,
+            box_mapping: [0.0; 2],
             sampling: [[0, 1, 1, 1]; 20],
             extension_uv_transforms: [[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]; 15],
         }
@@ -397,7 +402,7 @@ impl Default for RtMaterialAttributes {
 /// One row of the per-object / per-slot bindless table. Candidate walks read
 /// a row for every nonopaque candidate a ray meets, so every field the walk
 /// touches (alpha test, appearance coverage, and the UV / colour / index
-/// fetches behind them) sits in the first 104 bytes and the row is padded to
+/// fetches behind them) sits in the first 112 bytes and the row is padded to
 /// a multiple of the 128-byte GPU cache line: a candidate costs one line of
 /// the row, wherever its row lands. Hit shading reads the rest of the row.
 /// Keep the MSL mirror's field order identical; both sides assert it.
@@ -449,8 +454,8 @@ pub struct RtNormalSource {
     /// `(m00, m01, m10, m11, tx, ty)` convention.
     pub base_color_uv_transform: [f32; 6],
     /// Placed last in the candidate-walk record on purpose: the walk reads
-    /// `uv1_offset`, `color_offset` and `sampling[0]`, which are its first
-    /// 24 bytes.
+    /// `uv1_offset`, `color_offset`, `box_mapping` and `sampling[0]`, its first
+    /// 32 bytes.
     pub material_attributes: RtMaterialAttributes,
     /// Bindless address of THIS slot's
     /// `InstanceTransform` (the renderer's 32-byte layout,
@@ -523,8 +528,11 @@ pub struct RtNormalSource {
     /// local directions before the instance fold (identity in Object
     /// space). Normals take its cofactor, computed in the kernel.
     pub inner_matrix: [[f32; 3]; 3],
+    /// The inner matrix's translation, which box mapping's object-space
+    /// position needs.
+    pub inner_offset: [f32; 3],
     /// Pads the row to [`RT_NORMAL_SOURCE_ROW_BYTES`].
-    pub _pad_row: [u32; 24],
+    pub _pad_row: [u32; 19],
 }
 
 /// Row stride of the normal-source table: a whole number of 128-byte GPU
@@ -533,11 +541,13 @@ pub struct RtNormalSource {
 const RT_NORMAL_SOURCE_ROW_BYTES: usize = 1152;
 const _: () = assert!(std::mem::size_of::<RtNormalSource>() == RT_NORMAL_SOURCE_ROW_BYTES);
 const _: () = assert!(RT_NORMAL_SOURCE_ROW_BYTES.is_multiple_of(128));
-const _: () = assert!(std::mem::size_of::<RtMaterialAttributes>() == 688);
-const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, sampling) == 8);
-const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, extension_uv_transforms) == 328);
+const _: () = assert!(std::mem::size_of::<RtMaterialAttributes>() == 696);
+const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, box_mapping) == 8);
+const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, sampling) == 16);
+const _: () = assert!(std::mem::offset_of!(RtMaterialAttributes, extension_uv_transforms) == 336);
 // The candidate-walk record: every field a nonopaque candidate reads ends by
-// byte 104 (uv1_offset, color_offset and sampling[0] open `material_attributes`).
+// byte 112 (uv1_offset, color_offset, box_mapping and sampling[0] open
+// `material_attributes`), inside the row's first 128-byte line.
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, vertex_base_addr) == 0);
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, index_base_addr) == 8);
 const _: () = assert!(std::mem::offset_of!(RtNormalSource, appearance_weights_addr) == 16);
@@ -555,25 +565,26 @@ const _: () = assert!(
     std::mem::offset_of!(RtNormalSource, material_attributes)
         + std::mem::offset_of!(RtMaterialAttributes, sampling)
         + 16
-        <= 104
+        <= 112
 );
 // The rest of the row (hit shading only).
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, instance_addr) == 768);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, vertex_count) == 776);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_offset) == 780);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_matrix) == 784);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, base_color_tex_index) == 820);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, emissive_uv_m) == 836);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, object_index) == 860);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, mr_uv_transform) == 864);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_uv_transform) == 888);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_scale) == 912);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, tangent_offset) == 916);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_matrix) == 920);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_handedness) == 956);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, extra_tex_indices) == 960);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, inner_matrix) == 1020);
-const _: () = assert!(std::mem::offset_of!(RtNormalSource, _pad_row) == 1056);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, instance_addr) == 776);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, vertex_count) == 784);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_offset) == 788);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_matrix) == 792);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, base_color_tex_index) == 828);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, emissive_uv_m) == 844);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, object_index) == 868);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, mr_uv_transform) == 872);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_uv_transform) == 896);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, normal_scale) == 920);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, tangent_offset) == 924);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_matrix) == 928);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, model_handedness) == 964);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, extra_tex_indices) == 968);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, inner_matrix) == 1028);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, inner_offset) == 1064);
+const _: () = assert!(std::mem::offset_of!(RtNormalSource, _pad_row) == 1076);
 
 /// Manual mirror of the renderer's
 /// `mesh::InstanceTransform` (32 bytes,

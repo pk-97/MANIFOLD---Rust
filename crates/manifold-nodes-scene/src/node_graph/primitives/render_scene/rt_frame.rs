@@ -660,6 +660,14 @@ impl RenderScene {
                                     m.offset_set[1],
                                 ]
                             }),
+                            box_mapping: [
+                                if d.uniforms.surface[1] > 0.5 {
+                                    d.uniforms.surface[2]
+                                } else {
+                                    0.0
+                                },
+                                d.uniforms.surface[3],
+                            ],
                         },
                     }
                 }),

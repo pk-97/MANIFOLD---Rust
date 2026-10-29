@@ -141,6 +141,8 @@ pub(crate) fn read_facts(path: &Path) -> Result<(ModelFacts, Vec<String>), Strin
         texture_dims,
         radius: 1e-3,
         nodes: HashMap::new(),
+        // A file that gives no real-world size tiles once a metre.
+        tiles: Some(material.tile_size.unwrap_or(1.0)),
     };
     Ok((ModelFacts::new(facts), material.warnings))
 }
@@ -182,6 +184,7 @@ mod tests {
             metalness: 0.7,
             normal_scale: 1.0,
             emission: [0.0; 3],
+            tile_size: None,
             warnings: Vec::new(),
         }
     }

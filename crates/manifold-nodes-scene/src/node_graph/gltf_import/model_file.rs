@@ -96,6 +96,10 @@ pub(crate) struct ModelFile {
     pub radius: f32,
     /// By file node path.
     pub nodes: HashMap<String, NodeFacts>,
+    /// A material file's tile size in metres: its textures are seamless
+    /// tiles, so its material starts box mapped with repeats broken. `None`
+    /// for a model file, whose textures are laid out for its own UVs.
+    pub tiles: Option<f32>,
 }
 
 impl ModelFile {
@@ -234,6 +238,7 @@ pub(crate) fn facts_of(
         texture_dims: gltf_load::texture_dims(path, document, buffers),
         radius,
         nodes,
+        tiles: None,
     };
     (facts, report)
 }

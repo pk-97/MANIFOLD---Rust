@@ -809,6 +809,18 @@ impl Application {
                     // The parts keep drawing as plain meshes.
                     Err(message) => log::warn!("[scene] {path}: {message}"),
                 },
+                Ok(crate::import_worker::ImportProgress::MaterialFile {
+                    path,
+                    layer,
+                    item,
+                    read,
+                }) => {
+                    self.finish_material_file(&path, &layer, &item, read);
+                    self.import_worker_busy = false;
+                    if let Some(next) = self.import_queue.pop_front() {
+                        self.spawn_import_worker(next);
+                    }
+                }
                 Ok(crate::import_worker::ImportProgress::Failed { path, message }) => {
                     let file_name = path
                         .file_name()
@@ -827,6 +839,51 @@ impl Application {
                 Err(crossbeam_channel::TryRecvError::Empty) => break,
                 Err(crossbeam_channel::TryRecvError::Disconnected) => break,
             }
+        }
+    }
+
+    /// The UI-thread tail of a material file read: its facts go on the
+    /// layer first, so the Material compiles once with them and its rows
+    /// start at the file's values (`scene_edit::set_material_file`).
+    fn finish_material_file(
+        &mut self,
+        path: &std::path::Path,
+        layer: &manifold_core::LayerId,
+        item: &manifold_core::scene_doc::ItemId,
+        read: Result<(manifold_core::scene_doc::ModelFacts, Vec<String>), String>,
+    ) {
+        let file_name = path
+            .file_name()
+            .map_or_else(|| "material".to_string(), |n| n.to_string_lossy().to_string());
+        let file = path.to_string_lossy().into_owned();
+        let (facts, warnings) = match read {
+            Ok(read) => read,
+            Err(message) => {
+                log::warn!("[Import] {file}: {message}");
+                self.ws.ui_root.toast.show_with_accent(
+                    format!("Couldn't read {file_name}: {message}"),
+                    manifold_ui::color::RED_BASE,
+                );
+                return;
+            }
+        };
+        log_model_warnings(&file, &warnings);
+        let Some(content_tx) = self.content_tx.clone() else {
+            return;
+        };
+        self.model_store.arrived(file.clone(), facts.clone());
+        self.attach_model_facts(Some(layer.clone()), file.clone(), facts);
+        match crate::scene_edit::set_material_file(&self.local_project, layer, item, &file) {
+            Ok(edit) => {
+                self.local_project
+                    .edit(&mut self.ui_edits, &content_tx)
+                    .execute(edit.command);
+                self.ws.ui_root.toast.show(format!("{file_name} is on the Material"));
+            }
+            Err(e) => self.ws.ui_root.toast.show_with_accent(
+                format!("Couldn't use {file_name}: {e}"),
+                manifold_ui::color::RED_BASE,
+            ),
         }
     }
 
@@ -904,6 +961,9 @@ impl Application {
                 }
                 return;
             }
+            // A material file reads its facts alone and lands through
+            // `finish_material_file`; it never parses as a model.
+            ImportTarget::Material { .. } => return,
             ImportTarget::Into { layer, parent } => {
                 let Some(doc) = self.local_project.scene_of(&layer) else {
                     return layer_gone(self);

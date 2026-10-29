@@ -20,6 +20,10 @@ use crate::node_graph::gltf_load::{
     GltfFilterMode, GltfMaterialInfo, GltfSamplerInfo, GltfWrapMode,
 };
 
+/// Break Repeats a material file's tiles start at: enough shift and turn to
+/// hide the grid on a large surface.
+const TILE_BREAK_REPEATS: f32 = 0.5;
+
 /// The surface params and texture maps of `file`'s material `material` on
 /// `owner`'s surface node. Returns each map's source node and the
 /// `node.scene_object` port it feeds.
@@ -33,6 +37,11 @@ pub(crate) fn emit(
 ) -> Vec<(u32, &'static str)> {
     let m = model.material(material);
     write_surface(b, surface, m);
+    if let Some(size) = model.tiles {
+        b.set_number(surface, "mapping", 1.0);
+        b.set_number(surface, "tile_size", size);
+        b.set_number(surface, "break_repeats", TILE_BREAK_REPEATS);
+    }
     let mut maps: Vec<(u32, &'static str)> = Vec::new();
     // Keyed by (texture index, colour space, repack mode): an ORM-packed
     // file reads one image for occlusion and metal-roughness, while

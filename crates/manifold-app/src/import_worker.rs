@@ -63,6 +63,12 @@ pub(crate) enum ImportTarget {
         layer: manifold_core::LayerId,
         item: manifold_core::scene_doc::ItemId,
     },
+    /// A MaterialX file for Material `item` of scene layer `layer`: only
+    /// its facts are read.
+    Material {
+        layer: manifold_core::LayerId,
+        item: manifold_core::scene_doc::ItemId,
+    },
 }
 
 /// One event on the background-import channel (D3's committed shape).
@@ -99,6 +105,14 @@ pub(crate) enum ImportProgress {
         path: String,
         read: Result<(ModelFacts, Vec<String>), String>,
     },
+    /// A MaterialX file's facts and warnings, for Material `item` of scene
+    /// layer `layer`.
+    MaterialFile {
+        path: PathBuf,
+        layer: manifold_core::LayerId,
+        item: manifold_core::scene_doc::ItemId,
+        read: Result<(ModelFacts, Vec<String>), String>,
+    },
 }
 
 /// Everything [`run_import_worker`] needs, captured by value so it can cross
@@ -127,6 +141,17 @@ pub(crate) fn run_import_worker(
         target,
         blender_path_pref,
     } = req;
+    // A material file is facts only: there is no model to import.
+    if let ImportTarget::Material { layer, item } = target {
+        let read = manifold_nodes_scene::node_graph::gltf_import::read_file_facts(&path);
+        let _ = progress_tx.send(ImportProgress::MaterialFile {
+            path,
+            layer,
+            item,
+            read,
+        });
+        return;
+    }
 
     // FBX/.obj/.dae (MANIFOLD is glTF-only internally, per
     // Convert through the user's

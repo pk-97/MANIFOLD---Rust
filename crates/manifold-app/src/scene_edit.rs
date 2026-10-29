@@ -653,6 +653,59 @@ pub(crate) fn set_field(
     }))
 }
 
+/// A Material takes the MaterialX file `file`, one undo step: its texture
+/// becomes the file's material, and every row the performer has not touched
+/// starts at the file's value, so the material looks as the file says
+/// (box mapped, its roughness from the picture). The file's facts must be on
+/// the document already, so the copy compiled here sees its values.
+pub(crate) fn set_material_file(
+    project: &Project,
+    layer: &LayerId,
+    item: &ItemId,
+    file: &str,
+) -> Result<SceneEdit, String> {
+    let doc = doc(project, layer)?;
+    let found = doc
+        .find(item)
+        .ok_or("That Material is no longer in the scene")?;
+    let ItemFields::Material(old) = &found.fields else {
+        return Err("A material file goes on a Material".to_owned());
+    };
+    let fields = ItemFields::Material(MaterialFields {
+        texture: TextureSource::Model {
+            file: file.to_owned(),
+            material: Some(0),
+        },
+        ..old.clone()
+    });
+    let inst = instance(project, layer).ok_or("This layer has no scene")?;
+    let mut probe = inst.clone();
+    let mut probe_doc = doc.clone();
+    if let Some(material) = probe_doc.find_mut(item) {
+        material.fields = fields.clone();
+    }
+    probe.install_scene_document(probe_doc)?;
+    let prefix = format!("{}.", item.as_str());
+    let mut commands: Vec<Box<dyn Command>> = vec![Box::new(SetSceneItemFieldsCommand::new(
+        layer.clone(),
+        item.clone(),
+        fields,
+    ))];
+    for started in probe.params.iter() {
+        let Some(property) = started.id().strip_prefix(&prefix) else {
+            continue;
+        };
+        let Some(held) = inst.params.get(started.id()) else {
+            continue;
+        };
+        let untouched = (held.base - held.spec.default_value).abs() <= f32::EPSILON;
+        if untouched && (held.base - started.spec.default_value).abs() > f32::EPSILON {
+            commands.push(write(layer, item, property, held.base, started.spec.default_value));
+        }
+    }
+    Ok(batch(commands, "Set Material File", None))
+}
+
 /// A Shape change, one undo step: the new Shape; a default name follows it
 /// (Cube becomes Sphere), a name the user gave stays; and an imported
 /// object that takes a built-in drops its file, so the Material it alone
@@ -1451,6 +1504,57 @@ mod tests {
                 ("Swarm Gusts", ForceType::Wind)
             ]
         );
+    }
+
+    /// A material file picked on a Material that has its facts: the texture
+    /// becomes the file's material, the untouched rows start at the file's
+    /// values (box mapped, roughness from the picture), a row the performer
+    /// set keeps its value, and one undo takes it all back.
+    #[test]
+    fn a_material_file_starts_the_untouched_rows_at_its_values() {
+        let (mut project, layer, cube) = cube_scene();
+        let material = doc(&project, &layer)
+            .unwrap()
+            .effective_material(&cube)
+            .unwrap();
+        let file = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/materials/Bricks090/Bricks090_2K-JPG.mtlx"
+        );
+        let (facts, _) = manifold_nodes_scene::node_graph::gltf_import::read_file_facts(
+            std::path::Path::new(file),
+        )
+        .unwrap();
+        let held = base(instance(&project, &layer).unwrap(), &material, "metallic").unwrap();
+        write(&layer, &material, "metallic", held, 0.3).execute(&mut project);
+        let (_, scene_layer) = project
+            .timeline
+            .find_layer_by_id_mut(layer.as_str())
+            .unwrap();
+        let inst = scene_layer.gen_params_mut().unwrap();
+        let mut scene = inst.scene.clone().unwrap();
+        scene.models.insert(file.to_owned(), facts);
+        inst.install_scene_document(scene).unwrap();
+
+        let mut edit = set_material_file(&project, &layer, &material, file).unwrap();
+        edit.command.execute(&mut project);
+        let row = |project: &Project, property| {
+            base(instance(project, &layer).unwrap(), &material, property).unwrap()
+        };
+        assert_eq!(row(&project, "mapping"), 1.0, "a material file starts box mapped");
+        assert_eq!(row(&project, "roughness"), 1.0, "the picture carries the roughness");
+        assert!(row(&project, "break_repeats") > 0.0, "its repeats start broken");
+        assert_eq!(row(&project, "metallic"), 0.3, "a row the performer set stays");
+
+        edit.command.undo(&mut project);
+        assert_eq!(row(&project, "mapping"), 0.0);
+        assert!(matches!(
+            &doc(&project, &layer).unwrap().find(&material).unwrap().fields,
+            ItemFields::Material(MaterialFields {
+                texture: TextureSource::None,
+                ..
+            })
+        ));
     }
 
     /// A scene layer holding a new cube: the project, the layer, the cube.

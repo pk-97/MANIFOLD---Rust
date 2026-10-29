@@ -335,15 +335,17 @@ constant float RT_REFL_CLAMP_GAMMA = 1.0;
 struct RtMaterialAttributes {
     uint uv1_offset;
     uint color_offset;
+    // Box mapping: 1 / Tile Size (0 = UVs) and the Break Repeats amount.
+    float box_mapping[2];
     uint sampling[20][4];
     float extension_uv_transforms[15][6];
 };
 // One row of the per-object / per-slot bindless table. A nonopaque candidate
 // reads its row in `walk_with_alpha_test_counted` / `walk_with_transmission`
 // (alpha test, appearance coverage, and the UV / colour / index fetches behind
-// them), so everything those walks touch is the first 104 bytes of the row
-// (the start of `material_attributes` covers uv1_offset, color_offset and
-// sampling[0]) and the row is padded to a multiple of the 128-byte GPU cache
+// them), so everything those walks touch is the first 112 bytes of the row
+// (the start of `material_attributes` covers uv1_offset, color_offset,
+// box_mapping and sampling[0]) and the row is padded to a multiple of the 128-byte GPU cache
 // line: one candidate costs one line of the row. Hit shading reads the rest.
 // The Rust mirror (`RtNormalSource` in params.rs) asserts the same offsets.
 struct RtNormalSource {
@@ -373,7 +375,7 @@ struct RtNormalSource {
     float  base_color_uv_transform[6];
     RtMaterialAttributes material_attributes;
     // The bindless address of THIS slot's InstanceTransform (0 = unwired).
-    // 8-aligned at 768 with no padding before it.
+    // 8-aligned at 776 with no padding before it.
     ulong  instance_addr;
     uint   vertex_count;
     uint   normal_offset;
@@ -426,11 +428,12 @@ struct RtNormalSource {
     packed_float3 inner_matrix_col0;
     packed_float3 inner_matrix_col1;
     packed_float3 inner_matrix_col2;
-    uint   _pad_row[24];
+    packed_float3 inner_offset;
+    uint   _pad_row[19];
 };
 static_assert(sizeof(RtNormalSource) == 1152, "RtNormalSource row stride must match RT_NORMAL_SOURCE_ROW_BYTES");
 static_assert(__builtin_offsetof(RtNormalSource, material_attributes) == 80, "candidate-walk record");
-static_assert(__builtin_offsetof(RtNormalSource, instance_addr) == 768, "RtNormalSource rest-of-row offset");
+static_assert(__builtin_offsetof(RtNormalSource, instance_addr) == 776, "RtNormalSource rest-of-row offset");
 
 // Manual MSL mirror of the renderer's
 // `generators::mesh_common::InstanceTransform` (32 bytes: pos_scale =
@@ -947,6 +950,154 @@ static float4 rt_sample_map(texture2d<float> tex, float2 uv,
         mix(rt_map_texel(tex,base+int2(0,1),wrap),rt_map_texel(tex,base+int2(1,1),wrap),t.x),t.y);
 }
 
+// Box mapping at a hit, the raster's begin_box / box_sample / box_normal
+// (render_scene.wgsl): the hit's place on the object with its rotation and
+// placement removed and its scale kept, in tiles, the three sides' weights
+// from the normal in that frame, and the object's world axes. Each sample
+// walks the sides and their hex tiles as it goes, so a material on UVs
+// carries none of this.
+struct RtBoxPoint {
+    float3 p, w, s, ax, ay, az;
+    float amount;
+};
+
+static bool rt_box_point(device RtNormalSource& src, uint pid, float2 bary, thread RtBoxPoint& x) {
+    float inv_tile = src.material_attributes.box_mapping[0];
+    if (inv_tile <= 0.0f) return false;
+    uint3 c = rt_triangle_corners(src, pid);
+    device const uchar* base = (device const uchar*)src.vertex_base_addr;
+    float w0 = 1.0f - bary.x - bary.y;
+    float3 pos = float3(*(device const packed_float3*)(base + ulong(c.x) * src.vertex_stride)) * w0
+        + float3(*(device const packed_float3*)(base + ulong(c.y) * src.vertex_stride)) * bary.x
+        + float3(*(device const packed_float3*)(base + ulong(c.z) * src.vertex_stride)) * bary.y;
+    float3 nrm = float3(*(device const packed_float3*)(base + ulong(c.x) * src.vertex_stride + src.normal_offset)) * w0
+        + float3(*(device const packed_float3*)(base + ulong(c.y) * src.vertex_stride + src.normal_offset)) * bary.x
+        + float3(*(device const packed_float3*)(base + ulong(c.z) * src.vertex_stride + src.normal_offset)) * bary.y;
+    float3x3 model = float3x3(float3(src.model_matrix_col0), float3(src.model_matrix_col1), float3(src.model_matrix_col2));
+    float3 model_scale = float3(length(model[0]), length(model[1]), length(model[2]));
+    float instance_scale = 1.0f;
+    if (src.instance_addr != 0ul) {
+        instance_scale = fabs(((device const RtInstanceTransform*)src.instance_addr)->pos_scale.w);
+    }
+    x.p = (rti_inner(src) * pos + float3(src.inner_offset)) * instance_scale * model_scale * inv_tile;
+    float3 n = normalize(rti_apply_inner_normal(src, nrm) / max(model_scale, float3(1e-6f)));
+    float3 n2 = n * n;
+    float3 w = n2 * n2;
+    w /= w.x + w.y + w.z;
+    w = select(w, float3(0.0f), w < 0.02f);
+    x.w = w / (w.x + w.y + w.z);
+    x.s = select(float3(-1.0f), float3(1.0f), n >= 0.0f);
+    x.ax = normalize(model * rti_apply_instance_dir(src, float3(1.0f, 0.0f, 0.0f)));
+    x.ay = normalize(model * rti_apply_instance_dir(src, float3(0.0f, 1.0f, 0.0f)));
+    x.az = normalize(model * rti_apply_instance_dir(src, float3(0.0f, 0.0f, 1.0f)));
+    x.amount = src.material_attributes.box_mapping[1];
+    return true;
+}
+
+static float2 rt_box_turn(float2 v, float2 r) {
+    return float2(r.x * v.x - r.y * v.y, r.y * v.x + r.x * v.y);
+}
+
+static float3 rt_box_hash(int2 c) {
+    uint h = as_type<uint>(c.x) * 1664525u + as_type<uint>(c.y) * 1013904223u + 374761393u;
+    h = (h ^ (h >> 15u)) * 2246822519u;
+    h = (h ^ (h >> 13u)) * 3266489917u;
+    h = h ^ (h >> 16u);
+    uint a = h * 747796405u + 2891336453u;
+    uint b = (a ^ (a >> 16u)) * 2246822519u;
+    return float3(float(h >> 8u), float(a >> 8u), float(b >> 8u)) / 16777216.0f;
+}
+
+// Side `a`'s coordinate, texture right and image up in the world.
+static float2 rt_box_side(thread const RtBoxPoint& x, uint a, thread float3& t, thread float3& b) {
+    if (a == 0u) { t = -x.s.x * x.az; b = x.ay; return float2(-x.s.x * x.p.z, -x.p.y); }
+    if (a == 1u) { t = x.s.y * x.ax; b = -x.az; return float2(x.s.y * x.p.x, x.p.z); }
+    t = x.s.z * x.ax; b = x.ay;
+    return float2(x.s.z * x.p.x, -x.p.y);
+}
+
+// Tile `k` of the side coordinate `st`: its blend weight, coordinate and
+// turn. One plain tile when Break Repeats is off; otherwise Mikkelsen's
+// TriangleGrid, the hexagon corners of the triangle `st` sits in.
+static float rt_box_tile(float2 st, float amount, uint k, thread float2& st_k, thread float2& turn) {
+    if (amount <= 0.0f) {
+        st_k = st;
+        turn = float2(1.0f, 0.0f);
+        return k == 0u ? 1.0f : 0.0f;
+    }
+    float2 g = st * 3.4641016f;
+    float2 skewed = float2(g.x - 0.57735027f * g.y, 1.15470054f * g.y);
+    float2 corner0 = floor(skewed);
+    float2 f = skewed - corner0;
+    float z = 1.0f - f.x - f.y;
+    float s = step(0.0f, -z);
+    float s2 = 2.0f * s - 1.0f;
+    float3 w = max(float3(-z * s2, s - f.y * s2, s - f.x * s2), 0.0f);
+    float3 w2 = w * w;
+    float3 blend = w2 * w2 * w2 * w;
+    blend /= blend.x + blend.y + blend.z;
+    blend = select(blend, float3(0.0f), blend < 0.02f);
+    blend /= blend.x + blend.y + blend.z;
+    float2 corner = corner0 + (k == 0u ? float2(s, s) : k == 1u ? float2(s, 1.0f - s) : float2(1.0f - s, s));
+    float3 h = rt_box_hash(int2(corner));
+    float2 centre = float2(corner.x + 0.5f * corner.y, 0.8660254f * corner.y) / 3.4641016f;
+    float angle = (h.z * 2.0f - 1.0f) * 3.14159265f * amount;
+    turn = float2(cos(angle), sin(angle));
+    st_k = rt_box_turn(st - centre, turn) + centre + h.xy;
+    return blend[k];
+}
+
+static float4 rt_box_sample(thread const RtBoxPoint& x, texture2d<float> tex,
+    device RtNormalSource& src, uint map, float lod) {
+    float4 sum = float4(0.0f);
+    for (uint a = 0u; a < 3u; ++a) {
+        if (x.w[a] <= 0.0f) continue;
+        float3 t, b;
+        float2 st = rt_box_side(x, a, t, b);
+        for (uint k = 0u; k < 3u; ++k) {
+            float2 st_k, turn;
+            float h = rt_box_tile(st, x.amount, k, st_k, turn);
+            if (h > 0.0f) sum += (x.w[a] * h) * rt_sample_map(tex, st_k, src, map, lod);
+        }
+    }
+    return sum;
+}
+
+// The normal map read box-mapped, bending the world normal `n`: each tile's
+// slope turns back by the tile's turn and lies along its side's axes.
+static float3 rt_box_normal(thread const RtBoxPoint& x, texture2d<float> tex,
+    device RtNormalSource& src, float3 n) {
+    float z = 0.0f;
+    float3 slope = float3(0.0f);
+    for (uint a = 0u; a < 3u; ++a) {
+        if (x.w[a] <= 0.0f) continue;
+        float3 t, b;
+        float2 st = rt_box_side(x, a, t, b);
+        float2 xy = float2(0.0f);
+        float tz = 0.0f;
+        for (uint k = 0u; k < 3u; ++k) {
+            float2 st_k, turn;
+            float h = rt_box_tile(st, x.amount, k, st_k, turn);
+            if (h <= 0.0f) continue;
+            float3 tn = rt_sample_map(tex, st_k, src, 1u).rgb * 2.0f - 1.0f;
+            xy += h * rt_box_turn(tn.xy, turn);
+            tz += h * tn.z;
+        }
+        slope += x.w[a] * (t * xy.x + b * xy.y);
+        z += x.w[a] * tz;
+    }
+    return normalize(n * z + slope * src.normal_scale);
+}
+
+// A core map's texel at a hit: box-mapped, or at the map's UVs folded by
+// `transform`.
+static float4 rt_core_map(texture2d<float> tex, device RtNormalSource& src,
+    uint pid, float2 bary, uint map, device const float* transform, float lod) {
+    RtBoxPoint box;
+    if (rt_box_point(src, pid, bary, box)) return rt_box_sample(box, tex, src, map, lod);
+    return rt_sample_map(tex, rt_apply_uv_transform(map_uv_at_hit(src, pid, bary, map), transform), src, map, lod);
+}
+
 static float4 fetch_tangent(device RtNormalSource& src, uint vi) {
     if (src.tangent_offset == 0xFFFFFFFFu) return float4(0.0);
     device const uchar* base = (device const uchar*)src.vertex_base_addr;
@@ -1095,6 +1246,10 @@ static float3 perturb_normal_with_map(
     float3 n)
 {
     if (src.normal_tex_index >= MAX_RT_MATERIAL_TEXTURES) return n; // no texture bound: vertex normal stands (pre-BUG-wytp behavior)
+    RtBoxPoint box;
+    if (rt_box_point(src, primitive_id, bary, box)) {
+        return rt_box_normal(box, material_textures[src.normal_tex_index], src, n);
+    }
     float3 t;
     float3 b;
     if (!tangent_frame_at_hit(src, primitive_id, bary, n, t, b)) return n;
@@ -1123,6 +1278,10 @@ static float3 emissive_at_hit(
     uint instance_id, uint primitive_id, float2 bary)
 {
     if (src.emissive_tex_index >= MAX_RT_MATERIAL_TEXTURES) return factor;
+    RtBoxPoint box;
+    if (rt_box_point(src, primitive_id, bary, box)) {
+        return factor * rt_box_sample(box, material_textures[src.emissive_tex_index], src, 4u, 0.0f).rgb;
+    }
     float2 uv = map_uv_at_hit(src, primitive_id, bary, 4u);
     uv = float2(src.emissive_uv_m[0] * uv.x + src.emissive_uv_m[1] * uv.y + src.emissive_uv_t[0],
                 src.emissive_uv_m[2] * uv.x + src.emissive_uv_m[3] * uv.y + src.emissive_uv_t[1]);
@@ -1142,9 +1301,8 @@ static float sample_candidate_alpha(
 {
     float alpha = src.base_color_alpha * color_at_hit(src,primitive_id,bary).a;
     if (src.alpha_tex_index >= MAX_RT_MATERIAL_TEXTURES) return alpha;
-    float2 uv = map_uv_at_hit(src, primitive_id, bary, 0u);
-    uv = rt_apply_uv_transform(uv, src.base_color_uv_transform);
-    return alpha * rt_sample_map(material_textures[src.alpha_tex_index],uv,src,0u).a;
+    return alpha * rt_core_map(material_textures[src.alpha_tex_index],src,primitive_id,bary,0u,
+        src.base_color_uv_transform,0.0f).a;
 }
 
 // ─── Appearance coverage ────────
@@ -1722,6 +1880,9 @@ static float4 rt_extension(device RtNormalSource& src,
     array<texture2d<float>,MAX_RT_MATERIAL_TEXTURES> textures,uint pid,float2 bary,uint ext) {
     uint index=src.extra_tex_indices[ext];
     if(index>=MAX_RT_MATERIAL_TEXTURES) return float4(1.0f);
+    // Occlusion (14) is a core map: box-mapped with the others.
+    RtBoxPoint box;
+    if(ext==14u && rt_box_point(src,pid,bary,box)) return rt_box_sample(box,textures[index],src,5u+ext,0.0f);
     float2 uv=map_uv_at_hit(src,pid,bary,5u+ext);
     uv=rt_apply_uv_transform(uv,src.material_attributes.extension_uv_transforms[ext]);
     return rt_sample_map(textures[index],uv,src,5u+ext);
@@ -1737,14 +1898,12 @@ static RtSurface rt_surface(device GiMaterial& material,device RtNormalSource* s
     RtSurface m;
     m.albedo=float3(material.albedo)*color_at_hit(src,pid,bary).rgb;
     if(src.base_color_tex_index<MAX_RT_MATERIAL_TEXTURES) {
-        float2 uv=rt_apply_uv_transform(map_uv_at_hit(src,pid,bary,0u),src.base_color_uv_transform);
-        m.albedo*=rt_sample_map(textures[src.base_color_tex_index],uv,src,0u,lod).rgb;
+        m.albedo*=rt_core_map(textures[src.base_color_tex_index],src,pid,bary,0u,src.base_color_uv_transform,lod).rgb;
     }
     m.emission=emissive_at_hit(float3(material.emissive),src,sources,textures,instance,pid,bary);
     float4 mr=material.metallic_roughness;
     if(src.mr_tex_index<MAX_RT_MATERIAL_TEXTURES) {
-        float2 uv=rt_apply_uv_transform(map_uv_at_hit(src,pid,bary,2u),src.mr_uv_transform);
-        float4 texel=rt_sample_map(textures[src.mr_tex_index],uv,src,2u,lod); mr.xy*=texel.bg;
+        float4 texel=rt_core_map(textures[src.mr_tex_index],src,pid,bary,2u,src.mr_uv_transform,lod); mr.xy*=texel.bg;
     }
     m.metallic=clamp(mr.x,0.0f,1.0f); m.roughness=clamp(mr.y,0.01f,1.0f);
     float3 ng=fetch_interpolated_normal(sources,instance,pid,bary);
@@ -2720,9 +2879,8 @@ kernel void trace_shadow_rays(
         // instance rotation/reflection rather than the canonical object row.
         device RtNormalSource& rsrc = slot_sources[primary_iid];
         if (rsrc.mr_tex_index < MAX_RT_MATERIAL_TEXTURES) {
-            float2 primary_uv = map_uv_at_hit(rsrc,primary_pid,primary_bary,2u);
-            primary_uv = rt_apply_uv_transform(primary_uv, rsrc.mr_uv_transform);
-            float4 mr_texel = rt_sample_map(material_textures[rsrc.mr_tex_index],primary_uv,rsrc,2u);
+            float4 mr_texel = rt_core_map(material_textures[rsrc.mr_tex_index],rsrc,primary_pid,primary_bary,2u,
+                rsrc.mr_uv_transform,0.0f);
             mr.x = clamp(mr.x * mr_texel.b, 0.0, 1.0);
             roughness = max(mr.y * mr_texel.g, 0.01);
         }

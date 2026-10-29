@@ -63,6 +63,9 @@ pub struct Material {
     pub normal_scale: f32,
     /// Multiplies the emission picture, or is the emitted colour when there is none.
     pub emission: [f32; 3],
+    /// Metres one repeat of the base colour picture covers, from its
+    /// `realworldimagesize`, when the file gives one.
+    pub tile_size: Option<f32>,
     /// What the file asks for that this reader cannot honour, one plain line each.
     pub warnings: Vec<String>,
 }
@@ -208,6 +211,7 @@ struct Reader<'a, 'i> {
     maps: Vec<MapFile>,
     warnings: Vec<String>,
     normal_scale: f32,
+    tile_size: Option<f32>,
     read: Vec<&'static str>,
 }
 
@@ -284,6 +288,21 @@ impl<'a, 'i> Reader<'a, 'i> {
             .unwrap_or("");
         let relative = format!("{prefix}{value}");
         let label = slot.label();
+        // The colour picture's real-world size sets the tile; MaterialX
+        // states it in the input's own distance unit, metres by default.
+        if slot == MapSlot::BaseColor
+            && let Some(size) = input(node, "realworldimagesize")
+            && let Some(&width) = size.attribute("value").map(floats).as_deref().and_then(<[f32]>::first)
+        {
+            match size.attribute("unit").unwrap_or("meter") {
+                "meter" => self.tile_size = Some(width),
+                "centimeter" => self.tile_size = Some(width * 0.01),
+                "millimeter" => self.tile_size = Some(width * 0.001),
+                unit => self
+                    .warnings
+                    .push(format!("the picture's real-world size is in {unit}, which isn't read")),
+            }
+        }
         if node.tag_name().name() == "tiledimage"
             && let Some(t) = input_value(node, "uvtiling")
             && let [u, v, ..] = t[..]
@@ -369,6 +388,7 @@ pub fn parse(text: &str, folder: &Path) -> Result<Material, String> {
         maps: Vec::new(),
         warnings: Vec::new(),
         normal_scale: 1.0,
+        tile_size: None,
         read: Vec::new(),
     };
 
@@ -473,6 +493,7 @@ pub fn parse(text: &str, folder: &Path) -> Result<Material, String> {
         metalness,
         normal_scale: r.normal_scale,
         emission,
+        tile_size: r.tile_size,
         maps: r.maps,
         warnings: r.warnings,
     })

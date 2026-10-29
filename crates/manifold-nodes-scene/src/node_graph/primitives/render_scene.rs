@@ -762,8 +762,9 @@ struct RenderSceneUniforms {
     /// reuse is byte-identical for every asset without the extensions.
     pbr_metallic_roughness: [f32; 4],
     /// x: the material's grain size in metres, 0 for none (`sand_grain` in
-    /// render_scene.wgsl); yzw unused.
-    grain: [f32; 4],
+    /// render_scene.wgsl). y: Mapping, 1 for Box. z: 1 / Tile Size in
+    /// metres. w: Break Repeats (box mapping in render_scene.wgsl).
+    surface: [f32; 4],
     /// `KHR_materials_specular`'s
     /// `specularColorFactor` (rgb, default `[1,1,1]`) — `w` reserved.
     /// A NEW field (not a reserved-slot reuse) since no existing vec4 had
@@ -2508,7 +2509,12 @@ fn build_uniforms(
             material.ior,
             material.specular_factor,
         ],
-        grain: [material.grain * 0.001, 0.0, 0.0, 0.0],
+        surface: [
+            material.grain * 0.001,
+            if material.box_mapping { 1.0 } else { 0.0 },
+            1.0 / material.tile_size,
+            material.break_repeats,
+        ],
         pbr_specular_tint: [
             material.specular_tint[0],
             material.specular_tint[1],

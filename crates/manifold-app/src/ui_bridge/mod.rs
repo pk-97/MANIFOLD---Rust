@@ -307,6 +307,23 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                     extensions,
                 );
                 match picked {
+                    // A material file is read off the UI thread, then lands
+                    // with its values in one undo step.
+                    Some(path)
+                        if field == "texture_file"
+                            && manifold_core::materialx::is_materialx(&path.to_string_lossy()) =>
+                    {
+                        DispatchResult {
+                            import_model: Some((
+                                path,
+                                crate::import_worker::ImportTarget::Material {
+                                    layer: layer_id.clone(),
+                                    item: item.clone(),
+                                },
+                            )),
+                            ..DispatchResult::handled()
+                        }
+                    }
                     Some(path) => {
                         let pick = manifold_core::scene_surface::FieldPick::File(
                             path.to_string_lossy().into_owned(),

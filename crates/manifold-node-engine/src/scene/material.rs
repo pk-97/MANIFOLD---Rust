@@ -206,6 +206,14 @@ pub struct Material {
     /// Grain size in millimetres, 0 for none: the surface shades as packed
     /// grains of this size (sand).
     pub grain: f32,
+    /// Box mapping: the core maps project from the object's three axes in
+    /// metres instead of reading the mesh's UVs.
+    pub box_mapping: bool,
+    /// Metres one repeat of a box-mapped texture covers.
+    pub tile_size: f32,
+    /// How strongly box-mapped textures are shifted and turned in random
+    /// patches, 0 for none.
+    pub break_repeats: f32,
 
     // ---- Cel-specific. Inert when `kind != Cel`. ----
     /// Number of quantization bands `[2, 16]`.
@@ -386,6 +394,9 @@ impl Material {
             clearcoat_normal_scale: 1.0,
             occlusion_strength: 1.0,
             grain: 0.0,
+            box_mapping: false,
+            tile_size: 1.0,
+            break_repeats: 0.0,
             cel_bands: 4,
             band_low: 0.08,
             band_high: 1.0,

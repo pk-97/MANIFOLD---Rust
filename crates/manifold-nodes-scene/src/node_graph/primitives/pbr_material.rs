@@ -263,6 +263,30 @@ manifold_node_engine::primitive! {
             enum_values: &[],
         },
         ParamDef {
+            name: Cow::Borrowed("mapping"),
+            label: "Mapping",
+            ty: ParamType::Enum,
+            default: ParamValue::Enum(0),
+            range: Some((0.0, 1.0)),
+            enum_values: &["Mesh UVs", "Box"],
+        },
+        ParamDef {
+            name: Cow::Borrowed("tile_size"),
+            label: "Tile Size (m)",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.05, 20.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("break_repeats"),
+            label: "Break Repeats",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
             name: Cow::Borrowed("emission_r"),
             label: "Emission R",
             ty: ParamType::Float,
@@ -1275,6 +1299,15 @@ impl Primitive for PbrMaterial {
             .scalar_or_param("occlusion_strength", 1.0)
             .clamp(0.0, 1.0);
         let grain = ctx.scalar_or_param("grain", 0.0).clamp(0.0, 20.0);
+        // The scene compiler writes card rows as numbers; a graph may carry
+        // the enum.
+        let box_mapping = match ctx.params.get("mapping") {
+            Some(ParamValue::Enum(v)) => *v == 1,
+            Some(ParamValue::Float(f)) => f.round() as i32 == 1,
+            _ => false,
+        };
+        let tile_size = ctx.scalar_or_param("tile_size", 1.0).clamp(0.05, 20.0);
+        let break_repeats = ctx.scalar_or_param("break_repeats", 0.0).clamp(0.0, 1.0);
         let mut emission_r = ctx.scalar_or_param("emission_r", 0.0);
         let mut emission_g = ctx.scalar_or_param("emission_g", 0.0);
         let mut emission_b = ctx.scalar_or_param("emission_b", 0.0);
@@ -1834,6 +1867,9 @@ impl Primitive for PbrMaterial {
         material.clearcoat_normal_scale = clearcoat_normal_scale;
         material.occlusion_strength = occlusion_strength;
         material.grain = grain;
+        material.box_mapping = box_mapping;
+        material.tile_size = tile_size;
+        material.break_repeats = break_repeats;
         material.clearcoat = clearcoat;
         material.clearcoat_roughness = clearcoat_roughness;
         material.sheen_color_factor = [sheen_color_r, sheen_color_g, sheen_color_b];

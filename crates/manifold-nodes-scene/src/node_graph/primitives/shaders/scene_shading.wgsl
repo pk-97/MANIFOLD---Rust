@@ -42,8 +42,10 @@ struct Uniforms {
     // dielectric F0 term below. Defaults collapse the formula to the
     // pre-G-P4 hardcoded F0 = 0.04 exactly.
     pbr_metallic_roughness: vec4<f32>,
-    // x: grain size in metres, 0 for none (sand_grain); yzw unused.
-    grain: vec4<f32>,
+    // x: grain size in metres, 0 for none (sand_grain). y: Mapping, 1 for
+    // Box (box mapping in render_scene.wgsl), 0 for the mesh's UVs. z: 1 /
+    // Tile Size in metres. w: Break Repeats, 0 for none.
+    surface: vec4<f32>,
     // KHR_materials_specular's
     // specularColorFactor (rgb, default [1,1,1]). w: GLTF_MATERIAL_
     // EXTENSIONS_DESIGN.md E6 bitmask (see specular_family_flags()) —
