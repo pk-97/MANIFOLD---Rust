@@ -24,7 +24,8 @@
 // taps in the order −1, 0, +1.
 //
 // The workgroup stages its tile and `halo` nodes round it (1 at stride 1,
-// stride + 1 above) through its 27 neighbour tiles, then runs each filter
+// stride + 1 above) through its 27 neighbour tiles, reads each band node's
+// normal and samples across the surface from that staged copy, then runs each filter
 // one node per thread, from one workgroup array into the other: each pass
 // writes only the box of nodes the next one reads, so the boxes shrink to
 // the tile as the passes go and the two arrays fit the widest halo. A node in
@@ -62,6 +63,10 @@ const FS_LEASH_CELLS: f32 = 0.5;
 // FIELD_FAR_CELLS (scene_object), the level set where no tile is held.
 const FS_FAR_CELLS: f32 = 3.0;
 var<workgroup> fs_held: u32;
+// Whether any node of the tile lies in the band: a tile with none keeps
+// `prior` and skips the staging and the passes.
+var<workgroup> fs_band_any: atomic<u32>;
+var<workgroup> fs_in_band: u32;
 // The slots of the 27 tiles round this one, by neighbour index.
 var<workgroup> fs_near: array<u32, 27>;
 // The passes' boxes, alternately: `prior` over the staged region (side 8 + 2
@@ -130,33 +135,28 @@ fn fs_pass(from_a: bool, src: FsBox, dst: FsBox, dir: vec3<u32>, step: u32, far:
     }
 }
 
-// `prior` at node n (world nodes) in this tile or one of its 26 neighbours,
-// the canonical element where none is held.
-fn fs_prior_at(home: vec3<i32>, n: vec3<i32>, canon: f32) -> f32 {
-    let d = (n >> vec3<u32>(3u)) - home;
-    if any(abs(d) > vec3<i32>(1)) {
-        return canon;
-    }
-    let slot = fs_near[ts_neighbour_index(d)];
-    if slot == WT_NONE {
-        return canon;
-    }
-    return prior[slot * 512u + ts_local(n)];
+// `prior` at world node n from the staged region (fs_a before the passes),
+// `low` the region's first world node. A coordinate past the region is held
+// at its edge: only a trilinear corner of weight 0 reaches past it.
+fn fs_staged(low: vec3<i32>, n: vec3<i32>) -> f32 {
+    let side = i32(fs_side());
+    let r = vec3<u32>(clamp(n - low, vec3<i32>(0), vec3<i32>(side - 1)));
+    return fs_a[r.x + u32(side) * (r.y + u32(side) * r.z)];
 }
 
-// The trilinear of `prior` at q (world nodes), within reach of fs_prior_at.
-fn fs_prior_trilinear(home: vec3<i32>, q: vec3<f32>, canon: f32) -> f32 {
+// The trilinear of the staged `prior` at q (world nodes).
+fn fs_staged_trilinear(low: vec3<i32>, q: vec3<f32>) -> f32 {
     let fl = floor(q);
     let t = q - fl;
     let b = vec3<i32>(fl);
-    let c000 = fs_prior_at(home, b, canon);
-    let c100 = fs_prior_at(home, b + vec3<i32>(1, 0, 0), canon);
-    let c010 = fs_prior_at(home, b + vec3<i32>(0, 1, 0), canon);
-    let c110 = fs_prior_at(home, b + vec3<i32>(1, 1, 0), canon);
-    let c001 = fs_prior_at(home, b + vec3<i32>(0, 0, 1), canon);
-    let c101 = fs_prior_at(home, b + vec3<i32>(1, 0, 1), canon);
-    let c011 = fs_prior_at(home, b + vec3<i32>(0, 1, 1), canon);
-    let c111 = fs_prior_at(home, b + vec3<i32>(1, 1, 1), canon);
+    let c000 = fs_staged(low, b);
+    let c100 = fs_staged(low, b + vec3<i32>(1, 0, 0));
+    let c010 = fs_staged(low, b + vec3<i32>(0, 1, 0));
+    let c110 = fs_staged(low, b + vec3<i32>(1, 1, 0));
+    let c001 = fs_staged(low, b + vec3<i32>(0, 0, 1));
+    let c101 = fs_staged(low, b + vec3<i32>(1, 0, 1));
+    let c011 = fs_staged(low, b + vec3<i32>(0, 1, 1));
+    let c111 = fs_staged(low, b + vec3<i32>(1, 1, 1));
     let x00 = mix(c000, c100, t.x);
     let x10 = mix(c010, c110, t.x);
     let x01 = mix(c001, c101, t.x);
@@ -173,6 +173,7 @@ fn cs_main(
     let h = params.cell_size;
     let far = FS_FAR_CELLS * h;
     if lane == 0u {
+        atomicStore(&fs_band_any, 0u);
         fs_held = u32(slot < params.pool_tiles && ts_slot_entry(slot) != WT_NONE);
         if slot == params.pool_tiles {
             field[ts_canon()] = far;
@@ -183,6 +184,20 @@ fn cs_main(
             field[slot * 512u + lane] = far;
             field[slot * 512u + lane + FS_THREADS] = far;
         }
+        return;
+    }
+    let band = params.band_cells * params.sim_cell_size;
+    let first = slot * 512u + lane;
+    if abs(reference[first]) < band || abs(reference[first + FS_THREADS]) < band {
+        atomicOr(&fs_band_any, 1u);
+    }
+    workgroupBarrier();
+    if lane == 0u {
+        fs_in_band = atomicLoad(&fs_band_any);
+    }
+    if workgroupUniformLoad(&fs_in_band) == 0u {
+        field[first] = prior[first];
+        field[first + FS_THREADS] = prior[first + FS_THREADS];
         return;
     }
     if lane < WT_NEIGHBOURS {
@@ -204,6 +219,46 @@ fn cs_main(
         fs_a[i] = v;
     }
     workgroupBarrier();
+    // Each of this thread's two nodes in the band reads the surface's
+    // direction from the staged `prior` before the passes overwrite it:
+    // `bend`, c times the second difference across the surface, and whether
+    // the node is a sheet's middle. The band and the sample points sit within
+    // the halo: a simulation cell (s nodes) round the node, one more for the
+    // trilinear's far corner.
+    let home = ts_slot_tile(slot);
+    var bend = array<f32, 2>(0.0, 0.0);
+    var middle = array<bool, 2>(false, false);
+    for (var k = 0u; k < 2u; k = k + 1u) {
+        let local = lane + k * FS_THREADS;
+        let e = slot * 512u + local;
+        if abs(reference[e]) < band {
+            let node = home * 8 + vec3<i32>(i32(local & 7u), i32((local >> 3u) & 7u), i32(local >> 6u));
+            let before = fs_staged(low, node);
+            // The normal from central differences a simulation cell apart.
+            let st = i32(s);
+            let grad = vec3<f32>(
+                fs_staged(low, node + vec3<i32>(st, 0, 0)) - fs_staged(low, node - vec3<i32>(st, 0, 0)),
+                fs_staged(low, node + vec3<i32>(0, st, 0)) - fs_staged(low, node - vec3<i32>(0, st, 0)),
+                fs_staged(low, node + vec3<i32>(0, 0, st)) - fs_staged(low, node - vec3<i32>(0, 0, st)),
+            );
+            let gl = length(grad);
+            if gl > 1.0e-9 {
+                let nrm = grad / gl;
+                let q = vec3<f32>(node);
+                // The filters below add (1 + s²) / 4 node² of the Laplacian
+                // (1/4 at stride 1); the second difference across, a
+                // simulation cell each way, is s² node² of its part along
+                // the normal, so c takes that part out.
+                let across = fs_staged_trilinear(low, q + nrm * f32(s))
+                    + fs_staged_trilinear(low, q - nrm * f32(s)) - 2.0 * before;
+                let c = select((1.0 + f32(s * s)) / 4.0, 0.25, s == 1u) / f32(s * s);
+                bend[k] = c * across;
+                let half = 0.5 * f32(s);
+                middle[k] = fs_staged_trilinear(low, q + nrm * half) > before
+                    && fs_staged_trilinear(low, q - nrm * half) > before;
+            }
+        }
+    }
     // Each pass reads `src` and writes `dst` in the other array. The pass
     // between neighbours covers every node the stride pass after it reads.
     var src = FsBox(vec3<u32>(0u), vec3<u32>(side));
@@ -244,9 +299,9 @@ fn cs_main(
         src = dst;
         in_a = !in_a;
     }
-    let band = params.band_cells * params.sim_cell_size;
     let leash = params.smoothness * FS_LEASH_CELLS * params.sim_cell_size;
-    for (var local = lane; local < 512u; local = local + FS_THREADS) {
+    for (var k = 0u; k < 2u; k = k + 1u) {
+        let local = lane + k * FS_THREADS;
         let r = vec3<u32>(local & 7u, (local >> 3u) & 7u, local >> 6u) + vec3<u32>(halo);
         let smoothed = fs_load(in_a, src, r);
         let e = slot * 512u + local;
@@ -254,36 +309,10 @@ fn cs_main(
         let anchor = reference[e];
         var out = before;
         if abs(anchor) < band {
-            let home = ts_slot_tile(slot);
-            let node = home * 8 + vec3<i32>(i32(local & 7u), i32((local >> 3u) & 7u), i32(local >> 6u));
-            // The normal from central differences a simulation cell apart.
-            let st = i32(s);
-            let grad = vec3<f32>(
-                fs_prior_at(home, node + vec3<i32>(st, 0, 0), canon) - fs_prior_at(home, node - vec3<i32>(st, 0, 0), canon),
-                fs_prior_at(home, node + vec3<i32>(0, st, 0), canon) - fs_prior_at(home, node - vec3<i32>(0, st, 0), canon),
-                fs_prior_at(home, node + vec3<i32>(0, 0, st), canon) - fs_prior_at(home, node - vec3<i32>(0, 0, st), canon),
-            );
-            var along = smoothed;
-            var middle = false;
-            let gl = length(grad);
-            if gl > 1.0e-9 {
-                let nrm = grad / gl;
-                let q = vec3<f32>(node);
-                // The filters above add (1 + s²) / 4 node² of the Laplacian
-                // (1/4 at stride 1); the second difference across, a
-                // simulation cell each way, is s² node² of its part along
-                // the normal, so c takes that part out.
-                let across = fs_prior_trilinear(home, q + nrm * f32(s), canon)
-                    + fs_prior_trilinear(home, q - nrm * f32(s), canon) - 2.0 * before;
-                let c = select((1.0 + f32(s * s)) / 4.0, 0.25, s == 1u) / f32(s * s);
-                along = smoothed - c * across;
-                let half = 0.5 * f32(s);
-                middle = fs_prior_trilinear(home, q + nrm * half, canon) > before
-                    && fs_prior_trilinear(home, q - nrm * half, canon) > before;
-            }
+            let along = smoothed - bend[k];
             let w = weights[e];
             var delta = mix(0.5, 1.0, w) * (along - before);
-            if before < 0.0 && middle {
+            if before < 0.0 && middle[k] {
                 delta = min(delta, -0.5 * before);
             }
             let reach = mix(1.0, 2.0, w) * leash;
