@@ -23,9 +23,7 @@ Harness exit codes (crates/manifold-app/src/ui_snapshot/script.rs):
 
 Runner exit: 0 iff every `flows` entry PASSed, no `expected_fail` entry
 unexpectedly PASSed, and every flow file on disk is accounted for
-(flows | expected_fail | unresolved); 2 if the binary does not build. Run under
-the build lock:
-  .claude/scripts/with-build-lock.sh scripts/run_ui_flows.py
+(flows | expected_fail | unresolved); 2 if the binary does not build.
 
 GPU: the build runs with no lock held; the flow loop then holds the
 machine-wide GPU lock (scripts/gpu_queue.py) once, and every flow process

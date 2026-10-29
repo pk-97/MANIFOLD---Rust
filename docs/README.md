@@ -32,6 +32,6 @@
 
 ## Ideas and business
 - `IDEAS.md`: features worth building that nobody is working on
-- `BUSINESS_PLAN.md`, `CAPABILITY_ROADMAP.md`, `COMPETITIVE_STEAL_PASS.md`, `AUDIO_ENGINE_DIRECTION.md`
+- `BUSINESS_PLAN.md`, `CAPABILITY_ROADMAP.md`, `AUDIO_ENGINE_DIRECTION.md`
 
 Delete a design doc when its work ships. Add a map or guide here when one lands.

@@ -2,7 +2,7 @@
 
 <!-- index: Sand and soil on the Matter (MLS-MPM) solver: a Sand scene item, a per-particle material stage with a 3×3 SVD, Drucker-Prager sand with volume correction, soil as sand with cohesion that weakens as it shears, wall friction, an opaque grain look. Matter's water path is deleted. Later: the World's shared grid and two-way coupling with GPU FLIP water through its solid faces, kept open for a unified solver. -->
 
-**Status:** designed 29 Oct 2026, not started. Steps 1–4 are the MVP and start once the Matter mesh-collider work (uncommitted in `manifold-water-gpu-mpm`) lands. Steps 5–6 wait for WATER_SHARED_GRID_DESIGN.md phase 4.
+**Status:** steps 1–4, the MVP, are built. Steps 5–6 wait for WATER_SHARED_GRID_DESIGN.md phase 4.
 
 **Peter's calls (29 Oct):** Matter is never water; water is GPU FLIP only. Sand meets water with separate velocities on one grid, built simple but kept open for a later unified solver. Tests serve the end state: two maths checks, the rest is stills looked at by eye.
 

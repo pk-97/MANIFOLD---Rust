@@ -316,7 +316,7 @@ class PathTriggerTests(unittest.TestCase):
 
     def test_non_app_paths_select_nothing(self):
         paths = (
-            ".claude/GIT_TREE_DISCIPLINE.md",
+            ".claude/settings.json",
             "CLAUDE.md", "scripts/TOOLS.md", "scripts/dev.py",
             "scripts/fleet_health.py", "scripts/land_branch.py", "scripts/run_ui_flows.py",
             "scripts/ui-flows/manifest.json", "scripts/ui-flows/work_ceilings.json",
