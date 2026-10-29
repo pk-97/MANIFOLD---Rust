@@ -29,9 +29,12 @@ const SHADER_BODY: &str = include_str!("shaders/gpu_flip_sheet_distance.wgsl");
 fn shader() -> String {
     format!("{READ_SIDE}\n{SHADER_BODY}")
 }
-/// Bytes per fine cell of the two pooled distance fields and the sheeter's
-/// source with its solids as water (`SheetDistance::default` only).
-pub(crate) const POOLED_BYTES_PER_CELL: u64 = 3 * 4;
+/// Bytes per fine cell of the two pooled distance fields and the cells'
+/// neighbour masks, every distance's.
+pub(crate) const FIELD_BYTES_PER_CELL: u64 = 3 * 4;
+/// Bytes per fine cell of the sheeter's distance: its fields and its source
+/// with its solids as water (`SheetDistance::default` only).
+pub(crate) const POOLED_BYTES_PER_CELL: u64 = FIELD_BYTES_PER_CELL + 4;
 
 const ENTRIES: [&str; 3] = ["seed", "sweep", "through_solids"];
 
@@ -75,6 +78,8 @@ pub(crate) struct SheetDistance {
     pipelines: Vec<GpuComputePipeline>,
     /// The two ping-pong fields, pooled cell fields of `pool_len` elements.
     buffers: Option<[GpuBuffer; 2]>,
+    /// Each cell's neighbour mask, written by the seed for the sweeps.
+    masks: Option<GpuBuffer>,
     /// The source with its solids as water (`through_solids`), held by the
     /// sheeter's distance only.
     wet: Option<GpuBuffer>,
@@ -100,6 +105,7 @@ impl SheetDistance {
         Self {
             pipelines: Vec::new(),
             buffers: None,
+            masks: None,
             wet: None,
             pool_tiles: 0,
             cells,
@@ -129,13 +135,14 @@ impl SheetDistance {
         let bytes = pool_len(pool_tiles) * 4;
         manifold_node_engine::load::expand::admit_world_bytes(
             device.modifier_memory_snapshot(),
-            (2 + u64::from(self.through_solids)) * bytes,
+            (3 + u64::from(self.through_solids)) * bytes,
         )
         .map_err(|e| e.to_string())?;
         self.buffers = Some([
             device.try_create_buffer(bytes, BufferUse::Gpu)?,
             device.try_create_buffer(bytes, BufferUse::Gpu)?,
         ]);
+        self.masks = Some(device.try_create_buffer(bytes, BufferUse::Gpu)?);
         self.wet = if self.through_solids {
             Some(device.try_create_buffer(bytes, BufferUse::Gpu)?)
         } else {
@@ -172,6 +179,7 @@ impl SheetDistance {
             "the sheet distance was reserved for another pool"
         );
         let [a, b] = self.buffers.as_ref().expect("sheet distance reserved");
+        let masks = self.masks.as_ref().expect("sheet distance reserved");
         let params = Params {
             h,
             depth: (self.cells * f64::from(h)) as f32,
@@ -224,6 +232,11 @@ impl SheetDistance {
                     GpuBinding::Buffer {
                         binding: 7,
                         buffer: solid.unwrap_or(source),
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 8,
+                        buffer: masks,
                         offset: 0,
                     },
                 ],

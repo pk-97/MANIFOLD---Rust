@@ -2,7 +2,10 @@
 // liquid level set's zero crossings along grid edges, then swept with the
 // Godunov update of |grad u| = 1 in Jacobi passes (A -> B, B -> A), clamped to
 // `depth` metres. Cell centred; `source`, `field_in` and `field_out` are
-// pooled cell fields on world tiles (world_tiles_read.wgsl). Every kernel runs
+// pooled cell fields on world tiles (world_tiles_read.wgsl). The seed also
+// keeps each cell's mask: whether it sits beside a crossing (its value is
+// final) and which face neighbours are held and of its sign, the only ones a
+// sweep reads, so no sweep looks for crossings or signs again. Every kernel runs
 // over the cells of the held slots, 512 threads a slot, and sees a tile that
 // holds no slot as no neighbour at all.
 struct Params { h: f32, depth: f32, pool_tiles: u32, entries: u32 };
@@ -25,6 +28,11 @@ struct ClockPlan {
 // The solid's distance at the cell corners (gpu_flip_step `solid`), read by
 // `through_solids` only.
 @group(0) @binding(7) var<storage, read> solid: array<f32>;
+// Per cell, from `seed`: SEEDED when it lies beside a zero crossing, and bit
+// 2 axis + k when its face neighbour along `axis` by 2k - 1 is held and of
+// its sign.
+@group(0) @binding(8) var<storage, read_write> masks: array<u32>;
+const SEEDED: u32 = 64u;
 
 fn clock_active() -> bool {
     return clock_plan[0].live_mode == 0u || clock_plan[0].step_dt > 0.0;
@@ -42,23 +50,6 @@ fn neighbour(c: vec3<i32>, axis: u32, d: i32) -> i32 {
     let at = ts_cell_at(q);
     if at == ts_canon() { return -1; }
     return i32(at);
-}
-// Distance from the cell centre to the nearest zero crossing between it and a
-// face neighbour of the other sign, or -1 when there is none.
-fn crossing(c: vec3<i32>, p: f32) -> f32 {
-    let s = sign_of(p);
-    var best = -1.0;
-    for (var axis = 0u; axis < 3u; axis = axis + 1u) {
-        for (var k = 0; k < 2; k = k + 1) {
-            let j = neighbour(c, axis, 2 * k - 1);
-            if j < 0 { continue; }
-            let pj = source[u32(j)];
-            if sign_of(pj) == s { continue; }
-            let t = u.h * abs(p) / (abs(p) + abs(pj));
-            if best < 0.0 || t < best { best = t; }
-        }
-    }
-    return best;
 }
 
 // The sheeter's source: the level set with every cell whose centre is inside
@@ -91,8 +82,26 @@ fn seed(@builtin(global_invocation_id) gid: vec3<u32>) {
     ts_home(i);
     let c = ts_cell_coord(i);
     let p = source[i];
-    let t = crossing(c, p);
-    field_out[i] = sign_of(p) * select(u.depth, t, t >= 0.0);
+    let s = sign_of(p);
+    // The distance from the cell centre to the nearest zero crossing between
+    // it and a face neighbour of the other sign, -1 when there is none.
+    var t = -1.0;
+    var mask = 0u;
+    for (var axis = 0u; axis < 3u; axis = axis + 1u) {
+        for (var k = 0; k < 2; k = k + 1) {
+            let j = neighbour(c, axis, 2 * k - 1);
+            if j < 0 { continue; }
+            let pj = source[u32(j)];
+            if sign_of(pj) == s {
+                mask = mask | (1u << (2u * axis + u32(k)));
+                continue;
+            }
+            let at = u.h * abs(p) / (abs(p) + abs(pj));
+            if t < 0.0 || at < t { t = at; }
+        }
+    }
+    masks[i] = mask | select(0u, SEEDED, t >= 0.0);
+    field_out[i] = s * select(u.depth, t, t >= 0.0);
 }
 
 @compute @workgroup_size(256)
@@ -100,18 +109,18 @@ fn sweep(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let i = ts_list_cell(slots[gid.x >> 9u], gid.x);
     ts_home(i);
-    let c = ts_cell_coord(i);
-    let p = source[i];
-    if crossing(c, p) >= 0.0 {
+    let mask = masks[i];
+    if (mask & SEEDED) != 0u {
         field_out[i] = field_in[i];
         return;
     }
-    let s = sign_of(p);
+    let c = ts_cell_coord(i);
+    let s = sign_of(source[i]);
     var a = vec3<f32>(u.depth);
     for (var axis = 0u; axis < 3u; axis = axis + 1u) {
         for (var k = 0; k < 2; k = k + 1) {
-            let j = neighbour(c, axis, 2 * k - 1);
-            if j >= 0 && sign_of(source[u32(j)]) == s {
+            if (mask & (1u << (2u * axis + u32(k)))) != 0u {
+                let j = neighbour(c, axis, 2 * k - 1);
                 a[axis] = min(a[axis], abs(field_in[u32(j)]));
             }
         }

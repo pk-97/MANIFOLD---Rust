@@ -31,9 +31,11 @@ fn distance_cells() -> f64 {
 }
 
 /// Bytes per fine cell the band holds while it runs: the interior, its
-/// faces, the reseed scan's first level and the distance's two fields.
+/// faces, the reseed scan's first level and the distance's fields.
 pub(crate) fn pooled_bytes_per_cell() -> u64 {
-    4 + size_of::<FaceSample>() as u64 + 4 + 2 * 4
+    4 + size_of::<FaceSample>() as u64
+        + 4
+        + super::super::gpu_flip_sheet_distance::FIELD_BYTES_PER_CELL
 }
 
 const SCAN_LABELS: ScanLabels = ScanLabels {
