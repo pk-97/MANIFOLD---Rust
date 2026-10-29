@@ -479,6 +479,10 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let h = u.cell_size;
     var code = 0.0;
     var known = 0.0;
+    // The closest body at each corner of the cell's three faces (offset bits
+    // x, y, z), found once: neighbouring faces share corners.
+    var corner_body: array<i32, 8>;
+    var corner_found = 0u;
     for (var a = 0; a < 3; a = a + 1) {
         // Only a face a solid covers is sampled (weight > 0 in
         // MeshLevelSet::_computeVelocityGridThread); solid_extrapolate
@@ -500,10 +504,15 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
         let axes = cross_axes(a);
         var friction = 0.0;
         for (var k = 0; k < 4; k = k + 1) {
-            var q = p;
-            q[axes.x] = q[axes.x] + (k & 1);
-            q[axes.y] = q[axes.y] + ((k >> 1u) & 1);
-            let at = closest_body(lattice_min + vec3<f32>(q) * h);
+            var o = vec3<i32>(0);
+            o[axes.x] = k & 1;
+            o[axes.y] = (k >> 1u) & 1;
+            let corner = u32(o.x + 2 * o.y + 4 * o.z);
+            if ((corner_found >> corner) & 1u) == 0u {
+                corner_body[corner] = closest_body(lattice_min + vec3<f32>(p + o) * h);
+                corner_found = corner_found | (1u << corner);
+            }
+            let at = corner_body[corner];
             if at >= 0 {
                 friction = friction + posed[u32(at)].linear_velocity.w;
             }
@@ -530,41 +539,48 @@ fn solid_known(s: FaceSample, a: i32) -> bool {
 // known neighbours and is known from the next layer; the owner
 // code goes with the first owned known neighbour, so a dynamic body's
 // reaction reaches the faces its velocity reaches (the engine's
-// RigidBoundaryVelocityMap::extrapolate). Run SOLID_LAYERS times.
+// RigidBoundaryVelocityMap::extrapolate). Run SOLID_LAYERS times. The six
+// neighbours are read once for all three axes, and not at all where every
+// axis is known.
 @compute @workgroup_size(256)
 fn solid_extrapolate(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let at_record = list_cell(gid.x);
-    let p = ts_face_coord(at_record);
     var out = faces_in[at_record];
     var known = u32(out.face_weight.w);
+    if (known & 7u) == 7u {
+        faces_out[at_record] = out;
+        return;
+    }
+    let p = ts_face_coord(at_record);
     var code = u32(out.face_velocity.w);
-    for (var a = 0; a < 3; a = a + 1) {
-        if solid_known(out, a) {
-            continue;
-        }
-        var sum = 0.0;
-        var count = 0.0;
-        var owner = 0u;
-        for (var b = 0; b < 3; b = b + 1) {
-            for (var d = -1; d <= 1; d = d + 2) {
-                var q = p;
-                q[b] = p[b] + d;
-                let s = faces_in[ts_face(q)];
-                if solid_known(s, a) {
-                    sum = sum + s.face_velocity[a];
-                    count = count + 1.0;
-                    let o = (u32(s.face_velocity.w) >> (8u * u32(a))) & 255u;
-                    if owner == 0u {
-                        owner = o;
+    var sum = vec3<f32>(0.0);
+    var count = vec3<f32>(0.0);
+    var owner = vec3<u32>(0u);
+    for (var b = 0; b < 3; b = b + 1) {
+        for (var d = -1; d <= 1; d = d + 2) {
+            var q = p;
+            q[b] = p[b] + d;
+            let s = faces_in[ts_face(q)];
+            let s_known = u32(s.face_weight.w);
+            let s_code = u32(s.face_velocity.w);
+            for (var a = 0; a < 3; a = a + 1) {
+                if ((s_known >> u32(a)) & 1u) != 0u {
+                    sum[a] = sum[a] + s.face_velocity[a];
+                    count[a] = count[a] + 1.0;
+                    if owner[a] == 0u {
+                        owner[a] = (s_code >> (8u * u32(a))) & 255u;
                     }
                 }
             }
         }
-        if count > 0.0 {
-            out.face_velocity[a] = sum / count;
+    }
+    let was_known = known;
+    for (var a = 0; a < 3; a = a + 1) {
+        if ((was_known >> u32(a)) & 1u) == 0u && count[a] > 0.0 {
+            out.face_velocity[a] = sum[a] / count[a];
             known = known | (1u << u32(a));
-            code = code | (owner << (8u * u32(a)));
+            code = code | (owner[a] << (8u * u32(a)));
         }
     }
     out.face_velocity.w = f32(code);
