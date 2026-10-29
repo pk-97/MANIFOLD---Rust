@@ -28,7 +28,7 @@ fn apply_detection_edit(
     let mut config = project
         .timeline
         .find_clip(clip_id)
-        .and_then(|c| c.audio_detection.as_ref())
+        .and_then(|c| c.detection.as_ref())
         .map(|d| d.config.clone())
         .unwrap_or_default();
     mutate(&mut config);
@@ -110,7 +110,7 @@ pub(crate) fn dispatch_clip(
                     new_source_duration,
                     clip.in_point,
                     clip.recorded_bpm,
-                    clip.audio_detection.clone(),
+                    clip.detection.clone(),
                 );
                 let mut commands: Vec<Box<dyn Command>> = vec![Box::new(replace)];
                 for layer in ctx.project.timeline.layers.iter() {

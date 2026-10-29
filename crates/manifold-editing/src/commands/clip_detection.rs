@@ -41,15 +41,15 @@ impl Command for SetClipDetectionConfigCommand {
 
         // Capture the prior state once, for undo.
         if !self.captured {
-            self.had_detection = clip.audio_detection.is_some();
-            self.old_config = clip.audio_detection.as_ref().map(|d| d.config.clone());
+            self.had_detection = clip.detection.is_some();
+            self.old_config = clip.detection.as_ref().map(|d| d.config.clone());
             self.captured = true;
         }
 
-        match clip.audio_detection.as_mut() {
+        match clip.detection.as_mut() {
             Some(detection) => detection.config = self.new_config.clone(),
             None => {
-                clip.audio_detection = Some(AudioClipDetection {
+                clip.detection = Some(AudioClipDetection {
                     config: self.new_config.clone(),
                     analysis: None,
                     ..Default::default()
@@ -65,12 +65,12 @@ impl Command for SetClipDetectionConfigCommand {
 
         if !self.had_detection {
             // The clip had no detection before; restore that (keep no cached analysis).
-            clip.audio_detection = None;
+            clip.detection = None;
             return;
         }
 
         if let Some(old) = self.old_config.clone()
-            && let Some(detection) = clip.audio_detection.as_mut()
+            && let Some(detection) = clip.detection.as_mut()
         {
             detection.config = old;
         }
@@ -117,11 +117,11 @@ mod tests {
 
         cmd.execute(&mut project);
         let clip = project.timeline.find_clip_by_id_mut(&clip_id).unwrap();
-        assert!(clip.audio_detection.is_some());
+        assert!(clip.detection.is_some());
 
         cmd.undo(&mut project);
         let clip = project.timeline.find_clip_by_id_mut(&clip_id).unwrap();
-        assert!(clip.audio_detection.is_none());
+        assert!(clip.detection.is_none());
     }
 
     #[test]
@@ -135,14 +135,10 @@ mod tests {
                 quantize_on: false,
                 ..Default::default()
             };
-            clip.audio_detection = Some(AudioClipDetection {
+            clip.detection = Some(AudioClipDetection {
                 config: cfg,
                 analysis: Some(
-                    manifold_core::percussion_analysis::PercussionAnalysisData::new_simple(
-                        "t",
-                        manifold_core::units::Bpm(128.0),
-                        vec![],
-                    ),
+                    manifold_core::percussion_analysis::PercussionAnalysisData::new(vec![]),
                 ),
                 ..Default::default()
             });
@@ -156,13 +152,13 @@ mod tests {
 
         cmd.execute(&mut project);
         let clip = project.timeline.find_clip_by_id_mut(&clip_id).unwrap();
-        assert!(clip.audio_detection.as_ref().unwrap().config.quantize_on);
+        assert!(clip.detection.as_ref().unwrap().config.quantize_on);
         // Cached analysis survives a config change.
-        assert!(clip.audio_detection.as_ref().unwrap().has_analysis());
+        assert!(clip.detection.as_ref().unwrap().has_analysis());
 
         cmd.undo(&mut project);
         let clip = project.timeline.find_clip_by_id_mut(&clip_id).unwrap();
-        assert!(!clip.audio_detection.as_ref().unwrap().config.quantize_on);
-        assert!(clip.audio_detection.as_ref().unwrap().has_analysis());
+        assert!(!clip.detection.as_ref().unwrap().config.quantize_on);
+        assert!(clip.detection.as_ref().unwrap().has_analysis());
     }
 }

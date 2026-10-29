@@ -1,10 +1,9 @@
 // Per-audio-clip percussion detection state.
 //
 // Detection is a property of the audio clip, not a project-global singleton.
-// The clip owns its detection settings (`DetectionConfig`) and caches the events
-// from its last analysis (`PercussionAnalysisData`) so that changing sensitivity,
-// quantize, or routing can re-plan instantly without re-running the analysis
-// backend.
+// The clip owns its detection settings (`DetectionConfig`) and caches the hits
+// from its last Detect (`PercussionAnalysisData`) so that changing sensitivity,
+// quantize, or routing can re-plan instantly without re-running the detectors.
 
 use std::collections::HashMap;
 
@@ -17,6 +16,27 @@ use crate::units::{Beats, Seconds};
 /// Highest confidence threshold the sensitivity slider maps to (at sensitivity 0).
 /// At sensitivity 1 the threshold is 0 (accept every detected hit).
 const MAX_CONFIDENCE_THRESHOLD: f32 = 0.9;
+/// A new instrument row's sensitivity.
+const DEFAULT_SENSITIVITY: f32 = 0.5;
+
+/// The confidence a hit needs to be placed at `sensitivity`.
+fn confidence_gate(sensitivity: f32) -> f32 {
+    (1.0 - sensitivity.clamp(0.0, 1.0)) * MAX_CONFIDENCE_THRESHOLD
+}
+
+/// A trained detector's probability as a Detect confidence. The model's own cutoff lands on the default
+/// sensitivity's gate, so a default Detect places exactly what the live detector fires; more sensitivity admits
+/// candidates under the cutoff, less keeps only the surest hits. Linear on each side of the cutoff.
+pub fn confidence_from_probability(p: f64, cutoff: f64) -> f32 {
+    let gate = f64::from(confidence_gate(DEFAULT_SENSITIVITY));
+    let p = p.clamp(0.0, 1.0);
+    let c = if p < cutoff {
+        gate * p / cutoff
+    } else {
+        gate + (1.0 - gate) * (p - cutoff) / (1.0 - cutoff).max(f64::EPSILON)
+    };
+    c as f32
+}
 
 /// Per-instrument detection settings: whether to detect this trigger type, how
 /// sensitive, and which layer its generated trigger clips land on.
@@ -37,8 +57,8 @@ impl InstrumentDetect {
     pub fn new(trigger_type: PercussionTriggerType) -> Self {
         Self {
             trigger_type,
-            enabled: default_enabled(trigger_type),
-            sensitivity: 0.5,
+            enabled: true,
+            sensitivity: DEFAULT_SENSITIVITY,
             target_layer: None,
         }
     }
@@ -47,44 +67,18 @@ impl InstrumentDetect {
     /// Inverted: sensitivity 1.0 → threshold 0.0 (everything passes); 0.0 →
     /// `MAX_CONFIDENCE_THRESHOLD` (only the strongest hits pass).
     pub fn min_confidence(&self) -> f32 {
-        (1.0 - self.sensitivity.clamp(0.0, 1.0)) * MAX_CONFIDENCE_THRESHOLD
+        confidence_gate(self.sensitivity)
     }
 }
 
-/// Whether a trigger type is detected by default. Drums on, melodic/sustained off
-/// — matches the inspector's default of checked drums, unchecked bass/synth/etc.
-fn default_enabled(trigger_type: PercussionTriggerType) -> bool {
-    matches!(
-        trigger_type,
-        PercussionTriggerType::Kick
-            | PercussionTriggerType::Snare
-            | PercussionTriggerType::Hat
-            | PercussionTriggerType::Perc
-    )
-}
-
-/// The default instrument set, in inspector display order. Mirrors the trigger
-/// types the existing `build_import_options` factory wires.
+/// The default instrument set, in inspector display order: what the shipped detectors find.
 fn default_instruments() -> Vec<InstrumentDetect> {
-    [
-        PercussionTriggerType::Kick,
-        PercussionTriggerType::Snare,
-        PercussionTriggerType::Hat,
-        PercussionTriggerType::Perc,
-        PercussionTriggerType::Bass,
-        PercussionTriggerType::BassSustained,
-        PercussionTriggerType::Synth,
-        PercussionTriggerType::Pad,
-        PercussionTriggerType::Vocal,
-    ]
-    .into_iter()
-    .map(InstrumentDetect::new)
-    .collect()
+    [PercussionTriggerType::Kick, PercussionTriggerType::Snare]
+        .into_iter()
+        .map(InstrumentDetect::new)
+        .collect()
 }
 
-/// The detection knobs exposed in the audio clip inspector. All act at
-/// plan/apply time, so changing any of them re-plans from cached events without
-/// re-running the analysis backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DetectionConfig {
@@ -198,6 +192,22 @@ mod tests {
         assert_eq!(i.min_confidence(), 0.0);
         i.sensitivity = -3.0;
         assert!((i.min_confidence() - MAX_CONFIDENCE_THRESHOLD).abs() < 1e-6);
+    }
+
+    /// The cutoff sits exactly on the default gate, the ends stay put, and the mapping never reorders hits.
+    #[test]
+    fn probability_maps_the_cutoff_onto_the_default_gate() {
+        let gate = InstrumentDetect::new(PercussionTriggerType::Kick).min_confidence();
+        for cutoff in [0.3, 0.62, 0.9] {
+            assert!((confidence_from_probability(cutoff, cutoff) - gate).abs() < 1e-6);
+            assert!(confidence_from_probability(cutoff - 0.01, cutoff) < gate);
+            assert_eq!(confidence_from_probability(0.0, cutoff), 0.0);
+            assert!((confidence_from_probability(1.0, cutoff) - 1.0).abs() < 1e-6);
+            let ps: Vec<f32> = (0..=20)
+                .map(|i| confidence_from_probability(i as f64 / 20.0, cutoff))
+                .collect();
+            assert!(ps.windows(2).all(|w| w[0] <= w[1]));
+        }
     }
 
     #[test]

@@ -1,8 +1,4 @@
-use manifold_core::units::Bpm;
 use manifold_core::{Beats, ClipId, Seconds};
-// Port of Unity PercussionImportService.cs (405 lines).
-// Application-layer service for applying percussion import results to the timeline.
-// Owns layer resolution, clip creation, BPM auto-apply, and undo recording.
 
 use std::collections::HashSet;
 
@@ -10,30 +6,16 @@ use manifold_core::PresetTypeId;
 use manifold_core::audio_clip_detection::DetectionConfig;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
-use manifold_core::math::{BeatQuantizer, MathUtils};
 use manifold_core::percussion_analysis::{
-    ClipDetectionAnchor, PercussionAnalysisData, PercussionClipBinding, PercussionImportOptions,
-    PercussionPlacementPlan, PercussionTriggerType,
+    ClipDetectionAnchor, PercussionClipBinding, PercussionImportOptions, PercussionPlacementPlan,
+    PercussionTriggerType,
 };
-use manifold_core::percussion_settings::{
-    PercussionImportOptionsFactory, PercussionPipelineSettings,
-};
+use manifold_core::percussion_settings::PercussionImportOptionsFactory;
 use manifold_core::project::Project;
-use manifold_core::types::{LayerType, TempoPointSource};
+use manifold_core::types::LayerType;
 
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::clip::{AddClipCommand, DeleteClipCommand};
-use manifold_editing::commands::settings::ChangeBpmCommand;
-
-// ─── PercussionBpmDecision ───
-
-/// Port of Unity PercussionBpmDecision enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PercussionBpmDecision {
-    None = 0,
-    AutoApplied = 1,
-    SuggestedLowConfidence = 2,
-}
 
 // ─── PercussionImportResult ───
 
@@ -49,31 +31,12 @@ pub struct PercussionImportResult {
 
 // ─── PercussionImportService ───
 
-const DEFAULT_BPM_AUTO_APPLY_CONFIDENCE_THRESHOLD: f32 = 0.72;
-
-/// Port of Unity PercussionImportService.
-/// Application-layer service for applying percussion import results to the timeline.
-/// Owns layer resolution, clip creation, BPM auto-apply, and undo recording.
-/// No UI or MonoBehaviour dependencies.
-pub struct PercussionImportService {
-    bpm_auto_apply_confidence_threshold: f32,
-}
+/// Places a Detect plan's trigger clips on the timeline: layer resolution, clip creation and undo recording.
+pub struct PercussionImportService;
 
 impl PercussionImportService {
     pub fn new() -> Self {
-        Self {
-            bpm_auto_apply_confidence_threshold: DEFAULT_BPM_AUTO_APPLY_CONFIDENCE_THRESHOLD,
-        }
-    }
-
-    pub fn new_with_settings(settings: Option<&PercussionPipelineSettings>) -> Self {
-        let threshold = match settings {
-            Some(s) => s.global.bpm_auto_apply_confidence,
-            None => DEFAULT_BPM_AUTO_APPLY_CONFIDENCE_THRESHOLD,
-        };
-        Self {
-            bpm_auto_apply_confidence_threshold: threshold,
-        }
+        Self
     }
 
     /// Apply a placement plan to the timeline.
@@ -272,73 +235,6 @@ impl PercussionImportService {
         result
     }
 
-    pub fn apply_detected_bpm(
-        &self,
-        project: &mut Project,
-        analysis: Option<&PercussionAnalysisData>,
-        source_label: &str,
-    ) -> (PercussionBpmDecision, Option<Box<dyn Command>>) {
-        let analysis = match analysis {
-            Some(a) => a,
-            None => return (PercussionBpmDecision::None, None),
-        };
-
-        let detected_bpm_raw = analysis.bpm.0;
-        if !MathUtils::is_finite(detected_bpm_raw) || detected_bpm_raw <= 0.0 {
-            return (PercussionBpmDecision::None, None);
-        }
-
-        let detected_bpm = detected_bpm_raw.clamp(20.0, 300.0);
-        let current_bpm = project.settings.bpm.0;
-        if (current_bpm - detected_bpm).abs() < (BeatQuantizer::BPM_STEP * 0.5) {
-            return (PercussionBpmDecision::None, None);
-        }
-
-        let bpm_confidence = analysis.bpm_confidence;
-        if bpm_confidence < self.bpm_auto_apply_confidence_threshold {
-            log::warn!(
-                "[PercussionImportService] Detected BPM {:.2} from '{}' \
-                not auto-applied (confidence={:.2} < {:.2}).",
-                detected_bpm,
-                source_label,
-                bpm_confidence,
-                self.bpm_auto_apply_confidence_threshold,
-            );
-            return (PercussionBpmDecision::SuggestedLowConfidence, None);
-        }
-
-        let flatten_tempo_map = project.tempo_map.point_count() <= 1;
-        let old_tempo_points = project.tempo_map.clone_points();
-
-        let mut change_bpm_command = ChangeBpmCommand::with_tempo_map(
-            Bpm(current_bpm),
-            Bpm(detected_bpm),
-            TempoPointSource::Recorded,
-            flatten_tempo_map,
-            old_tempo_points,
-        );
-
-        change_bpm_command.execute(project);
-
-        project.recording_provenance.set_recorded_project_bpm(
-            Bpm(detected_bpm),
-            TempoPointSource::Recorded,
-            true,
-        );
-
-        log::info!(
-            "[PercussionImportService] Applied detected BPM {:.2} from '{}' (confidence={:.2}).",
-            detected_bpm,
-            source_label,
-            bpm_confidence,
-        );
-
-        (
-            PercussionBpmDecision::AutoApplied,
-            Some(Box::new(change_bpm_command)),
-        )
-    }
-
     fn resolve_target_layer_index_for_placement(
         &self,
         project: &mut Project,
@@ -512,26 +408,19 @@ impl Default for PercussionImportService {
 /// knobs: quantize, onset compensation, the enabled instrument set, and the
 /// sensitivity → `minimum_confidence` mapping. The `anchor` makes placement
 /// clip-anchored and warp-aware (the planner maps event times through it and
-/// trims to the clip window), so `start_beat_offset` stays zero. Per-instrument
+/// trims to the clip window). Per-instrument
 /// `target_layer` (set by the inspector dropdown) is carried onto each binding
 /// and honoured at apply time; `None` routes by trigger name (the default).
 pub fn build_clip_detection_options(
     project: &Project,
-    pipeline_settings: Option<&PercussionPipelineSettings>,
     config: &DetectionConfig,
     anchor: ClipDetectionAnchor,
 ) -> PercussionImportOptions {
-    // The anchor owns placement, so the factory's start-beat offset is zero.
-    let mut options = PercussionImportOptionsFactory::create_default_with_settings(
-        project,
-        pipeline_settings,
-        Beats::ZERO,
-    );
+    let mut options = PercussionImportOptionsFactory::create_default(project, anchor);
 
     options.quantize_to_grid = config.quantize_on;
     options.quantize_step_beats = config.quantize_step_beats;
     options.onset_compensation_seconds = config.onset_compensation;
-    options.clip_anchor = Some(anchor);
 
     // Keep only instruments the clip has enabled, and apply per-instrument
     // sensitivity as the confidence gate.
@@ -551,9 +440,6 @@ pub fn build_clip_detection_options(
 // ─── Helper functions ───
 
 pub(crate) fn get_trigger_layer_name(trigger_type: PercussionTriggerType) -> String {
-    if trigger_type == PercussionTriggerType::Unknown {
-        return "Percussion".to_string();
-    }
     format!("{:?}", trigger_type)
 }
 
@@ -592,15 +478,26 @@ mod tests {
     }
 
     fn kick_options() -> PercussionImportOptions {
-        let mut options = PercussionImportOptions::default();
-        options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Kick,
-            0,
-            gen_type(),
-            Beats(0.25),
-            0.0,
-        ));
-        options
+        PercussionImportOptions {
+            quantize_to_grid: true,
+            quantize_step_beats: Beats(0.25),
+            default_clip_duration_beats: Beats(0.25),
+            onset_compensation_seconds: Seconds::ZERO,
+            bindings: vec![PercussionClipBinding::new(
+                PercussionTriggerType::Kick,
+                0,
+                gen_type(),
+                Beats(0.25),
+                0.0,
+            )],
+            clip_anchor: ClipDetectionAnchor::new(
+                Beats::ZERO,
+                Beats(64.0),
+                Seconds::ZERO,
+                120.0,
+                manifold_core::units::Bpm(120.0),
+            ),
+        }
     }
 
     fn kick_plan(beat: f32) -> PercussionPlacementPlan {
@@ -745,7 +642,6 @@ mod tests {
             match inst.trigger_type {
                 PercussionTriggerType::Snare => inst.enabled = false,
                 PercussionTriggerType::Kick => inst.sensitivity = 1.0,
-                _ => {}
             }
         }
 
@@ -756,12 +652,9 @@ mod tests {
             120.0,
             manifold_core::units::Bpm(120.0),
         );
-        let options = build_clip_detection_options(&project, None, &config, anchor);
+        let options = build_clip_detection_options(&project, &config, anchor);
 
-        // The anchor owns placement; the legacy start-beat offset stays zero.
-        assert_eq!(options.start_beat_offset, Beats::ZERO);
-        let a = options.clip_anchor.expect("anchor is set");
-        assert_eq!(a.start_beat, Beats(4.0));
+        assert_eq!(options.clip_anchor.start_beat, Beats(4.0));
         let kick = options
             .bindings
             .iter()

@@ -325,7 +325,7 @@ impl ContentThread {
             editing_service: EditingService::new(),
             content_pipeline,
             audio_layer_playback: None,
-            percussion_orchestrator: PercussionImportOrchestrator::new(None, String::new()),
+            percussion_orchestrator: PercussionImportOrchestrator::new(),
             transport_controller: TransportController::new(),
             gpu,
             frame_count: 0,

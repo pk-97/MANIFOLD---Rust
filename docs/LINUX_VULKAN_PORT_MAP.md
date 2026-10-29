@@ -128,7 +128,7 @@ About 230 `target_os` lines in 36 files. Grouped by what they gate:
 | Menus | 2 | `menu.rs:187-197`; seven actions exist only in the menu (`app_render.rs:438-467`) | In-app entries for them, then section 10 item 3 | P4 |
 | Misc | 2 | `main.rs:379,732` (App Nap, nothing on Linux) | Gate stays | Build hygiene |
 
-**Paths left.** The `.app` bundle lookups (`preset_loader.rs:376-384`, `percussion_backend.rs:210`) wait for Linux packaging (P4).
+**Paths left.** The `.app` bundle lookups (`preset_loader.rs:376-384`) wait for Linux packaging (P4).
 
 **Gated until P4.** On Linux the app compiles with the display link off (P4 pacing). The headless harness, its tests, `perf-soak`, `frame-time`, `rt-capture`, `bridge-probe` and `ui-snap` build everywhere.
 
@@ -140,7 +140,7 @@ About 230 `target_os` lines in 36 files. Grouped by what they gate:
 |---|---|---|
 | manifold-media | Decode sits behind `DecoderBackend` and `VideoDecoder` (`decoder.rs`): VideoToolbox on the Mac (`videotoolbox.rs`), FFmpeg on the CPU elsewhere (`ffmpeg_decoder.rs`, ffmpeg-next 8, which keeps the locked `cc`; 9 needs `cc` 1.10). Off the Mac a frame is swscaled to sRGB RGBA fitted in the canvas and uploaded into an `Rgba8UnormSrgb` texture; the Mac converts NV12 into `Rgba16Float` and does not expand video-range chroma, so saturated colours read about 12% weaker there. Export goes through `encoder::VideoEncoder`: the AVFoundation plugin on the Mac, FFmpeg elsewhere (`ffmpeg_encoder.rs`: a GPU readback, then the Mac kernel's rolloff, sRGB and BT.709 limited-range 4:2:0 on the CPU, then h264_nvenc or libx264 at the Mac's bitrate). HDR export is Mac-only so far. The audio mux shells out to the `ffmpeg` CLI | P5 |
 | manifold-recording | The recorder is a cfg alias (`lib.rs`): the AVAssetWriter plugin on the Mac (`ffi.rs`, `native/LiveRecordingPlugin.m`), FFmpeg elsewhere (`ffmpeg_recorder.rs`). Off the Mac the converter writes RGBA, since Vulkan does not promise BGRA storage, and each pool slot has a readback buffer the recording thread swscales to BT.709 limited-range 4:2:0; video is H.264 from `manifold_media::ffmpeg_encoder::open_h264` (libx264 at its fast preset), audio is AAC or ALAC with capture gaps filled with silence. HDR recording is Mac-only. Default path is the Desktop (`config.rs`). `proofs.rs` and the soak bin stay Mac-only and expect `ffprobe` | P5 |
-| manifold-playback | Works as is: kira 0.12 and midir 0.11 on cpal 0.18, one ALSA library between them, rusty_link (needs cmake and libclang). kira takes volumes in decibels; `gain_db` converts the linear gain. Stem separation: the bundled demucs runtime exists only for macOS (`tools/audio_analysis/BundledRuntime/macOS`, `stage_runtime_mac.sh`); the device is `auto`, so CUDA is picked on Linux | P4 (runtime) |
+| manifold-playback | Works as is: kira 0.12 and midir 0.11 on cpal 0.18, one ALSA library between them, rusty_link (needs cmake and libclang). kira takes volumes in decibels; `gain_db` converts the linear gain. | P4 (runtime) |
 | manifold-native | The two ML plugins (BlobDetector, DepthEstimator) load `lib<name>.so` from `assets/plugins` on Linux; each `build.sh` builds it against `libopencv-dev`. `region_ffi.rs` tests that use `codesign` and `otool` stay Mac-only | P4: ship the `.so` files with the Linux package |
 | manifold-physics | Thread count: Mac performance cores, `available_parallelism` elsewhere (`lib.rs:471-485`). On the 9950X3D that is 32 threads over two chiplets, only one with the extra cache | P8: measure |
 | manifold-fluids | OpenMP (section 2). The `sheet_oracle.rs:245-260` test asserts an arm64 clang build of the oracle, so its baseline does not hold on x86_64 gcc | Test stays Mac-only |
@@ -157,7 +157,7 @@ Out of scope: `plugins/` (the analyzer VST, its own workspace, uses IOSurface in
 **Scripts.**
 - Portable: `wgsl_check.py`, `dev.py`, `run_ui_flows.py`, `gpu_queue.py` and `bridge_probe_gate.py`.
 - `feature_matrix.py` builds its rows from cargo metadata, so `manifold-gpu --features vulkan` is a row.
-- Mac-only: `launch_live_ui.py` (builds a `.app`), `rt_dynamic_acceptance.py` (`sysctl`, `system_profiler`, blocked off-Darwin), `sync_rig_report.py` (`~/Library/Logs`), `install-abletonosc-patch.sh` (Dropbox path), `assets/plugins/*/build.sh`, `tools/audio_analysis/stage_runtime_mac.sh` and `plugins/scripts/build-analyzer-vst-plugin.sh`.
+- Mac-only: `launch_live_ui.py` (builds a `.app`), `rt_dynamic_acceptance.py` (`sysctl`, `system_profiler`, blocked off-Darwin), `sync_rig_report.py` (`~/Library/Logs`), `install-abletonosc-patch.sh` (Dropbox path), `assets/plugins/*/build.sh` and `plugins/scripts/build-analyzer-vst-plugin.sh`.
 - Hardcoded repo path `/Users/peterkiemann/MANIFOLD - Rust`: `rt_noise_gate.py:103`, `rt_quality_matrix.py:28`, `rt_toggle_matrix.py:46` and `claude-pane.sh:47`. Derive it from the script's own location.
 
 **Tests.**

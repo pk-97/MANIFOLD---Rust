@@ -7,8 +7,7 @@ Usage: als_extract.py PROJECT.als [OUT.json]
 The .als is gzip XML; it is only ever opened for reading, and its sha256 is
 taken before and after the read (a mismatch aborts without writing).
 Emits:
-- tempo_points: the arrangement tempo map in the TempoPoint shape that
-  eval/beat_scoring.load_tempo_points reads (beat, bpm, recorded_at_seconds,
+- tempo_points: the arrangement tempo map in the TempoPoint shape (beat, bpm, recorded_at_seconds,
   source = SOURCE_ALS). Tempo automation is linear in BPM between breakpoints;
   seconds are integrated from beat 0.
 - audio_clips: every arrangement audio clip with its track, group chain,

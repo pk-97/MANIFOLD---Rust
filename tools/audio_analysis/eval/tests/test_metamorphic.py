@@ -1,7 +1,5 @@
 """Metamorphic suite tests — using a synthetic click-track-like signal so
-these run in milliseconds and don't depend on any fetched dataset. The
-babyslakh-backed gate (`python -m eval.run --set dev`) exercises the same
-functions against real audio."""
+these run in milliseconds and don't depend on any fetched dataset."""
 
 from __future__ import annotations
 

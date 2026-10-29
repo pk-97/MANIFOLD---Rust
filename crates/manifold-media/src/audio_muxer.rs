@@ -107,7 +107,7 @@ impl AudioMuxer {
 
     /// Resolve FFmpeg binary path.
     ///
-    /// Search order (matches percussion_backend.rs pattern):
+    /// Search order:
     /// 1. FFMPEG_PATH environment variable
     /// 2. Bundled runtime paths
     /// 3. System paths (`find_tool`)

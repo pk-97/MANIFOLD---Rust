@@ -870,7 +870,7 @@ impl Command for ReplaceAudioFileCommand {
             // Keep the config (the user's tuning), clear the analysis + counts
             // (they describe the old file). No config yet ⇒ stays None; the
             // next Detect creates one from scratch, same as a fresh clip.
-            if let Some(det) = clip.audio_detection.as_mut() {
+            if let Some(det) = clip.detection.as_mut() {
                 det.analysis = None;
                 det.last_counts.clear();
             }
@@ -885,7 +885,7 @@ impl Command for ReplaceAudioFileCommand {
             clip.recorded_bpm = self.old_recorded_bpm;
             clip.audio_warp_enabled = self.old_audio_warp_enabled.flatten();
             clip.audio_bpm_automatic = self.old_audio_bpm_automatic.unwrap_or(false);
-            clip.audio_detection = self.old_detection.clone();
+            clip.detection = self.old_detection.clone();
         }
     }
 

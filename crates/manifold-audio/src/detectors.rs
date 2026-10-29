@@ -1,5 +1,6 @@
 //! Trained event detectors (kick and snare now; clap, hats later) behind one interface, and the
-//! worker thread that runs one analysed send's detectors off the content thread. Offline paths run the same detectors inline.
+//! worker thread that runs one analysed send's detectors off the content thread. Offline paths (Detect on an
+//! audio clip, the offline renderer) run the same detectors inline.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -10,6 +11,7 @@ use ringbuf::traits::{Consumer, Observer, Producer, Split};
 use ringbuf::{HeapCons, HeapProd, HeapRb};
 
 use crate::trained::container::{Container, ContainerError};
+use crate::trained::spec::{MODEL_HOP, MODEL_RATE};
 use crate::trained::{Decision, DetectorError, Fire, SpecError, TrainedDetector};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,12 +189,77 @@ impl EventDetector for KickFed {
     }
 }
 
+/// One send's detector, keeping its concrete type so a trace sees every decision.
+pub enum Runner {
+    Alone(Box<TrainedDetector>),
+    Fed(Box<KickFed>),
+}
+
+impl Runner {
+    /// Every decision on `samples`, with the family that made it and that model's cutoff.
+    pub fn push_traced(
+        &mut self,
+        samples: &[f32],
+        mut on_decision: impl FnMut(EventKind, f64, &Decision<'_>, Option<Fire>),
+    ) {
+        match self {
+            Runner::Alone(d) => {
+                let (kind, cutoff) = (d.kind(), d.spec().cutoff);
+                d.push_traced(samples, |dec, fire| on_decision(kind, cutoff, dec, fire));
+            }
+            Runner::Fed(pair) => {
+                let kick = (pair.kick.kind(), pair.kick.spec().cutoff);
+                let reader = (pair.reader.kind(), pair.reader.spec().cutoff);
+                pair.push_traced(samples, |side, dec, fire| {
+                    let (kind, cutoff) = if side == Side::Kick { kick } else { reader };
+                    on_decision(kind, cutoff, dec, fire)
+                });
+            }
+        }
+    }
+}
+
+/// One candidate the shipped detectors judged on a whole recording.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Candidate {
+    pub kind: EventKind,
+    /// The hit itself: the end of the candidate's onset hop on the model grid, not the later sample where the
+    /// live detector fires.
+    pub onset_s: f64,
+    /// The model's final probability.
+    pub p: f64,
+    /// The probability the model fires at.
+    pub cutoff: f64,
+}
+
+/// Every candidate the shipped detectors judge on `mono` at `rate`, in time order: the fires, and the
+/// candidates under the cutoff, which a higher Detect sensitivity admits. A candidate over the cutoff that the
+/// refractory kept from firing is a second hit on the same sound, so it is left out.
+pub fn candidates(mono: &[f32], rate: u32) -> Vec<Candidate> {
+    let mut out = Vec::new();
+    for mut r in runners(rate) {
+        r.push_traced(mono, |kind, cutoff, d, fire| {
+            if d.p_final.is_nan() || (d.p_final >= cutoff && fire.is_none()) {
+                return;
+            }
+            out.push(Candidate {
+                kind,
+                onset_s: ((d.cand_hop + 1) * MODEL_HOP) as f64 / f64::from(MODEL_RATE),
+                p: d.p_final,
+                cutoff,
+            });
+        });
+    }
+    out.sort_by(|a, b| a.onset_s.total_cmp(&b.onset_s));
+    out
+}
+
 /// Every trained detector one analysed send runs, for mono input at `rate`: one per embedded model that loads.
 /// A model reading kick verdicts runs fed by the kick ([`KickFed`]); without a matching kick it is refused
-/// (logged once) and the kick runs alone. The live worker and the offline renderer both build theirs here.
-pub fn send_detectors(rate: u32) -> Vec<Box<dyn EventDetector>> {
+/// (logged once) and the kick runs alone. The live worker, the offline renderer and Detect all build theirs here.
+pub fn runners(rate: u32) -> Vec<Runner> {
     let mut kick = detector(EventKind::Kick, rate);
-    let mut out: Vec<Box<dyn EventDetector>> = Vec::new();
+    let mut out = Vec::new();
     let mut readers = Vec::new();
     for (kind, _) in EMBEDDED.iter().filter(|(k, _)| *k != EventKind::Kick) {
         let Some(d) = detector(*kind, rate) else {
@@ -201,7 +268,7 @@ pub fn send_detectors(rate: u32) -> Vec<Box<dyn EventDetector>> {
         if d.wants_kick().is_some() {
             readers.push(d);
         } else {
-            out.push(Box::new(d));
+            out.push(Runner::Alone(Box::new(d)));
         }
     }
     for reader in readers {
@@ -214,7 +281,7 @@ pub fn send_detectors(rate: u32) -> Vec<Box<dyn EventDetector>> {
             continue;
         };
         match KickFed::new(k, reader) {
-            Ok(pair) => out.push(Box::new(pair)),
+            Ok(pair) => out.push(Runner::Fed(Box::new(pair))),
             Err(e) => {
                 log::error!("[Audio] {} detector disabled: {e}", kind.name());
                 kick = detector(EventKind::Kick, rate);
@@ -222,9 +289,22 @@ pub fn send_detectors(rate: u32) -> Vec<Box<dyn EventDetector>> {
         }
     }
     if let Some(k) = kick {
-        out.insert(0, Box::new(k));
+        out.insert(0, Runner::Alone(Box::new(k)));
     }
     out
+}
+
+/// [`runners`] as the live worker's event detectors.
+pub fn send_detectors(rate: u32) -> Vec<Box<dyn EventDetector>> {
+    runners(rate)
+        .into_iter()
+        .map(|r| -> Box<dyn EventDetector> {
+            match r {
+                Runner::Alone(d) => d,
+                Runner::Fed(pair) => pair,
+            }
+        })
+        .collect()
 }
 
 /// Input samples the worker's ring holds (about 2.7 s at 48 kHz).
@@ -492,6 +572,30 @@ mod tests {
         let whole = fires(audio.len());
         assert!(whole.iter().any(|e| e.0 == "snare"));
         assert_eq!(whole, fires(300));
+    }
+
+    /// Detect's candidates over the cutoff are exactly the live fires on the same audio, one per hit, and the
+    /// candidates under it stay for a higher sensitivity.
+    #[test]
+    fn candidates_over_the_cutoff_are_the_live_fires() {
+        use crate::trained::golden;
+        let audio = golden::audio_f32(&golden::load("detectors/snare", "clip_dense.mkick"));
+        let mut events = Vec::new();
+        for d in &mut send_detectors(48_000) {
+            d.push(&audio, &mut events);
+        }
+        assert!(events.iter().any(|e| e.kind == EventKind::Snare));
+        let cands = candidates(&audio, 48_000);
+        for kind in EventKind::ALL {
+            let fires = events.iter().filter(|e| e.kind == kind).count();
+            let over = cands
+                .iter()
+                .filter(|c| c.kind == kind && c.p >= c.cutoff)
+                .count();
+            assert_eq!(over, fires, "{}", kind.name());
+        }
+        assert!(cands.iter().any(|c| c.p < c.cutoff));
+        assert!(cands.windows(2).all(|w| w[0].onset_s <= w[1].onset_s));
     }
 
     #[test]

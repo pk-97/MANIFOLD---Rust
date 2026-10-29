@@ -492,8 +492,7 @@ mod tests {
                 // float-equality failures unrelated to real mixdown behavior
                 // (BUG-106 / BUG-090 / BUG-074). Fix: add a per-process
                 // atomic sequence number so two calls can never collide
-                // regardless of clock resolution — same pattern already
-                // used by `percussion_backend.rs::build_temp_config_path`.
+                // regardless of clock resolution.
                 static SEQ: AtomicU64 = AtomicU64::new(0);
                 let seq = SEQ.fetch_add(1, Ordering::Relaxed);
                 let dir = std::env::temp_dir().join(format!(

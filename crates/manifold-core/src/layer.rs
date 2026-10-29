@@ -34,18 +34,6 @@ pub enum OverlapAction {
     },
 }
 
-/// Which of the four demucs stems a Detect-and-Group lane holds. Order
-/// mirrors `STEM_DISPLAY` in `percussion_orchestrator.rs` exactly — both are
-/// the pipeline's drums/bass/other/vocals order and must not drift apart.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum DetectStemRole {
-    Drums,
-    Bass,
-    Other,
-    Vocals,
-}
-
 /// A single layer in the timeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,24 +78,8 @@ pub struct Layer {
     /// Audio output state: when `true`, this layer is **silent to the master mix
     /// but still feeds its send** (the third state beside Live and Muted). Mute
     /// still wins — a muted layer is silent everywhere. Default `false` (Live).
-    /// Stem lanes from Detect-and-Group default this `true`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub analysis_only: bool,
-    /// Set ONLY on a Detect-and-Group **group** layer: the source audio lane this
-    /// set was built for. Drives lane-keyed reuse — re-detecting any clip on that
-    /// lane reuses this group's stem lanes + sends instead of making a second set.
-    /// `None` on every other layer.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detect_group_source: Option<LayerId>,
-    /// Set on a Detect-and-Group **stem lane**: which of the four demucs stems
-    /// this lane holds. Drives role-keyed reuse (lookup by role, not by name)
-    /// so replacing the source song's file/name doesn't spawn a second set of
-    /// stem lanes. `None` on every other layer, and on stem lanes created
-    /// before this field existed — those fall back to the legacy name match,
-    /// which stamps this field on first touch (lazy migration, no load pass).
-    ///
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detect_stem_role: Option<DetectStemRole>,
     #[serde(default, skip_serializing_if = "crate::has_no_items")]
     pub effects: Option<Vec<PresetInstance>>,
     #[serde(default, skip_serializing_if = "crate::has_no_items")]
@@ -975,8 +947,6 @@ impl Default for Layer {
             opacity: 1.0,
             audio_gain_db: 0.0,
             analysis_only: false,
-            detect_group_source: None,
-            detect_stem_role: None,
             effects: None,
             effect_groups: None,
             gen_params: None,
@@ -1249,44 +1219,6 @@ mod tests {
     fn reconcile_ignores_non_generator_layers() {
         let mut layer = Layer::new("Video".into(), LayerType::Video, 0);
         assert!(!layer.reconcile_generator_identity());
-    }
-
-    #[test]
-    fn detect_stem_role_roundtrips_camel_case_and_omits_when_none() {
-        // D8: the field must serialize camelCase, round-trip through every
-        // variant, and vanish entirely (not `null`) when unset — pre-role
-        // projects must not gain a spurious key on next save.
-        let mut layer = Layer::new_audio("MyTrack \u{00b7} Drums".into(), 0);
-        assert!(layer.detect_stem_role.is_none());
-        let json = serde_json::to_string(&layer).unwrap();
-        assert!(
-            !json.contains("detectStemRole"),
-            "unset role must be omitted, not serialized as null"
-        );
-        let back: Layer = serde_json::from_str(&json).unwrap();
-        assert!(back.detect_stem_role.is_none());
-
-        for role in [
-            DetectStemRole::Drums,
-            DetectStemRole::Bass,
-            DetectStemRole::Other,
-            DetectStemRole::Vocals,
-        ] {
-            layer.detect_stem_role = Some(role);
-            let json = serde_json::to_string(&layer).unwrap();
-            assert!(
-                json.contains("\"detectStemRole\""),
-                "field present when set"
-            );
-            let back: Layer = serde_json::from_str(&json).unwrap();
-            assert_eq!(back.detect_stem_role, Some(role));
-        }
-
-        // camelCase variant spelling, since the pipeline/UI never see this
-        // field directly but a hand-authored fixture or debugger might.
-        layer.detect_stem_role = Some(DetectStemRole::Other);
-        let json = serde_json::to_string(&layer).unwrap();
-        assert!(json.contains("\"detectStemRole\":\"other\""));
     }
 
     #[test]

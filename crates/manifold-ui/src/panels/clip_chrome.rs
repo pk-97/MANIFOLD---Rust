@@ -397,9 +397,9 @@ impl ClipChromePanel {
         let detect_label = if self.cached_detect_show {
             "Detecting\u{2026}"
         } else if self.cached_has_analysis {
-            "Re-detect & Group"
+            "Re-detect"
         } else {
-            "Detect and Group"
+            "Detect"
         };
         children.push(
             View::button(detect_label)

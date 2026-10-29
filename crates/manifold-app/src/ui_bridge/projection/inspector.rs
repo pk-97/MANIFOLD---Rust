@@ -398,7 +398,7 @@ pub fn sync_inspector_data(
                 use manifold_ui::panels::clip_chrome::{DetectInstrumentRow, DetectionView};
 
                 let default_cfg;
-                let (cfg, detection) = match clip.audio_detection.as_ref() {
+                let (cfg, detection) = match clip.detection.as_ref() {
                     Some(d) => (&d.config, Some(d)),
                     None => {
                         default_cfg = DetectionConfig::default();

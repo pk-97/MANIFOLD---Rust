@@ -1,441 +1,56 @@
-// Port of Unity PercussionAnalysisModels.cs (561 lines) + BeatTimeConverter.cs (90 lines).
-// All data types for the percussion analysis pipeline.
+// The data Detect produces and plans from: hits, the bindings that turn them into clips, and the
+// clip-anchored time mapping.
 
-use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 
 use crate::id::LayerId;
 use crate::preset_type_id::PresetTypeId;
-use crate::project::Project;
-use crate::tempo::TempoMapConverter;
 use crate::units::{Beats, Bpm, Seconds};
 
 // ─── PercussionTriggerType ───
 
-/// Port of Unity PercussionTriggerType enum.
-/// Normalized trigger classes used by percussion detection and clip mapping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[repr(i32)]
+/// The instruments Detect places triggers for: the families the shipped trained detectors find.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PercussionTriggerType {
-    #[default]
-    Unknown = 0,
-    Kick = 1,
-    Snare = 2,
-    Clap = 3,
-    Hat = 4,
-    Perc = 5,
-    Bass = 6,
-    Synth = 7,
-    Pad = 8,
-    Vocal = 9,
-    BassSustained = 10,
+    Kick,
+    Snare,
 }
 
 // ─── PercussionEvent ───
 
-/// Port of Unity PercussionEvent class.
-/// Single detected percussive event in seconds-domain.
+/// One detected hit in the source file's seconds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PercussionEvent {
     pub trigger_type: PercussionTriggerType,
     pub time_seconds: f32,
     pub confidence: f32,
-    pub duration_seconds: f32,
 }
 
 impl PercussionEvent {
-    pub fn new(
-        trigger_type: PercussionTriggerType,
-        time_seconds: f32,
-        confidence: f32,
-        duration_seconds: f32,
-    ) -> Self {
+    pub fn new(trigger_type: PercussionTriggerType, time_seconds: f32, confidence: f32) -> Self {
         Self {
             trigger_type,
             time_seconds: time_seconds.max(0.0),
             confidence: confidence.clamp(0.0, 1.0),
-            duration_seconds: duration_seconds.max(0.0),
         }
-    }
-
-    pub fn has_duration(&self) -> bool {
-        self.duration_seconds > 0.0
-    }
-}
-
-// ─── PercussionBeatGrid ───
-
-/// Port of Unity PercussionBeatGrid class.
-/// Beat-grid metadata emitted by analysis for seconds-to-beat mapping.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PercussionBeatGrid {
-    pub mode: String,
-    pub beat_times_seconds: Vec<f32>,
-    pub downbeat_indices: Vec<i32>,
-    pub bpm_derived: f32,
-    pub confidence: f32,
-    pub onset_to_peak_seconds: f32,
-}
-
-impl PercussionBeatGrid {
-    pub fn new(
-        mode: &str,
-        beat_times_seconds: Vec<f32>,
-        downbeat_indices: Vec<i32>,
-        bpm_derived: f32,
-        confidence: f32,
-        onset_to_peak_seconds: f32,
-    ) -> Self {
-        let mode = if mode.trim().is_empty() {
-            "beat_times".to_string()
-        } else {
-            mode.to_string()
-        };
-        let bpm_derived = if bpm_derived > 0.0 {
-            bpm_derived.clamp(20.0, 300.0)
-        } else {
-            0.0
-        };
-        let confidence = confidence.clamp(0.0, 1.0);
-        let onset_to_peak_seconds = onset_to_peak_seconds.clamp(0.0, 0.050);
-
-        let mut grid = Self {
-            mode,
-            beat_times_seconds,
-            downbeat_indices,
-            bpm_derived,
-            confidence,
-            onset_to_peak_seconds,
-        };
-        grid.ensure_valid();
-        grid
-    }
-
-    /// Port of Unity PercussionBeatGrid.BpmDerived property getter.
-    pub fn bpm_derived_clamped(&self) -> f32 {
-        if self.bpm_derived > 0.0 {
-            self.bpm_derived.clamp(20.0, 300.0)
-        } else {
-            0.0
-        }
-    }
-
-    /// Port of Unity PercussionBeatGrid.Confidence property getter.
-    pub fn confidence_clamped(&self) -> f32 {
-        self.confidence.clamp(0.0, 1.0)
-    }
-
-    pub fn has_usable_beats(&self) -> bool {
-        self.beat_times_seconds.len() >= 2
-    }
-
-    /// Port of Unity PercussionBeatGrid.EnsureValid().
-    pub fn ensure_valid(&mut self) {
-        if self.mode.trim().is_empty() {
-            self.mode = "beat_times".to_string();
-        }
-
-        // Remove non-finite or negative beat times.
-        self.beat_times_seconds
-            .retain(|&t| t.is_finite() && t >= 0.0);
-        self.beat_times_seconds
-            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-        // Deduplicate near-identical beat markers to keep interpolation stable.
-        let mut i = self.beat_times_seconds.len().saturating_sub(1);
-        while i >= 1 {
-            if (self.beat_times_seconds[i] - self.beat_times_seconds[i - 1]).abs() < 0.0001 {
-                self.beat_times_seconds.remove(i);
-            }
-            i = i.saturating_sub(1);
-        }
-
-        let beat_count = self.beat_times_seconds.len() as i32;
-        // Remove out-of-range downbeat indices.
-        self.downbeat_indices
-            .retain(|&idx| idx >= 0 && idx < beat_count);
-        self.downbeat_indices.sort();
-        // Deduplicate downbeat indices.
-        let mut i = self.downbeat_indices.len().saturating_sub(1);
-        while i >= 1 {
-            if self.downbeat_indices[i] == self.downbeat_indices[i - 1] {
-                self.downbeat_indices.remove(i);
-            }
-            i = i.saturating_sub(1);
-        }
-
-        if !self.bpm_derived.is_finite() || self.bpm_derived <= 0.0 {
-            self.bpm_derived = 0.0;
-        } else {
-            self.bpm_derived = self.bpm_derived.clamp(20.0, 300.0);
-        }
-
-        if !self.confidence.is_finite() {
-            self.confidence = 0.0;
-        }
-        self.confidence = self.confidence.clamp(0.0, 1.0);
-    }
-
-    /// Port of Unity PercussionBeatGrid.TryMapSecondsToBeat().
-    pub fn try_map_seconds_to_beat(&self, seconds: Seconds) -> Option<Beats> {
-        let seconds = seconds.as_f32();
-        if !self.has_usable_beats() || !seconds.is_finite() {
-            return None;
-        }
-
-        let interval = self.try_get_representative_interval()?;
-        if interval <= 0.000001 {
-            return None;
-        }
-
-        let first_beat_seconds = self.beat_times_seconds[0];
-        let beat_offset = if first_beat_seconds > (interval * 0.75) {
-            first_beat_seconds / interval
-        } else {
-            0.0
-        };
-
-        let target_seconds = seconds.max(0.0);
-        let last_index = self.beat_times_seconds.len() - 1;
-
-        if target_seconds <= first_beat_seconds {
-            let beat = beat_offset + ((target_seconds - first_beat_seconds) / interval);
-            return if beat.is_finite() {
-                Some(Beats::from_f32(beat))
-            } else {
-                None
-            };
-        }
-
-        if target_seconds >= self.beat_times_seconds[last_index] {
-            let beat = beat_offset
-                + last_index as f32
-                + ((target_seconds - self.beat_times_seconds[last_index]) / interval);
-            return if beat.is_finite() {
-                Some(Beats::from_f32(beat))
-            } else {
-                None
-            };
-        }
-
-        // Binary search for the containing segment.
-        let mut lo = 0usize;
-        let mut hi = last_index;
-        while hi - lo > 1 {
-            let mid = lo + ((hi - lo) / 2);
-            if self.beat_times_seconds[mid] <= target_seconds {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        }
-
-        let start = self.beat_times_seconds[lo];
-        let end = self.beat_times_seconds[lo + 1];
-        let segment = end - start;
-        if !segment.is_finite() || segment <= 0.000001 {
-            return None;
-        }
-
-        let t = (target_seconds - start) / segment;
-        let beat = beat_offset + lo as f32 + t;
-        if beat.is_finite() {
-            Some(Beats::from_f32(beat))
-        } else {
-            None
-        }
-    }
-
-    /// Port of Unity PercussionBeatGrid.TryGetRepresentativeInterval().
-    fn try_get_representative_interval(&self) -> Option<f32> {
-        if self.beat_times_seconds.len() < 2 {
-            return None;
-        }
-
-        // Middle interval is robust enough here and avoids sorting/allocating.
-        let mid = self.beat_times_seconds.len() / 2;
-        let i0 = (mid.saturating_sub(1)).min(self.beat_times_seconds.len() - 2);
-        let i1 = i0 + 1;
-        let candidate = self.beat_times_seconds[i1] - self.beat_times_seconds[i0];
-        if candidate.is_finite() && candidate > 0.000001 {
-            return Some(candidate);
-        }
-
-        // Fallback scan when central segment is degenerate.
-        for i in 0..self.beat_times_seconds.len() - 1 {
-            let d = self.beat_times_seconds[i + 1] - self.beat_times_seconds[i];
-            if d.is_finite() && d > 0.000001 {
-                return Some(d);
-            }
-        }
-
-        None
     }
 }
 
 // ─── PercussionAnalysisData ───
 
-/// Deserialize an analysis BPM while preserving the unknown zero sentinel.
-fn deserialize_analysis_bpm<'de, D>(deserializer: D) -> Result<Bpm, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let bpm = f32::deserialize(deserializer)?;
-    Ok(Bpm(if bpm.is_finite() && bpm > 0.0 {
-        bpm.clamp(20.0, 300.0)
-    } else {
-        0.0
-    }))
-}
-
-/// Port of Unity PercussionAnalysisData class.
-/// Parsed percussion analysis payload for one track/input segment.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One Detect run's hits on an audio clip's file, in time order. Cached on the clip so the inspector's knobs
+/// re-plan without re-running the detectors.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PercussionAnalysisData {
-    pub track_id: String,
-    #[serde(deserialize_with = "deserialize_analysis_bpm")]
-    pub bpm: Bpm,
-    pub bpm_confidence: f32,
-    pub beat_grid: Option<PercussionBeatGrid>,
     pub events: Vec<PercussionEvent>,
-    pub energy_envelope: Option<Vec<f32>>,
 }
 
 impl PercussionAnalysisData {
-    pub fn new(
-        track_id: &str,
-        bpm: Bpm,
-        events: Vec<PercussionEvent>,
-        bpm_confidence: f32,
-        beat_grid: Option<PercussionBeatGrid>,
-        energy_envelope: Option<Vec<f32>>,
-    ) -> Self {
-        let track_id = if track_id.is_empty() {
-            String::new()
-        } else {
-            track_id.to_string()
-        };
-        let bpm = Bpm(if bpm.0 > 0.0 {
-            bpm.0.clamp(20.0, 300.0)
-        } else {
-            0.0
-        });
-        let bpm_confidence = if bpm_confidence.is_finite() {
-            bpm_confidence.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-
-        let mut data = Self {
-            track_id,
-            bpm,
-            bpm_confidence,
-            beat_grid,
-            events,
-            energy_envelope,
-        };
-        if let Some(ref mut grid) = data.beat_grid {
-            grid.ensure_valid();
-        }
-        data
-    }
-
-    pub fn new_simple(track_id: &str, bpm: Bpm, events: Vec<PercussionEvent>) -> Self {
-        Self::new(track_id, bpm, events, 0.0, None, None)
-    }
-
-    pub fn has_energy_envelope(&self) -> bool {
-        self.energy_envelope.as_ref().is_some_and(|e| !e.is_empty())
-    }
-
-    /// Port of Unity PercussionAnalysisData.EnergyAtBeat().
-    /// Returns normalized energy [0,1] at the given beat via linear interpolation.
-    /// Beat 0 = index 0. Returns 1.0 if no envelope data is present.
-    pub fn energy_at_beat(&self, beat: Beats) -> f32 {
-        let envelope = match &self.energy_envelope {
-            Some(e) if !e.is_empty() => e,
-            _ => return 1.0,
-        };
-        let beat = beat.as_f32();
-        if beat <= 0.0 {
-            return envelope[0];
-        }
-        let last_idx = envelope.len() - 1;
-        if beat >= last_idx as f32 {
-            return envelope[last_idx];
-        }
-        let lo = beat as usize;
-        let t = beat - lo as f32;
-        envelope[lo] + t * (envelope[lo + 1] - envelope[lo])
-    }
-
-    /// Port of Unity PercussionAnalysisData.EnsureValid().
-    pub fn ensure_valid(&mut self) {
-        if !self.bpm.0.is_finite() || self.bpm.0 <= 0.0 {
-            self.bpm = Bpm(0.0);
-        } else {
-            self.bpm = Bpm(self.bpm.0.clamp(20.0, 300.0));
-        }
-
-        if !self.bpm_confidence.is_finite() {
-            self.bpm_confidence = 0.0;
-        }
-        self.bpm_confidence = self.bpm_confidence.clamp(0.0, 1.0);
-
-        if let Some(ref mut grid) = self.beat_grid {
-            grid.ensure_valid();
-        }
-        if self.bpm.0 <= 0.0
-            && let Some(ref grid) = self.beat_grid
-            && grid.bpm_derived_clamped() > 0.0
-        {
-            self.bpm = Bpm(grid.bpm_derived_clamped());
-        }
-        if self.bpm_confidence <= 0.0
-            && let Some(ref grid) = self.beat_grid
-        {
-            self.bpm_confidence = grid.confidence_clamped();
-        }
-
-        if let Some(ref mut envelope) = self.energy_envelope {
-            for val in envelope.iter_mut() {
-                if !val.is_finite() {
-                    *val = 1.0;
-                } else {
-                    *val = val.clamp(0.0, 1.0);
-                }
-            }
-        }
-
-        self.events.retain(|_| true); // no null check needed in Rust
-        self.events.sort_by(|a, b| {
-            a.time_seconds
-                .partial_cmp(&b.time_seconds)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
-
-    /// Port of Unity PercussionAnalysisData.TryMapSecondsToBeat().
-    /// Prefers the supplied project BPM converter when one is given.
-    pub fn try_map_seconds_to_beat(
-        &self,
-        seconds: Seconds,
-        fallback_converter: Option<&mut dyn BeatTimeConverter>,
-    ) -> Option<Beats> {
-        // Prefer the project BPM converter when one is supplied.
-        if let Some(converter) = fallback_converter {
-            let beat = converter.seconds_to_beat(seconds);
-            return if beat.0.is_finite() { Some(beat) } else { None };
-        }
-
-        if let Some(ref grid) = self.beat_grid {
-            return grid.try_map_seconds_to_beat(seconds);
-        }
-
-        None
+    pub fn new(mut events: Vec<PercussionEvent>) -> Self {
+        events.sort_by(|a, b| a.time_seconds.total_cmp(&b.time_seconds));
+        Self { events }
     }
 }
 
@@ -569,38 +184,16 @@ impl ClipDetectionAnchor {
 
 // ─── PercussionImportOptions ───
 
-/// Port of Unity PercussionImportOptions class.
-/// Planner configuration controlling quantization, offsets, and fallback behavior.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// How Detect turns one clip's hits into trigger clips.
+#[derive(Debug, Clone)]
 pub struct PercussionImportOptions {
-    pub start_beat_offset: Beats,
     pub quantize_to_grid: bool,
     pub quantize_step_beats: Beats,
     pub default_clip_duration_beats: Beats,
     pub onset_compensation_seconds: Seconds,
-    pub minimum_energy_gate: f32,
     pub bindings: Vec<PercussionClipBinding>,
-    /// When set (per-clip detection), the planner maps event times through this
-    /// clip-anchored, warp-aware converter and trims to the clip window instead
-    /// of using the project beat-time converter. `None` for the legacy wizard.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clip_anchor: Option<ClipDetectionAnchor>,
-}
-
-impl Default for PercussionImportOptions {
-    fn default() -> Self {
-        Self {
-            start_beat_offset: Beats::ZERO,
-            quantize_to_grid: true,
-            quantize_step_beats: Beats(0.25),
-            default_clip_duration_beats: Beats(0.25),
-            onset_compensation_seconds: Seconds::ZERO,
-            minimum_energy_gate: 0.0,
-            bindings: Vec::new(),
-            clip_anchor: None,
-        }
-    }
+    /// Maps the clip's source seconds to timeline beats, warp-aware, and trims to the clip window.
+    pub clip_anchor: ClipDetectionAnchor,
 }
 
 // ─── PercussionClipPlacement ───
@@ -694,131 +287,15 @@ impl PercussionPlacementPlan {
     }
 }
 
-// ─── BeatTimeConverter trait ───
-
-/// Port of Unity IBeatTimeConverter interface.
-pub trait BeatTimeConverter {
-    fn seconds_to_beat(&mut self, seconds: Seconds) -> Beats;
-}
-
-/// Port of Unity ProjectBeatTimeConverter class.
-/// Converts seconds-domain events into timeline beats using the project's tempo map.
-pub struct ProjectBeatTimeConverter<'a> {
-    project: &'a mut Project,
-}
-
-impl<'a> ProjectBeatTimeConverter<'a> {
-    pub fn new(project: &'a mut Project) -> Self {
-        Self { project }
-    }
-}
-
-impl<'a> BeatTimeConverter for ProjectBeatTimeConverter<'a> {
-    fn seconds_to_beat(&mut self, seconds: Seconds) -> Beats {
-        let fallback_bpm = self.project.settings.bpm;
-        TempoMapConverter::seconds_to_beat(&mut self.project.tempo_map, seconds, fallback_bpm)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_percussion_event_clamping() {
-        let e = PercussionEvent::new(PercussionTriggerType::Kick, -1.0, 2.0, -0.5);
+        let e = PercussionEvent::new(PercussionTriggerType::Kick, -1.0, 2.0);
         assert_eq!(e.time_seconds, 0.0);
         assert_eq!(e.confidence, 1.0);
-        assert_eq!(e.duration_seconds, 0.0);
-    }
-
-    #[test]
-    fn test_beat_grid_ensure_valid_removes_negative() {
-        let mut grid = PercussionBeatGrid {
-            mode: String::new(),
-            beat_times_seconds: vec![-1.0, 0.5, 1.0, f32::NAN],
-            downbeat_indices: vec![-1, 0, 5],
-            bpm_derived: 120.0,
-            confidence: 0.8,
-            onset_to_peak_seconds: 0.0,
-        };
-        grid.ensure_valid();
-        assert_eq!(grid.mode, "beat_times");
-        assert_eq!(grid.beat_times_seconds, vec![0.5, 1.0]);
-        assert_eq!(grid.downbeat_indices, vec![0]);
-    }
-
-    #[test]
-    fn test_beat_grid_dedup() {
-        let mut grid = PercussionBeatGrid {
-            mode: "beat_times".to_string(),
-            beat_times_seconds: vec![1.0, 1.00005, 2.0],
-            downbeat_indices: vec![],
-            bpm_derived: 120.0,
-            confidence: 0.8,
-            onset_to_peak_seconds: 0.0,
-        };
-        grid.ensure_valid();
-        assert_eq!(grid.beat_times_seconds.len(), 2);
-    }
-
-    #[test]
-    fn test_beat_grid_map_seconds_to_beat() {
-        let grid = PercussionBeatGrid::new(
-            "beat_times",
-            vec![0.0, 0.5, 1.0, 1.5, 2.0],
-            vec![],
-            120.0,
-            0.9,
-            0.0,
-        );
-        // Beat 0 at 0.0s, beat 1 at 0.5s, etc.
-        let beat = grid.try_map_seconds_to_beat(Seconds(0.25)).unwrap();
-        assert!((beat.0 - 0.5).abs() < 0.01); // Halfway between beat 0 and 1
-    }
-
-    #[test]
-    fn test_energy_at_beat() {
-        let data = PercussionAnalysisData::new(
-            "test",
-            Bpm(120.0),
-            vec![],
-            0.9,
-            None,
-            Some(vec![0.0, 0.5, 1.0]),
-        );
-        assert_eq!(data.energy_at_beat(Beats(0.0)), 0.0);
-        assert_eq!(data.energy_at_beat(Beats(0.5)), 0.25);
-        assert_eq!(data.energy_at_beat(Beats(1.0)), 0.5);
-        assert_eq!(data.energy_at_beat(Beats(2.0)), 1.0);
-    }
-
-    #[test]
-    fn test_energy_at_beat_no_envelope() {
-        let data = PercussionAnalysisData::new("test", Bpm(120.0), vec![], 0.9, None, None);
-        assert_eq!(data.energy_at_beat(Beats(1.0)), 1.0);
-    }
-
-    #[test]
-    fn analysis_bpm_roundtrip_preserves_unknown_zero() {
-        let data = PercussionAnalysisData::new_simple("test", Bpm(0.0), vec![]);
-        let mut detection = crate::audio_clip_detection::AudioClipDetection::new();
-        detection.analysis = Some(data);
-        let json = serde_json::to_string(&detection).unwrap();
-        let restored: crate::audio_clip_detection::AudioClipDetection =
-            serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.analysis.unwrap().bpm, Bpm(0.0));
-    }
-
-    #[test]
-    fn analysis_bpm_roundtrip_clamps_valid_and_nonpositive_values() {
-        for (input, expected) in [(120.0, 120.0), (10.0, 20.0), (400.0, 300.0), (-5.0, 0.0)] {
-            let json = format!(
-                r#"{{"trackId":"test","bpm":{input},"bpmConfidence":0.0,"beatGrid":null,"events":[],"energyEnvelope":null}}"#
-            );
-            let restored: PercussionAnalysisData = serde_json::from_str(&json).unwrap();
-            assert_eq!(restored.bpm, Bpm(expected));
-        }
     }
 
     #[test]
@@ -851,7 +328,7 @@ mod tests {
 
     #[test]
     fn old_binding_json_with_video_clip_id_still_loads() {
-        let json = r#"{"triggerType":"Unknown","layerIndex":2,"videoClipId":"clip_123","generatorType":"","durationBeats":0.5,"minimumConfidence":0.3}"#;
+        let json = r#"{"triggerType":"Kick","layerIndex":2,"videoClipId":"clip_123","generatorType":"","durationBeats":0.5,"minimumConfidence":0.3}"#;
         let binding: PercussionClipBinding = serde_json::from_str(json).expect("old file loads");
         assert_eq!(binding.layer_index, 2);
     }

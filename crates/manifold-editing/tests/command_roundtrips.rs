@@ -208,16 +208,9 @@ fn replace_audio_file_undo_restores_source_state_and_generated_clips() {
     song.audio_bpm_automatic = true;
     let mut detection = AudioClipDetection::new();
     detection.config.quantize_on = false;
-    detection.analysis = Some(PercussionAnalysisData::new(
-        "old_song",
-        Bpm(120.0),
-        Vec::new(),
-        0.9,
-        None,
-        None,
-    ));
+    detection.analysis = Some(PercussionAnalysisData::new(Vec::new()));
     detection.last_counts.insert(PercussionTriggerType::Kick, 8);
-    song.audio_detection = Some(detection);
+    song.detection = Some(detection);
     let song_id = song.id.clone();
     project.timeline.layers[0].restore_clip(song);
 
@@ -254,7 +247,7 @@ fn replace_audio_file_undo_restores_source_state_and_generated_clips() {
         Seconds(42.0),
         old_clip.in_point,
         old_clip.recorded_bpm,
-        old_clip.audio_detection.clone(),
+        old_clip.detection.clone(),
     );
     let mut commands: Vec<Box<dyn Command>> = vec![Box::new(replace)];
     for layer in project.timeline.layers.iter() {
@@ -285,10 +278,7 @@ fn replace_audio_file_undo_restores_source_state_and_generated_clips() {
     // start_beat / duration_beats untouched by the replace.
     assert_eq!(clip.start_beat, Beats(0.0));
     assert_eq!(clip.duration_beats, Beats(16.0));
-    let det = clip
-        .audio_detection
-        .as_ref()
-        .expect("config survives replace");
+    let det = clip.detection.as_ref().expect("config survives replace");
     assert!(!det.config.quantize_on, "config kept as-is");
     assert!(det.analysis.is_none(), "stale analysis cleared");
     assert!(det.last_counts.is_empty(), "stale counts cleared");
@@ -306,7 +296,7 @@ fn replace_audio_file_undo_restores_source_state_and_generated_clips() {
     assert_eq!(clip.recorded_bpm, 120.0);
     assert_eq!(clip.audio_warp_enabled, Some(false));
     assert!(clip.audio_bpm_automatic);
-    let det = clip.audio_detection.as_ref().expect("detection restored");
+    let det = clip.detection.as_ref().expect("detection restored");
     assert!(!det.config.quantize_on);
     assert!(det.analysis.is_some(), "cached analysis restored");
     assert_eq!(det.last_counts.get(&PercussionTriggerType::Kick), Some(&8));

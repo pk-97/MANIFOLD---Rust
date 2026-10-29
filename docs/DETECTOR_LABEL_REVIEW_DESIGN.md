@@ -31,7 +31,7 @@ file; folding the overlay into the labels is a separate, later step.
   ("All In For You", Growth Project) is not a lab song.
 - **Songs without a set** (6 stem-sum songs, 5 third-party sections): a constant grid fitted to the song's kick
   labels (for a stem-sum song those are its kick stem's own attacks). Kept when 75% of kicks sit within 30 ms of a
-  beat, else drawn at 120 BPM and marked `(no grid)`. The downbeat is a guess. manifold_audio's autocorrelation BPM
+  beat, else drawn at 120 BPM and marked `(no grid)`. The downbeat is a guess. An autocorrelation BPM on the mix
   put under a fifth of the kicks on its grid for most of these songs; Beat This is not installed in the lab env.
 - **Time signature.** Bars are 4/4. A set whose main-track time signature is anything else is reported.
 

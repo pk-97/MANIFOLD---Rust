@@ -12,7 +12,6 @@ use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_node_engine::gpu::context::GpuContext;
-use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 use manifold_ui_paint::ui_renderer::UIRenderer;
 
 use manifold_ui::cursors::{CursorManager, TimelineCursor};
@@ -1599,13 +1598,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             );
             content_thread.audio_layer_playback = audio_layer_playback;
             content_thread.midi_input.start();
-            content_thread.percussion_orchestrator = PercussionImportOrchestrator::new(
-                None,
-                std::env::current_exe()
-                    .ok()
-                    .and_then(|p| p.parent().map(|d| d.to_string_lossy().into_owned()))
-                    .unwrap_or_default(),
-            );
 
             // Before the content thread's first tick: the presented handler
             // and the stored calibration (D19).

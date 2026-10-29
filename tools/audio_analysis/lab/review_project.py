@@ -453,7 +453,7 @@ def fit_grid(kicks, name_bpm=None):
     tempo. The events are the song's kick labels: for a stem-sum song those are its kick stem's own attacks, for a
     third-party section Peter reviewed them. BPM: the best phase coherence on a 0.01 BPM grid (the name's BPM wins
     within GRID_NAME_SHARE of it). Beat phase: the kicks' mean phase. Downbeat: the beat of four holding the most
-    kicks, a guess. manifold_audio.bpm's autocorrelation on the mix put under a fifth of the kicks on its grid for
+    kicks, a guess. An autocorrelation BPM on the mix put under a fifth of the kicks on its grid for
     most of these songs, and Beat This is not installed in the lab env, so neither is used."""
     k = np.sort(np.asarray(kicks, float))
     if len(k) < 8:

@@ -26,42 +26,12 @@
 //!     <clip.(wav|aiff|mp3|flac)|clip.mkick> [--skip-check]
 //! ```
 
-use manifold_audio::detectors::{EventKind, KickFed, Side, detector, send_detectors};
-use manifold_audio::trained::TrainedDetector;
+use manifold_audio::detectors::{EventKind, detector, runners, send_detectors};
 use manifold_audio::trained::container::Container;
 use manifold_audio::trained::spec::{MODEL_HOP, MODEL_RATE};
 
 /// The live detector worker's step.
 const BLOCK: usize = 1024;
-
-enum Runner {
-    Alone(Box<TrainedDetector>),
-    Fed(Box<KickFed>),
-}
-
-/// `send_detectors`, keeping the concrete types so fires carry their candidate.
-fn runners(rate: u32) -> Vec<Runner> {
-    let mut kick = detector(EventKind::Kick, rate);
-    let mut out = Vec::new();
-    for kind in EventKind::ALL.into_iter().filter(|k| *k != EventKind::Kick) {
-        let Some(d) = detector(kind, rate) else {
-            continue;
-        };
-        if d.wants_kick().is_none() {
-            out.push(Runner::Alone(Box::new(d)));
-            continue;
-        }
-        let Some(k) = kick.take() else { continue };
-        match KickFed::new(k, d) {
-            Ok(pair) => out.push(Runner::Fed(Box::new(pair))),
-            Err(_) => kick = detector(EventKind::Kick, rate),
-        }
-    }
-    if let Some(k) = kick {
-        out.insert(0, Runner::Alone(Box::new(k)));
-    }
-    out
-}
 
 struct Hit {
     kind: EventKind,
@@ -73,33 +43,13 @@ fn run(mono: &[f32], rate: u32) -> Vec<Hit> {
     let mut hits = Vec::new();
     for mut r in runners(rate) {
         for block in mono.chunks(BLOCK) {
-            match &mut r {
-                Runner::Alone(d) => {
-                    let kind = d.kind();
-                    d.push_with(block, |f| {
-                        hits.push(Hit {
-                            kind,
-                            cand_hop: f.cand_hop,
-                            sample: f.sample,
-                        })
-                    });
-                }
-                Runner::Fed(pair) => {
-                    let reader = pair.reader().kind();
-                    pair.push_traced(block, |side, _, fire| {
-                        let kind = if side == Side::Kick {
-                            EventKind::Kick
-                        } else {
-                            reader
-                        };
-                        hits.extend(fire.map(|f| Hit {
-                            kind,
-                            cand_hop: f.cand_hop,
-                            sample: f.sample,
-                        }));
-                    });
-                }
-            }
+            r.push_traced(block, |kind, _, _, fire| {
+                hits.extend(fire.map(|f| Hit {
+                    kind,
+                    cand_hop: f.cand_hop,
+                    sample: f.sample,
+                }));
+            });
         }
     }
     hits.sort_by_key(|h| (h.sample, h.kind.name()));
@@ -158,14 +108,7 @@ fn main() {
         None => {
             let d = manifold_playback::audio_decoder::decode_audio_to_pcm(&input)
                 .unwrap_or_else(|e| fail(e));
-            let ch = d.channels.max(1);
-            (
-                d.samples
-                    .chunks_exact(ch)
-                    .map(|f| f.iter().sum::<f32>() / ch as f32)
-                    .collect(),
-                d.sample_rate,
-            )
+            (d.mono(), d.sample_rate)
         }
     };
 

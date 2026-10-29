@@ -8,6 +8,7 @@ publish = false
 manifold-core = { path = "../manifold-core" }
 manifold-foundation = { path = "../manifold-foundation" }
 manifold-editing = { path = "../manifold-editing" }
+manifold-audio = { path = "../manifold-audio" }
 log = "0.4"
 kira = { workspace = true }
 symphonia = { workspace = true }

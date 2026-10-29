@@ -61,9 +61,7 @@ class PRF:
 def _require_mir_eval() -> None:
     if mir_eval is None:
         raise RuntimeError(
-            "mir_eval is not importable in this runtime. It is a required "
-            "eval-harness dependency (requirements.runtime.mac.txt) — "
-            "re-stage the bundled runtime."
+            "mir_eval is not importable; pip install mir_eval."
         )
 
 

@@ -187,7 +187,8 @@ impl LayerTap {
         }
         // Capacity loss is reported by the stream at the original source frame
         // positions.
-        self.prod.push_interleaved(&self.staging[..self.staging_len]);
+        self.prod
+            .push_interleaved(&self.staging[..self.staging_len]);
         self.staging_len = 0;
     }
 }
@@ -253,9 +254,7 @@ fn play_routed_data(
     ratio: f32,
     paused: bool,
 ) -> Result<StaticSoundHandle, ()> {
-    let mut handle = track
-        .play(data.volume(Decibels::SILENCE))
-        .map_err(|_| ())?;
+    let mut handle = track.play(data.volume(Decibels::SILENCE)).map_err(|_| ())?;
     handle.seek_to(position);
     handle.set_volume(gain_db(volume), Tween::default());
     handle.set_playback_rate(ratio as f64, Tween::default());
@@ -268,11 +267,7 @@ fn play_routed_data(
 /// Build a fresh voice for `path` routed to `track` (decode + start paused at 0).
 /// `None` on a decode/play failure (logged) — a genuine "no audio," not a silent
 /// stand-in.
-fn make_voice(
-    track: &mut TrackHandle,
-    destination: &LayerId,
-    path: &str,
-) -> Option<Voice> {
+fn make_voice(track: &mut TrackHandle, destination: &LayerId, path: &str) -> Option<Voice> {
     let pre = match preload_audio(path, Beats::ZERO) {
         Ok(p) => p,
         Err(e) => {
@@ -366,15 +361,14 @@ impl<B: Backend> AudioLayerPlayback<B> {
             // chain — the `LayerTap` reads the frame *before* this volume, so the
             // send still sees signal even when the sub-track is muted to master.
             if let Some(lt) = self.layer_tracks.get_mut(&layer.layer_id) {
-                lt.track
-                    .set_volume(
-                        if master_hot {
-                            Decibels::IDENTITY
-                        } else {
-                            Decibels::SILENCE
-                        },
-                        declick(),
-                    );
+                lt.track.set_volume(
+                    if master_hot {
+                        Decibels::IDENTITY
+                    } else {
+                        Decibels::SILENCE
+                    },
+                    declick(),
+                );
             }
 
             // Tap gate: per-voice volume. The tap sits in the sub-track chain after
@@ -545,14 +539,7 @@ impl AudioLayerPlayback {
                     if voice.handle.state() == KiraPlaybackState::Stopped {
                         // Kira stops a handle at the natural end; replay for a
                         // fresh one seeked to the expected position.
-                        match play_routed_data(
-                            &voice.data,
-                            track,
-                            target.0,
-                            volume,
-                            ratio,
-                            false,
-                        ) {
+                        match play_routed_data(&voice.data, track, target.0, volume, ratio, false) {
                             Ok(h) => voice.handle = h,
                             Err(()) => log::warn!("[AudioLayerPlayback] replay failed"),
                         }
@@ -716,8 +703,8 @@ impl<B: Backend> AudioLayerPlayback<B> {
 /// internal buffer per call.
 #[cfg(test)]
 fn render_frames(manager: &mut AudioManager<kira::backend::mock::MockBackend>, frames: usize) {
-    let block = AudioManagerSettings::<kira::backend::mock::MockBackend>::default()
-        .internal_buffer_size;
+    let block =
+        AudioManagerSettings::<kira::backend::mock::MockBackend>::default().internal_buffer_size;
     for _ in 0..frames.div_ceil(block) {
         manager.backend_mut().on_start_processing();
         manager.backend_mut().process();
@@ -931,15 +918,8 @@ mod routed_voice_tests {
         };
 
         let source_position = 64.0 / 48_000.0;
-        let old_handle = play_routed_data(
-            &data,
-            &mut track_a,
-            source_position,
-            1.0,
-            1.0,
-            false,
-        )
-        .expect("initial routed voice");
+        let old_handle = play_routed_data(&data, &mut track_a, source_position, 1.0, 1.0, false)
+            .expect("initial routed voice");
         render_frames(&mut manager, 512);
         assert!(
             tap_peak(&mut tap_a) > 0.09,

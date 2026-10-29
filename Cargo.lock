@@ -2999,6 +2999,7 @@ dependencies = [
  "inventory",
  "kira",
  "log",
+ "manifold-audio",
  "manifold-core",
  "manifold-editing",
  "manifold-foundation",

@@ -274,8 +274,7 @@ GENERATORS = {
 # =True) instruments ("For drum instruments, returns zeros" — its own
 # docstring); the shared synth in eval/midi_synth.py can't render
 # kick_hat_128bpm's audible content. Render drum fixtures with a dedicated
-# percussive burst synth instead (same shape as
-# eval/beat_tracker_alignment.py's _percussive_click — exp-decaying noise for
+# percussive burst synth instead (exp-decaying noise for
 # the hat; a short low-sine thump for the kick), keeping the MIDI file (and
 # its note list) as the exact ground truth either way.
 DRUM_FIXTURE_IDS = {"kick_hat_128bpm", "edm_kit_128bpm"}

@@ -155,25 +155,6 @@ const OSC_SYNC_MODE: EnumTable = EnumTable {
     any_string_is_default: false,
 };
 
-const PERCUSSION_TRIGGER_TYPE: EnumTable = EnumTable {
-    numbers: &[
-        (0, "Unknown"),
-        (1, "Kick"),
-        (2, "Snare"),
-        (3, "Clap"),
-        (4, "Hat"),
-        (5, "Perc"),
-        (6, "Bass"),
-        (7, "Synth"),
-        (8, "Pad"),
-        (9, "Vocal"),
-        (10, "BassSustained"),
-    ],
-    default: "Unknown",
-    legacy: &[],
-    any_string_is_default: false,
-};
-
 const QUANTIZE_MODE: EnumTable = EnumTable {
     numbers: &[(0, "Off"), (1, "QuarterBeat"), (2, "Beat"), (3, "Bar")],
     default: "Off",
@@ -213,7 +194,6 @@ fn table_for(key: &str, path: &[String]) -> Option<&'static EnumTable> {
         ("clockAuthority", Some("settings")) => Some(&CLOCK_AUTHORITY),
         ("oscSyncMode", Some("settings")) => Some(&OSC_SYNC_MODE),
         ("quantizeMode", Some("settings")) => Some(&QUANTIZE_MODE),
-        ("triggerType", Some("instruments" | "events")) => Some(&PERCUSSION_TRIGGER_TYPE),
         ("color", Some("markers")) => Some(&MARKER_COLOR),
         ("startTempoSource" | "endTempoSource", Some("recordedClips")) => Some(&TEMPO_POINT_SOURCE),
         ("recordedProjectBpmSource", Some("recordingProvenance")) => Some(&TEMPO_POINT_SOURCE),
@@ -281,7 +261,6 @@ pub fn migrate(root: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_core::percussion_analysis::PercussionTriggerType;
     use manifold_core::project::Project;
     use manifold_core::types::{
         BeatDivision, BlendMode, ClipDurationMode, ClockAuthority, DriverWaveform, LayerType,
@@ -309,21 +288,7 @@ mod tests {
                             "waveform": v(1, "Triangle")
                         }]
                     }],
-                    "clips": [{
-                        "id": "c0",
-                        "audioDetection": {
-                            "config": {
-                                "quantizeOn": true,
-                                "quantizeStepBeats": 0.25,
-                                "onsetCompensation": 0.0,
-                                "instruments": [{
-                                    "triggerType": v(2, "Snare"),
-                                    "enabled": true,
-                                    "sensitivity": 0.5
-                                }]
-                            }
-                        }
-                    }]
+                    "clips": [{ "id": "c0" }]
                 }],
                 "markers": [{ "id": "m1", "beat": 4.0, "color": v(5, "Blue") }]
             },
@@ -367,11 +332,6 @@ mod tests {
         let driver = &layer.effects.as_ref().unwrap()[0].drivers.as_ref().unwrap()[0];
         assert_eq!(driver.beat_division, BeatDivision::Half);
         assert_eq!(driver.waveform, DriverWaveform::Triangle);
-        let det = layer.clips[0].audio_detection.as_ref().unwrap();
-        assert_eq!(
-            det.config.instruments[0].trigger_type,
-            PercussionTriggerType::Snare
-        );
         assert_eq!(p.timeline.markers[0].color, MarkerColor::Blue);
         assert_eq!(
             p.midi_config.mappings[0].duration_mode,

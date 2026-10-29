@@ -23,6 +23,17 @@ pub struct DecodedAudio {
     pub channels: usize,
 }
 
+impl DecodedAudio {
+    /// The channels averaged into one, at the file's own rate: what Detect and the offline detector tools run on.
+    pub fn mono(&self) -> Vec<f32> {
+        let ch = self.channels.max(1);
+        self.samples
+            .chunks_exact(ch)
+            .map(|f| f.iter().sum::<f32>() / ch as f32)
+            .collect()
+    }
+}
+
 /// Decode an audio file into raw interleaved PCM f32 samples.
 ///
 /// Supports WAV, AIFF, FLAC, MP3, AAC, OGG via symphonia.

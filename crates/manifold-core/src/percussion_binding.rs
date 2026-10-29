@@ -104,10 +104,11 @@ impl PercussionBindingResolver for ProjectPercussionBindingResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::percussion_analysis::PercussionImportOptions;
+    use crate::percussion_analysis::ClipDetectionAnchor;
+    use crate::percussion_settings::PercussionImportOptionsFactory;
     use crate::preset_type_id::PresetTypeId;
     use crate::types::LayerType;
-    use crate::units::Beats;
+    use crate::units::{Beats, Bpm, Seconds};
     use crate::video::VideoClip;
 
     fn clip(id: &str) -> VideoClip {
@@ -126,16 +127,18 @@ mod tests {
             .source_clip_ids
             .push("on_layer".to_string());
 
-        let mut options = PercussionImportOptions::default();
-        options.bindings.push(PercussionClipBinding::new(
+        let anchor =
+            ClipDetectionAnchor::new(Beats::ZERO, Beats(4.0), Seconds::ZERO, 120.0, Bpm(120.0));
+        let mut options = PercussionImportOptionsFactory::create_default(&project, anchor);
+        options.bindings = vec![PercussionClipBinding::new(
             PercussionTriggerType::Kick,
             layer_idx as i32,
             PresetTypeId::NONE,
             Beats(0.25),
             0.0,
-        ));
+        )];
         let resolver = ProjectPercussionBindingResolver::new(&project, &options);
-        let event = PercussionEvent::new(PercussionTriggerType::Kick, 0.5, 0.9, 0.0);
+        let event = PercussionEvent::new(PercussionTriggerType::Kick, 0.5, 0.9);
         let resolved = resolver.try_resolve(&event).expect("resolves");
         assert_eq!(resolved.video_clip_id.as_deref(), Some("on_layer"));
     }

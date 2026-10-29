@@ -327,8 +327,6 @@ fn layer_fp(fp: &mut Fp, layer: &Layer) {
         opacity,
         audio_gain_db,
         analysis_only,
-        detect_group_source,
-        detect_stem_role,
         effects,
         effect_groups,
         gen_params,
@@ -371,7 +369,6 @@ fn layer_fp(fp: &mut Fp, layer: &Layer) {
     );
     fp.put(Part::Values, opacity);
     fp.put(Part::Shapes, audio_gain_db);
-    fp.put(Part::Layers, &(detect_group_source, detect_stem_role));
     for fx in effects.iter().flatten() {
         instance_fp(fp, fx);
     }

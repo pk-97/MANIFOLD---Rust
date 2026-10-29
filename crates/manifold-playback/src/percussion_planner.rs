@@ -1,51 +1,32 @@
-// Port of Unity PercussionTimelinePlanner.cs (150 lines).
-// Converts parsed seconds-domain percussion events into beat-domain timeline placements.
+// Turns one audio clip's detected hits into beat-domain trigger placements.
 // Pure planning logic — does not mutate timeline/project state.
 
 use std::collections::HashMap;
 
 use manifold_core::percussion_analysis::{
-    BeatTimeConverter, PercussionAnalysisData, PercussionClipPlacement, PercussionImportOptions,
-    PercussionPlacementPlan, PercussionTriggerType,
+    PercussionAnalysisData, PercussionClipPlacement, PercussionImportOptions,
+    PercussionPlacementPlan,
 };
 use manifold_core::percussion_binding::{PercussionBindingResolver, ResolvedBinding};
 use manifold_core::units::{Beats, Seconds};
 
-/// Port of Unity PercussionTimelinePlanner.
-/// Converts parsed seconds-domain percussion events into beat-domain timeline placements.
-/// Pure planning logic; does not mutate timeline/project state.
+/// Maps each hit through the clip anchor (warp-aware, trimmed to the clip window), gates it by its binding's
+/// confidence, quantizes, and keeps the most confident hit per quantized slot.
 pub struct PercussionTimelinePlanner<'a> {
-    beat_time_converter: Box<dyn BeatTimeConverter + 'a>,
     binding_resolver: Box<dyn PercussionBindingResolver + 'a>,
 }
 
 impl<'a> PercussionTimelinePlanner<'a> {
-    pub fn new(
-        beat_time_converter: Box<dyn BeatTimeConverter + 'a>,
-        binding_resolver: Box<dyn PercussionBindingResolver + 'a>,
-    ) -> Self {
-        Self {
-            beat_time_converter,
-            binding_resolver,
-        }
+    pub fn new(binding_resolver: Box<dyn PercussionBindingResolver + 'a>) -> Self {
+        Self { binding_resolver }
     }
 
     pub fn build_plan(
         &mut self,
-        analysis: Option<&PercussionAnalysisData>,
-        options: Option<&PercussionImportOptions>,
+        analysis: &PercussionAnalysisData,
+        options: &PercussionImportOptions,
     ) -> PercussionPlacementPlan {
         let mut plan = PercussionPlacementPlan::new();
-
-        let analysis = match analysis {
-            Some(a) => a,
-            None => return plan,
-        };
-        let options = match options {
-            Some(o) => o,
-            None => return plan,
-        };
-
         let events = &analysis.events;
         plan.total_events = events.len() as i32;
 
@@ -59,15 +40,8 @@ impl<'a> PercussionTimelinePlanner<'a> {
         } else {
             Beats::ZERO
         };
-        let energy_gate = options.minimum_energy_gate;
-        let energy_gate_enabled = energy_gate > 0.0 && analysis.has_energy_envelope();
 
         for percussion_event in events.iter() {
-            if percussion_event.trigger_type == PercussionTriggerType::Unknown {
-                plan.skipped_unknown_type += 1;
-                continue;
-            }
-
             let ResolvedBinding {
                 binding,
                 video_clip_id,
@@ -86,40 +60,11 @@ impl<'a> PercussionTimelinePlanner<'a> {
 
             let compensated_time =
                 Seconds(percussion_event.time_seconds as f64) + options.onset_compensation_seconds;
-            // Per-clip detection maps through the clip-anchored, warp-aware
-            // converter and trims to the clip window; the legacy wizard uses the
-            // project beat-time converter.
-            let mapped_beat = if let Some(anchor) = &options.clip_anchor {
-                match anchor.map_source_seconds(compensated_time) {
-                    Some(b) => b,
-                    None => {
-                        plan.skipped_out_of_clip += 1;
-                        continue;
-                    }
-                }
-            } else {
-                match analysis.try_map_seconds_to_beat(
-                    compensated_time,
-                    Some(self.beat_time_converter.as_mut()),
-                ) {
-                    Some(b) => b,
-                    None => {
-                        plan.skipped_invalid_timing += 1;
-                        continue;
-                    }
-                }
+            let Some(source_beat) = options.clip_anchor.map_source_seconds(compensated_time) else {
+                plan.skipped_out_of_clip += 1;
+                continue;
             };
-
-            let mut source_beat = mapped_beat + options.start_beat_offset;
-            source_beat = source_beat.max(Beats::ZERO);
-
-            if energy_gate_enabled {
-                let energy_at_beat = analysis.energy_at_beat(source_beat);
-                if energy_at_beat < energy_gate {
-                    plan.skipped_low_energy += 1;
-                    continue;
-                }
-            }
+            let source_beat = source_beat.max(Beats::ZERO);
 
             let mut placement_beat = source_beat;
             if quantizing {
@@ -130,15 +75,7 @@ impl<'a> PercussionTimelinePlanner<'a> {
             let spacing_key =
                 ((binding.trigger_type as i32).wrapping_mul(397)) ^ binding.layer_index;
 
-            // Duration priority: per-event (from model) > binding (from SO) > default.
-            let duration_beats = if percussion_event.has_duration() && analysis.bpm.0 > 0.0 {
-                let seconds_per_beat =
-                    manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(
-                        analysis.bpm.0,
-                    );
-                let raw = percussion_event.duration_seconds / seconds_per_beat;
-                Beats::from_f32(raw.clamp(0.0625, 32.0))
-            } else if binding.duration_beats.0 > 0.0 {
+            let duration_beats = if binding.duration_beats.0 > 0.0 {
                 binding.duration_beats
             } else {
                 options.default_clip_duration_beats
@@ -190,18 +127,10 @@ impl<'a> PercussionTimelinePlanner<'a> {
 mod tests {
     use super::*;
     use manifold_core::percussion_analysis::{
-        ClipDetectionAnchor, PercussionClipBinding, PercussionEvent,
+        ClipDetectionAnchor, PercussionClipBinding, PercussionEvent, PercussionTriggerType,
     };
     use manifold_core::preset_type_id::PresetTypeId;
     use manifold_core::units::Bpm;
-
-    /// The anchored path must never touch the project beat-time converter.
-    struct PanicConverter;
-    impl BeatTimeConverter for PanicConverter {
-        fn seconds_to_beat(&mut self, _seconds: Seconds) -> Beats {
-            panic!("anchored detection must not use the project converter");
-        }
-    }
 
     struct KickResolver;
     impl PercussionBindingResolver for KickResolver {
@@ -222,19 +151,18 @@ mod tests {
     #[test]
     fn anchored_plan_places_on_heard_beats_and_trims() {
         // 120-BPM clip on a 128-BPM project, anchored at beat 0, 4 beats long.
-        let events = vec![
+        let analysis = PercussionAnalysisData::new(vec![
             // 0.5s into the file = 1 source-beat = timeline beat 1 (inside).
-            PercussionEvent::new(PercussionTriggerType::Kick, 0.5, 0.9, 0.0),
+            PercussionEvent::new(PercussionTriggerType::Kick, 0.5, 0.9),
             // Far past the 4-beat clip window: trimmed.
-            PercussionEvent::new(PercussionTriggerType::Kick, 50.0, 0.9, 0.0),
-        ];
-        let analysis = PercussionAnalysisData::new_simple("t", Bpm(120.0), events);
+            PercussionEvent::new(PercussionTriggerType::Kick, 50.0, 0.9),
+        ]);
 
-        let anchor =
-            ClipDetectionAnchor::new(Beats::ZERO, Beats(4.0), Seconds::ZERO, 120.0, Bpm(128.0));
         let options = PercussionImportOptions {
             quantize_to_grid: false,
-            clip_anchor: Some(anchor),
+            quantize_step_beats: Beats(0.25),
+            default_clip_duration_beats: Beats(0.25),
+            onset_compensation_seconds: Seconds::ZERO,
             bindings: vec![PercussionClipBinding::new(
                 PercussionTriggerType::Kick,
                 0,
@@ -242,12 +170,17 @@ mod tests {
                 Beats(0.25),
                 0.0,
             )],
-            ..Default::default()
+            clip_anchor: ClipDetectionAnchor::new(
+                Beats::ZERO,
+                Beats(4.0),
+                Seconds::ZERO,
+                120.0,
+                Bpm(128.0),
+            ),
         };
 
-        let mut planner =
-            PercussionTimelinePlanner::new(Box::new(PanicConverter), Box::new(KickResolver));
-        let plan = planner.build_plan(Some(&analysis), Some(&options));
+        let plan =
+            PercussionTimelinePlanner::new(Box::new(KickResolver)).build_plan(&analysis, &options);
 
         assert_eq!(plan.accepted_events(), 1, "one kick inside the clip window");
         assert_eq!(plan.skipped_out_of_clip, 1, "one kick trimmed past the end");

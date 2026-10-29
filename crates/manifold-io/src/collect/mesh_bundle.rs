@@ -189,7 +189,10 @@ impl MeshBundle {
                 }
             }
             if relative.as_os_str().is_empty() {
-                return Err(error(format!("names an empty picture path {:?}", map.relative)));
+                return Err(error(format!(
+                    "names an empty picture path {:?}",
+                    map.relative
+                )));
             }
             if resources.iter().any(|r| r.relative == relative) {
                 continue;
@@ -365,10 +368,8 @@ mod tests {
 
     #[test]
     fn materialx_copies_its_pictures_beside_it() {
-        let root = std::env::temp_dir().join(format!(
-            "manifold-collect-materialx-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("manifold-collect-materialx-{}", std::process::id()));
         let src = root.join("src");
         std::fs::create_dir_all(src.join("textures")).unwrap();
         let mtlx = br#"<?xml version="1.0"?>
