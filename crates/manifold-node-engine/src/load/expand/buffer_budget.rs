@@ -331,7 +331,9 @@ fn world_limit(recommended: u64) -> Result<(u64, String), SceneModifierExpandErr
     Ok(if share < allowed {
         (
             share,
-            format!("the physics World's two thirds of the recommended working set {recommended} bytes"),
+            format!(
+                "the physics World's two thirds of the recommended working set {recommended} bytes"
+            ),
         )
     } else {
         (allowed, policy)
