@@ -146,7 +146,9 @@ impl Primitive for MatterGrains {
         }
         .min(slots);
         let radius = crate::matter::RADIUS_SCALE * cell_size / points_per_cell.cbrt();
-        let k = grains_needed(radius, grain_size).min(slots / live_points.max(1)).max(1);
+        let k = grains_needed(radius, grain_size)
+            .min(slots / live_points.max(1))
+            .max(1);
         ctx.outputs
             .set_scalar("count", ParamValue::Float((live_points * k) as f32));
         if live_points == 0 {
@@ -212,8 +214,12 @@ impl Primitive for MatterGrains {
             "node.matter_grains.count",
         );
         gpu.native_enc.compute_memory_barrier_buffers();
-        gpu.native_enc
-            .dispatch_compute(&pipelines.emit, &bindings, groups, "node.matter_grains.emit");
+        gpu.native_enc.dispatch_compute(
+            &pipelines.emit,
+            &bindings,
+            groups,
+            "node.matter_grains.emit",
+        );
     }
 }
 
@@ -239,11 +245,18 @@ mod tests {
     /// r · sqrt(2 / K) sits under the asked size, so the grains draw at it.
     #[test]
     fn grains_reach_their_size_at_coarse_cells() {
-        for (cell, ppc, size) in [(0.43f32, 8.0f32, 0.01f32), (0.0625, 8.0, 0.004), (0.15, 27.0, 0.008)] {
+        for (cell, ppc, size) in [
+            (0.43f32, 8.0f32, 0.01f32),
+            (0.0625, 8.0, 0.004),
+            (0.15, 27.0, 0.008),
+        ] {
             let radius = crate::matter::RADIUS_SCALE * cell / ppc.cbrt();
             let k = grains_needed(radius, size);
             assert!(k < MAX_GRAINS, "{cell} m cells, {size} m grains: {k}");
-            assert!(radius * (2.0 / k as f32).sqrt() <= size, "{cell} m cells, {size} m grains: {k}");
+            assert!(
+                radius * (2.0 / k as f32).sqrt() <= size,
+                "{cell} m cells, {size} m grains: {k}"
+            );
         }
         assert_eq!(grains_needed(0.0194, 0.014), 4);
     }
@@ -253,7 +266,10 @@ mod tests {
         for points in [0, 1, 1000, 1025, 300_000] {
             let entries = table_entries(points);
             assert!(entries.is_power_of_two());
-            assert!(entries >= points * 2 && entries >= 1024, "{points} → {entries}");
+            assert!(
+                entries >= points * 2 && entries >= 1024,
+                "{points} → {entries}"
+            );
         }
     }
 }

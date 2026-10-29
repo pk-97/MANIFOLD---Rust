@@ -160,7 +160,10 @@ impl Primitive for FieldSmoothBlend {
             entries: table_entries(pool.pool_tiles),
             stride,
             sim_cell_size,
-            keep_sheets: u32::from(!matches!(ctx.params.get("keep_sheets"), Some(ParamValue::Bool(false)))),
+            keep_sheets: u32::from(!matches!(
+                ctx.params.get("keep_sheets"),
+                Some(ParamValue::Bool(false))
+            )),
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = self.smooth_pipelines[stride as usize - 1].get_or_insert_with(|| {

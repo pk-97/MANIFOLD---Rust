@@ -184,7 +184,13 @@ fn steps(
     let mut h = Harness::new();
     let mut field = prior.to_vec();
     for _ in 0..FIELD_SMOOTH_STEPS {
-        let pooled = blend(&mut h, placed, [&field, weights, reference], smoothness, keep_sheets);
+        let pooled = blend(
+            &mut h,
+            placed,
+            [&field, weights, reference],
+            smoothness,
+            keep_sheets,
+        );
         assert_eq!(placed.free_not(&pooled, FAR), 0);
         field = placed.dense(&pooled);
     }
@@ -317,7 +323,14 @@ fn a_lone_bump_melts_without_keep_sheets() {
             .map(|i| (-f[i]).max(0.0))
             .sum::<f32>()
     };
-    let got = steps(&placed, &field, &vec![1.0; node_count()], &field, 2.0, false);
+    let got = steps(
+        &placed,
+        &field,
+        &vec![1.0; node_count()],
+        &field,
+        2.0,
+        false,
+    );
     let (before, after) = (standing(&field), standing(&got));
     assert!(before > 0.0);
     assert!(after < 0.67 * before, "{after} vs {before}");

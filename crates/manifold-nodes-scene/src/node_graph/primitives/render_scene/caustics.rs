@@ -112,7 +112,9 @@ fn extinction(colour: [f32; 4], distance: f32) -> [f32; 3] {
 /// A water that casts caustics: meshed, letting light through, with its
 /// caustics on.
 fn casts_caustics(field: &FieldObject) -> bool {
-    field.caustics > 0.0 && field.mesh.is_some() && field.uniforms.transmission_volume_params[0] > 0.0
+    field.caustics > 0.0
+        && field.mesh.is_some()
+        && field.uniforms.transmission_volume_params[0] > 0.0
 }
 
 /// The clear surfaces in order, at most [`MAX_CLEARS`]: every water that
@@ -133,7 +135,10 @@ fn surfaces<'a>(
             Some(Surface {
                 vertices: mesh.vertices,
                 count: match &mesh.live_args {
-                    Some((args, offset)) => DrawCount::Indirect { args, offset: *offset },
+                    Some((args, offset)) => DrawCount::Indirect {
+                        args,
+                        offset: *offset,
+                    },
                     None => DrawCount::Direct {
                         vertices: mesh.vertex_count,
                         instances: 1,
@@ -381,11 +386,28 @@ impl Targets {
         let drawn = GpuTextureUsage::RENDER_TARGET | GpuTextureUsage::SHADER_READ;
         Ok(Self {
             side,
-            front: texture(GpuTextureFormat::Depth32Float, drawn, "node.render_scene caustic front")?,
-            front_normal: texture(GpuTextureFormat::Rgba16Float, drawn, "node.render_scene caustic front normal")?,
-            back: texture(GpuTextureFormat::Depth32Float, drawn, "node.render_scene caustic back")?,
-            back_normal: texture(GpuTextureFormat::Rgba16Float, drawn, "node.render_scene caustic back normal")?,
-            sums: device.try_create_buffer(3 * 4 * u64::from(side) * u64::from(side), BufferUse::Gpu)?,
+            front: texture(
+                GpuTextureFormat::Depth32Float,
+                drawn,
+                "node.render_scene caustic front",
+            )?,
+            front_normal: texture(
+                GpuTextureFormat::Rgba16Float,
+                drawn,
+                "node.render_scene caustic front normal",
+            )?,
+            back: texture(
+                GpuTextureFormat::Depth32Float,
+                drawn,
+                "node.render_scene caustic back",
+            )?,
+            back_normal: texture(
+                GpuTextureFormat::Rgba16Float,
+                drawn,
+                "node.render_scene caustic back normal",
+            )?,
+            sums: device
+                .try_create_buffer(3 * 4 * u64::from(side) * u64::from(side), BufferUse::Gpu)?,
             map: texture(
                 GpuTextureFormat::Rgba16Float,
                 GpuTextureUsage::SHADER_WRITE | GpuTextureUsage::SHADER_READ,
