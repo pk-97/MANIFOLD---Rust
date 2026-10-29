@@ -57,40 +57,100 @@ pub(crate) fn items_of(
     found
 }
 
-/// The Sand template's particle frame, and the Water template's step and
-/// wet map: sand reaches the water from the one to the others.
+/// The Sand template's particle frame, state and domain, and the Water
+/// template's step and wet map: sand reaches the water from the one to the
+/// others, and the water pushes the sand back through the state.
 const SAND_FRAME: &str = "frame";
+const SAND_STATE: &str = "state";
+const SAND_DOMAIN: &str = "domain";
 const WATER_SAND_READERS: [&str; 2] = ["step", "water_wetness"];
+const WATER_WETNESS: &str = "water_wetness";
 
 /// Emit every Water and Sand and its sources. With no water solver linked,
 /// they draw nothing. The first Sand is porous to every Water: its particles
 /// this frame reach each water's step, which slows the water inside the
 /// sand, so water soaks into a pile instead of passing through it, and each
-/// water's wet map, which marks the sand where the water touches it.
+/// water's wet map, which marks the sand where the water touches it. The
+/// first Water drags the first Sand back ([`water_on_sand`]).
 pub(crate) fn emit_all(b: &mut Builder<'_>) {
-    let mut sand = None;
-    let mut readers = Vec::new();
+    let mut sand: Option<BTreeMap<String, u32>> = None;
+    let mut water_ids = Vec::new();
     for (item, group) in waters(b.doc) {
         if let Some(family) = water_family(&item.fields) {
             let ids = emit(b, &item, group.as_ref(), &family);
             match item.kind() {
-                ItemKind::Sand => sand = sand.or(ids.get(SAND_FRAME).copied()),
-                ItemKind::Water => readers.extend(
-                    WATER_SAND_READERS
-                        .iter()
-                        .filter_map(|n| ids.get(*n).copied()),
-                ),
+                ItemKind::Sand if sand.is_none() => sand = Some(ids),
+                ItemKind::Water => water_ids.push((item.id.as_str().to_owned(), ids)),
                 _ => {}
             }
         }
     }
-    if let Some(frame) = sand {
-        let [points, count] = manifold_core::liquid_domain::SAND_INPUTS;
-        for reader in readers {
+    let Some(sand) = sand else {
+        return;
+    };
+    let Some(&frame) = sand.get(SAND_FRAME) else {
+        return;
+    };
+    let [points, count] = manifold_core::liquid_domain::SAND_INPUTS;
+    for (_, ids) in &water_ids {
+        for reader in WATER_SAND_READERS
+            .iter()
+            .filter_map(|n| ids.get(*n).copied())
+        {
             b.wire(frame, "particles_b", reader, points);
             b.wire(frame, "count_b", reader, count);
         }
     }
+    if let (Some((owner, ids)), Some(&state), Some(&domain)) = (
+        water_ids.first(),
+        sand.get(SAND_STATE),
+        sand.get(SAND_DOMAIN),
+    ) {
+        water_on_sand(b, owner, ids, [frame, state, domain]);
+    }
+}
+
+/// The water at each grain of the Sand (`node.water_on_sand`), from the
+/// Water's display level set and velocity (the sources of its Physics View
+/// switches) on its display tiles (the wet map's), into the Sand's state on
+/// the next frame, which drags the grains toward the water's velocity.
+fn water_on_sand(
+    b: &mut Builder<'_>,
+    owner: &str,
+    water: &BTreeMap<String, u32>,
+    [frame, state, domain]: [u32; 3],
+) {
+    let source =
+        |b: &Builder<'_>, node: &str, port: &str| water.get(node).and_then(|&id| b.input(id, port));
+    let (Some(field), Some(velocity), Some(tiles), Some(pool_tiles), Some(cell_size)) = (
+        source(b, PHYSICS_VIEW_SWITCHES[0], "in_0"),
+        source(b, PHYSICS_VIEW_SWITCHES[1], "in_0"),
+        source(b, WATER_WETNESS, "tiles"),
+        source(b, WATER_WETNESS, "pool_tiles"),
+        source(b, WATER_WETNESS, "cell_size"),
+    ) else {
+        return;
+    };
+    let node = b.add(owner, "water_on_sand", "node.water_on_sand");
+    let [points, count] = manifold_core::liquid_domain::SAND_INPUTS;
+    b.wire(frame, "particles_b", node, points);
+    b.wire(frame, "count_b", node, count);
+    for ((from, port), to) in [
+        (field, "levelset"),
+        (velocity, "velocity"),
+        (tiles, "tiles"),
+        (pool_tiles, "pool_tiles"),
+        (cell_size, "cell_size"),
+    ] {
+        b.wire(from, &port, node, to);
+    }
+    b.wire(
+        node,
+        "push",
+        state,
+        manifold_core::liquid_domain::WATER_PUSH_INPUT,
+    );
+    b.wire(domain, "density", state, "density");
 }
 
 fn emit(

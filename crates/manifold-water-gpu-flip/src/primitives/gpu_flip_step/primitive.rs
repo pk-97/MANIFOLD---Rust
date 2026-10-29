@@ -440,7 +440,7 @@ impl Primitive for GpuFlipStep {
                 static_all: 0,
                 tension,
                 sand_count,
-                _pad_static: 0,
+                sand_drag: manifold_core::liquid_domain::SAND_WATER_DRAG,
             },
             clock_plan: &zeros,
             particles,

@@ -9,4 +9,5 @@ manifold_core::testkit_visible! { pub(crate) mod surface_tiles; }
 #[doc(hidden)]
 pub mod testkit;
 mod tile_surface_mesh;
+mod water_on_sand;
 mod wet_map;

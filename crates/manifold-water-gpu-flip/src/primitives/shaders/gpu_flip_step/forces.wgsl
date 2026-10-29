@@ -132,10 +132,6 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
 // Fixed-point units of one whole cell of sand in `sand_share`.
 const SAND_FIXED: f32 = 65536.0;
 
-// How fast sand stops the water inside it, per second at a full cell of
-// sand: water seeps through packed sand at about g / SAND_DRAG (0.25 m/s),
-// so it soaks into a pile over seconds instead of passing through it.
-const SAND_DRAG: f32 = 40.0;
 
 // One thread a sand particle, after the step's table is built: its rest
 // volume (the sphere of its radius) over a cell's, shared trilinearly among
@@ -175,6 +171,6 @@ fn sand_drag(@builtin(global_invocation_id) gid: vec3<u32>) {
     let share = min(f32(atomicExchange(&sand_share[at], 0u)) / SAND_FIXED, 1.0);
     if share <= 0.0 { return; }
     var here = faces_out[at];
-    here.face_velocity = vec4<f32>(here.face_velocity.xyz * exp(-SAND_DRAG * share * adaptive_step_dt()), here.face_velocity.w);
+    here.face_velocity = vec4<f32>(here.face_velocity.xyz * exp(-u.sand_drag * share * adaptive_step_dt()), here.face_velocity.w);
     faces_out[at] = here;
 }

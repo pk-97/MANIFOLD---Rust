@@ -537,6 +537,27 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "gas_volume.rs",
+        rust_struct: "GasUniforms",
+        shader: "shaders/gas_step.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "water_on_sand.rs",
+        rust_struct: "WaterOnSandUniforms",
+        shader: "shaders/water_on_sand.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "matter_state.rs",
+        rust_struct: "WaterDragParams",
+        shader: "shaders/matter_water_drag.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "spray_mist.rs",
         rust_struct: "MistUniforms",
         shader: "shaders/spray_mist.wgsl",

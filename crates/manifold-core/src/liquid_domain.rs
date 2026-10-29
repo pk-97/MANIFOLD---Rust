@@ -28,6 +28,16 @@ pub const LIQUID_DOMAIN_TYPE_IDS: &[&str] = &[
 /// water's surface, so the surface walk never follows them.
 pub const SAND_INPUTS: [&str; 2] = ["sand", "sand_count"];
 
+/// The input a Sand's state takes the water on: last frame's push at each
+/// grain. The water is not part of the sand's surface either.
+pub const WATER_PUSH_INPUT: &str = "water_push";
+
+/// How fast sand slows the water inside it, per second at a full cell of
+/// sand: water seeps through packed sand at about g / 40 (0.25 m/s), so it
+/// soaks into a pile over seconds instead of passing through it. The sand
+/// takes the same push back, scaled by water's density over the sand's.
+pub const SAND_WATER_DRAG: f32 = 40.0;
+
 pub fn is_liquid_domain(type_id: &str) -> bool {
     LIQUID_DOMAIN_TYPE_IDS.contains(&type_id)
 }
@@ -74,7 +84,8 @@ pub fn liquid_domains_in(nodes: &[EffectGraphNode]) -> Vec<NestedLiquidDomain> {
 /// domain it meets. A field surface (particles → sort → blobs → volume →
 /// smoothing), a mesh drawn from the particles, and particles or grains drawn
 /// as copies of a fixed mesh all reach their domain. A Sand wired into a
-/// Water's step ([`SAND_INPUTS`]) is not the water's.
+/// Water's step ([`SAND_INPUTS`]) is not the water's, nor a Water pushing a
+/// Sand ([`WATER_PUSH_INPUT`]) the sand's.
 pub fn liquid_domain_of(
     index: &FlatSceneIndex,
     object: &NodeId,
@@ -116,12 +127,11 @@ pub fn liquid_domain_of(
             domains.insert(reference.clone());
             continue;
         }
-        for wire in index
-            .flat
-            .wires
-            .iter()
-            .filter(|wire| wire.to_node == id && !SAND_INPUTS.contains(&wire.to_port.as_str()))
-        {
+        for wire in index.flat.wires.iter().filter(|wire| {
+            wire.to_node == id
+                && !SAND_INPUTS.contains(&wire.to_port.as_str())
+                && wire.to_port != WATER_PUSH_INPUT
+        }) {
             if seen.insert(wire.from_node) {
                 pending.push(wire.from_node);
             }

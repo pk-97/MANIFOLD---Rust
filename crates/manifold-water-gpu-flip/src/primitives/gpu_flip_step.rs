@@ -335,7 +335,7 @@ pub(crate) struct StepParams {
     pub(crate) tension: f32,
     /// A wired Sand's particles this step (`Step::sand`), 0 with none.
     pub(crate) sand_count: u32,
-    pub(crate) _pad_static: u32,
+    pub(crate) sand_drag: f32,
 }
 
 }

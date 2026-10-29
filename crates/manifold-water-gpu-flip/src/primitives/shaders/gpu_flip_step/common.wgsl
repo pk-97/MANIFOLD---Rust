@@ -138,7 +138,9 @@ struct Params {
     tension: f32,
     // Sand particles at binding 72 (`sand_corners`), 0 with no sand wired.
     sand_count: u32,
-    _pad6: u32,
+    // How fast a full cell of sand slows the water, per second
+    // (`manifold_core::liquid_domain::SAND_WATER_DRAG`).
+    sand_drag: f32,
 };
 
 struct CellRange {

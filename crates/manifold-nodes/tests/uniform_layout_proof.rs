@@ -618,15 +618,21 @@ const NON_STANDALONE: &[&str] = &[
     // MeshUniforms and FillUniforms are reflected in uniform_layout_extended.
     "node.tile_surface_mesh",
     "node.interior_fill",
-    // The display table's hand build, the wet map and the spray mist splat:
-    // TileUniforms, WetMapUniforms and MistUniforms are reflected in
+    // The display table's hand build, the wet map, the water at the sand's
+    // grains and the spray mist splat: TileUniforms, WetMapUniforms,
+    // WaterOnSandUniforms and MistUniforms are reflected in
     // uniform_layout_extended.
     "node.surface_tiles",
     "node.wet_map",
+    "node.water_on_sand",
     "node.spray_mist",
     // The whitewater emitter packer, proven above.
     "node.whitewater_influence",
     "node.turbulence_emission_count",
+    // The gas solver: barriered advection, sources, forces and pressure sweeps
+    // over one hand shader, its GasUniforms reflected in
+    // uniform_layout_extended.
+    "node.gas_volume",
     // CPU-only piece cutter: the piece is written to shared memory, no GPU kernel or uniforms.
     "node.mesh_fragment",
 ];
