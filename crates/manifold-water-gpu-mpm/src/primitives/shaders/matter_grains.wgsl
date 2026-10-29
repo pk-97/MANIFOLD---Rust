@@ -1,0 +1,191 @@
+// node.matter_grains — a matter frame drawn as sand grains, at its surface
+// only. Hand WGSL under exclusion 1 (atomics across passes):
+//   count_main: each live point adds one to its occupancy cell, two point
+//     spacings on a side (eight points when packed), in an open-addressed
+//     table of (cell key, count) pairs the node clears first.
+//   emit_main: each point reads its own cell and the cells one and two steps
+//     along each axis, FULL points making a cell filled. A point with an empty
+//     cell one step away is at the surface and draws all K grains. One with
+//     an empty cell two steps away lies just under it and draws its first
+//     grain, which fills the gaps between the surface grains; deeper, no
+//     camera sees it and all its grains are holes the draw skips.
+// Copy p·K + j is grain j of point p: a sand grain at a hashed offset in the
+// point's cube (spread · radius each way), scaled to size · radius times a
+// hashed 0.7 to 1.3, each hash keyed on the point's id and j, so a grain keeps
+// its place and size on the point it rides. Its turn is a hashed start plus
+// the point's position over the grain's radius, as a grain rolls: moving x
+// turns it about z, moving z about x, falling about both, so still sand stays
+// still and moving sand tumbles at its rolling rate. A point past the live
+// count, with radius 0 or with no id draws holes.
+
+struct GrainParams {
+    // Below 0: every point.
+    live_count: f32,
+    grains: u32,
+    size: f32,
+    spread: f32,
+    points: u32,
+    // Table pairs, a power of two.
+    entries: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+struct FluidParticle {
+    position_radius: vec4<f32>,
+    velocity: vec3<f32>,
+    id: u32,
+}
+
+struct Copy {
+    pos_scale: vec4<f32>,
+    rot_pad: vec4<f32>,
+}
+
+@group(0) @binding(0) var<uniform> params: GrainParams;
+@group(0) @binding(1) var<storage, read> particles: array<FluidParticle>;
+@group(0) @binding(2) var<storage, read_write> copies: array<Copy>;
+// Pair e is (key, count) at words 2e and 2e + 1; key 0 is an empty pair.
+@group(0) @binding(3) var<storage, read_write> table: array<atomic<u32>>;
+
+// A point's radius over its spacing (matter.rs RADIUS_SCALE): an occupancy
+// cell of two spacings is radius · 2 / RADIUS_SCALE on a side.
+const RADIUS_SCALE: f32 = 0.6203505;
+// Points in a neighbour cell that count it as filled: a packed cell holds
+// eight, and sheared or loosened sand fewer.
+const FULL: u32 = 3u;
+// Probes before a lookup or insert gives up: a full table reads as empty
+// cells, which draws grains (never holes in the surface).
+const MAX_PROBES: u32 = 64u;
+
+fn mg_hash(v: u32) -> u32 {
+    var x = v;
+    x = x ^ (x >> 16u);
+    x = x * 0x7feb352du;
+    x = x ^ (x >> 15u);
+    x = x * 0x846ca68bu;
+    x = x ^ (x >> 16u);
+    return x;
+}
+
+// Four uniform values in [0, 1) from one key.
+fn mg_unit4(key: u32) -> vec4<f32> {
+    let a = mg_hash(key);
+    let b = mg_hash(a ^ 0x9e3779b9u);
+    return vec4<f32>(
+        f32(a & 0xffffu),
+        f32(a >> 16u),
+        f32(b & 0xffffu),
+        f32(b >> 16u),
+    ) / 65536.0;
+}
+
+// Whether point p draws: live, placed and with an id.
+fn mg_live(p: u32) -> bool {
+    if params.live_count >= 0.0 && f32(p) >= params.live_count {
+        return false;
+    }
+    let q = particles[p];
+    return q.position_radius.w > 0.0 && q.id != 0u;
+}
+
+fn mg_cell(q: FluidParticle) -> vec3<i32> {
+    let edge = 2.0 * q.position_radius.w / RADIUS_SCALE;
+    return vec3<i32>(floor(q.position_radius.xyz / edge));
+}
+
+// A cell's key: ten bits per axis, so cells 1024 apart share one, far past
+// any Matter scene, plus one so no cell keys 0.
+fn mg_key(c: vec3<i32>) -> u32 {
+    let u = bitcast<vec3<u32>>(c + vec3<i32>(512)) & vec3<u32>(1023u);
+    return (u.x | (u.y << 10u) | (u.z << 20u)) + 1u;
+}
+
+fn mg_count(c: vec3<i32>) -> u32 {
+    let key = mg_key(c);
+    let mask = params.entries - 1u;
+    var e = mg_hash(key) & mask;
+    for (var probe = 0u; probe < MAX_PROBES; probe = probe + 1u) {
+        let held = atomicLoad(&table[2u * e]);
+        if held == key {
+            return atomicLoad(&table[2u * e + 1u]);
+        }
+        if held == 0u {
+            return 0u;
+        }
+        e = (e + 1u) & mask;
+    }
+    return 0u;
+}
+
+@compute @workgroup_size(256)
+fn count_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let p = gid.x;
+    if p >= params.points || !mg_live(p) {
+        return;
+    }
+    let key = mg_key(mg_cell(particles[p]));
+    let mask = params.entries - 1u;
+    var e = mg_hash(key) & mask;
+    for (var probe = 0u; probe < MAX_PROBES; probe = probe + 1u) {
+        let swap = atomicCompareExchangeWeak(&table[2u * e], 0u, key);
+        if swap.old_value == key || (swap.exchanged && swap.old_value == 0u) {
+            atomicAdd(&table[2u * e + 1u], 1u);
+            return;
+        }
+        // A weak exchange can fail spuriously on an empty pair: try it again.
+        if swap.old_value != 0u {
+            e = (e + 1u) & mask;
+        }
+    }
+}
+
+@compute @workgroup_size(256)
+fn emit_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let p = gid.x;
+    if p >= params.points {
+        return;
+    }
+    let k = max(params.grains, 1u);
+    let hole = Copy(vec4<f32>(0.0), vec4<f32>(0.0));
+    if !mg_live(p) {
+        for (var j = 0u; j < k; j = j + 1u) {
+            copies[p * k + j] = hole;
+        }
+        return;
+    }
+    let c = mg_cell(particles[p]);
+    var drawn = 0u;
+    if mg_count(c) < FULL {
+        drawn = k;
+    }
+    for (var d = 1; d <= 2 && drawn == 0u; d = d + 1) {
+        let filled = mg_count(c + vec3<i32>(d, 0, 0)) >= FULL
+            && mg_count(c - vec3<i32>(d, 0, 0)) >= FULL
+            && mg_count(c + vec3<i32>(0, d, 0)) >= FULL
+            && mg_count(c - vec3<i32>(0, d, 0)) >= FULL
+            && mg_count(c + vec3<i32>(0, 0, d)) >= FULL
+            && mg_count(c - vec3<i32>(0, 0, d)) >= FULL;
+        if !filled {
+            drawn = select(1u, k, d == 1);
+        }
+    }
+    for (var j = drawn; j < k; j = j + 1u) {
+        copies[p * k + j] = hole;
+    }
+    let q = particles[p];
+    let radius = q.position_radius.w;
+    let x = q.position_radius.xyz;
+    for (var j = 0u; j < drawn; j = j + 1u) {
+        let key = mg_hash(q.id * 32u + j);
+        let place = mg_unit4(key);
+        let turn = mg_unit4(key ^ 0x632be5abu);
+        let offset = (place.xyz * 2.0 - vec3<f32>(1.0)) * params.spread * radius;
+        let scale = params.size * radius * (0.7 + 0.6 * place.w);
+        let rolled = vec3<f32>(x.z + 0.5 * x.y, 0.0, 0.5 * x.y - x.x) / scale;
+        copies[p * k + j] = Copy(
+            vec4<f32>(x + offset, scale),
+            vec4<f32>(turn.xyz * 6.2831853 + rolled, 0.0),
+        );
+    }
+}

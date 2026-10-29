@@ -23,6 +23,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "matter_grains.rs",
+        rust_struct: "GrainParams",
+        shader: "shaders/matter_grains.wgsl",
+        shader_struct: "GrainParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "matter_to_grid.rs",
         rust_struct: "P2gParams",
         shader: "shaders/matter_to_grid.wgsl",

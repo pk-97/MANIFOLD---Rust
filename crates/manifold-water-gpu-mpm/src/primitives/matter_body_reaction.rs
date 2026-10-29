@@ -57,7 +57,9 @@ struct BodyReactionUniforms {
     wall_velocity_hi_z: f32,
     wall_friction: f32,
     dispatch_count: u32,
-    _pad: [u32; 3],
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 manifold_node_engine::primitive! {
@@ -336,7 +338,9 @@ impl Primitive for MatterBodyReaction {
             wall_velocity_hi_z: wall_velocity_hi[2],
             wall_friction,
             dispatch_count: nodes,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         gpu.native_enc.dispatch_compute_indirect(
             pipeline,

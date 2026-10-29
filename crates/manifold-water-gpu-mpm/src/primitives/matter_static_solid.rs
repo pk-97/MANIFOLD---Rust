@@ -30,7 +30,8 @@ struct StaticSolidUniforms {
     static_key: i32,
     built: i32,
     dispatch_count: u32,
-    _pad: [u32; 2],
+    _pad0: u32,
+    _pad1: u32,
 }
 
 manifold_node_engine::primitive! {
@@ -205,7 +206,8 @@ impl Primitive for MatterStaticSolid {
             static_key,
             built: i32::from(built),
             dispatch_count: nodes,
-            _pad: [0; 2],
+            _pad0: 0,
+            _pad1: 0,
         };
         // Every held tile after a change, else the build's fresh tiles: the
         // list bound as `held` and the triple it is dispatched by.
