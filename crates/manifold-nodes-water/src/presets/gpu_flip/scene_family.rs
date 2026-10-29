@@ -185,9 +185,18 @@ fn sand_material(b: &mut Builder) {
     }
 }
 
+/// Display cells the field is carried into solids before Matter's
+/// smoothing: past the two nodes a smoothing step's ring reaches.
+const SMOOTH_CARRY_CELLS: f32 = 2.0;
+
 /// Matter holds no one-particle sheets, so its smoothing lets thin bumps of
 /// stray particles melt back into the surface instead of keeping them as
-/// fins (node.field_smooth_blend's Keep Sheets).
+/// fins (node.field_smooth_blend's Keep Sheets), and its blobs mirror across
+/// floors, walls and colliders, so a body meets them in a crease
+/// (node.particle_volume's Mirror Solids). The field is carried into the
+/// solids before it is smoothed too, so the smoothing finds the body's sides
+/// running on into the floor instead of air under it and keeps the crease
+/// instead of curling the bottom edge up.
 fn solid_surface(b: &mut Builder, surface: usize) {
     let group = b
         .nodes
@@ -196,12 +205,63 @@ fn solid_surface(b: &mut Builder, surface: usize) {
         .and_then(|node| node.group.as_mut())
         .expect("the surface group");
     for node in &mut group.nodes {
-        if node.type_id.as_str() == "node.field_smooth_blend" {
-            node.params.insert(
-                "keep_sheets".to_owned(),
-                manifold_core::effect_graph_def::SerializedParamValue::Bool { value: false },
-            );
+        let (name, value) = match node.type_id.as_str() {
+            "node.field_smooth_blend" => ("keep_sheets", false),
+            "node.particle_volume" => ("mirror_solids", true),
+            _ => continue,
+        };
+        node.params.insert(
+            name.to_owned(),
+            manifold_core::effect_graph_def::SerializedParamValue::Bool { value },
+        );
+    }
+    let [input, closed, after] = [
+        "system.group_input",
+        "liquid_close_gaps",
+        "liquid_carry_into_solids",
+    ]
+    .map(|name| {
+        group
+            .nodes
+            .iter()
+            .find(|node| node.node_id.as_str() == name || node.type_id.as_str() == name)
+            .map(|node| node.id)
+            .expect("a surface group node")
+    });
+    let carry = group.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
+    group.nodes.push(
+        serde_json::from_value(json!({
+            "id": carry,
+            "nodeId": "liquid_carry_before_smoothing",
+            "typeId": "node.carry_liquid_into_solids",
+            "handle": "Carry Before Smoothing",
+            "params": {"carry_cells": {"type": "Float", "value": SMOOTH_CARRY_CELLS}},
+        }))
+        .expect("the carry node"),
+    );
+    let fed: Vec<_> = group
+        .wires
+        .iter()
+        .filter(|wire| wire.to_node == after && wire.from_node == input)
+        .map(|wire| (wire.from_port.clone(), wire.to_port.clone()))
+        .collect();
+    for wire in &mut group.wires {
+        if wire.from_node == closed && matches!(wire.to_port.as_str(), "prior" | "reference") {
+            wire.from_node = carry;
+            wire.from_port = "out".to_owned();
         }
+    }
+    let wire = |from_node, from_port: &str, to_port: &str| {
+        manifold_core::effect_graph_def::EffectGraphWire {
+            from_node,
+            from_port: from_port.to_owned(),
+            to_node: carry,
+            to_port: to_port.to_owned(),
+        }
+    };
+    group.wires.push(wire(closed, "out", "levelset"));
+    for (from_port, to_port) in fed {
+        group.wires.push(wire(input, &from_port, &to_port));
     }
 }
 
