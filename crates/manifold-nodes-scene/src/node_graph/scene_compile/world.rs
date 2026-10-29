@@ -36,6 +36,10 @@ pub(crate) fn emit(b: &mut Builder<'_>) {
         super::physics::join_world(b, node);
         world = Some(node);
     }
+    // The World's Cell Size, which every Water's and Sand's cell follows.
+    if !super::water::waters(b.doc).is_empty() {
+        b.add(owner, "cell_size", "node.value");
+    }
     let render = b.scene("render");
     if *fog {
         let atmosphere = b.add(owner, "fog", "node.atmosphere");

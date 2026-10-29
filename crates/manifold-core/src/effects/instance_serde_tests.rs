@@ -670,3 +670,55 @@ fn a_rename_landing_on_a_repeated_id_loads_one_param() {
         .collect();
     assert_eq!(amounts, vec![7.0]);
 }
+
+/// A scene saved with a Cell Size on each Water (0.11 m at High, which
+/// scaled it by ¾, and 1.0 m at Medium, as waterTestV3) and on a Sand
+/// (0.2 m) loads with the World Cell Size at which the finest keeps its
+/// cells and its Quality, 0.0825 m at High's ½ = 0.165 m, and each other
+/// item at the Quality whose cells are nearest its own.
+#[test]
+fn saved_cells_lift_onto_the_world() {
+    use crate::scene_doc::{
+        Item, ItemFields, ItemId, Quality, SandFields, SceneDoc, WaterFields, param_id,
+    };
+    let mut doc = SceneDoc::base();
+    let world = doc.world().unwrap().id.clone();
+    let (head, decoy, sand) = (ItemId::new("head"), ItemId::new("decoy"), ItemId::new("sand"));
+    for (id, fields) in [
+        (&head, ItemFields::Water(WaterFields { quality: Quality::High, ..WaterFields::default() })),
+        (&decoy, ItemFields::Water(WaterFields::default())),
+        (&sand, ItemFields::Sand(SandFields::default())),
+    ] {
+        doc.insert(None, 0, Item::new(id.clone(), "Item", fields)).unwrap();
+    }
+    let mut generator = PresetInstance::new_generator(PresetTypeId::new("Scene"));
+    generator.scene = Some(doc);
+    let mut wire = serde_json::to_value(&generator).unwrap();
+    let entry = |value: f32| serde_json::json!({"value": value, "exposed": true, "base": value});
+    wire["params"] = serde_json::json!({
+        param_id(&head, "cell_size"): entry(0.11),
+        param_id(&decoy, "cell_size"): entry(1.0),
+        param_id(&sand, "cell_size"): entry(0.2),
+    });
+
+    let json = wire.to_string();
+    let mut de = serde_json::Deserializer::from_str(&json);
+    let loaded = deserialize_generator_instance(&mut de).unwrap();
+    let doc = loaded.scene.as_ref().unwrap();
+    let quality = |id: &ItemId| match &doc.find(id).unwrap().fields {
+        ItemFields::Water(water) => water.quality,
+        ItemFields::Sand(sand) => sand.quality,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(quality(&head), Quality::High);
+    // 1.0 / 0.165 is 6.1: Low's 2× is the nearest level.
+    assert_eq!(quality(&decoy), Quality::Low);
+    // 0.2 / 0.165 is 1.2: Medium.
+    assert_eq!(quality(&sand), Quality::Medium);
+    let pending = loaded.pending_wire.as_ref().unwrap();
+    let world_cell = pending[&param_id(&world, "cell_size")].value;
+    assert!((world_cell * Quality::High.cell_scale() - 0.0825).abs() < 1e-6, "{world_cell}");
+    for id in [&head, &decoy, &sand] {
+        assert!(!pending.contains_key(&param_id(id, "cell_size")));
+    }
+}

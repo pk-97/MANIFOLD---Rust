@@ -1006,7 +1006,67 @@ impl GeneratorInstanceRaw {
         Ok(())
     }
 
+    /// Cell Size lives on the World, one grid for every simulation in it, and
+    /// each Water's and Sand's Quality picks its cells on it. A scene saved
+    /// with a Cell Size on each Water and Sand, which a Water's Quality then
+    /// scaled by 1.5, 1, ¾ or ½, gets the World Cell Size at which its finest
+    /// item keeps its cells and its Quality, and every other item the Quality
+    /// whose cells are nearest its own.
+    fn lift_world_lattice(&mut self) {
+        use crate::scene_doc::{ItemFields, Quality, param_id};
+        fn saved_scale(quality: Quality) -> f32 {
+            match quality {
+                Quality::Low => 1.5,
+                Quality::Medium => 1.0,
+                Quality::High => 0.75,
+                Quality::ExtraHigh => 0.5,
+            }
+        }
+        let Some(doc) = self.scene.as_mut() else {
+            return;
+        };
+        let Some(world) = doc.world().map(|world| world.id.clone()) else {
+            return;
+        };
+        let params = self.params.get_or_insert_with(Default::default);
+        let size = |entry: &ParamEntryWire| entry.base.unwrap_or(entry.value);
+        let mut saved = Vec::new();
+        doc.walk(|item, _| {
+            let quality = match &item.fields {
+                ItemFields::Water(water) => water.quality,
+                ItemFields::Sand(_) => Quality::Medium,
+                _ => return,
+            };
+            if let Some(entry) = params.remove(&param_id(&item.id, "cell_size")) {
+                let cells = size(&entry) * saved_scale(quality);
+                saved.push((item.id.clone(), quality, cells, entry));
+            }
+        });
+        let Some((_, quality, cells, entry)) = saved.iter().min_by(|a, b| a.2.total_cmp(&b.2))
+        else {
+            return;
+        };
+        let world_key = param_id(&world, "cell_size");
+        if !params.contains_key(&world_key) {
+            let world_cell = cells / quality.cell_scale();
+            let mut entry = entry.clone();
+            entry.value = world_cell;
+            entry.base = entry.base.map(|_| world_cell);
+            params.insert(world_key.clone(), entry);
+        }
+        let world_cell = size(&params[&world_key]);
+        for (id, _, cells, _) in &saved {
+            let quality = Quality::nearest(cells / world_cell);
+            match doc.find_mut(id).map(|item| &mut item.fields) {
+                Some(ItemFields::Water(water)) => water.quality = quality,
+                Some(ItemFields::Sand(sand)) => sand.quality = quality,
+                _ => {}
+            }
+        }
+    }
+
     fn into_instance(mut self) -> PresetInstance {
+        self.lift_world_lattice();
         // V1.4 section 4 reconcile: a graph-backed generator's own `meta.params` is
         // the descriptor authority (else the registry); overlay the incoming
         // `params` map by id. Stash a copy of the wire map first (D1) — see

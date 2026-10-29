@@ -26,8 +26,8 @@ use super::fields::{
 };
 use super::{Exposure, PropertyRow, Reach, follows, perform, row, setup};
 use crate::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
-use crate::fluid_domain::{CELL_SIZE_METRES, DEFAULT_CELL_SIZE, MIN_DOMAIN_SIDE_METRES};
-use crate::scene_doc::{ItemFields, ItemKind, WaterDraw, WaterQuality};
+use crate::fluid_domain::MIN_DOMAIN_SIDE_METRES;
+use crate::scene_doc::{ItemFields, ItemKind, Quality, WaterDraw};
 
 /// The water family the scene compiler splices for each Water: the solver,
 /// its display and its looks, with no source and no host wiring.
@@ -161,7 +161,6 @@ pub const WORLD_FOLLOWS: [&str; 6] = [
 
 const T: Reach = Reach::Own("transform");
 pub(super) const DOMAIN: Reach = Reach::Own(DOMAIN_ROLE);
-const CELL_SIZE: Reach = Reach::Own("cell_size");
 const DETAIL: Reach = Reach::Own("surface_detail");
 const PARTICLE_SCALE: Reach = Reach::Own("liquid_particle_scale");
 const SMOOTHNESS: Reach = Reach::Own("liquid_smoothness");
@@ -263,14 +262,6 @@ pub(super) const FRONT_WALL: PropertyRow = row("closed_pos_z", DOMAIN, Domain, s
     .name("Front Wall")
     .tip(WALL_TIP)
     .when(bounded);
-// The cell edge in metres; the box's cells follow from its size.
-pub(super) const CELL_SIZE_ROW: PropertyRow = row("cell_size", CELL_SIZE, Domain, setup())
-    .param("value")
-    .name("Cell Size")
-    .tip("The simulation's grid cell in metres; a Water's Quality scales it, Low by 1.5, High by ¾, Extra High by ½. Smaller cells show finer detail but cost far more: half the size holds eight times as many cells")
-    .unit(Unit::Metres)
-    .default(DEFAULT_CELL_SIZE)
-    .limit(HardLimit::Between(CELL_SIZE_METRES.0, CELL_SIZE_METRES.1));
 pub(super) const DOMAIN_SIZE: PropertyRow = row(
     "domain_size",
     DOMAIN,
@@ -323,7 +314,7 @@ pub(super) const FOLLOW_AIR: PropertyRow = follows(WORLD_FOLLOWS[3], "the World'
 pub(super) const FOLLOW_SPEED: PropertyRow = follows(WORLD_FOLLOWS[4], "the World's Speed");
 pub(super) const FOLLOW_RESET: PropertyRow = follows(WORLD_FOLLOWS[5], "the World's Reset");
 
-pub static WATER_ROWS: [PropertyRow; 42] = [
+pub static WATER_ROWS: [PropertyRow; 41] = [
     POS_X,
     POS_Y,
     POS_Z,
@@ -340,7 +331,6 @@ pub static WATER_ROWS: [PropertyRow; 42] = [
     CEILING,
     BACK_WALL,
     FRONT_WALL,
-    CELL_SIZE_ROW,
     DOMAIN_SIZE,
     FILL_HEIGHT,
     SURFACE_DETAIL,
@@ -563,47 +553,51 @@ const QUALITIES: &[Choice] = &[
     },
 ];
 
-const QUALITY_KEYS: [(WaterQuality, &str); 4] = [
-    (WaterQuality::Low, "low"),
-    (WaterQuality::Medium, "medium"),
-    (WaterQuality::High, "high"),
-    (WaterQuality::ExtraHigh, "extra_high"),
-];
+/// Each level's key, in [`Quality::ALL`] order.
+const QUALITY_KEYS: [&str; 4] = ["low", "medium", "high", "extra_high"];
+
+fn quality_of(fields: &ItemFields) -> Option<Quality> {
+    match fields {
+        ItemFields::Water(w) => Some(w.quality),
+        ItemFields::Sand(s) => Some(s.quality),
+        _ => None,
+    }
+}
+
+/// A Water's or Sand's Quality: its cells on the World's grid
+/// ([`Quality::cell_scale`]).
+pub(super) const QUALITY_FIELD: FieldRow = FieldRow {
+    id: "quality",
+    label: "Quality",
+    section: ControlGroup::Domain,
+    control: FieldControl::Closed(QUALITIES),
+    applies: always,
+    disabled: enabled,
+    read: |fields| {
+        let key = quality_of(fields)
+            .and_then(|quality| Quality::ALL.iter().position(|q| *q == quality))
+            .map_or("", |i| QUALITY_KEYS[i]);
+        FieldValue::Choice(key.to_owned())
+    },
+    write: |fields, value| {
+        let FieldValue::Choice(key) = value else {
+            return Err(wrong_value("quality", value));
+        };
+        let Some(i) = QUALITY_KEYS.iter().position(|k| *k == key.as_str()) else {
+            return Err(wrong_value("quality", value));
+        };
+        match fields {
+            ItemFields::Water(w) => w.quality = Quality::ALL[i],
+            ItemFields::Sand(s) => s.quality = Quality::ALL[i],
+            _ => return Err(wrong_value("quality", value)),
+        }
+        Ok(())
+    },
+};
 
 pub static WATER_FIELDS: [FieldRow; 5] = [
     BOUNDS_FIELD,
-    // Quality scales the Cell Size (WaterQuality::cell_scale).
-    FieldRow {
-        id: "quality",
-        label: "Quality",
-        section: ControlGroup::Domain,
-        control: FieldControl::Closed(QUALITIES),
-        applies: always,
-        disabled: enabled,
-        read: |fields| {
-            let key = match fields {
-                ItemFields::Water(w) => QUALITY_KEYS
-                    .iter()
-                    .find(|(quality, _)| *quality == w.quality)
-                    .map_or("", |(_, key)| key),
-                _ => "",
-            };
-            FieldValue::Choice(key.to_owned())
-        },
-        write: |fields, value| {
-            let FieldValue::Choice(key) = value else {
-                return Err(wrong_value("quality", value));
-            };
-            let Some((quality, _)) = QUALITY_KEYS.iter().find(|(_, k)| *k == key.as_str()) else {
-                return Err(wrong_value("quality", value));
-            };
-            match fields {
-                ItemFields::Water(w) => w.quality = *quality,
-                _ => return Err(wrong_value("quality", value)),
-            }
-            Ok(())
-        },
-    },
+    QUALITY_FIELD,
     FieldRow {
         id: "narrow_band",
         label: "Narrow Band",
@@ -666,7 +660,7 @@ mod tests {
                 assert!(applies(on, property), "{property} with Bounds on");
                 assert!(!applies(off, property), "{property} with Bounds off");
             }
-            assert!(applies(off, "cell_size"));
+            assert!(applies(off, "pos_x"));
         }
     }
 }

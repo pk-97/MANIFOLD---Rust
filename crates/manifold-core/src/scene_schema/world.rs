@@ -12,9 +12,12 @@ use manifold_foundation::scene_surface::{
 
 use super::fields::{FieldRow, always, enabled, is_on, on_off, parse_on, wrong_value};
 use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
+use crate::fluid_domain::{CELL_SIZE_METRES, DEFAULT_CELL_SIZE};
 use crate::scene_doc::{CAMERA_PICK, ItemFields};
 
 const PHYSICS: Reach = Reach::Own("physics");
+/// The World's Cell Size, which every Water's and Sand's cell follows.
+const CELL_SIZE: Reach = Reach::Own("cell_size");
 const FOG: Reach = Reach::Own("fog");
 const RENDER: Reach = Reach::Scene("render");
 const MODE: Reach = Reach::Own("render_mode");
@@ -69,7 +72,7 @@ const fn look(
     row(property, reach, section, perform(CardBand::Look, order))
 }
 
-pub static WORLD_ROWS: [PropertyRow; 60] = [
+pub static WORLD_ROWS: [PropertyRow; 61] = [
     // Camera: which camera renders. A cut is a param write, so it lands on
     // its frame and never recompiles; the choices are the cameras by name.
     // No top limit: a recorded cut past the highest live number is a
@@ -108,6 +111,15 @@ pub static WORLD_ROWS: [PropertyRow; 60] = [
     row("air_resistance", PHYSICS, PhysicsWorld, setup())
         .unit(Unit::PerSecond)
         .limit(AT_LEAST_ZERO),
+    // The cell edge in metres of the grid every simulation in the World
+    // shares; each item's Quality picks its cells on it.
+    row("cell_size", CELL_SIZE, PhysicsWorld, setup())
+        .param("value")
+        .name("Cell Size")
+        .tip("The simulation grid's cell in metres, shared by every Water and Sand in the scene. Each item's Quality picks its cells on it: Low twice this, Medium this, High half, Extra High a quarter. Smaller cells show finer detail but cost far more: half the size holds eight times as many cells")
+        .unit(Unit::Metres)
+        .default(DEFAULT_CELL_SIZE)
+        .limit(HardLimit::Between(CELL_SIZE_METRES.0, CELL_SIZE_METRES.1)),
     row(
         "air_drag",
         PHYSICS,

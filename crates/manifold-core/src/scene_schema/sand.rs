@@ -10,7 +10,7 @@ use super::fields::{
     Choice, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, always, enabled, wrong_value,
 };
 use super::water::{
-    BACK_WALL, BILLBOARD, BOUNDS_FIELD, CEILING, CELL_SIZE_ROW, DOMAIN, DOMAIN_SIZE, DRAW_FIELD,
+    BACK_WALL, BILLBOARD, BOUNDS_FIELD, CEILING, QUALITY_FIELD, DOMAIN, DOMAIN_SIZE, DRAW_FIELD,
     FILL_HEIGHT, FLOOR, FOLLOW_AIR, FOLLOW_GRAVITY_X, FOLLOW_GRAVITY_Y, FOLLOW_GRAVITY_Z,
     FOLLOW_RESET, FOLLOW_SPEED, FRONT_WALL, LEFT_WALL, POS_X, POS_Y, POS_Z, RIGHT_WALL, ROT_X,
     ROT_Y, ROT_Z, SCALE_X, SCALE_Y, SCALE_Z, SURFACE_CLOSE_GAPS, SURFACE_DETAIL,
@@ -83,7 +83,7 @@ const fn thickness(property: &'static str, default: f32, range: (f32, f32)) -> P
         .range(range.0, range.1)
 }
 
-pub static SAND_ROWS: [PropertyRow; 49] = [
+pub static SAND_ROWS: [PropertyRow; 48] = [
     POS_X,
     POS_Y,
     POS_Z,
@@ -100,7 +100,6 @@ pub static SAND_ROWS: [PropertyRow; 49] = [
     CEILING,
     BACK_WALL,
     FRONT_WALL,
-    CELL_SIZE_ROW,
     DOMAIN_SIZE,
     FILL_HEIGHT,
     row("stiffness", DOMAIN, Simulation, perform(CardBand::Scene, 2))
@@ -201,7 +200,9 @@ const MATTER_FIELD: FieldRow = FieldRow {
     applies: always,
     disabled: enabled,
     read: |fields| match fields {
-        ItemFields::Sand(s) => FieldValue::Choice(MATTERS[s.matter.index() as usize].key.to_owned()),
+        ItemFields::Sand(s) => {
+            FieldValue::Choice(MATTERS[s.matter.index() as usize].key.to_owned())
+        }
         _ => FieldValue::Choice(String::new()),
     },
     write: |fields, value| {
@@ -223,7 +224,13 @@ const MATTER_FIELD: FieldRow = FieldRow {
     },
 };
 
-pub static SAND_FIELDS: [FieldRow; 4] = [MATTER_FIELD, BOUNDS_FIELD, DRAW_FIELD, MATERIAL_BINDING];
+pub static SAND_FIELDS: [FieldRow; 5] = [
+    MATTER_FIELD,
+    BOUNDS_FIELD,
+    QUALITY_FIELD,
+    DRAW_FIELD,
+    MATERIAL_BINDING,
+];
 
 /// The look a Sand of `matter` gives its own Material: the Sand template's
 /// look with what it is made of over it ([`matter_look`]).

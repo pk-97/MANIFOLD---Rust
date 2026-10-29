@@ -321,7 +321,10 @@ pub(crate) fn add(
             fields,
         )));
         // The template's look, with what a Sand is made of over it.
-        let look = matter.map_or_else(|| scene_schema::water_look(entry.kind), scene_schema::sand_look);
+        let look = matter.map_or_else(
+            || scene_schema::water_look(entry.kind),
+            scene_schema::sand_look,
+        );
         commands.extend(
             writable_look(look)
                 .into_iter()
@@ -664,7 +667,11 @@ pub(crate) fn set_field(
             .collect();
         let fresh = unique_name(new.matter.name(), &taken);
         for (id, _) in renamed {
-            commands.push(Box::new(RenameSceneItemCommand::new(layer.clone(), id, fresh.clone())));
+            commands.push(Box::new(RenameSceneItemCommand::new(
+                layer.clone(),
+                id,
+                fresh.clone(),
+            )));
         }
         return Ok(Some(batch(commands, "Set Matter", None)));
     }
@@ -1550,7 +1557,7 @@ pub(crate) fn chain_move(
 mod tests {
     use super::*;
     use manifold_core::PresetTypeId;
-    use manifold_core::scene_doc::Matter;
+    use manifold_core::scene_doc::{Matter, Quality};
     use manifold_core::types::LayerType;
 
     /// Setting a Shape to Ocean writes the water look onto the Ocean's own
@@ -1662,13 +1669,27 @@ mod tests {
         let mut snow = add(&project, &layer, "matter.snow", None, &[]).unwrap();
         snow.command.execute(&mut project);
         let sand = snow.select.unwrap();
-        write(&layer, &sand, "cell_size", 0.0, 0.2).execute(&mut project);
+        set_field(
+            &project,
+            &layer,
+            &sand,
+            "quality",
+            &FieldPick::Choice("low".into()),
+        )
+        .unwrap()
+        .unwrap()
+        .command
+        .execute(&mut project);
         let material = match &doc(&project, &layer).unwrap().find(&sand).unwrap().fields {
             ItemFields::Sand(fields) => fields.material.clone().unwrap(),
             other => panic!("{other:?}"),
         };
         let radius = |project: &Project| {
-            base(instance(project, &layer).unwrap(), &material, "subsurface_radius_b")
+            base(
+                instance(project, &layer).unwrap(),
+                &material,
+                "subsurface_radius_b",
+            )
         };
         assert_eq!(radius(&project), Some(0.012));
 
@@ -1684,16 +1705,19 @@ mod tests {
         swap.command.execute(&mut project);
         let doc_now = doc(&project, &layer).unwrap();
         let found = doc_now.find(&sand).unwrap();
-        assert!(matches!(&found.fields, ItemFields::Sand(s) if s.matter == Matter::Clay));
+        assert!(
+            matches!(&found.fields, ItemFields::Sand(s) if s.matter == Matter::Clay && s.quality == Quality::Low)
+        );
         assert_eq!(found.name, "Clay");
         assert_eq!(doc_now.find(&material).unwrap().name, "Clay");
-        let inst = instance(&project, &layer).unwrap();
-        assert_eq!(base(inst, &sand, "cell_size"), Some(0.2));
         assert_eq!(radius(&project), Some(0.002));
 
         swap.command.undo(&mut project);
         assert_eq!(radius(&project), Some(0.012));
-        assert_eq!(doc(&project, &layer).unwrap().find(&sand).unwrap().name, "Snow");
+        assert_eq!(
+            doc(&project, &layer).unwrap().find(&sand).unwrap().name,
+            "Snow"
+        );
     }
 
     /// A dropped download folder names its one material file, a folder of

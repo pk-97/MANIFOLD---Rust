@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
-use manifold_core::scene_doc::{Item, ItemFields, ItemKind, SceneDoc, SourceShape};
+use manifold_core::scene_doc::{Item, ItemFields, ItemKind, Quality, SceneDoc, SourceShape};
 use manifold_core::scene_schema::{
     DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SOLID, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET,
     WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WORLD_FOLLOWS, WaterFamily, role_index, rows,
@@ -81,7 +81,14 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
     }
     b.wire(transform, "transform", domain, "domain");
 
+    // The World's Cell Size reaches it in `follow_world`; a scene with no
+    // World runs at the default cell.
     let cell_size = b.add(owner, "cell_size", "node.value");
+    b.set_number(
+        cell_size,
+        "value",
+        manifold_core::fluid_domain::DEFAULT_CELL_SIZE,
+    );
     b.wire(cell_size, "out", domain, "cell_metres");
     let bounds = match &item.fields {
         ItemFields::Water(water) => water.bounds,
@@ -152,9 +159,6 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
         b.add(owner, "surface_detail", "node.value");
     }
     b.rows(item);
-    if let ItemFields::Water(water) = &item.fields {
-        b.scale_param(cell_size, "value", water.quality.cell_scale());
-    }
     if let Some(detail) = b.id(owner, "surface_detail") {
         for target in SURFACE_DETAIL_NODES {
             if let Some(target) = b.id(owner, target) {
@@ -281,8 +285,25 @@ fn renumber(
 /// less Physics View's index plus one, so only Physics View reaches 1; the
 /// side that is off is never computed.
 pub(crate) fn follow_world(b: &mut Builder<'_>, world: Option<u32>, mode: u32) {
+    let world_cell = b
+        .doc
+        .world()
+        .and_then(|world| b.id(world.id.as_str(), "cell_size"));
     for (item, _) in waters(b.doc) {
         let owner = item.id.as_str();
+        // One grid per World: the item's cell is the World's Cell Size times
+        // its own Quality's scale.
+        if let Some(cell) = b.id(owner, "cell_size") {
+            let quality = match &item.fields {
+                ItemFields::Water(water) => water.quality,
+                ItemFields::Sand(sand) => sand.quality,
+                _ => Quality::Medium,
+            };
+            if let Some(world_cell) = world_cell {
+                b.follow(world_cell, "value", cell, "value");
+            }
+            b.scale_param(cell, "value", quality.cell_scale());
+        }
         if let Some(world) = world {
             for (control, role) in WORLD_INPUTS.iter().zip(WORLD_FOLLOWS) {
                 if let Some(value) = b.id(owner, role) {

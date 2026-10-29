@@ -524,17 +524,18 @@ pub struct WaterFields {
     /// GPU FLIP Narrow Band: particles only near the surface and the solids,
     /// the deep water held on the grid.
     pub narrow_band: bool,
-    /// How finely the water simulates: the Cell Size times this level's
-    /// [`WaterQuality::cell_scale`].
-    pub quality: WaterQuality,
+    /// How finely the water simulates: its cells on the World's grid
+    /// ([`Quality::cell_scale`]).
+    pub quality: Quality,
 }
 
-/// A Water's quality level, from live on a light machine to overnight
-/// exports: each scales the Cell Size, so the finer levels hold more cells
-/// and a finer surface, and move differently.
+/// An item's quality level, from live on a light machine to overnight
+/// exports. It picks the item's cells on the World's grid, the World's Cell
+/// Size times a power of two, so every material's grid lines up with the
+/// World's; the finer levels hold more cells and move differently.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum WaterQuality {
+pub enum Quality {
     Low,
     #[default]
     Medium,
@@ -542,15 +543,24 @@ pub enum WaterQuality {
     ExtraHigh,
 }
 
-impl WaterQuality {
-    /// What the level multiplies the Cell Size by.
+impl Quality {
+    pub const ALL: [Quality; 4] = [Self::Low, Self::Medium, Self::High, Self::ExtraHigh];
+
+    /// What the level multiplies the World's Cell Size by.
     pub fn cell_scale(self) -> f32 {
         match self {
-            Self::Low => 1.5,
+            Self::Low => 2.0,
             Self::Medium => 1.0,
-            Self::High => 0.75,
-            Self::ExtraHigh => 0.5,
+            Self::High => 0.5,
+            Self::ExtraHigh => 0.25,
         }
+    }
+
+    /// The level whose cells are nearest `ratio` times the World's, on a log
+    /// scale.
+    pub fn nearest(ratio: f32) -> Self {
+        let finer = -ratio.log2();
+        Self::ALL[(finer.round() + 1.0).clamp(0.0, 3.0) as usize]
     }
 }
 
@@ -567,6 +577,8 @@ pub struct SandFields {
     pub material: Option<ItemId>,
     /// The Bounds switch: the Sand's own box and walls, instead of the world's.
     pub bounds: bool,
+    /// How finely the sand simulates: its cells on the World's grid.
+    pub quality: Quality,
 }
 
 impl Default for SandFields {
@@ -578,6 +590,7 @@ impl Default for SandFields {
             draw: WaterDraw::Particles,
             material: None,
             bounds: true,
+            quality: Quality::Medium,
         }
     }
 }

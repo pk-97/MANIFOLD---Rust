@@ -954,7 +954,7 @@ pub(super) fn water_sites(
             owner,
             layout: SiteLayout {
                 transform: Box::new(transform),
-                cell_size: (card("cell_size"), at("cell_size")),
+                cell_size: cell_size(doc, item, values),
             },
             box_shape: Some(box_shape),
             column,
@@ -966,6 +966,36 @@ pub(super) fn water_sites(
         });
     });
     sites
+}
+
+/// An item's cell and the row that sets it: the World's Cell Size times the
+/// item's Quality's scale.
+fn cell_size(
+    doc: &SceneDoc,
+    item: &manifold_core::scene_doc::Item,
+    values: &dyn Fn(&str) -> Option<f32>,
+) -> (ParamAddr, f32) {
+    use super::shapes::resting;
+    let scale = match &item.fields {
+        ItemFields::Water(water) => water.quality.cell_scale(),
+        ItemFields::Sand(sand) => sand.quality.cell_scale(),
+        _ => 1.0,
+    };
+    let Some(world) = doc.world() else {
+        let addr = ParamAddr {
+            scope_path: Vec::new(),
+            node_doc_id: 0,
+            param_id: param_id(&item.id, "cell_size"),
+        };
+        return (addr, manifold_core::fluid_domain::DEFAULT_CELL_SIZE * scale);
+    };
+    let addr = ParamAddr {
+        scope_path: Vec::new(),
+        node_doc_id: 0,
+        param_id: param_id(&world.id, "cell_size"),
+    };
+    let size = values(&addr.param_id).unwrap_or_else(|| resting(world, "cell_size"));
+    (addr, size * scale)
 }
 
 /// The card param a setup param names when it is a scene item's own row:
