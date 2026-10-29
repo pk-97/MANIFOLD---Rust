@@ -2,6 +2,8 @@
 
 Features worth building that nobody is working on. Each one predates today's code, so design it fresh against the current code before building it.
 
+Where an idea builds on someone else's work, its entry credits them and names the licence. MIT, BSD and Apache code can be ported once its notice goes in THIRD_PARTY_NOTICES.md, and Apache also asks that changed files say so. GPL code can't go into a closed commercial app, so those ideas get rebuilt from the published maths, never from the code.
+
 ## Live performance and sync
 
 ### Import an Ableton set as a show score
@@ -86,6 +88,15 @@ Keeps the ray traced picture clean when things move. Already built: the still-sc
 ### Ray tracing tier 3 scoping
 A list of the next ray tracing features, such as reflections on shiny surfaces, to decide which ones get built. Each item needs its own plan before any code is written.
 
+### 3D fractals you can play
+Mandelbulbs, Mandelboxes and other fractals rendered live and morphing on the beat. A fractal is already a distance field, which is what our colliders read, so water and sand could pour over one. Inspired by [Mandelbulber](https://github.com/buddhi1980/mandelbulber2) by Krzysztof Marczak and contributors (GPL-3.0), so build from the published formulas, not its code: the Mandelbulb by Daniel White and Paul Nylander, the Mandelbox by Tom Lowe. Nothing is built yet.
+
+### Pen plotter 3D lines
+3D scenes drawn as clean ink lines with the hidden edges removed, like a pen plotter drawing. From [ln](https://github.com/fogleman/ln) by Michael Fogleman (MIT). Already built: wireframe edges, but they show the edges behind too.
+
+### Gems with rainbow fire
+Diamonds and crystals that throw rainbow sparkle as light bends and splits inside them, as part of the material upgrade. Inspired by [diamond-webgl](https://github.com/piellardj/diamond-webgl) by Jérémie Piellard (GPL-3.0), so build it from the optics, not the code. Already built: glTF's dispersion value loads, but nothing draws it yet.
+
 ## Simulation
 
 ### Snow, goo and lava on Matter
@@ -96,6 +107,9 @@ Cinematic material scenes that react to the music: a mountainside giving way wit
 
 ### Photoreal procedural terrain you can perform
 A landscape built entirely from maths that you play live: raise a mountain range on the build, let rain carve valleys through the breakdown, flood the basin on the drop. Noise alone looks fake, so live GPU erosion gives the shape its ridges, gullies and sediment fans, and also produces the masks (slope, height, where water ran) that blend scanned rock, soil, sand and snow materials onto it. The material upgrade's parallax and normal maps carry the close-up detail. The terrain sits on the shared physics grid as a height field that changes every frame, so water runs down the valleys as they form and sand slides off a ridge you just steepened. Already built: the noise node, grid mesh, displace, heightmap-to-normal, scatter on mesh, the Garden terrain demo, and material file loading. Needs: GPU erosion, a terrain material that layers by those masks, more detail near the camera than far away, and a height-field collider that reads the ground directly, because today's colliders cache static meshes.
+
+### Chladni sand patterns
+Sand on a vibrating plate settling into patterns that change with the pitch of the music, as Ernst Chladni showed in 1787. Working out how a plate of any shape vibrates is finite element maths, the kind [scikit-fem](https://github.com/kinnala/scikit-fem) by Tom Gustafsson and contributors does (BSD-3-Clause); the sand then gathers on the lines that stay still. Already built: Matter sand.
 
 ### Different sim speeds in one scene
 Two waters, or one water and the bodies in it, running at different Speeds and still touching: a pool in slow motion beside one at full speed, a slow-motion splash round a body that falls at normal speed. Today a Water Speed other than the World's stops coupled water with an error (BUG-n0nr), because the water and Box3D must step the same clock. On the shared grid (WATER_SHARED_GRID_DESIGN.md) each region would carry its own time scale, and exchanges between regions would convert momentum across the seam. Needs first: the shared grid, then a clock per region with a rule for what a body straddling two speeds feels.
@@ -108,6 +122,38 @@ Runs the GPU FLIP water on cells two or more times larger, which gives about 8×
 
 ### Replay recorded GPU work every frame
 Records the GPU work of a repeated section once and replays it each frame, cutting the CPU cost of repeated steps and leaving more room in each frame. Already built: part of it is on the main line. The fluid step is still open.
+
+## Generators and effects
+
+### Growing images that heal
+An image grows from a single seed, a kick tears a hole in it and it grows back. Each pixel runs a tiny trained network, so it's cheap live, but each image needs training first. From Growing Neural Cellular Automata by Alexander Mordvintsev, Ettore Randazzo, Eyvind Niklasson and Michael Levin (Distill, 2020), and the [PyTorch version](https://github.com/PWhiddy/Growing-Neural-Cellular-Automata-Pytorch) by Peter Whidden (Apache-2.0). In the show it would run as a small shader with built-in weights, like the audio detector's network.
+
+### Reactive Game of Life
+John Conway's Game of Life (1970) where kicks seed new cells, snares wipe areas and the incoming image decides where life starts. A small shader, next to the Reaction Diffusion preset.
+
+### Light as waves and rays
+Two looks from optics. Waves: light rippling and interfering through slits and lenses, as [MEEP](https://github.com/NanoComp/meep) by MIT's Nanostructures and Computation Group simulates (GPL-2.0, so rebuild from the wave equations). Rays: laser beams bending through prisms and mirrors and splitting into colours, as [Ray Optics Simulation](https://github.com/ricktu288/ray-optics) by Yi-Ting Tu draws (Apache-2.0). Nothing is built yet.
+
+### Growing lines
+A line that grows, pushes itself apart and folds into coral and brain shapes. From [differential-line](https://github.com/inconvergent/differential-line) by Anders Hoff, who works as inconvergent (MIT).
+
+### Ink painting plants
+Plants and flowers grown from code in the look of Chinese ink painting. A look Peter especially wants. From [nonflowers](https://github.com/LingDong-/nonflowers) by Lingdong Huang (MIT).
+
+### Live seam carving
+Squeezes and stretches the picture by cutting out its least important seams, so faces and edges hold while everything else melts. After a feedback node it would get very trippy. Seam carving is by Shai Avidan and Ariel Shamir (2007), and [caire](https://github.com/esimov/caire) by Endre Simo is a clean reference (MIT). Each seam depends on the one before, so live needs a version built for the GPU.
+
+### Particles drawn as density
+Millions of particles drawn as glowing density with the brightness spread evenly, like a long exposure, instead of as dots. The technique is from [datashader](https://github.com/holoviz/datashader) by HoloViz (BSD-3-Clause). It would work on any of our particle sims.
+
+### Window portals
+A 2D effect where the picture only shows through fake desktop windows with title bars, buttons and shadows, which open, move and close on the beat, in a TouchDesigner style. Each window could show the layer behind it or a different layer. Nothing is built yet.
+
+### Redacted text
+Black bars that sweep over text, cover words and lift off again, like a declassified file. Pairs with Code Terminal. A Redaction name is still in the effect ID list, but no effect is behind it.
+
+### Code Terminal that types nonstop
+Code Terminal should look like someone typing nonstop down a terminal window: the cursor runs line after line and writes over the old text as it goes. Today it retypes whole 8-row blocks on the beat instead.
 
 ## Video and outputs
 
