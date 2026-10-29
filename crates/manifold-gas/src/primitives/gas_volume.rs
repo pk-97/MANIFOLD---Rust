@@ -100,6 +100,12 @@ impl GasGeometry {
         self.dims.iter().map(|&d| u64::from(d)).product()
     }
 
+    /// Nodes of the staggered velocity: one more than the cells along each
+    /// axis, so every face of every cell has one.
+    fn face_nodes(&self) -> u64 {
+        self.dims.iter().map(|&d| u64::from(d) + 1).product()
+    }
+
     /// The scalar outputs this geometry fixes, by name.
     fn outputs(&self) -> [(&'static str, f32); 7] {
         let [x, y, z] = self.origin;
@@ -402,8 +408,10 @@ impl GasUniforms {
 /// Bytes of each kind of buffer for a box of cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct GasBytes {
-    /// A vec4 per cell: a velocity or state buffer (three of each), the curl.
+    /// A vec4 per cell: a state buffer (three of them) and the curl.
     vec4: u64,
+    /// A vec4 per face node: a velocity buffer (three of them).
+    faces: u64,
     /// An f32 per cell: pressure and divergence.
     scalar: u64,
     /// Two words per cell: the published state and velocity.
@@ -411,9 +419,11 @@ struct GasBytes {
 }
 
 impl GasBytes {
-    fn of(cells: u64) -> Self {
+    fn of(geometry: &GasGeometry) -> Self {
+        let cells = geometry.cells();
         Self {
             vec4: cells * 16,
+            faces: geometry.face_nodes() * 16,
             scalar: cells * 4,
             packed: cells * 8,
         }
@@ -423,7 +433,8 @@ impl GasBytes {
     /// divergence, both published arrays, the light ring and the blackbody
     /// table.
     fn total(&self) -> u64 {
-        7 * self.vec4
+        4 * self.vec4
+            + 3 * self.faces
             + 2 * self.scalar
             + 2 * self.packed
             + RING as u64 * LIGHT_BYTES
@@ -459,7 +470,7 @@ impl GasBuffers {
     /// Allocate the box's buffers, admitted against the World's memory budget
     /// as a whole first. The contents are not zeroed.
     fn allocate(device: &GpuDevice, geometry: &GasGeometry) -> Result<Self, String> {
-        let bytes = GasBytes::of(geometry.cells());
+        let bytes = GasBytes::of(geometry);
         let total = bytes.total();
         manifold_node_engine::load::expand::admit_world_bytes(
             device.modifier_memory_snapshot(),
@@ -478,9 +489,9 @@ impl GasBuffers {
         Ok(Self {
             dims: geometry.dims,
             velocity: [
-                make(bytes.vec4, BufferUse::Gpu)?,
-                make(bytes.vec4, BufferUse::Gpu)?,
-                make(bytes.vec4, BufferUse::Gpu)?,
+                make(bytes.faces, BufferUse::Gpu)?,
+                make(bytes.faces, BufferUse::Gpu)?,
+                make(bytes.faces, BufferUse::Gpu)?,
             ],
             state: [
                 make(bytes.vec4, BufferUse::Gpu)?,
@@ -508,6 +519,7 @@ pub struct Pipelines {
     advect_back: GpuComputePipeline,
     maccormack: GpuComputePipeline,
     sources: GpuComputePipeline,
+    forces: GpuComputePipeline,
     curl: GpuComputePipeline,
     confine: GpuComputePipeline,
     divergence: GpuComputePipeline,
@@ -528,6 +540,7 @@ impl Pipelines {
             advect_back: make("cs_advect_back"),
             maccormack: make("cs_maccormack"),
             sources: make("cs_sources"),
+            forces: make("cs_forces"),
             curl: make("cs_curl"),
             confine: make("cs_confine"),
             divergence: make("cs_divergence"),
@@ -709,8 +722,8 @@ manifold_node_engine::primitive! {
         gas_param!("source_heat", "Source Heat", Float, 0.6, 0.0, 2.0),
         gas_param!("buoyancy", "Buoyancy (m/s²)", Float, 2.0, 0.0, 50.0),
         gas_param!("weight", "Weight (m/s²)", Float, 0.2, 0.0, 20.0),
-        gas_param!("vorticity", "Swirl", Float, 3.0, 0.0, 20.0),
-        gas_param!("turbulence", "Turbulence (m/s²)", Float, 1.0, 0.0, 30.0),
+        gas_param!("vorticity", "Swirl", Float, 0.3, 0.0, 20.0),
+        gas_param!("turbulence", "Turbulence (m/s²)", Float, 0.3, 0.0, 30.0),
         gas_param!("dissipation", "Smoke Fade (1/s)", Float, 0.15, 0.0, 10.0),
         gas_param!("cooling", "Cooling (1/s)", Float, 0.6, 0.0, 20.0),
         gas_param!("burn_rate", "Burn Rate (1/s)", Float, 6.0, 0.0, 50.0),
@@ -817,7 +830,9 @@ impl GasVolume {
 
         let uniforms = GasUniforms::new(geometry, settings, dt, self.sim_time as f32);
         let uniform_bytes = bytemuck::bytes_of(&uniforms);
+        // Cell kernels cover the cells; face kernels the one-larger face nodes.
         let groups = geometry.dims.map(|d| d.div_ceil(GROUP_EDGE));
+        let face_groups = geometry.dims.map(|d| (d + 1).div_ceil(GROUP_EDGE));
         let light = &buffers.lights[write_slot];
         let enc = &mut *gpu.native_enc;
 
@@ -830,7 +845,7 @@ impl GasVolume {
                     enc,
                     &pipelines.clear,
                     &bindings,
-                    groups,
+                    face_groups,
                     "node.gas_volume.clear",
                 );
             }
@@ -845,32 +860,33 @@ impl GasVolume {
                 enc,
                 &pipelines.advect,
                 &advection,
-                groups,
+                face_groups,
                 "node.gas_volume.advect",
             );
             pass(
                 enc,
                 &pipelines.advect_back,
                 &advection,
-                groups,
+                face_groups,
                 "node.gas_volume.advect_back",
             );
             pass(
                 enc,
                 &pipelines.maccormack,
                 &advection,
-                groups,
+                face_groups,
                 "node.gas_volume.maccormack",
             );
             result = b;
             let working = binding_list(uniform_bytes, buffers, Roles::new(last, result), light);
-            for (pipeline, label) in [
-                (&pipelines.sources, "node.gas_volume.sources"),
-                (&pipelines.curl, "node.gas_volume.curl"),
-                (&pipelines.confine, "node.gas_volume.confine"),
-                (&pipelines.divergence, "node.gas_volume.divergence"),
+            for (pipeline, grid, label) in [
+                (&pipelines.sources, groups, "node.gas_volume.sources"),
+                (&pipelines.forces, face_groups, "node.gas_volume.forces"),
+                (&pipelines.curl, groups, "node.gas_volume.curl"),
+                (&pipelines.confine, face_groups, "node.gas_volume.confine"),
+                (&pipelines.divergence, groups, "node.gas_volume.divergence"),
             ] {
-                pass(enc, pipeline, &working, groups, label);
+                pass(enc, pipeline, &working, grid, label);
             }
             for _ in 0..settings.quality.pressure_pairs() {
                 pass(
@@ -892,7 +908,7 @@ impl GasVolume {
                 enc,
                 &pipelines.project,
                 &working,
-                groups,
+                face_groups,
                 "node.gas_volume.project",
             );
         }
@@ -1001,6 +1017,7 @@ mod tests {
             "cs_advect_back",
             "cs_maccormack",
             "cs_sources",
+            "cs_forces",
             "cs_curl",
             "cs_confine",
             "cs_divergence",
@@ -1253,12 +1270,18 @@ mod tests {
 
     #[test]
     fn every_buffer_is_counted_once() {
-        let bytes = GasBytes::of(1000);
+        let geometry = GasGeometry {
+            cell: 0.1,
+            origin: [0.0; 3],
+            dims: [10, 10, 10],
+        };
+        let bytes = GasBytes::of(&geometry);
         assert_eq!(bytes.vec4, 16_000);
+        assert_eq!(bytes.faces, 11 * 11 * 11 * 16);
         assert_eq!(bytes.packed, 8_000);
         assert_eq!(
             bytes.total(),
-            7 * 16_000 + 2 * 4_000 + 2 * 8_000 + 3 * 32 + 256 * 16
+            4 * 16_000 + 3 * 21_296 + 2 * 4_000 + 2 * 8_000 + 3 * 32 + 256 * 16
         );
     }
 }

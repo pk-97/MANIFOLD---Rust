@@ -28,17 +28,21 @@ Fields, as 3D textures (hardware trilinear for advection and the march):
 1. Emit: in the source (a squashed sphere, Source Size across) add density
    or fuel, temperature and an upward inflow speed, modulated by animated
    noise so the inflow breaks up.
-2. Advect: velocity semi-Lagrangian, state MacCormack with the min/max
-   clamp. Velocity sits at cell centres, where the
-   pressure solve cannot see a cell-to-cell zigzag; corrected velocity let
-   one grow into streaks, and the plain advection's smoothing stops it.
+2. Advect velocity and state: MacCormack with the min/max clamp.
+   Velocity is staggered (a MAC grid, one component on each cell face), so
+   divergence, pressure and projection share one compact stencil and no
+   cell-to-cell zigzag hides from the solve. On cell-centred velocity the
+   corrected advection grew one into horizontal streaks.
 3. Burn (Fire): `burn = fuel·(1 − e^(−rate·dt))` where temperature is past
    ignition; fuel −= burn, temperature += burn·heat, density += burn·soot,
    flame = max(flame·e^(−dt/τ), burn·k). Burning also expands: the
    pressure solve takes `burn·expansion` as its divergence target.
 4. Forces: buoyancy along −gravity, `(buoyancy·T − weight·density)`;
-   vorticity confinement `ε·h·(N×ω)` (Swirl); a curl-noise push at half
-   the source's size, at least four cells (Turbulence).
+   vorticity confinement `ε·h·(N×ω)` (Swirl) at cell centres, each face
+   taking the mean of its two cells; a curl-noise push at half the source's
+   size, at least four cells (Turbulence). The staggered solve keeps its own
+   turbulence, so both start low: Swirl 0.3 / 1, Turbulence 0.3 / 1 (Smoke /
+   Fire).
 5. Project: divergence, red-black Gauss-Seidel on the warm-started
    pressure (iterations per Quality), subtract the gradient. Floor closed,
    other faces open (p = 0).
@@ -91,7 +95,19 @@ the flame colour, its power following the flames.
 | scatter octaves | 2 | 3 | 4 | 4 |
 | scene shadows in smoke | off | off | on | on |
 
-Measured costs go here once built.
+Measured on an M4 Max, 1080p, a scene with a sun and sky, whole frame less
+the same scene without the gas (1.96 ms). Fire box 1.5 × 3 × 1.5 m, Smoke
+2 × 4 × 2 m, World Cell Size 0.0625 m.
+
+| | Low | Medium | High | Extra High |
+|---|---|---|---|---|
+| Fire cells | 12 × 24 × 12 | 24 × 48 × 24 | 48 × 96 × 48 | 96 × 192 × 96 |
+| Fire, ms | 0.7 | 1.3 | 4.8 | 30 |
+| Smoke cells | 16 × 32 × 16 | 32 × 64 × 32 | 64 × 128 × 64 | 128 × 256 × 128 |
+| Smoke, ms | 0.6 | 1.4 | 5.7 | 47 |
+
+Low and Medium are bound by dispatch count (about 60 small dispatches), not
+cells. High is the live default; Extra High is for renders.
 
 ## Not in this version
 

@@ -3,10 +3,15 @@
 // BLACKBODY_*, LIGHT_FIXED_SCALE and LIGHT_WORDS constants ahead of this
 // source).
 //
-// Cell (x, y, z) is element i = x + nx (y + ny z) of every field; its centre is
-// origin + (c + 1/2) h. The floor (y = 0) is a wall, the sides and the top are
-// open. Velocity is metres per second, state is x density (soot), y
-// temperature (0 ambient, 1 a hot flame), z fuel and w flame.
+// Cell (x, y, z) is element i = x + nx (y + ny z) of every cell field; its
+// centre is origin + (c + 1/2) h. Velocity is staggered (a MAC grid): node
+// (x, y, z) of the velocity fields, element x + (nx + 1) (y + (ny + 1) z),
+// holds u on the face at x - 1/2, v on the face at y - 1/2 and w on the face
+// at z - 1/2 of cell (x, y, z), so divergence, pressure and projection share
+// one compact stencil and no cell-to-cell zigzag hides from the solve. The
+// floor (y = 0) is a wall, the sides and the top are open. Velocity is metres
+// per second, state is x density (soot), y temperature (0 ambient, 1 a hot
+// flame), z fuel and w flame.
 //
 // Roles rotate: the host names three velocity and three state buffers and
 // binds them as vel_in/state_in (last frame's result), vel_a/state_a and
@@ -126,17 +131,10 @@ fn taps(g: vec3<f32>) -> Taps {
     return t;
 }
 
+
 struct Range {
     lo: vec4<f32>,
     hi: vec4<f32>,
-}
-
-fn blend_vel_in(t: Taps) -> vec4<f32> {
-    var sum = vec4<f32>(0.0);
-    for (var k = 0u; k < 8u; k++) {
-        sum += t.weight[k] * vel_in[t.index[k]];
-    }
-    return sum;
 }
 
 fn blend_state_in(t: Taps) -> vec4<f32> {
@@ -226,65 +224,209 @@ fn curl_noise(q: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(dy.z - dz.y, dz.x - dx.z, dx.y - dy.x) / (2.0 * e);
 }
 
-// ---- Advection ------------------------------------------------------------
+// ---- Faces ------------------------------------------------------------------
 
-// Semi-Lagrangian: each cell takes the fields from where its air came from.
+// Whether node `c` carries a face normal to `axis`: 0..=n along the axis,
+// 0..n-1 across it.
+fn has_face(c: vec3<u32>, axis: u32) -> bool {
+    var top = params.dims - vec3<u32>(1u);
+    top[axis] = params.dims[axis];
+    return all(c <= top);
+}
+
+fn in_faces(c: vec3<u32>) -> bool {
+    return all(c <= params.dims);
+}
+
+fn face_index(c: vec3<u32>) -> u32 {
+    let n = params.dims + vec3<u32>(1u);
+    return c.x + n.x * (c.y + n.y * c.z);
+}
+
+fn unit(axis: u32) -> vec3<u32> {
+    var e = vec3<u32>(0u);
+    e[axis] = 1u;
+    return e;
+}
+
+// Grid point of the face normal to `axis` at node `c`, in cell units.
+fn face_point(c: vec3<u32>, axis: u32) -> vec3<f32> {
+    var g = vec3<f32>(c);
+    g[axis] -= 0.5;
+    return g;
+}
+
+// The eight faces normal to `axis` around grid point `g` (cell units, cell
+// centres at integers), clamped to the faces, and their weights.
+fn face_taps(g: vec3<f32>, axis: u32) -> Taps {
+    var q = g;
+    q[axis] += 0.5;
+    var top = params.dims - vec3<u32>(1u);
+    top[axis] = params.dims[axis];
+    q = clamp(q, vec3<f32>(0.0), vec3<f32>(top));
+    let base = floor(q);
+    let f = q - base;
+    let lo = vec3<u32>(base);
+    let hi = min(lo + vec3<u32>(1u), top);
+    var t: Taps;
+    for (var k = 0u; k < 8u; k++) {
+        let hx = (k & 1u) != 0u;
+        let hy = (k & 2u) != 0u;
+        let hz = (k & 4u) != 0u;
+        let c = vec3<u32>(select(lo.x, hi.x, hx), select(lo.y, hi.y, hy), select(lo.z, hi.z, hz));
+        t.index[k] = face_index(c);
+        t.weight[k] = select(1.0 - f.x, f.x, hx) * select(1.0 - f.y, f.y, hy) * select(1.0 - f.z, f.z, hz);
+    }
+    return t;
+}
+
+fn component_in(g: vec3<f32>, axis: u32) -> f32 {
+    let t = face_taps(g, axis);
+    var sum = 0.0;
+    for (var k = 0u; k < 8u; k++) {
+        sum += t.weight[k] * vel_in[t.index[k]][axis];
+    }
+    return sum;
+}
+
+fn component_a(g: vec3<f32>, axis: u32) -> f32 {
+    let t = face_taps(g, axis);
+    var sum = 0.0;
+    for (var k = 0u; k < 8u; k++) {
+        sum += t.weight[k] * vel_a[t.index[k]][axis];
+    }
+    return sum;
+}
+
+// Last frame's velocity at the face normal to `axis` at node `c`: its own
+// component exactly, each other one the mean of the four faces round it (a
+// cell outside the box stands in with the one inside).
+fn face_velocity_in(c: vec3<u32>, axis: u32) -> vec3<f32> {
+    var v = vec3<f32>(0.0);
+    v[axis] = vel_in[face_index(c)][axis];
+    var below = c;
+    below[axis] = max(c[axis], 1u) - 1u;
+    var above = c;
+    above[axis] = min(c[axis], params.dims[axis] - 1u);
+    for (var other = 0u; other < 3u; other++) {
+        if other == axis {
+            continue;
+        }
+        let e = unit(other);
+        v[other] = 0.25 * (vel_in[face_index(below)][other] + vel_in[face_index(below + e)][other]
+            + vel_in[face_index(above)][other] + vel_in[face_index(above + e)][other]);
+    }
+    return v;
+}
+
+// Velocity at the centre of cell `c`: each component the mean of its two faces.
+fn centre_velocity_in(c: vec3<u32>) -> vec3<f32> {
+    let own = vel_in[face_index(c)].xyz;
+    return 0.5 * (own + vec3<f32>(
+        vel_in[face_index(c + unit(0u))].x,
+        vel_in[face_index(c + unit(1u))].y,
+        vel_in[face_index(c + unit(2u))].z,
+    ));
+}
+
+fn centre_velocity_a(c: vec3<u32>) -> vec3<f32> {
+    let own = vel_a[face_index(c)].xyz;
+    return 0.5 * (own + vec3<f32>(
+        vel_a[face_index(c + unit(0u))].x,
+        vel_a[face_index(c + unit(1u))].y,
+        vel_a[face_index(c + unit(2u))].z,
+    ));
+}
+
+// ---- Advection ------------------------------------------------------------
+//
+// These kernels run over the face nodes: a node inside the box also advects
+// its cell's state.
+
+// Semi-Lagrangian: each cell and face takes the fields from where its air
+// came from.
 @compute @workgroup_size(4, 4, 4)
 fn cs_advect(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !inside(gid) {
+    if !in_faces(gid) {
         return;
     }
-    let i = cell_index(gid);
-    let back = vec3<f32>(gid) - params.dt * vel_in[i].xyz / params.h;
-    let t = taps(back);
-    vel_a[i] = vec4<f32>(blend_vel_in(t).xyz, 0.0);
-    state_a[i] = blend_state_in(t);
+    if inside(gid) {
+        let back = vec3<f32>(gid) - params.dt * centre_velocity_in(gid) / params.h;
+        state_a[cell_index(gid)] = blend_state_in(taps(back));
+    }
+    var v = vec4<f32>(0.0);
+    for (var axis = 0u; axis < 3u; axis++) {
+        if has_face(gid, axis) {
+            let g = face_point(gid, axis);
+            let back = g - params.dt * face_velocity_in(gid, axis) / params.h;
+            v[axis] = component_in(back, axis);
+        }
+    }
+    vel_a[face_index(gid)] = v;
 }
 
-// MacCormack's second look: the advected state carried forward again.
+// MacCormack's second look: the advected fields carried forward again.
 @compute @workgroup_size(4, 4, 4)
 fn cs_advect_back(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !inside(gid) {
+    if !in_faces(gid) {
         return;
     }
-    let i = cell_index(gid);
-    let ahead = vec3<f32>(gid) + params.dt * vel_in[i].xyz / params.h;
-    state_b[i] = blend_state_a(taps(ahead));
+    if inside(gid) {
+        let ahead = vec3<f32>(gid) + params.dt * centre_velocity_in(gid) / params.h;
+        state_b[cell_index(gid)] = blend_state_a(taps(ahead));
+    }
+    var v = vec4<f32>(0.0);
+    for (var axis = 0u; axis < 3u; axis++) {
+        if has_face(gid, axis) {
+            let g = face_point(gid, axis);
+            let ahead = g + params.dt * face_velocity_in(gid, axis) / params.h;
+            v[axis] = component_a(ahead, axis);
+        }
+    }
+    vel_b[face_index(gid)] = v;
 }
 
-// The error-corrected state, held between the extremes of the eight cells
-// the air came from. The velocity keeps its semi-Lagrangian value: velocity
-// sits at cell centres, where the pressure solve cannot see a cell-to-cell
-// zigzag, and the plain advection's smoothing is what keeps one from growing.
-// A thread reads only its own vel_b/state_b, so it writes the result in place.
+// The error-corrected fields, each held between the extremes of the eight
+// values the air came from. A thread reads only its own vel_b/state_b, so it
+// writes the result in place.
 @compute @workgroup_size(4, 4, 4)
 fn cs_maccormack(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !inside(gid) {
+    if !in_faces(gid) {
         return;
     }
-    let i = cell_index(gid);
-    let back = vec3<f32>(gid) - params.dt * vel_in[i].xyz / params.h;
-    let t = taps(back);
-    let rs = range_state_in(t);
-    let s = state_a[i] + 0.5 * (state_in[i] - state_b[i]);
-    vel_b[i] = vel_a[i];
-    state_b[i] = clamp(s, rs.lo, rs.hi);
+    if inside(gid) {
+        let i = cell_index(gid);
+        let back = vec3<f32>(gid) - params.dt * centre_velocity_in(gid) / params.h;
+        let rs = range_state_in(taps(back));
+        let s = state_a[i] + 0.5 * (state_in[i] - state_b[i]);
+        state_b[i] = clamp(s, rs.lo, rs.hi);
+    }
+    let f = face_index(gid);
+    var v = vec4<f32>(0.0);
+    for (var axis = 0u; axis < 3u; axis++) {
+        if has_face(gid, axis) {
+            let g = face_point(gid, axis);
+            let back = g - params.dt * face_velocity_in(gid, axis) / params.h;
+            let t = face_taps(back, axis);
+            var lo = vel_in[t.index[0]][axis];
+            var hi = lo;
+            for (var k = 1u; k < 8u; k++) {
+                let value = vel_in[t.index[k]][axis];
+                lo = min(lo, value);
+                hi = max(hi, value);
+            }
+            let corrected = vel_a[f][axis] + 0.5 * (vel_in[f][axis] - vel_b[f][axis]);
+            v[axis] = clamp(corrected, lo, hi);
+        }
+    }
+    vel_b[f] = v;
 }
 
 // ---- Sources, burning and forces (on R) -------------------------------------
 
-@compute @workgroup_size(4, 4, 4)
-fn cs_sources(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !inside(gid) {
-        return;
-    }
-    let i = cell_index(gid);
-    let pos = cell_centre(gid);
-    var v = vel_a[i].xyz;
-    var s = state_a[i];
-
-    // The source: a squashed ellipsoid at the floor's centre, broken up by
-    // noise that drifts along with time.
+// How strongly the source emits at world point `pos`: a squashed ellipsoid at
+// the floor's centre, broken up by noise that drifts along with time.
+fn source_weight(pos: vec3<f32>) -> f32 {
     let box_centre_xz = params.origin.xz + 0.5 * vec2<f32>(params.dims.xz) * params.h;
     let source_centre = vec3<f32>(
         box_centre_xz.x,
@@ -297,25 +439,36 @@ fn cs_sources(@builtin(global_invocation_id) gid: vec3<u32>) {
         0.5 * params.source_size,
     );
     let falloff = 1.0 - smoothstep(0.6, 1.0, length((pos - source_centre) / radii));
-    var w = 0.0;
-    if falloff > 0.0 {
-        let breakup = clamp(
-            0.6 + 0.8 * noise3(pos * 2.0 / params.source_size + vec3<f32>(0.0, -2.0 * params.time, 0.0)),
-            0.0,
-            1.4,
-        );
-        w = falloff * breakup;
+    if falloff <= 0.0 {
+        return 0.0;
     }
+    let breakup = clamp(
+        0.6 + 0.8 * noise3(pos * 2.0 / params.source_size + vec3<f32>(0.0, -2.0 * params.time, 0.0)),
+        0.0,
+        1.4,
+    );
+    return falloff * breakup;
+}
+
+// Each cell's emission, burning, decay and sponge. The turbulence's push for
+// this step goes to `curl` (free until cs_curl) for cs_forces to spread onto
+// the faces.
+@compute @workgroup_size(4, 4, 4)
+fn cs_sources(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !inside(gid) {
+        return;
+    }
+    let i = cell_index(gid);
+    let pos = cell_centre(gid);
+    var s = state_a[i];
+
+    let w = source_weight(pos);
     if params.kind == 0u {
         s.x += params.rate * w * params.dt;
         s.y = max(s.y, params.source_heat * w);
     } else {
         s.z += params.rate * w * params.dt;
         s.y = max(s.y, (params.ignition + 0.3) * step(0.05, w));
-    }
-    // The source blows along `up` at least as fast as its inflow speed.
-    if w > 0.0 {
-        v += params.up * max(0.0, params.inflow * w - dot(v, params.up));
     }
 
     // Fire burns its fuel where it is hot enough, heating and smoking.
@@ -329,18 +482,17 @@ fn cs_sources(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     s.w = flame;
 
-    // Hot air rises and smoke sinks, along -gravity; noise stirs only where
-    // there is gas.
-    v += params.dt * params.up * (params.g / REFERENCE_GRAVITY)
-        * (params.buoyancy * s.y - params.weight * s.x);
+    // Noise stirs only where there is gas.
+    var push = vec3<f32>(0.0);
     if params.turbulence > 0.0 {
         let gas = saturate(s.x + s.y + s.z);
         if gas > 0.0 {
             let scale = max(4.0 * params.h, TURBULENCE_SOURCE_SHARE * params.source_size);
             let q = pos / scale + vec3<f32>(0.0, -0.5 * params.time, 0.0);
-            v += params.dt * params.turbulence * gas * curl_noise(q);
+            push = params.turbulence * gas * curl_noise(q);
         }
     }
+    curl[i] = vec4<f32>(push, 0.0);
 
     s.x *= exp(-params.dissipation * params.dt);
     s.y *= exp(-params.cooling * params.dt);
@@ -360,22 +512,73 @@ fn cs_sources(@builtin(global_invocation_id) gid: vec3<u32>) {
         s = vec4<f32>(0.0);
     }
 
-    // At most four cells a step, so the next advection stays in reach.
-    let limit = 4.0 * params.h / max(params.dt, 1e-4);
-    let speed = length(v);
-    if speed > limit {
-        v *= limit / speed;
-    }
     s = max(s, vec4<f32>(0.0));
     s.y = min(s.y, MAX_TEMPERATURE);
-
-    vel_a[i] = vec4<f32>(v, 0.0);
     state_a[i] = s;
+}
+
+// The cell below node `c` along `axis` and the cell above it, each clamped
+// into the box: a face on the box's side has one cell, which stands in for
+// the missing one.
+fn cell_below(c: vec3<u32>, axis: u32) -> u32 {
+    var q = vec3<i32>(c);
+    q[axis] -= 1;
+    return clamped_index(q);
+}
+
+fn cell_above(c: vec3<u32>) -> u32 {
+    return clamped_index(vec3<i32>(c));
+}
+
+// Forces on the faces: hot air rises and smoke sinks along -gravity, the
+// turbulence's push, and the source blowing along `up` at least as fast as
+// its inflow speed. No face moves more than four cells a step, so the next
+// advection stays in reach; nothing flows through the floor.
+@compute @workgroup_size(4, 4, 4)
+fn cs_forces(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !in_faces(gid) {
+        return;
+    }
+    let f = face_index(gid);
+    var v = vel_a[f];
+    let limit = 4.0 * params.h / max(params.dt, 1e-4);
+    let lift = params.g / REFERENCE_GRAVITY;
+    for (var axis = 0u; axis < 3u; axis++) {
+        if !has_face(gid, axis) {
+            continue;
+        }
+        if axis == 1u && gid.y == 0u {
+            v.y = 0.0;
+            continue;
+        }
+        let lower = cell_below(gid, axis);
+        let upper = cell_above(gid);
+        let s = 0.5 * (state_a[lower] + state_a[upper]);
+        let push = 0.5 * (curl[lower][axis] + curl[upper][axis]);
+        var u = v[axis] + params.dt * (
+            params.up[axis] * lift * (params.buoyancy * s.y - params.weight * s.x) + push
+        );
+        if params.up[axis] != 0.0 {
+            let w = source_weight(params.origin + (face_point(gid, axis) + vec3<f32>(0.5)) * params.h);
+            if w > 0.0 {
+                let target_speed = params.inflow * w * params.up[axis];
+                u = select(min(u, target_speed), max(u, target_speed), params.up[axis] > 0.0);
+            }
+        }
+        v[axis] = clamp(u, -limit, limit);
+    }
+    vel_a[f] = v;
 }
 
 // ---- Vorticity (on R) -------------------------------------------------------
 
-// d(velocity)/d(axis) by central differences; one-sided at the box faces.
+fn centre_velocity_clamped(c: vec3<i32>) -> vec3<f32> {
+    let q = clamp(c, vec3<i32>(0), vec3<i32>(params.dims) - vec3<i32>(1));
+    return centre_velocity_a(vec3<u32>(q));
+}
+
+// d(velocity)/d(axis) at a cell centre by central differences; one-sided at
+// the box faces.
 fn velocity_derivative(c: vec3<i32>, axis: u32) -> vec3<f32> {
     let lo = max(c[axis] - 1, 0);
     let hi = min(c[axis] + 1, i32(params.dims[axis]) - 1);
@@ -383,7 +586,7 @@ fn velocity_derivative(c: vec3<i32>, axis: u32) -> vec3<f32> {
     a[axis] = lo;
     var b = c;
     b[axis] = hi;
-    return (vel_a[clamped_index(b)].xyz - vel_a[clamped_index(a)].xyz) / (f32(hi - lo) * params.h);
+    return (centre_velocity_clamped(b) - centre_velocity_clamped(a)) / (f32(hi - lo) * params.h);
 }
 
 // d(|vorticity|)/d(axis), the same way.
@@ -410,16 +613,14 @@ fn cs_curl(@builtin(global_invocation_id) gid: vec3<u32>) {
     curl[cell_index(gid)] = vec4<f32>(omega, length(omega));
 }
 
-// Vorticity confinement (Fedkiw): a push around the vortex cores that puts
-// back the swirl advection smooths away. `vorticity` is the dimensionless
-// strength; the cell size makes the push shrink with the cells.
-@compute @workgroup_size(4, 4, 4)
-fn cs_confine(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !inside(gid) {
-        return;
+// Vorticity confinement (Fedkiw) at cell `c`: a push around the vortex cores
+// that puts back the swirl advection smooths away; none outside the box.
+// `vorticity` is the dimensionless strength; the cell size makes the push
+// shrink with the cells.
+fn confinement(c: vec3<i32>) -> vec3<f32> {
+    if any(c < vec3<i32>(0)) || any(c >= vec3<i32>(params.dims)) {
+        return vec3<f32>(0.0);
     }
-    let i = cell_index(gid);
-    let c = vec3<i32>(gid);
     let grad = vec3<f32>(
         curl_length_derivative(c, 0u),
         curl_length_derivative(c, 1u),
@@ -427,27 +628,41 @@ fn cs_confine(@builtin(global_invocation_id) gid: vec3<u32>) {
     );
     let len = length(grad);
     if len < 1e-6 {
+        return vec3<f32>(0.0);
+    }
+    return params.vorticity * params.h * cross(grad / len, curl[clamped_index(c)].xyz);
+}
+
+// Each face takes the mean of its two cells' confinement; a face on the box's
+// side takes its one cell's.
+@compute @workgroup_size(4, 4, 4)
+fn cs_confine(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !in_faces(gid) || params.vorticity <= 0.0 {
         return;
     }
-    let n = grad / len;
-    let v = vel_a[i].xyz + params.dt * params.vorticity * params.h * cross(n, curl[i].xyz);
-    vel_a[i] = vec4<f32>(v, 0.0);
+    let f = face_index(gid);
+    let c = vec3<i32>(gid);
+    let own = confinement(c);
+    var v = vel_a[f];
+    for (var axis = 0u; axis < 3u; axis++) {
+        if !has_face(gid, axis) || (axis == 1u && gid.y == 0u) {
+            continue;
+        }
+        var below = c;
+        below[axis] -= 1;
+        let lower = confinement(below)[axis];
+        var share = 0.5 * (own[axis] + lower);
+        if gid[axis] == 0u {
+            share = own[axis];
+        } else if gid[axis] == params.dims[axis] {
+            share = lower;
+        }
+        v[axis] += params.dt * share;
+    }
+    vel_a[f] = v;
 }
 
 // ---- Pressure projection (on R) ---------------------------------------------
-
-// Velocity of the cell at `c`, which may lie one past the box: the floor
-// mirrors (its normal component flips), an open face repeats the cell `own`.
-fn neighbour_velocity(c: vec3<i32>, own: vec3<f32>) -> vec3<f32> {
-    if c.y < 0 {
-        return vec3<f32>(own.x, -own.y, own.z);
-    }
-    let dims = vec3<i32>(params.dims);
-    if c.x < 0 || c.z < 0 || c.x >= dims.x || c.y >= dims.y || c.z >= dims.z {
-        return own;
-    }
-    return vel_a[cell_index(vec3<u32>(c))].xyz;
-}
 
 // Pressure of the cell at `c`, which may lie one past the box: the floor has
 // no pressure gradient through it, an open face is atmosphere (0).
@@ -462,22 +677,22 @@ fn neighbour_pressure(c: vec3<i32>, own: f32) -> f32 {
     return pressure[cell_index(vec3<u32>(c))];
 }
 
-// The velocity's divergence, less the expansion the flames ask for.
+// The flow out of each cell through its six faces, less the expansion the
+// flames ask for. The floor's faces are closed.
 @compute @workgroup_size(4, 4, 4)
 fn cs_divergence(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !inside(gid) {
         return;
     }
     let i = cell_index(gid);
-    let c = vec3<i32>(gid);
-    let own = vel_a[i].xyz;
-    let du = neighbour_velocity(c + vec3<i32>(1, 0, 0), own).x
-        - neighbour_velocity(c - vec3<i32>(1, 0, 0), own).x;
-    let dv = neighbour_velocity(c + vec3<i32>(0, 1, 0), own).y
-        - neighbour_velocity(c - vec3<i32>(0, 1, 0), own).y;
-    let dw = neighbour_velocity(c + vec3<i32>(0, 0, 1), own).z
-        - neighbour_velocity(c - vec3<i32>(0, 0, 1), own).z;
-    divergence[i] = (du + dv + dw) / (2.0 * params.h) - params.expansion * state_a[i].w;
+    let own = vel_a[face_index(gid)];
+    let floor_v = select(own.y, 0.0, gid.y == 0u);
+    let out = vec3<f32>(
+        vel_a[face_index(gid + unit(0u))].x - own.x,
+        vel_a[face_index(gid + unit(1u))].y - floor_v,
+        vel_a[face_index(gid + unit(2u))].z - own.z,
+    );
+    divergence[i] = (out.x + out.y + out.z) / params.h - params.expansion * state_a[i].w;
 }
 
 // One colour of a red-black Gauss-Seidel sweep with over-relaxation: a cell
@@ -512,25 +727,32 @@ fn cs_pressure_black(@builtin(global_invocation_id) gid: vec3<u32>) {
     pressure_sweep(gid, 1u);
 }
 
-// Subtract the pressure gradient; nothing flows into the floor.
+// Each face loses the pressure difference across it, the open faces against
+// the atmosphere's 0; nothing flows through the floor.
 @compute @workgroup_size(4, 4, 4)
 fn cs_project(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !inside(gid) {
+    if !in_faces(gid) {
         return;
     }
-    let i = cell_index(gid);
+    let f = face_index(gid);
     let c = vec3<i32>(gid);
-    let own = pressure[i];
-    let gradient = vec3<f32>(
-        neighbour_pressure(c + vec3<i32>(1, 0, 0), own) - neighbour_pressure(c - vec3<i32>(1, 0, 0), own),
-        neighbour_pressure(c + vec3<i32>(0, 1, 0), own) - neighbour_pressure(c - vec3<i32>(0, 1, 0), own),
-        neighbour_pressure(c + vec3<i32>(0, 0, 1), own) - neighbour_pressure(c - vec3<i32>(0, 0, 1), own),
-    ) / (2.0 * params.h);
-    var v = vel_a[i].xyz - gradient;
-    if gid.y == 0u {
-        v.y = max(v.y, 0.0);
+    let dims = vec3<i32>(params.dims);
+    var v = vel_a[f];
+    for (var axis = 0u; axis < 3u; axis++) {
+        if !has_face(gid, axis) {
+            continue;
+        }
+        if axis == 1u && gid.y == 0u {
+            v.y = 0.0;
+            continue;
+        }
+        var below = c;
+        below[axis] -= 1;
+        let upper = select(0.0, pressure[clamped_index(c)], c[axis] < dims[axis]);
+        let lower = select(0.0, pressure[clamped_index(below)], below[axis] >= 0);
+        v[axis] -= (upper - lower) / params.h;
     }
-    vel_a[i] = vec4<f32>(v, 0.0);
+    vel_a[f] = v;
 }
 
 // ---- Publishing (on R) --------------------------------------------------------
@@ -579,7 +801,7 @@ fn cs_publish(
     var heat = 0.0;
     if inside(gid) {
         let i = cell_index(gid);
-        let v = vel_a[i].xyz;
+        let v = centre_velocity_a(gid);
         let s = state_a[i];
         state_out[2u * i] = pack_half(s.x, s.y);
         state_out[2u * i + 1u] = pack_half(s.z, s.w);
@@ -619,17 +841,20 @@ fn cs_publish(
 
 // ---- Reset --------------------------------------------------------------------
 
-// Zero every field. vel_in/state_in are read-only here, so the host runs this
-// twice with the roles rotated until each of the three buffers has been
-// vel_a or vel_b.
+// Zero every field, over the face nodes. vel_in/state_in are read-only here,
+// so the host runs this twice with the roles rotated until each of the three
+// buffers has been vel_a or vel_b.
 @compute @workgroup_size(4, 4, 4)
 fn cs_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !in_faces(gid) {
+        return;
+    }
+    vel_a[face_index(gid)] = vec4<f32>(0.0);
+    vel_b[face_index(gid)] = vec4<f32>(0.0);
     if !inside(gid) {
         return;
     }
     let i = cell_index(gid);
-    vel_a[i] = vec4<f32>(0.0);
-    vel_b[i] = vec4<f32>(0.0);
     state_a[i] = vec4<f32>(0.0);
     state_b[i] = vec4<f32>(0.0);
     curl[i] = vec4<f32>(0.0);
