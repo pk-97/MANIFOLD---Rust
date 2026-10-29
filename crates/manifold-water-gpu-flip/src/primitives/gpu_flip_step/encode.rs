@@ -268,6 +268,31 @@ impl StepState {
             ],
             "gpu_flip.step.forces",
         );
+        // A wired Sand: its grains' share at the corners, then its drag on
+        // the forced faces.
+        if let (Some(points), Some(share)) = (step.sand, self.sand_share.as_ref()) {
+            enc.dispatch_compute(
+                &pipes.sand_corners,
+                &[
+                    uniform(&base),
+                    buffer(46, step.clock_plan),
+                    buffer(51, table),
+                    buffer(72, points),
+                    buffer(73, share),
+                ],
+                [p.sand_count.div_ceil(256), 1, 1],
+                "gpu_flip.step.sand_corners",
+            );
+            enc.compute_memory_barrier_buffers();
+            over(
+                enc,
+                &pipes.sand_drag,
+                held,
+                &[buffer(4, &l.f), buffer(73, share)],
+                "gpu_flip.step.sand_drag",
+            );
+            enc.compute_memory_barrier_buffers();
+        }
         over(
             enc,
             &pipes.open,

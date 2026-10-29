@@ -128,3 +128,53 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     faces_out[at] = out;
 }
+
+// Fixed-point units of one whole cell of sand in `sand_share`.
+const SAND_FIXED: f32 = 65536.0;
+
+// How fast sand stops the water inside it, per second at a full cell of
+// sand: water seeps through packed sand at about g / SAND_DRAG (0.25 m/s),
+// so it soaks into a pile over seconds instead of passing through it.
+const SAND_DRAG: f32 = 40.0;
+
+// One thread a sand particle, after the step's table is built: its rest
+// volume (the sphere of its radius) over a cell's, shared trilinearly among
+// the eight corners round it. A grain whose own tile the water does not hold
+// is far from any water (the table holds rings of tiles round it) and adds
+// nothing, so a pile away from the water costs one lookup a grain.
+@compute @workgroup_size(256)
+fn sand_corners(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() || gid.x >= u.sand_count { return; }
+    let point = sand_points[gid.x];
+    let r = point.position_radius.w * u.inv_cell;
+    if r <= 0.0 { return; }
+    let g = (point.position_radius.xyz - u.origin) * u.inv_cell;
+    let base = vec3<i32>(floor(g));
+    let home = ts_cell_at(base);
+    if home == ts_canon() { return; }
+    ts_home(home);
+    let f = g - floor(g);
+    let share = SAND_FIXED * 4.18879 * r * r * r;
+    for (var k = 0u; k < 8u; k = k + 1u) {
+        let o = vec3<u32>(k & 1u, (k >> 1u) & 1u, k >> 2u);
+        let idx = ts_cell_at(base + vec3<i32>(o));
+        if idx == ts_canon() { continue; }
+        let w = select(1.0 - f, f, o == vec3<u32>(1u));
+        atomicAdd(&sand_share[idx], u32(share * w.x * w.y * w.z + 0.5));
+    }
+}
+
+// 512 threads a held slot, after `face_gravity`: sand is porous, so the water
+// inside it is slowed by its share at the cell's low corner, which stands
+// for the cell's three faces (a grain's share spreads over the cell round
+// it). The share is taken, so the next step's `sand_corners` adds to zero.
+@compute @workgroup_size(256)
+fn sand_drag(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
+    let at = list_cell(gid.x);
+    let share = min(f32(atomicExchange(&sand_share[at], 0u)) / SAND_FIXED, 1.0);
+    if share <= 0.0 { return; }
+    var here = faces_out[at];
+    here.face_velocity = vec4<f32>(here.face_velocity.xyz * exp(-SAND_DRAG * share * adaptive_step_dt()), here.face_velocity.w);
+    faces_out[at] = here;
+}

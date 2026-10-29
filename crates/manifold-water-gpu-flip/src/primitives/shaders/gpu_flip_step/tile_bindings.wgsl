@@ -33,6 +33,14 @@
 // canonical element is `CANON_CORNER`.
 @group(0) @binding(43) var<storage, read_write> tile_corners: array<f32>;
 
+// A wired Sand's particles this frame, `u.sand_count` of them.
+@group(0) @binding(72) var<storage, read> sand_points: array<FluidParticle>;
+
+// The sand's volume share at each held cell's low corner in SAND_FIXED
+// units, added by `sand_corners` and taken (reset to 0) by `sand_drag` in
+// the same step.
+@group(0) @binding(73) var<storage, read_write> sand_share: array<atomic<u32>>;
+
 // Slots handed out this build (world_tiles.rs TileLists::fresh).
 @group(0) @binding(53) var<storage, read> tiles_fresh_list: array<u32>;
 

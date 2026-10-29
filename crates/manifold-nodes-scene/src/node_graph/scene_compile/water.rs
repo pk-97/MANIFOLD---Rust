@@ -57,17 +57,43 @@ pub(crate) fn items_of(
     found
 }
 
+/// The Sand template's particle frame and the Water template's step: sand
+/// reaches the water from one to the other.
+const SAND_FRAME: &str = "frame";
+const WATER_STEP: &str = "step";
+
 /// Emit every Water and Sand and its sources. With no water solver linked,
-/// they draw nothing.
+/// they draw nothing. The first Sand is porous to every Water: its particles
+/// this frame reach each water's step, which slows the water inside the
+/// sand, so water soaks into a pile instead of passing through it.
 pub(crate) fn emit_all(b: &mut Builder<'_>) {
+    let mut sand = None;
+    let mut steps = Vec::new();
     for (item, group) in waters(b.doc) {
         if let Some(family) = water_family(&item.fields) {
-            emit(b, &item, group.as_ref(), &family);
+            let ids = emit(b, &item, group.as_ref(), &family);
+            match item.kind() {
+                ItemKind::Sand => sand = sand.or(ids.get(SAND_FRAME).copied()),
+                ItemKind::Water => steps.extend(ids.get(WATER_STEP).copied()),
+                _ => {}
+            }
+        }
+    }
+    if let Some(frame) = sand {
+        let [points, count] = manifold_core::liquid_domain::SAND_INPUTS;
+        for step in steps {
+            b.wire(frame, "particles_b", step, points);
+            b.wire(frame, "count_b", step, count);
         }
     }
 }
 
-fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &WaterFamily) {
+fn emit(
+    b: &mut Builder<'_>,
+    item: &Item,
+    group: Option<&ItemId>,
+    family: &WaterFamily,
+) -> BTreeMap<String, u32> {
     let owner = item.id.as_str();
     let ids = splice(b, owner, family);
     let node = |name: &str| ids.get(name).copied();
@@ -80,7 +106,7 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
         }
     }
     let Some(domain) = node(DOMAIN_ROLE) else {
-        return;
+        return ids;
     };
     let frame = group.and_then(|group| b.group_frames.get(group).copied());
     let visible = group.and_then(|group| b.group_visible.get(group).copied());
@@ -181,6 +207,7 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, family: &Water
             }
         }
     }
+    ids
 }
 
 /// One source: its Transform places a `node.fluid_role_source` (a unit box,

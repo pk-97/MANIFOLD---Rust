@@ -333,7 +333,9 @@ pub(crate) struct StepParams {
     /// water's pressure at the free surface is this times the surface's
     /// curvature, with ghost fluid on.
     pub(crate) tension: f32,
-    pub(crate) _pad_static: [u32; 2],
+    /// A wired Sand's particles this step (`Step::sand`), 0 with none.
+    pub(crate) sand_count: u32,
+    pub(crate) _pad_static: u32,
 }
 
 }
@@ -476,6 +478,9 @@ pub(crate) struct StepState {
     sheet_distance: super::gpu_flip_sheet_distance::SheetDistance,
     sheeting: super::gpu_flip_sheeting::GpuSheeting,
     sheet_order: Option<GpuBuffer>,
+    /// A wired Sand's share at each held cell's low corner (`sand_corners`),
+    /// a pooled cell field; reserved only while a Sand is wired.
+    sand_share: Option<GpuBuffer>,
     /// Narrow Band: its distance and scan, prepared at install; its storage
     /// only while it runs.
     narrow_band: narrow_band::NarrowBand,
@@ -571,6 +576,9 @@ struct Step<'a> {
     /// switching on mid-show does not hitch) and scratch reserved while it was
     /// on stays held.
     sheet_rate: f32,
+    /// A wired Sand's particles, `params.sand_count` of them: porous, they
+    /// slow the water inside them (`sand_corners`, `sand_drag`).
+    sand: Option<&'a GpuBuffer>,
 }
 
 impl StepState {}
@@ -625,6 +633,8 @@ manifold_node_engine::primitive! {
         live_hits: Array(f32) optional,
         live_hit_count: ScalarF32 optional,
         narrow_band: ScalarF32 optional,
+        sand: Array(FluidParticle) optional,
+        sand_count: ScalarF32 optional,
     },
     outputs: {
         out: Array(FluidParticle),

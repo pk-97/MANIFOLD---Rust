@@ -80,6 +80,7 @@ impl StepState {
         slots: u64,
         sheeting: bool,
         narrow_band: u32,
+        sand: bool,
     ) -> Result<(), String> {
         if self.zeros.is_none() {
             let zeros = device.try_create_buffer(ZERO_BYTES, BufferUse::Upload)?;
@@ -122,6 +123,15 @@ impl StepState {
             self.sorted = Some(allocate(device, sorted)?);
         }
         self.narrow_band.reserve(device, pool, narrow_band)?;
+        // Every share is taken in the step that adds it, so a fresh zeroed
+        // field per pool is all the sand needs; unwired, none is held.
+        let share = pool_len(pool) * 4;
+        if !sand {
+            self.sand_share = None;
+        } else if self.sand_share.as_ref().is_none_or(|b| b.size != share) {
+            self.sand_share = None;
+            self.sand_share = Some(allocate_zeroed(device, share)?);
+        }
         if sheeting {
             let slot_count = u32::try_from(slots)
                 .map_err(|_| "sheeting particle capacity exceeds u32".to_string())?;

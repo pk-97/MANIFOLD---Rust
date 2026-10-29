@@ -136,7 +136,8 @@ struct Params {
     // `surface_tension`): the water's pressure at the free surface is this
     // times its curvature, with `ghost` 1.
     tension: f32,
-    _pad5: u32,
+    // Sand particles at binding 72 (`sand_corners`), 0 with no sand wired.
+    sand_count: u32,
     _pad6: u32,
 };
 

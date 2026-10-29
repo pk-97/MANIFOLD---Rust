@@ -23,6 +23,11 @@ pub const LIQUID_DOMAIN_TYPE_IDS: &[&str] = &[
     GPU_FLIP_DOMAIN_TYPE_ID,
 ];
 
+/// The inputs a Water's step takes a Sand on: its particles this frame and
+/// their count. The sand slows the water there; it is not part of the
+/// water's surface, so the surface walk never follows them.
+pub const SAND_INPUTS: [&str; 2] = ["sand", "sand_count"];
+
 pub fn is_liquid_domain(type_id: &str) -> bool {
     LIQUID_DOMAIN_TYPE_IDS.contains(&type_id)
 }
@@ -68,7 +73,8 @@ pub fn liquid_domains_in(nodes: &[EffectGraphNode]) -> Vec<NestedLiquidDomain> {
 /// producer, follows every wired input upstream and stops at each liquid
 /// domain it meets. A field surface (particles → sort → blobs → volume →
 /// smoothing), a mesh drawn from the particles, and particles or grains drawn
-/// as copies of a fixed mesh all reach their domain.
+/// as copies of a fixed mesh all reach their domain. A Sand wired into a
+/// Water's step ([`SAND_INPUTS`]) is not the water's.
 pub fn liquid_domain_of(
     index: &FlatSceneIndex,
     object: &NodeId,
@@ -110,7 +116,12 @@ pub fn liquid_domain_of(
             domains.insert(reference.clone());
             continue;
         }
-        for wire in index.flat.wires.iter().filter(|wire| wire.to_node == id) {
+        for wire in index
+            .flat
+            .wires
+            .iter()
+            .filter(|wire| wire.to_node == id && !SAND_INPUTS.contains(&wire.to_port.as_str()))
+        {
             if seen.insert(wire.from_node) {
                 pending.push(wire.from_node);
             }

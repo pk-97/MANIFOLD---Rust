@@ -237,12 +237,20 @@ impl Primitive for GpuFlipStep {
             _ => 0,
         };
         let band = step_band();
+        let sand = ctx.inputs.array("sand");
+        let sand_count = sand.map_or(0, |points| {
+            ctx.scalar_or_param("sand_count", 0.0).round().clamp(
+                0.0,
+                (points.size / size_of::<FluidParticle>() as u64) as f32,
+            ) as u32
+        });
         if let Err(error) = self.state.reserve(
             ctx.gpu_encoder().device,
             pool,
             u64::from(capacity),
             sheet_rate > 0.0,
             narrow_band,
+            sand.is_some(),
         ) {
             ctx.error(format!(
                 "{NAME}: a pool of {pool} tiles with {capacity} particle slots needs storage the device cannot give: {error}. Raise Cell Size."
@@ -431,7 +439,8 @@ impl Primitive for GpuFlipStep {
                 // The encode decides: it knows the buffers it last built from.
                 static_all: 0,
                 tension,
-                _pad_static: [0; 2],
+                sand_count,
+                _pad_static: 0,
             },
             clock_plan: &zeros,
             particles,
@@ -455,6 +464,7 @@ impl Primitive for GpuFlipStep {
             ghost,
             density: ctx.scalar_or_param("volume_projection", 0.0) > 0.5,
             sheet_rate,
+            sand: sand.filter(|_| sand_count > 0),
         };
         let clock_status = ctx.outputs.array("clock_status").cloned();
         let body_row_offset = u64::try_from(rows.saturating_sub(body_count).max(0))

@@ -56,6 +56,10 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // step's cell and face arrays, the world tiles and the solver's fine
     // vectors.
     x.hold(pressure_scratch_bytes(pool) + step_scratch_bytes(pool, slots));
+    // A wired Sand's share at every corner of the pool.
+    if x.bytes("sand").is_some() {
+        x.hold(pool_len(pool) * 4);
+    }
     field_reads(x)?;
     x.covers_if_bound("clock_status", 32)?;
     for (buffer, count) in [
