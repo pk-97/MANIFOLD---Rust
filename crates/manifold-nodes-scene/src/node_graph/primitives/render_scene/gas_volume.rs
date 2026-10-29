@@ -12,7 +12,7 @@ use manifold_node_engine::scene::blackbody::{
 };
 use manifold_node_engine::scene::scene_object::GasVolume;
 
-use super::RenderSceneUniforms;
+use super::gas_objects::GasDraw;
 use super::water_shade::SCENE_BINDINGS;
 
 /// The scene shading, the constants generated from the Rust side, then the
@@ -387,20 +387,6 @@ fn validate(volume: &GasVolume) -> Result<RenderPreset, String> {
 
 // ---- Resources -------------------------------------------------------------
 
-/// One gas to draw this frame.
-pub(super) struct GasObject<'ctx> {
-    /// The solver's packed state: two words a cell, half floats (density,
-    /// temperature) then (fuel, flame).
-    pub state: &'ctx GpuBuffer,
-    /// The solver's packed velocity: two words a cell, half floats (u, v)
-    /// then (w, 0).
-    pub velocity: &'ctx GpuBuffer,
-    pub volume: GasVolume,
-    /// The object's `RenderSceneUniforms` bytes (view_proj, camera_pos,
-    /// scene_params: x light count, z exposure EV).
-    pub uniforms: &'ctx [u8],
-}
-
 /// What the camera and the frame give every gas.
 pub(super) struct GasView {
     pub inv_view_proj: [[f32; 4]; 4],
@@ -507,20 +493,6 @@ fn create_volume(
 
 fn groups(dims: [u32; 3]) -> [u32; 3] {
     dims.map(|n| n.div_ceil(GROUP_SIDE))
-}
-
-/// Where the object uniforms put the camera.
-fn camera_position(uniforms: &[u8]) -> Result<[f32; 3], String> {
-    let at = std::mem::offset_of!(RenderSceneUniforms, camera_pos);
-    uniforms
-        .get(at..at + 12)
-        .map(bytemuck::pod_read_unaligned)
-        .ok_or_else(|| {
-            format!(
-                "the object uniforms hold {} bytes, short of the camera",
-                uniforms.len()
-            )
-        })
 }
 
 impl GasPass {
@@ -647,7 +619,7 @@ impl GasPass {
         device: &GpuDevice,
         enc: &mut GpuEncoder,
         index: usize,
-        gas: &GasObject,
+        gas: &GasDraw,
         preset: &RenderPreset,
         sun: Option<Sun>,
     ) -> Result<(), String> {
@@ -775,7 +747,7 @@ impl GasPass {
         view: &GasView,
         sun: Option<Sun>,
         index: usize,
-        gas: &GasObject,
+        gas: &GasDraw,
         preset: &RenderPreset,
     ) {
         let pipeline = &self.pipeline.as_ref().expect("pipeline is made first").0;
@@ -791,7 +763,7 @@ impl GasPass {
         let own = [
             GpuBinding::Bytes {
                 binding: 0,
-                data: gas.uniforms,
+                data: bytemuck::bytes_of(&gas.uniforms),
             },
             GpuBinding::Bytes {
                 binding: 80,
@@ -861,7 +833,7 @@ impl GasPass {
         opaque_depth: &GpuTexture,
         scene: &[GpuBinding; SCENE_BINDINGS],
         view: &GasView,
-        gases: &[GasObject],
+        gases: &[GasDraw],
     ) -> Result<(), String> {
         if gases.is_empty() {
             return Ok(());
@@ -876,7 +848,7 @@ impl GasPass {
             let preset = validate(&gas.volume).map_err(|error| format!("gas {index}: {error}"))?;
             self.prepare(device, enc, index, gas, &preset, sun)
                 .map_err(|error| format!("gas {index}: {error}"))?;
-            let camera = camera_position(gas.uniforms)?;
+            let camera = gas.uniforms.camera_pos;
             let size = gas.volume.dims.map(|n| n as f32 * gas.volume.cell_size);
             let distance_squared: f32 = (0..3)
                 .map(|a| {

@@ -1233,15 +1233,6 @@ impl RenderScene {
                     frame: ctx.time.frame_count as u32,
                     sun: first_sun(&pre.light_data, pre.light_count),
                 };
-                let objects: Vec<gas_volume::GasObject> = gases
-                    .iter()
-                    .map(|gas| gas_volume::GasObject {
-                        state: gas.state,
-                        velocity: gas.velocity,
-                        volume: gas.volume,
-                        uniforms: bytemuck::bytes_of(&gas.uniforms),
-                    })
-                    .collect();
                 let gpu = ctx.gpu_encoder();
                 // The march reads a copy of the depth with the water in it;
                 // the depth itself stays the pass's attachment.
@@ -1260,7 +1251,7 @@ impl RenderScene {
                     transmissive_depth_scratch,
                     &scene_bindings(opaque_scene_color),
                     &view,
-                    &objects,
+                    gases,
                 ) {
                     Self::fail_frame(ctx, None, format!("Gas: {error}"));
                     return None;
