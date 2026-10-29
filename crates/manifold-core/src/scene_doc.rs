@@ -539,12 +539,13 @@ pub struct SandFields {
 }
 
 impl Default for SandFields {
-    /// A new Sand draws as grains.
+    /// A new Sand draws as grains inside its own box, so it has a floor to
+    /// land on in an empty scene.
     fn default() -> Self {
         Self {
             draw: WaterDraw::Particles,
             material: None,
-            bounds: false,
+            bounds: true,
         }
     }
 }

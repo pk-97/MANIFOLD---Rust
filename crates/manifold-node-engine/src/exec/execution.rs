@@ -3045,7 +3045,7 @@ impl Executor {
                         &mut self.error_scratch,
                         std::time::Instant::now,
                     ) {
-                        eprintln!(
+                        log::warn!(
                             "[graph error] node {:?} ({}): {msg}",
                             step.node,
                             inst.node.type_id().as_str(),
@@ -3401,7 +3401,7 @@ impl Executor {
                     &mut self.error_scratch,
                     std::time::Instant::now,
                 ) {
-                    eprintln!(
+                    log::warn!(
                         "[graph error] node {:?} ({}) late_capture: {msg}",
                         step.node,
                         inst.node.type_id().as_str(),
@@ -3481,7 +3481,7 @@ impl Executor {
                             _ => false,
                         };
                         if !landed {
-                            eprintln!(
+                            log::warn!(
                                 "[graph error] node {:?} ({}): texture swap \
                                  {out_port}<->{in_port} failed AND no copy \
                                  fallback was possible (missing texture or \

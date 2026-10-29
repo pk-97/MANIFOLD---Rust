@@ -590,11 +590,11 @@ mod tests {
                 ItemFields::Water(WaterFields::default()),
             ),
             (
+                ItemFields::Sand(SandFields::default()),
                 ItemFields::Sand(SandFields {
-                    bounds: true,
+                    bounds: false,
                     ..SandFields::default()
                 }),
-                ItemFields::Sand(SandFields::default()),
             ),
         ];
         for (on, off) in &pairs {

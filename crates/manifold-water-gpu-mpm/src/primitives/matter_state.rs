@@ -118,8 +118,6 @@ manifold_node_engine::primitive! {
     aliases: ["matter state", "mpm state", "substeps"],
     boundary_reason: CrossFrameState,
     extra_fields: {
-        // The clock's dropped total the card last saw.
-        dropped_shown: f64 = 0.0,
         epoch: Option<u32> = None,
         pending: u32 = 0,
         substeps: u32 = 1,
@@ -400,20 +398,9 @@ impl Primitive for MatterState {
             "fault",
             ParamValue::Float(if self.faulted { 1.0 } else { 0.0 }),
         );
-        // The clock's dropped time is a total since the epoch began: the line
-        // holds only while it grows, so one late frame does not stay on the
-        // card.
-        let dropped_now = dropped_seconds - self.dropped_shown;
-        self.dropped_shown = dropped_seconds;
-        if dropped_now > 0.0 {
-            ctx.error(format!(
-                "Water: the machine is behind; the water plays in slow motion ({:.0} ms dropped)",
-                dropped_now * 1000.0
-            ));
-        }
-        if self.completed_cap {
-            ctx.error("Water: a fast tick stretched its last substep".to_string());
-        }
+        // Dropped time and a stretched substep are not faults: the sand
+        // keeps drawing, slower. They go to the frame's metrics above, not
+        // to the stage, whose notices say a layer can't be drawn.
         if let Some(error) = refused {
             ctx.error(error);
         } else if self.faulted {
