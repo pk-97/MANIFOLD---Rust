@@ -132,3 +132,8 @@ times. Check this list BEFORE starting work in any of these areas.
 **Why it happens:** The frame planner decides every projection, rebuild and in-place push from its inputs (`FrameInputs`, `frame_plan.rs`). A value the UI shows that is not an input, or not derived from one, never triggers the work that draws it. `DispatchResult::structural()` and `needs_rebuild` are gone; there is no flag to set.
 **Rule:** Route the write through `DispatchCtx::mutate(touches, f)` or `execute(cmd)` so the part stamps move, or add the shown value to the planner's inputs. Never add an invalidation flag. The input matrix (`ui_snapshot/input_matrix.rs`) and `AssertFresh` catch a missing input.
 **Check first:** When a UI button/toggle "doesn't work", check that its value reaches `gather_frame_inputs` before investigating click detection or data flow.
+
+## Water and Matter surface
+
+### 23. Changing the liquid field or its smoothing
+**Rule:** Nodes near the surface must hold real distances, and smoothing weights must all be positive. Read GPU_FLUID_SURFACE_DESIGN.md P6h (rules, dead ends, costs) before changing either.

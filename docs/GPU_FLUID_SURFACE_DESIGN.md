@@ -642,6 +642,16 @@ it is BLOCKED: file a `bd` bug naming the missing read-path and declare
   atoms work. No — `FluidParticle` is its own record.
 - You will want to route the surface params through the solver so they "match the CPU
   path". No — D14; they are live GPU params.
+- You will want to smooth the field with a blur and take out its part across the
+  surface. No — the subtraction has negative weights and grows bumps on a distance
+  field (P6h).
+- You will want to fix chop by giving every node above the surface a full distance
+  (a relax or redistance pass). No — no visible gain once the smoothing is right, and
+  0.7 ms (P6h).
+- You will want to find a sheet's middle as "the field dips along an axis". No — every
+  bump top dips too, and keeps its bump (P6h).
+- You will want to mirror blobs across solids with a solid lookup per tile visit. No —
+  23 ms and flicker (P6h).
 
 ## 6. Cost and the instrument
 
@@ -1066,6 +1076,68 @@ integrated presets use particle scale 3.
 and the weights read the splat, exact within 1.5 kernel radii. `offset_lattice`
 (coincident add, one dispatch) supplies the one missing operation, with a standalone
 generated kernel, freeze body and value proof. Negative-inside sign is preserved.
+
+### P6h — Field rules for a flat, calm surface (2026-10-29)
+
+Peter's complaint: terraces, a step at every layer of display nodes on gentle slopes
+(rings on jelly and goo slabs), then chop and holes in thin floor water at Smoothness
+1–2. Checked by stills A/B per binary on waterBoxTests at Smoothness 0, 1 and 2, head
+D0, waterTestV3, a goo slab and a jelly drop; by the two nodes' GPU proofs; and by
+per-node GPU ms from `perf-soak --profile` (the `worst_frames` rows in
+`target/perf-profile/*-profile.json`, noisy: two runs a side).
+
+**Rules now in the code.**
+1. *Near distance* (`node.particle_volume`, 5913cedfa). A node outside every blob's
+   weight but inside some blob's box reads its distance to the nearest such blob's
+   surface, (|q| − r)/g, at most the band. The cause of the terraces: the blend reaches
+   only half a flattened blob's short axis past its surface, often less than a node, so
+   the node above read the band and pulled every surface crossing toward the node below.
+   Cost on head D0: particle volume 2–3 ms → 3.6–4.3 ms in a 72 ms frame.
+2. *Smoothing along the surface* (`node.field_smooth_blend`, 47001937d). Each step moves
+   a node toward 1/4 of itself plus 1/8 of each of six trilinear samples on a ring square
+   to the normal, radius √(16C/3) nodes with C = (1 + s²)/4 node² (1/4 at stride 1).
+   Every weight is positive, so a step only flattens and a straight distance field stays
+   put. The operator it replaced (the separable [1, 2, 1] blur less c × the second
+   difference along the normal) has negative weights; it grew bumps once the field held
+   real distances above the water, hidden before only because the far band made the
+   field steep there. Cost about 0.1 ms.
+3. *Sheet middles.* Where the central-difference gradient is under half, the normal is
+   the Hessian's leading eigenvector (power iteration), the direction the field bends
+   most. Without it the normal in a film's middle points along the film, the ring
+   averages across it, and films break into chop and holes.
+4. *Keep Sheets* (f9d3f1519, the Matter session). Matter sets it false on its three
+   smoothing steps: it holds no one-particle sheets, and rule 3 kept stray bumps at its
+   edges as thin fins.
+5. *Floor contact.* Water meets solids through the film discs (thin water within a
+   simulation cell of a solid draws as flat discs on it), the wall rule (a node inside a
+   solid reads at least its depth less half a cell) and `carry_liquid_into_solids`.
+   None of them square off a bulk body's bottom edge: the lowest blobs' round bottoms sit
+   above the face, and the carry writes only nodes inside the solid. Matter adds a second
+   carry before its smoothing (a2d9dc2b0), so the smoothing no longer sees air inside the
+   floor and curls the crease up: 0.06 ms, most of the crease.
+
+**Tried and dropped, measured.**
+- A relax pass giving every node within the smoothing's reach a distance (26-neighbour
+  chamfer, two-phase so frames match): no visible change once rule 2 was in; 0.7 ms.
+- The ring smoothing without rule 3: bulk surfaces glassy, floor films chop and holes.
+- Rule 3 triggered by "the field dips or peaks along an axis": catches every bump top,
+  and the jelly turned bumpy again. The gradient test does not.
+- Mirrored blobs at solids inside `node.particle_volume` (reverted, 74b1ca5e5): a solid
+  lookup on every blob's every tile visit cost 23 ms on a large jelly, and capped solid
+  values (1e4) near a body lattice's edge mirrored blobs the wrong way, pitting and
+  flickering the top. Retry only as a once-per-blob pre-pass that rejects any corner
+  reading the cap.
+- A standing-water film for thin floor water: most water
+  went missing in waterTestV2. Not to be revived as it was.
+
+**Open.**
+- Holes in very thin floor water (front of waterBoxTests), before and after these rules.
+- `particles_per_cell` never reaches the surface group, so it runs at the default 8. At
+  Matter's 27 points per cell the bulk neighbour count is 3.4× too low (every node reads
+  as bulk, no film discs) and blobs keep the 8-per-cell radius.
+- Smoothness defaults were tuned on the old steep field; the same setting now moves the
+  surface further (estimate 1.5–3×). Sand rows default to 2.
+- The near distance's 1.4 ms on head D0.
 
 ### P7 — Add Fluid authors the GPU surface
 
