@@ -1,24 +1,22 @@
 //! GPU proofs for `node.particle_volume` against the dense blended-sphere
-//! rule (every blob against every node) on world tiles. Each box of nodes is a pooled field
-//! under the table of the tiles it touches, its first node at world node
-//! `ORIGIN` so the box straddles tiles -1 and 0 on x; the blobs are sorted
+//! rule (every blob against every node) on world tiles. Each box of nodes is
+//! the whole of the tiles it touches as a pooled field; the blobs are sorted
 //! into the display cells on the CPU, as `node.sort_particles_into_cells` does
 //! over the same table.
 
 use super::*;
+use bytemuck::Zeroable;
 use manifold_node_engine::scene::scene_object::FIELD_FAR_CELLS;
 use manifold_node_engine::scene::world_tiles::{local_index, pool_len};
-use bytemuck::Zeroable;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_water_liquid::testkit::world_box::{BoxTable, table_words_of};
 
 const H: f32 = 0.07;
 /// The shader's PV_WALL_REACH: how far, in cells, water reaches into a solid.
 const WALL_REACH_CELLS: f32 = 0.5;
-/// The world node of the box's first node: x from -6 is tile -1 for six
-/// nodes and tile 0 for the rest; y from 3 and z from -2 cross tile faces too.
-const ORIGIN: [i32; 3] = [-6, 3, -2];
-const DIMS: [u32; 3] = [16, 20, 16];
+/// The world node of the box's first node: the 27 tiles from tile (-1, 0, -1).
+const ORIGIN: [i32; 3] = [-8, 0, -8];
+const DIMS: [u32; 3] = [24, 24, 24];
 /// More neighbours than any film has: past the smoothing fade at every
 /// particle density.
 const BULK_COUNT: f32 = 1000.0;
@@ -95,21 +93,45 @@ fn box_index(table: &BoxTable, w: [i32; 3]) -> usize {
 const FIXED: f64 = 1_048_576.0;
 const MIN_WEIGHT: f64 = 1.0e-3;
 
-/// One node under the dense rule: its value and how far the shader's rounded
-/// sums may sit from it, or `None` where its weight is too near the cutoff to
-/// say which side the shader lands.
-type Level = Option<(f32, f32)>;
+/// One node under the dense rule.
+#[derive(Clone, Copy)]
+struct Level {
+    /// The rule's value, NaN where the weight is too near the cutoff to say
+    /// which side the shader lands.
+    value: f32,
+    /// The least and most the shader's rounded sums may give, both sides'
+    /// values where the rule cannot say.
+    lo: f64,
+    hi: f64,
+}
+
+/// Whether a round blob centred at `c` with weight radius `blend` visits
+/// world node `node`: the shader's grid box, floor((c - R)/H + 1/2) through
+/// floor((c + R)/H + 1/2) + 1 on each axis.
+fn visits(c: [f32; 3], blend: f32, node: [i32; 3]) -> bool {
+    (0..3).all(|a| {
+        let first = ((c[a] - blend) / H + 0.5).floor() as i32;
+        let last = ((c[a] + blend) / H + 0.5).floor() as i32 + 1;
+        (first..=last).contains(&node[a])
+    })
+}
 
 /// The blended-sphere rule at world node `node` over every blob, R half the
-/// band, and inside the solid at least the node's depth in it.
+/// band, and inside the solid at least the node's depth in it. A node no
+/// blob's weight reaches reads its distance to the nearest round blob whose
+/// box visits it, at most the band.
 fn dense_level(blobs: &[[f32; 4]], node: [i32; 3], band: f32, solid: f32) -> Level {
     let p: [f64; 3] = std::array::from_fn(|a| (f64::from(node[a]) - 0.5) * f64::from(H));
     let blend = 0.5 * f64::from(band);
     let (mut weight, mut offset, mut radius, mut terms) = (0.0, [0.0f64; 3], 0.0, 0.0);
+    let mut near = f64::from(band);
     for b in blobs.iter().filter(|b| b[3] > 0.0) {
         let d: [f64; 3] = std::array::from_fn(|a| (f64::from(b[a]) - p[a]) / blend);
         let s2 = d.iter().map(|x| x * x).sum::<f64>();
         if s2 >= 1.0 {
+            if visits([b[0], b[1], b[2]], blend as f32, node) {
+                near = near.min(s2.sqrt() * blend - f64::from(b[3]));
+            }
             continue;
         }
         let w = (1.0 - s2).powi(3);
@@ -121,26 +143,53 @@ fn dense_level(blobs: &[[f32; 4]], node: [i32; 3], band: f32, solid: f32) -> Lev
         terms += 1.0;
     }
     let slack = terms / FIXED;
-    if (weight - MIN_WEIGHT).abs() <= slack {
-        return None;
-    }
-    let (mut phi, mut tolerance) = (f64::from(band), 0.0);
-    if weight >= MIN_WEIGHT {
+    let far = (near, 1.0 / FIXED);
+    let blended = if weight > 0.0 {
         let off = offset
             .iter()
             .map(|o| (o / weight).powi(2))
             .sum::<f64>()
             .sqrt();
-        phi = ((off - radius / weight) * blend).min(f64::from(band));
-        tolerance = 3.0 * blend * slack / weight;
-    }
+        (
+            ((off - radius / weight) * blend).min(f64::from(band)),
+            3.0 * blend * slack / weight,
+        )
+    } else {
+        far
+    };
+    let mut level = if (weight - MIN_WEIGHT).abs() <= slack {
+        Level {
+            value: f32::NAN,
+            lo: (far.0 - far.1).min(blended.0 - blended.1),
+            hi: (far.0 + far.1).max(blended.0 + blended.1),
+        }
+    } else {
+        let (phi, tolerance) = if weight >= MIN_WEIGHT { blended } else { far };
+        Level {
+            value: phi as f32,
+            lo: phi - tolerance,
+            hi: phi + tolerance,
+        }
+    };
     if solid < 0.0 {
-        phi = phi.max(f64::from(-solid - WALL_REACH_CELLS * H));
+        level = level.at_least(f64::from(-solid - WALL_REACH_CELLS * H));
     }
-    Some((
-        phi as f32,
-        tolerance as f32 + 1.0e-6 + 1.0e-5 * phi.abs() as f32,
-    ))
+    level
+}
+
+impl Level {
+    /// The level raised to `floor`, as the wall rule raises a node in a solid.
+    fn at_least(self, floor: f64) -> Self {
+        Level {
+            value: if self.value.is_nan() {
+                f32::NAN
+            } else {
+                self.value.max(floor as f32)
+            },
+            lo: self.lo.max(floor),
+            hi: self.hi.max(floor),
+        }
+    }
 }
 
 /// Every node of the box (x fastest) under the dense rule.
@@ -162,12 +211,14 @@ fn dense_box(blobs: &[[f32; 4]], solid: &[f32], band: f32) -> Vec<Level> {
     out
 }
 
+/// The least and most the shader's value may be at each node.
+fn bounds(levels: &[Level]) -> Vec<(f64, f64)> {
+    levels.iter().map(|l| (l.lo, l.hi)).collect()
+}
+
 /// The dense values, NaN where the rule cannot say.
 fn values(levels: &[Level]) -> Vec<f32> {
-    levels
-        .iter()
-        .map(|l| l.map_or(f32::NAN, |(v, _)| v))
-        .collect()
+    levels.iter().map(|l| l.value).collect()
 }
 
 /// The solid's distance at every node of the box: negative below `y_edge` cells.
@@ -201,8 +252,7 @@ fn run(
     // Bulk water's neighbour counts, so no blob beside the solid draws as a
     // film disc: the dense box models plain blobs.
     let (counts_slot, _) = harness.array(&vec![BULK_COUNT; blobs.len()], blobs.len());
-    let (sorted_slot, _) =
-        harness.array(&vec![FluidParticle::zeroed(); blobs.len()], blobs.len());
+    let (sorted_slot, _) = harness.array(&vec![FluidParticle::zeroed(); blobs.len()], blobs.len());
     // An element the node leaves unwritten stays NaN and fails every compare.
     let (out_slot, out_buffer) = harness.array(&vec![f32::NAN; len], len);
     let (weights_slot, _) = harness.array(&vec![f32::NAN; len], len);
@@ -236,20 +286,16 @@ fn run(
     read(&out_buffer, len)
 }
 
-fn assert_all_close(got: &[f32], want: &[Level]) {
+/// Every GPU value within its bounds, give or take f32 rounding.
+fn assert_all_close(got: &[f32], want: &[(f64, f64)]) {
     assert_eq!(got.len(), want.len());
-    let mut compared = 0;
-    for (i, (&g, w)) in got.iter().zip(want).enumerate() {
-        if let Some((w, tolerance)) = *w {
-            assert!((g - w).abs() <= tolerance, "node {i}: gpu {g} vs dense {w}");
-            compared += 1;
-        }
+    for (i, (&g, &(lo, hi))) in got.iter().zip(want).enumerate() {
+        let slack = 1.0e-6 + 1.0e-5 * f64::from(g).abs();
+        assert!(
+            (lo - slack..=hi + slack).contains(&f64::from(g)),
+            "node {i}: gpu {g} vs dense {lo}..{hi}"
+        );
     }
-    assert!(
-        compared * 100 > got.len() * 99,
-        "{compared} of {}",
-        got.len()
-    );
 }
 
 /// One blob each side of the face between world cells -1 and 0 (the face
@@ -281,7 +327,7 @@ fn blobs_each_side_of_a_tile_face_match_a_dense_box() {
     ));
     let band = 3.0 * blob_reach;
     let want = dense_box(&blobs, &solid_dense, band);
-    assert_all_close(&got, &want);
+    assert_all_close(&got, &bounds(&want));
 
     // The face matters: A, centred in tile -1, reaches nodes of tile 0, and
     // B, centred in tile 0, nodes of tile -1; the solid clips and the rest is
@@ -335,7 +381,7 @@ fn a_blob_cloud_matches_the_dense_box() {
         blob_reach,
     ));
     let want = dense_box(&blobs, &solid_dense, 3.0 * blob_reach);
-    assert_all_close(&got, &want);
+    assert_all_close(&got, &bounds(&want));
     let want = values(&want);
     assert!(want.iter().filter(|&&v| v < 0.0).count() > 500);
     // Nodes in the floor a blob reaches read their depth in it less the
@@ -347,7 +393,7 @@ fn a_blob_cloud_matches_the_dense_box() {
     assert!(want.iter().any(|&v| v > 0.0 && v < 3.0 * blob_reach));
 }
 
-/// Held tiles with no water read the band, a free slot and the canonical
+/// Held tiles no blob visits read the band, a free slot and the canonical
 /// element read the far value (three cells), and a tile's own nodes match
 /// the dense rule for a blob in it.
 #[test]
@@ -384,14 +430,15 @@ fn air_reads_the_band_and_free_slots_and_canon_read_far() {
     let mut touched = 0;
     for (e, &value) in got.iter().enumerate().take(512) {
         let node = [(e & 7) as i32, ((e >> 3) & 7) as i32, (e >> 6) as i32];
-        let Some((want, tolerance)) = dense_level(&[blob], node, band, NO_SOLID) else {
-            continue;
-        };
+        let level = dense_level(&[blob], node, band, NO_SOLID);
+        let slack = 1.0e-6 + 1.0e-5 * f64::from(value).abs();
         assert!(
-            (value - want).abs() <= tolerance,
-            "tile node {node:?}: gpu {value} vs dense {want}"
+            (level.lo - slack..=level.hi + slack).contains(&f64::from(value)),
+            "tile node {node:?}: gpu {value} vs dense {}..{}",
+            level.lo,
+            level.hi
         );
-        touched += usize::from(want < band);
+        touched += usize::from(value < band);
     }
     assert!(touched > 20, "the blob must touch the tile");
 }

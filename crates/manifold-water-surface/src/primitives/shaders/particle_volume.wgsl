@@ -24,7 +24,12 @@
 // surface and `film_half` along its normal, so the film's discs blend into
 // one flat sheet `film_half` high with the rest of the water's look, where
 // their own ellipsoids would leave holes and bumps. A node that gathers less
-// than PV_MIN_WEIGHT reads 3 * blob_reach. A blob visits the nodes of its
+// than PV_MIN_WEIGHT reads its distance to the nearest blob whose box visits
+// it, (|q| - r) / g for that blob alone, at most 3 * blob_reach: the blend
+// reaches only half a short axis past a flattened blob's surface, often less
+// than a node, and a far value there would pull every surface crossing
+// toward the node below it, a step at every layer of nodes on a gentle
+// slope. A blob visits the nodes of its
 // inclusive floor(c - R')..floor(c + R')+1 grid box, R' = R times its
 // weight's reach (shape_diagonal.w).
 //
@@ -135,6 +140,10 @@ const PV_MAX_WINDOW: i32 = 52;
 // velocity (xyz).
 const PV_SUMS: u32 = 10u;
 var<workgroup> pv_sum: array<atomic<i32>, 5120>;
+// Per node, the least distance (fixed point, PV_FIXED per metre) to the
+// surface of a blob whose box visits it but whose weight does not reach it.
+var<workgroup> pv_near: array<atomic<i32>, 512>;
+const PV_NEAR_NONE: i32 = 2147483647;
 // The fixed-point scale of the sums. Each term is at most a few units (q and
 // g reach 1 / size, about 4) and a node's weights sum to at most about a
 // hundred blobs, far inside an i32.
@@ -220,6 +229,9 @@ fn cs_main(
     let band = 3.0 * reach;
     for (var l = lane; l < 512u * PV_SUMS; l = l + PV_THREADS) {
         atomicStore(&pv_sum[l], 0);
+    }
+    for (var l = lane; l < 512u; l = l + PV_THREADS) {
+        atomicStore(&pv_near[l], PV_NEAR_NONE);
     }
     // Zhu and Bridson's blend radius: the support every blob already visits.
     let blend = 1.5 * reach;
@@ -354,11 +366,6 @@ fn cs_main(
                         let q = pv_apply(diag, off, centre - p);
                         let m = size * q;
                         let s2 = dot(m, m) / (blend * blend);
-                        if s2 >= 1.0 {
-                            continue;
-                        }
-                        let fall = 1.0 - s2;
-                        let w = fall * fall * fall;
                         // The gradient scale |A q| / |q|; at the centre,
                         // where it has no direction, the mean axis.
                         let reach_q = length(q);
@@ -366,6 +373,18 @@ fn cs_main(
                         if reach_q > 1.0e-6 * blend {
                             g = length(pv_apply(diag, off, q)) / reach_q;
                         }
+                        if s2 >= 1.0 {
+                            // Most visits are no nearer than one already
+                            // seen; a plain load skips their atomic.
+                            let apart = i32(round(min((reach_q - r) / max(g, 1.0e-6), band) * PV_FIXED));
+                            let k = ts_local(node);
+                            if apart < atomicLoad(&pv_near[k]) {
+                                atomicMin(&pv_near[k], apart);
+                            }
+                            continue;
+                        }
+                        let fall = 1.0 - s2;
+                        let w = fall * fall * fall;
                         let wq = w / blend * PV_FIXED;
                         let base = PV_SUMS * ts_local(node);
                         atomicAdd(&pv_sum[base], i32(round(w * PV_FIXED)));
@@ -391,6 +410,10 @@ fn cs_main(
         let base = PV_SUMS * l;
         let weight = f32(atomicLoad(&pv_sum[base]));
         var phi = band;
+        let near = atomicLoad(&pv_near[l]);
+        if near != PV_NEAR_NONE {
+            phi = f32(near) / PV_FIXED;
+        }
         var smoothing = 0.0;
         var moving = vec3<f32>(0.0);
         if weight >= PV_MIN_WEIGHT * PV_FIXED {
