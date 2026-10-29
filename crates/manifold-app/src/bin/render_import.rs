@@ -59,6 +59,8 @@
 //! refit path (camera motion does not). Warmup converges first at the start
 //! value(s), then N consecutive frames render with the param(s) advancing linearly
 //! to end. Frames are tiled horizontally into one PNG.
+//! With `--benchmark-frames` the sweep is timed instead: the first five frames
+//! warm up, the rest report GPU time, and only the last frame is written.
 //!
 //! Exit codes: 0 = PNG written after convergence; 2 = never converged
 //! (prints the last non-black fraction); 3 = import error (parse/build
@@ -410,16 +412,7 @@ fn validate_benchmark_mode(args: &Args) -> Result<(), String> {
     if args.benchmark_frames.is_some() && args.app_presentation {
         return Err("--benchmark-frames measures generator work only; use the app's perf-soak command for content-path timing".to_string());
     }
-    if args.benchmark_frames.is_some()
-        && (args.anim_param.is_some()
-            || args.anim_start.is_some()
-            || args.anim_end.is_some()
-            || args.anim_frames.is_some())
-    {
-        Err("--benchmark-frames cannot be combined with animation flags".to_string())
-    } else {
-        Ok(())
-    }
+    Ok(())
 }
 
 /// `--dump-def <glb-path> <out.json>` — P3-D INV-R8 harness mode. Assembles
@@ -747,6 +740,7 @@ fn main() {
 
     // Sequence phase: render N consecutive frames with param advancing.
     let mut filmstrip_frames = Vec::with_capacity(anim_frames as usize);
+    let mut anim_gpu_ms = Vec::new();
     let warmup_end_frame = args.frames_max; // Warmup converges by frames_max (300), not exact.
     for i in 0..anim_frames {
         let param_value =
@@ -785,7 +779,16 @@ fn main() {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
             runtime.render(&mut gpu, &target.texture, &ctx, &seq_manifest);
         }
-        enc.commit_and_wait().expect("GPU work completes");
+        let profile = enc.commit_and_wait_profiled(&device);
+        // A timed sweep keeps only the last frame and skips five warm frames.
+        if args.benchmark_frames.is_some() {
+            if i >= 5 {
+                anim_gpu_ms.push(profile.total_ms);
+            }
+            if i + 1 < anim_frames {
+                continue;
+            }
+        }
 
         let rgba = if let Some(presentation) = app_presentation.as_mut() {
             presentation.capture(
@@ -807,8 +810,19 @@ fn main() {
         filmstrip_frames.push(rgba);
     }
 
+    if !anim_gpu_ms.is_empty() {
+        let benchmark = serde_json::json!({
+            "width": args.width,
+            "height": args.height,
+            "frames": anim_gpu_ms.len(),
+            "gpu_median_ms": percentile_ms(&anim_gpu_ms, 0.50),
+            "gpu_p95_ms": percentile_ms(&anim_gpu_ms, 0.95),
+        });
+        println!("benchmark: {benchmark}");
+    }
+
     // Tile frames horizontally into one PNG.
-    let filmstrip_width = args.width * anim_frames;
+    let filmstrip_width = args.width * filmstrip_frames.len() as u32;
     let mut filmstrip_rgba = vec![0u8; (filmstrip_width * args.height * 4) as usize];
     for (i, frame) in filmstrip_frames.iter().enumerate() {
         let x_offset = (i as u32 * args.width * 4) as usize;
@@ -1332,31 +1346,6 @@ mod tests {
         .unwrap();
         assert!(enabled.app_presentation);
         assert!(enabled.trace);
-    }
-
-    #[test]
-    fn benchmark_mode_rejects_animation_flags() {
-        let args = Args {
-            glb: PathBuf::from("fixture.glb"),
-            width: 8,
-            height: 8,
-            out: PathBuf::from("/tmp/out.png"),
-            overrides: Vec::new(),
-            orbit: None,
-            tilt: None,
-            frames_max: 10,
-            non_black_floor: 0.02,
-            trace: false,
-            time: 0.0,
-            anim_param: Some("camera_orbit".to_string()),
-            anim_start: Some(0.0),
-            anim_end: Some(1.0),
-            anim_frames: Some(2),
-            benchmark_frames: Some(1),
-            app_presentation: false,
-        };
-        let error = validate_benchmark_mode(&args).unwrap_err();
-        assert!(error.contains("cannot be combined with animation flags"));
     }
 
     #[test]
