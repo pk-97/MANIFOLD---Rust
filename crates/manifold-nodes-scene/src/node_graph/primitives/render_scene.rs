@@ -928,7 +928,7 @@ struct RenderSceneUniforms {
     /// Last frame's `instance_inner`, the velocity pair of `prev_model`.
     prev_instance_inner: [[f32; 4]; 4],
     /// x: metres the height picture carves a box-mapped surface, 0 for
-    /// none (parallax in render_scene.wgsl's `begin_box`). yzw unused.
+    /// none (parallax in render_scene.wgsl's `begin_surface`). yzw unused.
     relief: [f32; 4],
 }
 
@@ -2260,13 +2260,10 @@ fn solid_surface(uniforms: &RenderSceneUniforms) -> bool {
         && uniforms.volume_optics[0] <= 0.5
 }
 
-/// Whether a draw takes the parallax pipeline: a PBR material with Depth,
-/// box mapped, with a normal map (its alpha holds the height).
+/// Whether a draw takes the parallax pipeline: a PBR material with Depth and
+/// a normal map (its alpha holds the height), box mapped or on its UVs.
 fn parallax_surface(kind: MaterialKind, uniforms: &RenderSceneUniforms) -> bool {
-    kind == MaterialKind::Pbr
-        && uniforms.relief[0] > 0.0
-        && uniforms.surface[1] > 0.5
-        && uniforms.texture_flags[0] > 0.5
+    kind == MaterialKind::Pbr && uniforms.relief[0] > 0.0 && uniforms.texture_flags[0] > 0.5
 }
 
 /// SCENE_RENDER_MODE_DESIGN.md D4 / INV-R4: modes act on the raster path

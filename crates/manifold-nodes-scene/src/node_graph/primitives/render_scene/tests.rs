@@ -592,26 +592,59 @@ fn opaque_fast_variants_have_no_discard_and_validate() {
     }
 }
 
-/// The parallax variant is a text edit of the shader: its marker must sit in
-/// the source exactly once, and the edited shader must still validate.
+/// The parallax variant is a text edit on top of every aux and solid edit:
+/// each one must trace on the box and on the UVs, write the carved depth,
+/// and still validate.
 #[test]
-fn parallax_variant_traces_and_validates() {
+fn parallax_variants_trace_write_depth_and_validate() {
     let base = RENDER_SCENE_WGSL.as_str();
-    let mut src = base.to_string();
-    for &(pattern, replacement) in RenderScene::PARALLAX_SPECIALIZATIONS {
-        assert_eq!(base.matches(pattern).count(), 1, "parallax marker");
-        src = src.replace(pattern, replacement);
-    }
-    let module = naga::front::wgsl::parse_str(&src).expect("parallax variant must parse");
-    let mut validator = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    );
-    if let Err(e) = validator.validate(&module) {
-        panic!(
-            "parallax variant failed validation:\n{}",
-            e.emit_to_string(&src)
-        );
+    for (velocity, ao_mask, denoise) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (true, true, false),
+        (false, false, true),
+        (true, false, true),
+        (false, true, true),
+        (true, true, true),
+    ] {
+        for opaque_fast in [false, true] {
+            let mut specs = RenderScene::aux_variant(velocity, ao_mask, denoise)
+                .map_or(Vec::new(), |(specs, _, _)| specs.to_vec());
+            if opaque_fast {
+                specs.extend_from_slice(RenderScene::OPAQUE_FAST_SPECIALIZATIONS);
+            }
+            specs.extend_from_slice(RenderScene::PARALLAX_SPECIALIZATIONS);
+            let mut src = base.to_string();
+            for (pattern, replacement) in specs {
+                src = src.replace(pattern, replacement);
+            }
+            let variant = format!(
+                "velocity={velocity} ao_mask={ao_mask} denoise={denoise} opaque_fast={opaque_fast}"
+            );
+            for call in [
+                "p = box_parallax(",
+                "uv_parallax(uv, ",
+                "@builtin(frag_depth)",
+                "@early_depth_test(greater_equal)",
+            ] {
+                assert_eq!(src.matches(call).count(), 1, "{variant}: {call}");
+            }
+            assert_eq!(
+                src.matches("return FsOut(carved_depth(").count(),
+                3,
+                "{variant}"
+            );
+            let module = naga::front::wgsl::parse_str(&src)
+                .unwrap_or_else(|e| panic!("{variant}: {}", e.emit_to_string(&src)));
+            let mut validator = naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            );
+            if let Err(e) = validator.validate(&module) {
+                panic!("{variant} failed validation:\n{}", e.emit_to_string(&src));
+            }
+        }
     }
 }
 

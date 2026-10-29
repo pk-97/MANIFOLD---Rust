@@ -170,14 +170,64 @@ impl RenderScene {
         ),
     ];
 
-    /// The parallax variant: traces the height field in `begin_box` for a
-    /// material with Depth. Every other draw compiles without the trace,
-    /// because its registers alone slow every PBR pixel even when the trace
-    /// never runs. Only valid for a draw where `parallax_surface` holds.
-    pub(super) const PARALLAX_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[(
-        "    // parallax trace (only in the parallax pipeline, `PARALLAX_SPECIALIZATIONS`)\n",
-        "    p = box_parallax(p, px, py, n, s, mat3x3<f32>(ax, ay, az), world_pos, pixel);\n",
-    )];
+    /// The parallax variant: traces the height field in `begin_surface` for
+    /// a material with Depth, box mapped or on the mesh's UVs, and writes the
+    /// carved depth so other objects meet the relief. Every other draw
+    /// compiles without the trace, because its registers alone slow every
+    /// PBR pixel even when the trace never runs. Only valid for a draw where
+    /// `parallax_surface` holds. Applied after the aux edits: the depth
+    /// output joins their `FsOut`, or makes one for the plain variant.
+    pub(super) const PARALLAX_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[
+        (
+            "    // parallax trace (only in the parallax pipeline, `PARALLAX_SPECIALIZATIONS`)\n",
+            "    p = box_parallax(p, px, py, n, s, mat3x3<f32>(ax, ay, az), world_pos, pixel);\n",
+        ),
+        (
+            "        // uv parallax (only in the parallax pipeline, `PARALLAX_SPECIALIZATIONS`)\n",
+            "        uv_parallax(uv, world_normal, world_pos, pixel);\n",
+        ),
+        // The UV path's reads keep the unshifted gradients, so a cliff in
+        // the height never jumps the mip or bends the tangent frame.
+        (
+            "    return textureSampleBias(tex, samp, material_uv(uv, index), u.render_mode.y);",
+            "    return textureSampleGrad(tex, samp, material_uv(uv, index), flat_uv_dx(uv, index), flat_uv_dy(uv, index));",
+        ),
+        (
+            "textureSampleBias(normal_map, normal_sampler, uv_t, u.render_mode.y)",
+            "textureSampleGrad(normal_map, normal_sampler, uv_t, flat_uv_dx(uv, 1u), flat_uv_dy(uv, 1u))",
+        ),
+        (
+            "let tbn = tbn_for(n, world_pos, uv_t, tangent);",
+            "let tbn = tbn_for(n, world_pos, material_uv_flat(uv, 1u), tangent);",
+        ),
+        (
+            "let footprint = max(length(dpdx(coord) * dim), length(dpdy(coord) * dim));",
+            "let footprint = max(length(dpdx(material_uv_flat(uv, index)) * dim), length(dpdy(material_uv_flat(uv, index)) * dim));",
+        ),
+        // Carving only pushes depth away from the eye, so the early depth
+        // test stays valid.
+        (
+            "@fragment\nfn fs_pbr(",
+            "@fragment\n@early_depth_test(greater_equal)\nfn fs_pbr(",
+        ),
+        (
+            "struct FsOut {\n    @location(0) color: vec4<f32>,",
+            "struct FsOut {\n    @builtin(frag_depth) depth: f32,\n    @location(0) color: vec4<f32>,",
+        ),
+        (
+            "return FsOut(",
+            "return FsOut(carved_depth(in.clip_pos.z, in.world_pos), ",
+        ),
+        (
+            "// GBUFFER_FSOUT_VELOCITY_STRUCT",
+            "struct FsOut {\n    @builtin(frag_depth) depth: f32,\n    @location(0) color: vec4<f32>,\n};",
+        ),
+        ("-> @location(0) vec4<f32> {", "-> FsOut {"),
+        (
+            "return apply_appearance(rgb, albedo.a, in.appearance_weight);",
+            "return FsOut(carved_depth(in.clip_pos.z, in.world_pos), apply_appearance(rgb, albedo.a, in.appearance_weight));",
+        ),
+    ];
 
     /// The solid depth-only variant of `shaders/shadow_depth.wgsl`: drops the
     /// cutout and appearance-fade `discard` block that all three fragment

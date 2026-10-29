@@ -150,10 +150,31 @@ struct MaterialMaps { maps: array<MaterialMapUniform, 19>, };
 @group(0) @binding(52) var subsurface_radiance: texture_2d<f32>;
 @group(0) @binding(50) var<uniform> material_maps: MaterialMaps;
 
-fn material_uv(uv: vec4<f32>, index: u32) -> vec2<f32> {
+fn material_uv_flat(uv: vec4<f32>, index: u32) -> vec2<f32> {
     let m = material_maps.maps[index];
     let xy = select(uv.xy, uv.zw, m.offset_set.z == 1.0);
     return vec2<f32>(dot(m.matrix.xy, xy), dot(m.matrix.zw, xy)) + m.offset_set.xy;
+}
+
+// Parallax on the mesh's own UVs moves the normal map's UV set by this
+// (`uv_parallax`), so every map on that set reads the carved spot.
+var<private> uv_shift: vec2<f32> = vec2<f32>(0.0);
+
+fn material_uv(uv: vec4<f32>, index: u32) -> vec2<f32> {
+    let second = material_maps.maps[1u].offset_set.z == 1.0;
+    let shift = select(vec4<f32>(uv_shift, 0.0, 0.0), vec4<f32>(0.0, 0.0, uv_shift), second);
+    return material_uv_flat(uv + shift, index);
+}
+
+// Map `index`'s screen gradients before the parallax shift, scaled by the
+// mip bias as textureSampleBias would: a cliff in the height moves the
+// coordinate, never the mip. The parallax pipeline reads through these.
+fn flat_uv_dx(uv: vec4<f32>, index: u32) -> vec2<f32> {
+    return dpdx(material_uv_flat(uv, index)) * exp2(u.render_mode.y);
+}
+
+fn flat_uv_dy(uv: vec4<f32>, index: u32) -> vec2<f32> {
+    return dpdy(material_uv_flat(uv, index)) * exp2(u.render_mode.y);
 }
 
 fn map_address(i: i32, size: i32, mode: u32) -> i32 {
@@ -242,7 +263,7 @@ struct VsOut {
     @location(6) appearance_weight: f32,
     @location(8) vertex_color: vec4<f32>,
     @location(9) @interpolate(flat) instance_scale: f32,
-    // Box mapping's frame (`begin_box`): the position along the object's
+    // Box mapping's frame (`begin_surface`): the position along the object's
     // own axes in metres, the normal in that frame, and where each of those
     // axes points in the world. Zero unless the material is box mapped.
     @location(10) box_pos: vec3<f32>,
@@ -597,6 +618,21 @@ var<private> box_weights: vec3<f32>;
 // parallax did not run.
 var<private> relief_light: vec4<f32> = vec4<f32>(1.0);
 var<private> relief_crevice: f32 = 1.0;
+// How far down the view ray the parallax hit sits, in metres; 0 where
+// parallax did not run.
+var<private> relief_sink: f32 = 0.0;
+
+// The depth of the parallax hit, so other objects meet the carved surface
+// rather than its flat face; the parallax pipeline writes it. `z` is the
+// flat face's own.
+fn carved_depth(z: f32, world_pos: vec3<f32>) -> f32 {
+    if relief_sink <= 0.0 {
+        return z;
+    }
+    let hit = world_pos - normalize(u.camera_pos.xyz - world_pos) * relief_sink;
+    let clip = u.view_proj * vec4<f32>(hit, 1.0);
+    return clip.z / clip.w;
+}
 
 fn box_hash(c: vec2<i32>) -> vec3<f32> {
     var h = bitcast<u32>(c.x) * 1664525u + bitcast<u32>(c.y) * 1013904223u + 374761393u;
@@ -717,7 +753,81 @@ fn box_parallax(p: vec3<f32>, px: vec3<f32>, py: vec3<f32>, n: vec3<f32>, s: vec
     // Side and tile maps are linear, so the ray is a straight line in the
     // tile's coordinates.
     let dir = box_turn(box_side_st(down, s, a), r);
-    let steps = clamp(ceil(reach / (3.0 * pixel_size)), 3.0, 16.0);
+    let hit = relief_march(start, dir, lod, clamp(ceil(reach / (3.0 * pixel_size)), 3.0, 16.0), pixel);
+    let uv = start + dir * hit;
+    let height = 1.0 - hit;
+    for (var i = 0u; i < min(u32(u.scene_params.x), 4u); i++) {
+        let l = transpose(axes) * light_direction_attenuation(i, world_pos).xyz;
+        let ln = dot(l, n);
+        if ln > 0.0 {
+            let up = box_turn(box_side_st(l * (depth / ln), s, a), r);
+            relief_light[i] = relief_shadow(uv, height, lod, up);
+        }
+    }
+    relief_crevice = relief_occlusion(uv, height, lod, depth);
+    relief_sink = u.relief.x * hit / vn;
+    return p + down * hit;
+}
+
+// Parallax on the mesh's own UVs, as `box_parallax` does on the box: the
+// view ray marches into the height along the normal map's coordinate, and
+// the normal map's UV set moves to the hit (`uv_shift`). The UVs' gradients
+// over the surface (the cotangent solve `cotangent_frame` uses, kept to
+// scale) turn metres of depth into UV distance, so stretched or scaled UVs
+// carve true depth.
+fn uv_parallax(uv: vec4<f32>, normal: vec3<f32>, world_pos: vec3<f32>, pixel: vec2<f32>) {
+    let m = material_maps.maps[1u];
+    let raw = select(uv.xy, uv.zw, m.offset_set.z == 1.0);
+    let coord = material_uv_flat(uv, 1u);
+    let n = normalize(normal);
+    let dp1 = dpdx(world_pos);
+    let dp2 = dpdy(world_pos);
+    let duv1 = dpdx(raw);
+    let duv2 = dpdy(raw);
+    let cx = dpdx(coord);
+    let cy = dpdy(coord);
+    let v = normalize(u.camera_pos.xyz - world_pos);
+    let vn = dot(v, n);
+    let dp2perp = cross(dp2, n);
+    let dp1perp = cross(n, dp1);
+    let det = dot(dp1, dp2perp);
+    if vn < 0.05 || det == 0.0 || (u32(u.appearance.z) & 1u) != 0u {
+        return;
+    }
+    let gu = (dp2perp * duv1.x + dp1perp * duv2.x) / det;
+    let gv = (dp2perp * duv1.y + dp1perp * duv2.y) / det;
+    // The normal map's coordinate per metre along the surface.
+    let gx = m.matrix.x * gu + m.matrix.y * gv;
+    let gy = m.matrix.z * gu + m.matrix.w * gv;
+    let depth = u.relief.x;
+    let down = -vec2<f32>(dot(gu, v), dot(gv, v)) * (depth / vn);
+    let dir = vec2<f32>(dot(m.matrix.xy, down), dot(m.matrix.zw, down));
+    let pixel_size = max(length(cx), length(cy));
+    let reach = length(dir);
+    if reach < 0.5 * pixel_size {
+        return;
+    }
+    let size = vec2<f32>(textureDimensions(normal_map));
+    let lod = log2(max(max(length(cx * size), length(cy * size)), 1.0)) + 1.0;
+    let hit = relief_march(coord, dir, lod, clamp(ceil(reach / (3.0 * pixel_size)), 3.0, 16.0), pixel);
+    let at = coord + dir * hit;
+    let height = 1.0 - hit;
+    for (var i = 0u; i < min(u32(u.scene_params.x), 4u); i++) {
+        let l = light_direction_attenuation(i, world_pos).xyz;
+        let ln = dot(l, n);
+        if ln > 0.0 {
+            relief_light[i] = relief_shadow(at, height, lod, vec2<f32>(dot(gx, l), dot(gy, l)) * (depth / ln));
+        }
+    }
+    relief_crevice = relief_occlusion(at, height, lod, depth * 0.5 * (length(gx) + length(gy)));
+    relief_sink = depth * hit / vn;
+    uv_shift = down * hit;
+}
+
+// March the ray from `start` along `dir` (its way to the full depth, in the
+// normal map's coordinate) into the height, `steps` steps, and return how
+// far down it meets the height, 0 to 1.
+fn relief_march(start: vec2<f32>, dir: vec2<f32>, lod: f32, steps: f32, pixel: vec2<f32>) -> f32 {
     // Interleaved gradient noise staggers the first step per pixel, so the
     // steps leave grain rather than bands.
     let stagger = fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
@@ -774,30 +884,18 @@ fn box_parallax(p: vec3<f32>, px: vec3<f32>, py: vec3<f32>, n: vec3<f32>, s: vec
     // The height crosses the ray between the last step above it and this one.
     let span = gap - prev_gap;
     let t = select(-prev_gap / span, 0.0, span <= 0.0);
-    let hit = mix(prev_d, d, t);
-    let uv = start + dir * hit;
-    let height = 1.0 - hit;
-    for (var i = 0u; i < min(u32(u.scene_params.x), 4u); i++) {
-        let l = transpose(axes) * light_direction_attenuation(i, world_pos).xyz;
-        relief_light[i] = relief_shadow(l, uv, height, lod, a, r, s, n);
-    }
-    relief_crevice = relief_occlusion(uv, height, lod);
-    return p + down * hit;
+    return mix(prev_d, d, t);
 }
 
-// How much of the light along `l` (box frame, towards the light) the carved
-// surface lets reach the parallax hit at `uv` and `height` on side `side`
-// (turned by `turn` in its tile, facing `signs`, normal `n`): four heights
-// between the hit and the top along the light, read together; the highest
-// one over the ray shades it.
-fn relief_shadow(l: vec3<f32>, uv: vec2<f32>, height: f32, lod: f32, side: u32, turn: vec2<f32>, signs: vec3<f32>, n: vec3<f32>) -> f32 {
-    let ln = dot(l, n);
+// How much of a light the carved surface lets reach the parallax hit at
+// `uv` and `height`: four heights between the hit and the top along `dir`
+// (the light's way up from the full depth, in the normal map's coordinate),
+// read together; the highest one over the ray shades it.
+fn relief_shadow(uv: vec2<f32>, height: f32, lod: f32, dir: vec2<f32>) -> f32 {
     let rise = 1.0 - height;
-    if ln <= 0.0 || rise <= 0.0 {
+    if rise <= 0.0 {
         return 1.0;
     }
-    let up = l * (u.relief.x * u.surface.z / ln);
-    let dir = box_turn(box_side_st(up, signs, side), turn);
     let es = vec4<f32>(0.125, 0.375, 0.625, 0.875) * rise;
     let hs = vec4<f32>(
         textureSampleLevel(normal_map, normal_sampler, uv + dir * es.x, lod).a,
@@ -812,20 +910,23 @@ fn relief_shadow(l: vec3<f32>, uv: vec2<f32>, height: f32, lod: f32, side: u32, 
 // Ambient light reaching the parallax hit at `uv` and `height`. A spot
 // lower than the height around it (a mip four levels or more up) sits in a
 // crevice; how dark goes with the crevice's real depth over its width, so a
-// shallow relief barely darkens.
-fn relief_occlusion(uv: vec2<f32>, height: f32, trace_lod: f32) -> f32 {
+// shallow relief barely darkens. `depth` is the full depth in the normal
+// map's coordinate.
+fn relief_occlusion(uv: vec2<f32>, height: f32, trace_lod: f32, depth: f32) -> f32 {
     let lod = max(trace_lod + 2.0, 4.0);
     let around = textureSampleLevel(normal_map, normal_sampler, uv, lod).a;
     let width = exp2(lod) / f32(textureDimensions(normal_map).x);
-    let steepness = u.relief.x * u.surface.z / width;
+    let steepness = depth / width;
     return clamp(1.0 - (around - height) * steepness, 0.0, 1.0);
 }
 
-// Set this fragment's box frame. Every fragment entry calls it first, in
-// uniform control flow, since it takes screen derivatives. The mip bias
-// scales the gradients as textureSampleBias would.
-fn begin_box(box_pos: vec3<f32>, box_normal: vec3<f32>, ax: vec3<f32>, ay: vec3<f32>, az: vec3<f32>, world_pos: vec3<f32>, pixel: vec2<f32>) {
+// Set this fragment's box frame, or its parallax on the mesh's UVs. Every
+// fragment entry calls it first, in uniform control flow, since it takes
+// screen derivatives. The mip bias scales the gradients as
+// textureSampleBias would.
+fn begin_surface(box_pos: vec3<f32>, box_normal: vec3<f32>, ax: vec3<f32>, ay: vec3<f32>, az: vec3<f32>, world_pos: vec3<f32>, pixel: vec2<f32>, uv: vec4<f32>, world_normal: vec3<f32>) {
     if u.surface.y < 0.5 {
+        // uv parallax (only in the parallax pipeline, `PARALLAX_SPECIALIZATIONS`)
         return;
     }
     var p = box_pos * u.surface.z;
@@ -1316,7 +1417,7 @@ fn facing_normal(n: vec3<f32>, geometric: vec3<f32>, v: vec3<f32>) -> vec3<f32> 
 // light loop (matches render_3d_mesh.wgsl exactly).
 @fragment
 fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
-    begin_box(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z, in.world_pos, in.clip_pos.xy);
+    begin_surface(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z, in.world_pos, in.clip_pos.xy, in.uv, in.world_normal);
     let albedo = resolve_albedo(in.uv, in.vertex_color);
     if appearance_discard(in.appearance_weight) {
         discard;
@@ -1341,7 +1442,7 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
 // and the only well-defined choice when light_count can be 0.
 @fragment
 fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
-    begin_box(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z, in.world_pos, in.clip_pos.xy);
+    begin_surface(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z, in.world_pos, in.clip_pos.xy, in.uv, in.world_normal);
     if u.volume_optics.x > 0.5 {
         let nearest = textureLoad(volume_nearest, vec2<i32>(in.clip_pos.xy), 0);
         if in.clip_pos.z < nearest - max(nearest * 0.00001, 0.0000001) { discard; }
@@ -1519,7 +1620,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
 // every wired light; ambient + emission added exactly once.
 @fragment
 fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
-    begin_box(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z, in.world_pos, in.clip_pos.xy);
+    begin_surface(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z, in.world_pos, in.clip_pos.xy, in.uv, in.world_normal);
     let albedo = resolve_albedo(in.uv, in.vertex_color);
     if appearance_discard(in.appearance_weight) {
         discard;

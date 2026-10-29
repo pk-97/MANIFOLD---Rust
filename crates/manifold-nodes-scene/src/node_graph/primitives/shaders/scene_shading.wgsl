@@ -202,7 +202,7 @@ struct Uniforms {
     instance_inner: mat4x4<f32>,
     prev_instance_inner: mat4x4<f32>,
     // x: metres the height picture (the normal map's alpha) carves a
-    // box-mapped surface, 0 for none (parallax in begin_box). yzw unused.
+    // surface, 0 for none (parallax in begin_surface). yzw unused.
     relief: vec4<f32>,
 };
 

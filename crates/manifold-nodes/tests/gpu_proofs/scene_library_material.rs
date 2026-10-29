@@ -284,13 +284,27 @@ fn a_materialx_brick_material_draws_its_pictures() {
                 ];
                 let name = folder.file_name().unwrap().to_string_lossy().into_owned();
                 render(doc.clone(), &rows, &name, 4);
-                // Close up, with the parallax and without it.
+                // Close up: carved and flat, on the box and on the meshes'
+                // own UVs, and the long box sunk 5 cm into a floor carved
+                // 10 cm, where the floor's relief should cut it.
                 let close = [("camera.distance", 3.5), ("camera.tilt", 0.2)];
                 let carved: Vec<_> = rows.iter().chain(&close).copied().collect();
-                render(doc.clone(), &carved, &format!("{name}_close"), 4);
-                let mut flat = carved.clone();
-                flat.push(("cube-material.depth", 0.0));
-                render(doc, &flat, &format!("{name}_close_flat"), 4);
+                for (suffix, extra) in [
+                    ("close", vec![]),
+                    ("close_flat", vec![("cube-material.depth", 0.0)]),
+                    ("close_uv", vec![("cube-material.mapping", 0.0)]),
+                    (
+                        "close_uv_flat",
+                        vec![("cube-material.mapping", 0.0), ("cube-material.depth", 0.0)],
+                    ),
+                    (
+                        "sunk",
+                        vec![("cube-material.depth", 10.0), ("long.pos_y", -0.25)],
+                    ),
+                ] {
+                    let all: Vec<_> = carved.iter().copied().chain(extra).collect();
+                    render(doc.clone(), &all, &format!("{name}_{suffix}"), 4);
+                }
             }
         }
     }
