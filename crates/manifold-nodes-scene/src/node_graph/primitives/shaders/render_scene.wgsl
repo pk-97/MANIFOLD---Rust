@@ -670,37 +670,75 @@ fn box_parallax(p: vec3<f32>, px: vec3<f32>, py: vec3<f32>, n: vec3<f32>, s: vec
     let dx = box_side_st(px, s, a);
     let dy = box_side_st(py, s, a);
     let tiles = box_side(st, dx, dy, vec3<f32>(0.0), vec3<f32>(0.0));
-    var k = 0u;
-    if tiles.blend.y > tiles.blend[k] {
-        k = 1u;
-    }
-    if tiles.blend.z > tiles.blend[k] {
-        k = 2u;
-    }
-    // The tile maps a side coordinate as turn(st) + shift.
-    let r = tiles.turn[k];
-    let shift = tiles.st[k] - box_turn(st, r);
-    let gx = box_turn(dx, r);
-    let gy = box_turn(dy, r);
+    // The strongest tile, picked with constant indices so the tile arrays
+    // stay in registers.
+    let b = tiles.blend;
+    let first = b.x >= b.y && b.x >= b.z;
+    let second = !first && b.y >= b.z;
+    let r = select(select(tiles.turn[2], tiles.turn[1], second), tiles.turn[0], first);
+    let start = select(select(tiles.st[2], tiles.st[1], second), tiles.st[0], first);
+    // The height reads one mip, a level above the footprint's long axis: the
+    // trace needs no anisotropic taps, and a softer height only smooths the
+    // carve while its reads stay in cache.
+    let size = vec2<f32>(textureDimensions(normal_map));
+    let lod = log2(max(max(length(dx * size), length(dy * size)), 1.0)) + 1.0;
     let down = -v * (depth / vn);
-    let steps = clamp(ceil(reach / pixel_size), 4.0, 32.0);
+    // Side and tile maps are linear, so the ray is a straight line in the
+    // tile's coordinates.
+    let dir = box_turn(box_side_st(down, s, a), r);
+    let steps = clamp(ceil(reach / (3.0 * pixel_size)), 3.0, 16.0);
     // Interleaved gradient noise staggers the first step per pixel, so the
     // steps leave grain rather than bands.
     let stagger = fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
     // gap = how far below the height the ray is; it starts at or above it.
+    let inc = 1.0 / steps;
     var prev_d = 0.0;
-    var prev_gap = textureSampleGrad(normal_map, normal_sampler, tiles.st[k], gx, gy).a - 1.0;
+    var prev_gap = 0.0;
     var d = 0.0;
-    var gap = prev_gap;
-    for (var i = 0u; i < 33u; i++) {
-        d = min((f32(i) + stagger) / steps, 1.0);
-        let q = box_side_st(p + down * d, s, a);
-        gap = d + textureSampleGrad(normal_map, normal_sampler, box_turn(q, r) + shift, gx, gy).a - 1.0;
-        if gap >= 0.0 || d >= 1.0 {
+    var gap = 0.0;
+    // Four steps a pass: their reads go out together, so the trace waits on
+    // one read per four steps rather than one per step. The first pass
+    // starts at the surface itself.
+    for (var i = 0u; i < 5u; i++) {
+        let ds = clamp(vec4<f32>((f32(i * 4u) + stagger - 1.0) * inc) + vec4<f32>(0.0, 1.0, 2.0, 3.0) * inc, vec4<f32>(0.0), vec4<f32>(1.0));
+        let hs = vec4<f32>(
+            textureSampleLevel(normal_map, normal_sampler, start + dir * ds.x, lod).a,
+            textureSampleLevel(normal_map, normal_sampler, start + dir * ds.y, lod).a,
+            textureSampleLevel(normal_map, normal_sampler, start + dir * ds.z, lod).a,
+            textureSampleLevel(normal_map, normal_sampler, start + dir * ds.w, lod).a,
+        );
+        let gs = ds + hs - vec4<f32>(1.0);
+        if gs.x >= 0.0 {
+            if i == 0u {
+                prev_gap = gs.x;
+            }
+            d = ds.x;
+            gap = gs.x;
             break;
         }
-        prev_d = d;
-        prev_gap = gap;
+        if gs.y >= 0.0 {
+            prev_d = ds.x;
+            prev_gap = gs.x;
+            d = ds.y;
+            gap = gs.y;
+            break;
+        }
+        if gs.z >= 0.0 {
+            prev_d = ds.y;
+            prev_gap = gs.y;
+            d = ds.z;
+            gap = gs.z;
+            break;
+        }
+        prev_d = ds.z;
+        prev_gap = gs.z;
+        d = ds.w;
+        gap = gs.w;
+        if gs.w >= 0.0 {
+            break;
+        }
+        prev_d = ds.w;
+        prev_gap = gs.w;
     }
     // The height crosses the ray between the last step above it and this one.
     let span = gap - prev_gap;
