@@ -196,8 +196,8 @@ struct MapFamily {
     /// The `node.scene_object` port, and the role of the source node made
     /// for it (`scene_schema::material::MODEL_MAP_ROLES`).
     port: &'static str,
-    /// 1 repacks a spec-gloss alpha into G = roughness, B = metallic
-    /// 0 passes through.
+    /// 1 repacks a spec-gloss alpha into G = roughness, B = metallic,
+    /// 2 makes normal-map texels unit length, 0 passes through.
     channel_mode: fn(&GltfMaterialInfo) -> u32,
 }
 
@@ -214,7 +214,7 @@ const MAP_FAMILIES: &[MapFamily] = &[
         texture: |m| m.normal_texture,
         color_space: 1,
         port: "normal_map",
-        channel_mode: |_| 0,
+        channel_mode: |_| 2,
     },
     MapFamily {
         texture: |m| m.mr_texture,

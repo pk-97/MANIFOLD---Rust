@@ -492,6 +492,24 @@ fn tbn_for(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>, tangent: vec4<f32>) -> mat
     );
 }
 
+// The bump detail the normal map's filtering averaged away under this
+// pixel, as GGX alpha squared for `fs_pbr` to add, so a busy surface (grass,
+// moss, gravel) turns matte with distance as it does in a path tracer
+// instead of reading as one smooth mirror. `resolve_normal` sets it.
+var<private> bump_variance: f32 = 0.0;
+
+// Toksvig's measure through a von Mises-Fisher lobe: the model loader
+// stores unit normals (`gltf_texture_blit.wgsl` mode 2), so a filtered
+// normal of length `r` short of 1 means the bumps under it point different
+// ways. Half-float storage leaves about 0.002 of rounding that must not
+// read as roughness. A Normal Strength `s` scales the slopes, so the
+// variance scales by s squared.
+fn bump_variance_of(r: f32, s: f32) -> f32 {
+    let c = clamp(r, 0.01, 0.9999);
+    let kappa = (3.0 * c - c * c * c) / (1.0 - c * c);
+    return max(2.0 / kappa - 0.002, 0.0) * s * s;
+}
+
 // Identical to render_3d_mesh.wgsl's SIGNATURE — see that file for the
 // world-space-map path it still uses. render_scene's normal_map_n (D3) is
 // tangent-space (glTF convention: R/G = tangent-space X/Y in [-1,1] packed
@@ -510,6 +528,7 @@ fn resolve_normal(uv: vec4<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>,
         let uv_t = material_uv(uv, 1u);
         let sampled = textureSampleBias(normal_map, normal_sampler, uv_t, u.render_mode.y).rgb;
         var tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
+        bump_variance = bump_variance_of(length(tangent_normal), u.normal_uv_t.z);
         tangent_normal = vec3<f32>(tangent_normal.xy * u.normal_uv_t.z, tangent_normal.z);
         // glTF TANGENT is the authored normal-map frame. Only meshes
         // without it derive a frame from the selected, transformed UVs.
@@ -844,9 +863,12 @@ fn box_sample(tex: texture_2d<f32>, samp: sampler) -> vec4<f32> {
 // The normal map read box-mapped, bending the surface normal `n`. Each
 // tile's tangent slope turns back by the tile's own turn, and each side's
 // slope lies along that side's texture right and image up in the world.
+// The bump variance is each read's own, weighed like its normal: blending
+// tiles that disagree is not detail the map averaged away.
 fn box_normal(n: vec3<f32>) -> vec3<f32> {
     var z = 0.0;
     var slope = vec3<f32>(0.0);
+    var variance = 0.0;
     for (var a = 0u; a < 3u; a++) {
         let w = box_weights[a];
         if w <= 0.0 {
@@ -864,10 +886,12 @@ fn box_normal(n: vec3<f32>) -> vec3<f32> {
             let tn = textureSampleGrad(normal_map, normal_sampler, side.st[k], box_turn(side.dx, r), box_turn(side.dy, r)).rgb * 2.0 - vec3<f32>(1.0);
             xy += h * box_turn(tn.xy, r);
             tz += h * tn.z;
+            variance += (w * h) * bump_variance_of(length(tn), u.normal_uv_t.z);
         }
         slope += w * (side.t * xy.x + side.b * xy.y);
         z += w * tz;
     }
+    bump_variance = variance;
     return normalize(n * z + slope * u.normal_uv_t.z);
 }
 
@@ -1275,6 +1299,15 @@ fn sand_grain(world_pos: vec3<f32>, n: vec3<f32>, albedo: vec3<f32>, roughness: 
 
 // ===== Material kind fragment entry points =====
 
+// The shading normal turned to face the eye. A back face turns it round
+// whole. A bump tilted past the silhouette lays edge-on instead of flipping
+// through the surface, where it would face the ground and shade black.
+fn facing_normal(n: vec3<f32>, geometric: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
+    let m = select(n, -n, dot(geometric, v) < 0.0);
+    let n_dot_v = dot(m, v);
+    return select(m, normalize(m - v * (n_dot_v - 0.01)), n_dot_v < 0.0);
+}
+
 // Unlit — flat colour passthrough plus emission. No lighting math, no
 // light loop (matches render_3d_mesh.wgsl exactly).
 @fragment
@@ -1321,10 +1354,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     if dot(geometric_N, V) < 0.0 {
         geometric_N = -geometric_N;
     }
-    var N = resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent);
-    if dot(N, V) < 0.0 {
-        N = -N;
-    }
+    var N = facing_normal(resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent), in.world_normal, V);
     let mr = resolve_mr(in.uv);
     // Water on the surface darkens it and smooths it, keyed on the pixel
     // because materials are shared. After the cutout test, which stays on
@@ -1338,12 +1368,13 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     albedo = vec4<f32>(wet.albedo, albedo.a);
     // Specular anti-aliasing (Kaplanyan 2016, with Filament's constants):
     // normal detail finer than a pixel widens the highlight instead of
-    // sparkling.
+    // sparkling, and so does the detail the map's mips averaged away
+    // (`bump_variance`).
     let dn_x = dpdx(N);
     let dn_y = dpdy(N);
     let alpha = wet.roughness * wet.roughness;
     let kernel = min(0.3 * (dot(dn_x, dn_x) + dot(dn_y, dn_y)), 0.2);
-    let roughness = sqrt(sqrt(clamp(alpha * alpha + kernel, 0.0, 1.0)));
+    let roughness = sqrt(sqrt(clamp(alpha * alpha + kernel + bump_variance, 0.0, 1.0)));
     let metallic = mr.y;
     // (sheenColor.rgb, sheenRoughness). The default zero colour zeroes every
     // sheen term.
@@ -1492,11 +1523,8 @@ fn fs_cel(in: VsOut) -> @location(0) vec4<f32> {
     if u.alpha_params.x == 1.0 && albedo.a < u.alpha_params.y {
         discard;
     }
-    var N = resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent);
     let V = normalize(u.camera_pos.xyz - in.world_pos);
-    if dot(N, V) < 0.0 {
-        N = -N;
-    }
+    let N = facing_normal(resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent), in.world_normal, V);
     let bands = max(u.cel_params.x, 2.0);
     let band_low = u.cel_params.y;
     let band_high = u.cel_params.z;

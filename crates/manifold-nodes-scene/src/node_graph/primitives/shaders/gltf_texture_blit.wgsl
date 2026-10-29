@@ -19,6 +19,10 @@ struct Uniforms {
     // metallic is written 0.0 (spec-gloss's dielectric default, matching
     // `gltf_load::convert_spec_gloss`'s factor-level conversion); the RGB
     // specular tint is Deferred (section 8) and is NOT read here.
+    // 2 = normal: every normal-map texel becomes unit length, so how far
+    // a mip level's averaged normal falls short of 1 measures the bump
+    // detail it averaged away (`bump_variance` in render_scene.wgsl).
+    // Alpha (a MaterialX height) passes through.
     mode: f32,
     glossiness_factor: f32,
 };
@@ -37,7 +41,12 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);
     var c = textureSampleLevel(src_tex, src_sampler, uv, 0.0);
-    if (u.mode > 0.5) {
+    if (u.mode > 1.5) {
+        let n = c.rgb * 2.0 - vec3<f32>(1.0);
+        let len = length(n);
+        let unit = select(vec3<f32>(0.0, 0.0, 1.0), n / len, len > 1e-4);
+        c = vec4<f32>(unit * 0.5 + vec3<f32>(0.5), c.a);
+    } else if (u.mode > 0.5) {
         let roughness = 1.0 - u.glossiness_factor * c.a;
         c = vec4<f32>(0.0, roughness, 0.0, 1.0);
     }
