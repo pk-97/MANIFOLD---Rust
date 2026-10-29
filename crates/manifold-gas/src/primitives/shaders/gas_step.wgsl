@@ -298,6 +298,13 @@ fn component_a(g: vec3<f32>, axis: u32) -> f32 {
     return sum;
 }
 
+// Whether grid point `g` (cell units) lies past an open face: the air there
+// is the still atmosphere. The box spans -1/2 to n - 1/2 on each axis.
+fn outside(g: vec3<f32>) -> bool {
+    let last = vec3<f32>(params.dims) - vec3<f32>(0.5);
+    return g.x < -0.5 || g.z < -0.5 || g.x > last.x || g.y > last.y || g.z > last.z;
+}
+
 // Last frame's velocity at the face normal to `axis` at node `c`: its own
 // component exactly, each other one the mean of the four faces round it (a
 // cell outside the box stands in with the one inside).
@@ -359,7 +366,9 @@ fn cs_advect(@builtin(global_invocation_id) gid: vec3<u32>) {
         if has_face(gid, axis) {
             let g = face_point(gid, axis);
             let back = g - params.dt * face_velocity_in(gid, axis) / params.h;
-            v[axis] = component_in(back, axis);
+            // Air that blows in through an open face arrives still, so no
+            // wind at a face can feed itself.
+            v[axis] = select(component_in(back, axis), 0.0, outside(back));
         }
     }
     vel_a[face_index(gid)] = v;
@@ -380,7 +389,7 @@ fn cs_advect_back(@builtin(global_invocation_id) gid: vec3<u32>) {
         if has_face(gid, axis) {
             let g = face_point(gid, axis);
             let ahead = g + params.dt * face_velocity_in(gid, axis) / params.h;
-            v[axis] = component_a(ahead, axis);
+            v[axis] = select(component_a(ahead, axis), 0.0, outside(ahead));
         }
     }
     vel_b[face_index(gid)] = v;
@@ -407,6 +416,9 @@ fn cs_maccormack(@builtin(global_invocation_id) gid: vec3<u32>) {
         if has_face(gid, axis) {
             let g = face_point(gid, axis);
             let back = g - params.dt * face_velocity_in(gid, axis) / params.h;
+            if outside(back) {
+                continue;
+            }
             let t = face_taps(back, axis);
             var lo = vel_in[t.index[0]][axis];
             var hi = lo;
@@ -448,6 +460,18 @@ fn source_weight(pos: vec3<f32>) -> f32 {
         1.4,
     );
     return falloff * breakup;
+}
+
+// How deep cell `c` sits in the sponge band, 0 outside it to 1 at the
+// outermost cells, squared so it starts gently.
+fn sponge(c: vec3<u32>) -> f32 {
+    let last = vec3<f32>(params.dims) - vec3<f32>(1.0);
+    let g = vec3<f32>(c);
+    let to_face = vec3<f32>(min(g.x, last.x - g.x), last.y - g.y, min(g.z, last.z - g.z));
+    let band = max(vec3<f32>(2.0), SPONGE_SHARE * vec3<f32>(params.dims));
+    let depth = saturate(vec3<f32>(1.0) - to_face / band);
+    let deepest = max(depth.x, max(depth.y, depth.z));
+    return deepest * deepest;
 }
 
 // Each cell's emission, burning, decay and sponge. The turbulence's push for
@@ -499,16 +523,9 @@ fn cs_sources(@builtin(global_invocation_id) gid: vec3<u32>) {
     s.z *= exp(-FUEL_DECAY * params.dt);
 
     // What reaches the sides or the top leaves through the sponge band.
-    let to_face = vec3<u32>(
-        min(gid.x, params.dims.x - 1u - gid.x),
-        params.dims.y - 1u - gid.y,
-        min(gid.z, params.dims.z - 1u - gid.z),
-    );
-    let band = max(vec3<f32>(2.0), SPONGE_SHARE * vec3<f32>(params.dims));
-    let depth = saturate(vec3<f32>(1.0) - vec3<f32>(to_face) / band);
-    let sponge = max(depth.x, max(depth.y, depth.z));
-    s *= exp(-SPONGE_RATE * sponge * sponge * params.dt);
-    if min(to_face.x, min(to_face.y, to_face.z)) == 0u {
+    s *= exp(-SPONGE_RATE * sponge(gid) * params.dt);
+    let to_face = min(min(gid.x, params.dims.x - 1u - gid.x), min(gid.z, params.dims.z - 1u - gid.z));
+    if min(to_face, params.dims.y - 1u - gid.y) == 0u {
         s = vec4<f32>(0.0);
     }
 

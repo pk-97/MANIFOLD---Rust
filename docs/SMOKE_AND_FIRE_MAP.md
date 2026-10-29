@@ -34,7 +34,10 @@ roles each frame.
 
 ## Step (once a frame, dt = frame time × World Speed, at most 1/20 s)
 
-1. Advect velocity and state: MacCormack with the min/max clamp.
+1. Advect velocity and state: MacCormack with the min/max clamp. Air that
+   comes in through an open face arrives still, so no wind at a face can
+   feed itself (with the edge's own velocity, a crosswind grew over seconds
+   and laid the fire flat).
 2. Sources (per cell): emit density or fuel in a noisy squashed ellipsoid;
    burn where hot (fuel to heat and soot, flame); decay; a sponge band over
    15% of the box next to the sides and top fades the gas at up to 30 per
@@ -51,7 +54,8 @@ roles each frame.
    emission sum and centre for the fire light (read back two frames late).
 
 The staggered solve keeps its own turbulence, so Swirl and Turbulence start
-low: 0.3 / 1 (Smoke / Fire).
+at 0 for Smoke and 1 for Fire. Swirl on thick smoke that lingers for many
+seconds turns it streaky.
 
 ## Render (inside render_scene, after the water and its mist)
 
