@@ -25,10 +25,33 @@ use super::{
 
 /// The Platonic shape a drawn particle is, scaled by the particle's radius.
 const ICOSAHEDRON: usize = 3;
+/// A sand grain's shape: eight faces, turned per grain, read as a faceted
+/// grain at a few pixels across for under half an icosahedron's triangles.
+const OCTAHEDRON: usize = 2;
 
 /// Draw the push-out particles as instanced spheres on the water object, in
 /// place of the surface and Physics View's dots.
 pub(super) fn particles_draw(b: &mut Builder) {
+    let copies = b.node(
+        "liquid_particle_copies",
+        "node.particles_to_copies",
+        json!({}),
+    );
+    let frame = b.id("frame");
+    instanced_draw(b, copies, (frame, "count_b"), ICOSAHEDRON);
+}
+
+/// Sand's Particles: each point as a handful of small turned grains
+/// (node.matter_grains), drawn as faceted solids.
+fn grains_draw(b: &mut Builder) {
+    let grains = b.node("sand_grains", "node.matter_grains", json!({}));
+    instanced_draw(b, grains, (grains, "count"), OCTAHEDRON);
+}
+
+/// The push-out particles through `copies` (particles and live_count in,
+/// copies out) as instances of a unit Platonic `shape` on the water object,
+/// `count` of them, in place of the surface and Physics View's dots.
+fn instanced_draw(b: &mut Builder, copies: usize, count: (usize, &str), shape: usize) {
     b.remove(&[
         "surface",
         "water_mesh",
@@ -50,15 +73,10 @@ pub(super) fn particles_draw(b: &mut Builder) {
         (wire.to_node != water || !wire.to_port.starts_with("field_"))
             && (wire.to_node != tiles || wire.to_port != "spray")
     });
-    let copies = b.node(
-        "liquid_particle_copies",
-        "node.particles_to_copies",
-        json!({}),
-    );
     let sphere = b.node(
         "liquid_particle_mesh",
         "node.platonic_solid_mesh",
-        json!({"radius": float(1.0), "shape": {"type": "Enum", "value": ICOSAHEDRON}}),
+        json!({"radius": float(1.0), "shape": {"type": "Enum", "value": shape}}),
     );
     let [frame, particles, water] =
         ["frame", "particle_push_out", "water_object"].map(|name| b.id(name));
@@ -67,7 +85,7 @@ pub(super) fn particles_draw(b: &mut Builder) {
         ((frame, "count_b"), (copies, "live_count")),
         ((copies, "copies"), (water, "instances")),
         ((sphere, "vertices"), (water, "vertices")),
-        ((frame, "count_b"), (water, "instance_count")),
+        (count, (water, "instance_count")),
     ] {
         b.wire(from, to.0, to.1);
     }
@@ -180,7 +198,7 @@ fn mpm(draw: WaterDraw, _narrow_band: bool) -> WaterFamily {
     sand_material(&mut b);
     let mut objects = vec!["water_object".to_owned(), "dots_object".to_owned()];
     if draw == WaterDraw::Particles {
-        particles_draw(&mut b);
+        grains_draw(&mut b);
         objects.retain(|object| object != "dots_object");
     } else {
         sand_surface_draw(&mut b);

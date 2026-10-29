@@ -57,7 +57,8 @@ pub static SAND_ROWS: [PropertyRow; 35] = [
     row("seed", DOMAIN, Simulation, setup()).name("Seed"),
     SURFACE_DETAIL,
     SURFACE_PARTICLE_SCALE,
-    SURFACE_SMOOTHNESS,
+    // Sand reads as clean slopes, with its grain from the material.
+    SURFACE_SMOOTHNESS.default(2.0),
     SURFACE_CLOSE_GAPS,
     FOLLOW_GRAVITY_X,
     FOLLOW_GRAVITY_Y,

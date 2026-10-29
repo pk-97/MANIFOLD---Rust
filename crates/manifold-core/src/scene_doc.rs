@@ -528,7 +528,7 @@ pub struct WaterFields {
 
 /// Sand and soil on Matter (MLS-MPM): a domain like a Water's, filled by its
 /// Fill, with no Inflow, Drain or whitewater.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct SandFields {
     pub draw: WaterDraw,
@@ -538,7 +538,19 @@ pub struct SandFields {
     pub bounds: bool,
 }
 
-/// How a Water or Sand is drawn: its surface, or its particles as small spheres.
+impl Default for SandFields {
+    /// A new Sand draws as grains.
+    fn default() -> Self {
+        Self {
+            draw: WaterDraw::Particles,
+            material: None,
+            bounds: false,
+        }
+    }
+}
+
+/// How a Water or Sand is drawn: its surface, or its particles (a Water's as
+/// small spheres, a Sand's as grains).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WaterDraw {
