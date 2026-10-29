@@ -1,5 +1,5 @@
 //! `node.gpu_flip_step` — one GPU FLIP water step: sort, particle distance, particles to faces,
-//! extend, forces, solids, water mask from φ, divergence, pressure solve,
+//! extend, forces, solids, water mask from φ, wall release, divergence, pressure solve,
 //! projection, extend, constraint, density projection, then the particles
 //! move, remove crowded/extreme markers, compact, and emit inflow. One node
 //! because no pass has a consumer outside the step and the solve between them

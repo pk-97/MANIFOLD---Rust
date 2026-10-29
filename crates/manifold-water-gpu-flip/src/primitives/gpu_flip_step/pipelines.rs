@@ -17,6 +17,8 @@ pub(super) struct Pipelines {
     pub(super) distance: GpuComputePipeline,
     pub(super) subtract: GpuComputePipeline,
     pub(super) constrain: GpuComputePipeline,
+    /// Walls that only push.
+    pub(super) release: GpuComputePipeline,
     pub(super) density: GpuComputePipeline,
     pub(super) advect: GpuComputePipeline,
     pub(super) pocket_seed: GpuComputePipeline,
@@ -120,6 +122,7 @@ impl Pipelines {
             distance: pipe("particle_distance"),
             subtract: pipe("subtract_pressure"),
             constrain: pipe("constrain_solid_faces"),
+            release: pipe("release_walls"),
             density: pipe("density_source"),
             advect: pipe("faces_to_particles"),
             pocket_seed: pipe("pocket_seed"),

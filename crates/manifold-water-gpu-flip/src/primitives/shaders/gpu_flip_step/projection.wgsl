@@ -100,11 +100,51 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
     faces_rw[at] = out;
 }
 
+// Walls that only push, before the divergence: a wall face that held water
+// by suction in the last solve, and that the water now moves away from, is
+// released. Water outside a sealed pocket (whose pressure is only known up
+// to a constant) that came out of the last solve with negative pressure, in
+// `pressure`, releases each closed face to a fully solid neighbour where the
+// face's velocity in `faces_in` leaves the wall, d·(u − v_s) < 0: the face's
+// open fraction becomes 1 and its release mark (the open-fraction record's
+// velocity slot, 0 from open_fractions) 1, and the neighbour leaves the
+// solves' water in `cell_out`, so this solve takes it as air at zero
+// pressure. The constraint then holds the face's water off the wall. A face
+// that starts pulling releases one step later; a fresh slot's pressure is 0.
+@compute @workgroup_size(256)
+fn release_walls(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
+    let idx = list_cell(gid.x);
+    if !(water[idx] > 0.5) || !(pressure[idx] < 0.0) || pocket[idx] == POCKET_SEALED {
+        return;
+    }
+    let p = ts_cell_coord(idx);
+    for (var k = 0; k < 6; k = k + 1) {
+        let a = k / 2;
+        let d = select(-1, 1, (k & 1) == 1);
+        var q = p;
+        q[a] = p[a] + d;
+        let wall = ts_cell_at(q);
+        let face = ts_face(select(p, q, d > 0));
+        if wall == ts_canon() || face == ts_canon() {
+            continue;
+        }
+        let leaves = f32(d) * (faces_in[face].face_velocity[a] - solid_velocity[face].face_velocity[a]) < 0.0;
+        if leaves && faces_rw[face].face_weight[a] == 0.0 && faces_rw[wall].face_weight.w == 0.0 {
+            faces_rw[face].face_weight[a] = 1.0;
+            faces_rw[face].face_velocity[a] = 1.0;
+            cell_out[wall] = 0.0;
+        }
+    }
+}
+
 // 512 threads a held slot, one per record, in place on
 // `faces_rw` (FluidSimulation::_constrainVelocityFieldThread): a
 // closed face (open fraction 0) takes the solid's velocity v_s, a cut face
 // takes f·v_s + (1 − f)·u with f the solid's friction, an open face keeps u.
-// A wall's face is closed like any solid's. Weights pass through.
+// A wall's face is closed like any solid's. A released face (release_walls)
+// keeps u only where it leaves the wall: its solid is the side with no open
+// volume, and u toward that side is held to v_s. Weights pass through.
 @compute @workgroup_size(256)
 fn constrain_solid_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
@@ -115,7 +155,10 @@ fn constrain_solid_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var a = 0; a < 3; a = a + 1) {
         let w = open.face_weight[a];
         let v_s = solid_here.face_velocity[a];
-        if !(w > 0.0) {
+        if open.face_velocity[a] > 0.5 {
+            let u_face = out.face_velocity[a];
+            out.face_velocity[a] = select(max(u_face, v_s), min(u_face, v_s), open.face_weight.w == 0.0);
+        } else if !(w > 0.0) {
             out.face_velocity[a] = v_s;
         } else if w < 1.0 {
             let f = solid_here.face_weight[a];

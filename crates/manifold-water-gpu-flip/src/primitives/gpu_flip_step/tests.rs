@@ -224,6 +224,7 @@ fn step_shader_validates_with_every_entry() {
         "particle_distance",
         "subtract_pressure",
         "constrain_solid_faces",
+        "release_walls",
         "remove_crowded_markers",
         "owed_clear",
         "owed_count",

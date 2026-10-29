@@ -371,6 +371,26 @@ impl StepState {
                 "gpu_flip.step.pocket_condition",
             );
         }
+        // Walls that only push (projection.wgsl release_walls), from the last
+        // solve's pressure. The density projection writes its own answer into
+        // that buffer, so with it on the walls hold as they always did.
+        if !step.density {
+            over(
+                enc,
+                &pipes.release,
+                c,
+                &[
+                    buffer(3, &l.f),
+                    buffer(5, &l.solve_water),
+                    buffer(6, &l.water),
+                    buffer(8, &l.pressure),
+                    buffer(11, &l.v),
+                    buffer(20, &l.s),
+                    buffer(23, &l.pocket),
+                ],
+                "gpu_flip.step.release_walls",
+            );
+        }
         over(
             enc,
             &pipes.divergence,
