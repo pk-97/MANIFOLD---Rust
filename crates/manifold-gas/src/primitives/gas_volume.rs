@@ -868,14 +868,18 @@ impl GasVolume {
             );
             result = b;
             let working = binding_list(uniform_bytes, buffers, Roles::new(last, result), light);
-            for (pipeline, grid, label) in [
-                (&pipelines.sources, groups, "node.gas_volume.sources"),
-                (&pipelines.forces, face_groups, "node.gas_volume.forces"),
-                (&pipelines.curl, groups, "node.gas_volume.curl"),
-                (&pipelines.confine, face_groups, "node.gas_volume.confine"),
-                (&pipelines.divergence, groups, "node.gas_volume.divergence"),
+            // Swirl at 0 confines nothing: its two passes don't run.
+            let swirl = settings.vorticity > 0.0;
+            for (pipeline, grid, label, runs) in [
+                (&pipelines.sources, groups, "node.gas_volume.sources", true),
+                (&pipelines.forces, face_groups, "node.gas_volume.forces", true),
+                (&pipelines.curl, groups, "node.gas_volume.curl", swirl),
+                (&pipelines.confine, face_groups, "node.gas_volume.confine", swirl),
+                (&pipelines.divergence, groups, "node.gas_volume.divergence", true),
             ] {
-                pass(enc, pipeline, &working, grid, label);
+                if runs {
+                    pass(enc, pipeline, &working, grid, label);
+                }
             }
             for _ in 0..settings.quality.pressure_pairs() {
                 pass(
