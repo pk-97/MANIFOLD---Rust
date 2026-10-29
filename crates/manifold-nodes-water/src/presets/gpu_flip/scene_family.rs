@@ -41,13 +41,40 @@ pub(super) fn particles_draw(b: &mut Builder) {
     instanced_draw(b, copies, (frame, "count_b"), ICOSAHEDRON);
 }
 
-/// Sand's Particles: each point as a handful of small turned grains
-/// (node.matter_grains), drawn as faceted solids.
+/// The object Sand's loose grains draw on, beside the surface.
+const SAND_GRAINS_OBJECT: &str = "sand_grains_object";
+
+/// Sand's Particles: the surface, with its material's grain, draws the bulk,
+/// and the loose sand (flying grains, thin streams) draws as small turned
+/// grains (node.matter_grains) on their own object with the same material.
 fn grains_draw(b: &mut Builder) {
     let grains = b.node("sand_grains", "node.matter_grains", json!({}));
     let domain = b.id("domain");
     b.wires(domain, grains, &["cell_size", "points_per_cell"]);
-    instanced_draw(b, grains, (grains, "count"), OCTAHEDRON);
+    let mesh = b.node(
+        "sand_grain_mesh",
+        "node.platonic_solid_mesh",
+        json!({"radius": float(1.0), "shape": {"type": "Enum", "value": OCTAHEDRON}}),
+    );
+    let object = b.node(SAND_GRAINS_OBJECT, "node.scene_object", json!({}));
+    let [frame, particles, material, visible] = [
+        "frame",
+        "particle_push_out",
+        "water_material",
+        PHYSICS_VIEW_SWITCHES[4],
+    ]
+    .map(|name| b.id(name));
+    for (from, to) in [
+        ((particles, "out"), (grains, "particles")),
+        ((frame, "count_b"), (grains, "live_count")),
+        ((grains, "copies"), (object, "instances")),
+        ((grains, "count"), (object, "instance_count")),
+        ((mesh, "vertices"), (object, "vertices")),
+        ((material, "out"), (object, "material")),
+        ((visible, "out"), (object, "visible")),
+    ] {
+        b.wire(from, to.0, to.1);
+    }
 }
 
 /// The push-out particles through `copies` (particles and live_count in,
@@ -275,11 +302,10 @@ fn mpm(draw: WaterDraw, _narrow_band: bool) -> WaterFamily {
     feed_intervals(&b.nodes, &mut b.wires, domain as u32);
     sand_material(&mut b);
     let mut objects = vec!["water_object".to_owned(), "dots_object".to_owned()];
+    sand_surface_draw(&mut b);
     if draw == WaterDraw::Particles {
         grains_draw(&mut b);
-        objects.retain(|object| object != "dots_object");
-    } else {
-        sand_surface_draw(&mut b);
+        objects.insert(1, SAND_GRAINS_OBJECT.to_owned());
     }
     family(b, objects)
 }

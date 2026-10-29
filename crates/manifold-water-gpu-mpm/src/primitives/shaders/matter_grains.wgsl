@@ -1,18 +1,15 @@
-// node.matter_grains — a matter frame drawn as sand grains, at its surface
-// only. Hand WGSL under exclusion 1 (atomics across passes):
+// node.matter_grains — a matter frame's loose sand drawn as grains, where
+// the surface would draw it as blobs: flying grains, thin streams and the
+// spray off an impact. Hand WGSL under exclusion 1 (atomics across passes):
 //   count_main: each live point adds one to its occupancy cell, two point
 //     spacings on a side (eight points when packed), in an open-addressed
 //     table of (cell key, count) pairs the node clears first.
-//   emit_main: each point reads its own cell and the cells one to three
-//     steps along each axis, FULL points making a cell filled. A point with an
-//     empty cell within two steps is near the surface and draws the grains
-//     that cover its patch. One with an empty cell three steps away draws one
-//     grain the point's size, which fills the gaps between the surface
-//     grains; deeper, no camera sees it and its grains are holes the draw
-//     skips. A point near a step's edge switches as its neighbours' counts
-//     move, so the full grains reach two steps in and each switch happens
-//     under them, out of sight.
-// A surface point of radius r draws n = ceil(2 r² / g²) grains of Grain Size
+//   emit_main: each point sums its own cell and the 26 round it. Fewer than
+//     LOOSE points there is loose sand and draws its grains; more is bulk,
+//     which the surface draws, and its grains are holes the draw skips. A
+//     grain fades in by size as its block thins from LOOSE to LOOSE_FULL, so
+//     no grain pops in or out from one frame to the next.
+// A loose point of radius r draws n = ceil(2 r² / g²) grains of Grain Size
 // g, about one and a half times its patch's area, at most K, which the host
 // sets from Grain Size and the rest radius (so any Cell Size reaches any
 // Grain Size) within its slot budget. Past K the grains grow to
@@ -61,14 +58,15 @@ struct Copy {
 // A point's radius over its spacing (matter.rs RADIUS_SCALE): an occupancy
 // cell of two spacings is radius · 2 / RADIUS_SCALE on a side.
 const RADIUS_SCALE: f32 = 0.6203505;
-// Points in a neighbour cell that count it as filled: a packed cell holds
-// eight, and sheared or loosened sand fewer.
-const FULL: u32 = 3u;
+// Points in a point's 3³ block of cells below which it is loose and draws
+// grains at full size, and at which they have faded to nothing: packed sand
+// holds 216, a flat surface about half that, a one-point-thick sheet about
+// a sixth and a lone grain one.
+const LOOSE_FULL: f32 = 12.0;
+const LOOSE: f32 = 36.0;
 // Probes before a lookup or insert gives up: a full table reads as empty
-// cells, which draws grains (never holes in the surface).
+// cells, which draws grains (never a hole where loose sand flies).
 const MAX_PROBES: u32 = 64u;
-// The filler grain under the surface, times the point's radius.
-const FILLER: f32 = 0.65;
 
 fn mg_hash(v: u32) -> u32 {
     var x = v;
@@ -172,28 +170,18 @@ fn emit_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let size = max(params.grain_size, radius * sqrt(2.0 / f32(k)));
     let cover = min(u32(ceil(2.0 * radius * radius / (size * size))), k);
     let c = mg_cell(q);
-    var drawn = 0u;
-    if mg_count(c) < FULL {
-        drawn = cover;
+    var block = 0u;
+    for (var n = 0; n < 27; n = n + 1) {
+        block = block + mg_count(c + vec3<i32>(n % 3 - 1, (n / 3) % 3 - 1, n / 9 - 1));
     }
-    for (var d = 1; d <= 3 && drawn == 0u; d = d + 1) {
-        let filled = mg_count(c + vec3<i32>(d, 0, 0)) >= FULL
-            && mg_count(c - vec3<i32>(d, 0, 0)) >= FULL
-            && mg_count(c + vec3<i32>(0, d, 0)) >= FULL
-            && mg_count(c - vec3<i32>(0, d, 0)) >= FULL
-            && mg_count(c + vec3<i32>(0, 0, d)) >= FULL
-            && mg_count(c - vec3<i32>(0, 0, d)) >= FULL;
-        if !filled {
-            drawn = select(1u, cover, d <= 2);
-        }
-    }
+    let fade = 1.0 - smoothstep(LOOSE_FULL, LOOSE, f32(block));
+    let drawn = select(0u, cover, fade > 0.0);
     for (var j = drawn; j < k; j = j + 1u) {
         copies[p * k + j] = hole;
     }
-    // The layer under the surface fills gaps with one grain the point's size.
-    let grain = select(size, max(size, FILLER * radius), drawn == 1u && cover > 1u);
+    let grain = size * fade;
     for (var j = 0u; j < drawn; j = j + 1u) {
-        let key = mg_hash(q.id * 64u + j);
+        let key = mg_hash(mg_hash(q.id) ^ j);
         let place = mg_unit4(key);
         let turn = mg_unit4(key ^ 0x632be5abu);
         let offset = (place.xyz * 2.0 - vec3<f32>(1.0)) * params.spread * radius;
