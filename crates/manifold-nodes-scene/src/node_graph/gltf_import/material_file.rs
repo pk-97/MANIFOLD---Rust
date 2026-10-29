@@ -64,7 +64,16 @@ pub(crate) fn textures(material: &Material) -> (Vec<StackedTexture>, GltfMateria
     let colour = picture(MapSlot::BaseColor);
     let opacity = picture(MapSlot::Opacity);
     let [r, g, b] = material.base_color;
-    info.base_color_factor = [r, g, b, if opacity.is_some() { 1.0 } else { material.opacity }];
+    info.base_color_factor = [
+        r,
+        g,
+        b,
+        if opacity.is_some() {
+            1.0
+        } else {
+            material.opacity
+        },
+    ];
     info.alpha_mask = opacity.is_some();
     if colour.is_some() || opacity.is_some() {
         info.base_color_texture = add(StackedTexture {
@@ -81,8 +90,16 @@ pub(crate) fn textures(material: &Material) -> (Vec<StackedTexture>, GltfMateria
 
     let roughness = picture(MapSlot::Roughness);
     let metalness = picture(MapSlot::Metalness);
-    info.roughness = if roughness.is_some() { 1.0 } else { material.roughness };
-    info.metallic = if metalness.is_some() { 1.0 } else { material.metalness };
+    info.roughness = if roughness.is_some() {
+        1.0
+    } else {
+        material.roughness
+    };
+    info.metallic = if metalness.is_some() {
+        1.0
+    } else {
+        material.metalness
+    };
     if roughness.is_some() || metalness.is_some() {
         // A missing channel reads 1, so its factor alone is the value.
         let channels = [(roughness, 1), (metalness, 2)]

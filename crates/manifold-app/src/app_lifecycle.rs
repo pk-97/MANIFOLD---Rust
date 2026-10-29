@@ -852,9 +852,10 @@ impl Application {
         item: &manifold_core::scene_doc::ItemId,
         read: Result<(manifold_core::scene_doc::ModelFacts, Vec<String>), String>,
     ) {
-        let file_name = path
-            .file_name()
-            .map_or_else(|| "material".to_string(), |n| n.to_string_lossy().to_string());
+        let file_name = path.file_name().map_or_else(
+            || "material".to_string(),
+            |n| n.to_string_lossy().to_string(),
+        );
         let file = path.to_string_lossy().into_owned();
         let (facts, warnings) = match read {
             Ok(read) => read,
@@ -878,7 +879,10 @@ impl Application {
                 self.local_project
                     .edit(&mut self.ui_edits, &content_tx)
                     .execute(edit.command);
-                self.ws.ui_root.toast.show(format!("{file_name} is on the Material"));
+                self.ws
+                    .ui_root
+                    .toast
+                    .show(format!("{file_name} is on the Material"));
             }
             Err(e) => self.ws.ui_root.toast.show_with_accent(
                 format!("Couldn't use {file_name}: {e}"),

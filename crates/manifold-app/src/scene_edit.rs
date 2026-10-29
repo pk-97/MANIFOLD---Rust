@@ -653,6 +653,53 @@ pub(crate) fn set_field(
     }))
 }
 
+/// The material file a drop names: the `.mtlx` itself, or the one `.mtlx`
+/// in a dropped folder, as material downloads unpack. `None` when the drop
+/// holds no material file.
+pub(crate) fn dropped_material_file(
+    path: &std::path::Path,
+) -> Option<Result<std::path::PathBuf, String>> {
+    let is_materialx =
+        |p: &std::path::Path| manifold_core::materialx::is_materialx(&p.to_string_lossy());
+    if !path.is_dir() {
+        return is_materialx(path).then(|| Ok(path.to_path_buf()));
+    }
+    let mut files: Vec<_> = std::fs::read_dir(path)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|p| is_materialx(p))
+        .collect();
+    match files.len() {
+        0 => None,
+        1 => files.pop().map(Ok),
+        n => Some(Err(format!(
+            "That folder holds {n} material files; drop the one you want"
+        ))),
+    }
+}
+
+/// The Material a dropped material file lands on: the selected Material, or
+/// the selected Object's Material.
+pub(crate) fn drop_material_target(
+    project: &Project,
+    layer: &LayerId,
+    item: &ItemId,
+) -> Result<ItemId, String> {
+    let doc = doc(project, layer)?;
+    match &doc
+        .find(item)
+        .ok_or("That item is no longer in the scene")?
+        .fields
+    {
+        ItemFields::Material(_) => Ok(item.clone()),
+        ItemFields::Object(object) => object
+            .material
+            .clone()
+            .ok_or_else(|| "This object has no Material to take the file".to_owned()),
+        _ => Err("Select a Material or an Object, then drop the material file".to_owned()),
+    }
+}
+
 /// A Material takes the MaterialX file `file`, one undo step: its texture
 /// becomes the file's material, and every row the performer has not touched
 /// starts at the file's value, so the material looks as the file says
@@ -700,7 +747,13 @@ pub(crate) fn set_material_file(
         };
         let untouched = (held.base - held.spec.default_value).abs() <= f32::EPSILON;
         if untouched && (held.base - started.spec.default_value).abs() > f32::EPSILON {
-            commands.push(write(layer, item, property, held.base, started.spec.default_value));
+            commands.push(write(
+                layer,
+                item,
+                property,
+                held.base,
+                started.spec.default_value,
+            ));
         }
     }
     Ok(batch(commands, "Set Material File", None))
@@ -1506,6 +1559,25 @@ mod tests {
         );
     }
 
+    /// A dropped download folder names its one material file, a folder of
+    /// folders names none, and a dropped `.mtlx` names itself.
+    #[test]
+    fn a_dropped_folder_names_its_material_file() {
+        let materials =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/materials");
+        let file = materials.join("Bricks090/Bricks090_2K-JPG.mtlx");
+        assert_eq!(
+            dropped_material_file(&materials.join("Bricks090")),
+            Some(Ok(file.clone()))
+        );
+        assert_eq!(dropped_material_file(&materials), None);
+        assert_eq!(dropped_material_file(&file), Some(Ok(file.clone())));
+        assert_eq!(
+            dropped_material_file(&materials.join("Bricks090/Bricks090_2K-JPG_Color.jpg")),
+            None
+        );
+    }
+
     /// A material file picked on a Material that has its facts: the texture
     /// becomes the file's material, the untouched rows start at the file's
     /// values (box mapped, roughness from the picture), a row the performer
@@ -1541,15 +1613,34 @@ mod tests {
         let row = |project: &Project, property| {
             base(instance(project, &layer).unwrap(), &material, property).unwrap()
         };
-        assert_eq!(row(&project, "mapping"), 1.0, "a material file starts box mapped");
-        assert_eq!(row(&project, "roughness"), 1.0, "the picture carries the roughness");
-        assert!(row(&project, "break_repeats") > 0.0, "its repeats start broken");
-        assert_eq!(row(&project, "metallic"), 0.3, "a row the performer set stays");
+        assert_eq!(
+            row(&project, "mapping"),
+            1.0,
+            "a material file starts box mapped"
+        );
+        assert_eq!(
+            row(&project, "roughness"),
+            1.0,
+            "the picture carries the roughness"
+        );
+        assert!(
+            row(&project, "break_repeats") > 0.0,
+            "its repeats start broken"
+        );
+        assert_eq!(
+            row(&project, "metallic"),
+            0.3,
+            "a row the performer set stays"
+        );
 
         edit.command.undo(&mut project);
         assert_eq!(row(&project, "mapping"), 0.0);
         assert!(matches!(
-            &doc(&project, &layer).unwrap().find(&material).unwrap().fields,
+            &doc(&project, &layer)
+                .unwrap()
+                .find(&material)
+                .unwrap()
+                .fields,
             ItemFields::Material(MaterialFields {
                 texture: TextureSource::None,
                 ..

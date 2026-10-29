@@ -43,7 +43,10 @@ fn scene(texture: TextureSource, mirror: bool) -> SceneDoc {
         let (facts, warnings) =
             manifold_nodes_scene::node_graph::gltf_import::read_file_facts(Path::new(file))
                 .expect("the brick material reads");
-        assert!(warnings.is_empty(), "nothing in the file is dropped: {warnings:?}");
+        assert!(
+            warnings.is_empty(),
+            "nothing in the file is dropped: {warnings:?}"
+        );
         doc.models.insert(file.clone(), facts);
     }
     let Some(Item {
@@ -59,7 +62,11 @@ fn scene(texture: TextureSource, mirror: bool) -> SceneDoc {
         doc.insert(
             None,
             at,
-            Item::new(ItemId::new("mirror"), "mirror", ItemFields::default_for(ItemKind::Material)),
+            Item::new(
+                ItemId::new("mirror"),
+                "mirror",
+                ItemFields::default_for(ItemKind::Material),
+            ),
         )
         .unwrap();
     }
@@ -78,8 +85,12 @@ fn scene(texture: TextureSource, mirror: bool) -> SceneDoc {
             BASE_CUBE_MATERIAL
         }));
         let at = doc.items.len();
-        doc.insert(None, at, Item::new(ItemId::new(id), id, ItemFields::Object(fields)))
-            .unwrap();
+        doc.insert(
+            None,
+            at,
+            Item::new(ItemId::new(id), id, ItemFields::Object(fields)),
+        )
+        .unwrap();
     }
     doc
 }
@@ -186,10 +197,18 @@ fn render(doc: SceneDoc, rows: &[(&str, f32)], still: &str, frames: u32) -> Vec<
 
 /// Luma spread over a patch inside the cube's lit side face.
 fn face_spread(rgba: &[u8]) -> f64 {
-    let (cx, cy, half) = (WIDTH as usize * 41 / 100, HEIGHT as usize * 44 / 100, 20usize);
+    let (cx, cy, half) = (
+        WIDTH as usize * 41 / 100,
+        HEIGHT as usize * 44 / 100,
+        20usize,
+    );
     let lumas: Vec<f64> = (cy - half..cy + half)
         .flat_map(|y| (cx - half..cx + half).map(move |x| (y * WIDTH as usize + x) * 4))
-        .map(|i| 0.2126 * f64::from(rgba[i]) + 0.7152 * f64::from(rgba[i + 1]) + 0.0722 * f64::from(rgba[i + 2]))
+        .map(|i| {
+            0.2126 * f64::from(rgba[i])
+                + 0.7152 * f64::from(rgba[i + 1])
+                + 0.0722 * f64::from(rgba[i + 2])
+        })
         .collect();
     let mean = lumas.iter().sum::<f64>() / lumas.len() as f64;
     (lumas.iter().map(|l| (l - mean).powi(2)).sum::<f64>() / lumas.len() as f64).sqrt()
@@ -214,7 +233,10 @@ fn a_materialx_brick_material_draws_its_pictures() {
         render(brick_doc(false), &boxed, "brick_box_only", 4);
         render(
             brick_doc(false),
-            &[("cube-material.mapping", 1.0), ("cube-material.break_repeats", 0.5)],
+            &[
+                ("cube-material.mapping", 1.0),
+                ("cube-material.break_repeats", 0.5),
+            ],
             "brick_box_break",
             4,
         );

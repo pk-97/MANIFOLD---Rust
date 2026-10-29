@@ -2017,6 +2017,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 } else if ext == "json" || ext == "manifold" {
                     // Project files → load project
                     self.open_project_from_path(path.clone());
+                } else if let Some(file) = crate::scene_edit::dropped_material_file(&path) {
+                    // A material file, or the folder holding one, lands on
+                    // the Material selected in the Scene panel (or the
+                    // selected Object's), as picking it on the card does.
+                    let target = file.and_then(|file| {
+                        let at = self
+                            .ws
+                            .ui_root
+                            .scene_setup_panel
+                            .selected_scene_item()
+                            .ok_or("Select a Material or an Object, then drop the material file")?;
+                        let item = crate::scene_edit::drop_material_target(
+                            &self.local_project,
+                            &at.layer_id,
+                            &at.item,
+                        )?;
+                        Ok((file, at.layer_id, item))
+                    });
+                    match target {
+                        Ok((file, layer, item)) => self.queue_import(
+                            &file,
+                            crate::import_worker::ImportTarget::Material { layer, item },
+                        ),
+                        Err(e) => self
+                            .ws
+                            .ui_root
+                            .toast
+                            .show_with_accent(e, manifold_ui::color::RED_BASE),
+                    }
                 } else {
                     log::debug!("Unrecognized file type dropped: {}", path.to_string_lossy());
                 }

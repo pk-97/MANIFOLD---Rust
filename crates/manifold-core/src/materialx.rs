@@ -232,10 +232,14 @@ impl<'a, 'i> Reader<'a, 'i> {
                 None => outputs.next().filter(|_| outputs.next().is_none()),
             }
             .ok_or_else(|| missing(input.attribute("output").unwrap_or("an output")))?;
-            let node = output.attribute("nodename").ok_or_else(|| missing("a node"))?;
+            let node = output
+                .attribute("nodename")
+                .ok_or_else(|| missing("a node"))?;
             return named(graph, node).ok_or_else(|| missing(node));
         }
-        let node = input.attribute("nodename").ok_or_else(|| missing("a node"))?;
+        let node = input
+            .attribute("nodename")
+            .ok_or_else(|| missing("a node"))?;
         let scope = input
             .parent()
             .and_then(|owner| owner.parent())
@@ -277,8 +281,12 @@ impl<'a, 'i> Reader<'a, 'i> {
     }
 
     fn image(&mut self, node: Node<'a, 'i>, slot: MapSlot) -> Result<(), String> {
-        let Some(file) = input(node, "file") else { return Ok(()) };
-        let Some(value) = file.attribute("value") else { return Ok(()) };
+        let Some(file) = input(node, "file") else {
+            return Ok(());
+        };
+        let Some(value) = file.attribute("value") else {
+            return Ok(());
+        };
         if self.maps.iter().any(|m| m.slot == slot) {
             return Ok(());
         }
@@ -292,15 +300,19 @@ impl<'a, 'i> Reader<'a, 'i> {
         // states it in the input's own distance unit, metres by default.
         if slot == MapSlot::BaseColor
             && let Some(size) = input(node, "realworldimagesize")
-            && let Some(&width) = size.attribute("value").map(floats).as_deref().and_then(<[f32]>::first)
+            && let Some(&width) = size
+                .attribute("value")
+                .map(floats)
+                .as_deref()
+                .and_then(<[f32]>::first)
         {
             match size.attribute("unit").unwrap_or("meter") {
                 "meter" => self.tile_size = Some(width),
                 "centimeter" => self.tile_size = Some(width * 0.01),
                 "millimeter" => self.tile_size = Some(width * 0.001),
-                unit => self
-                    .warnings
-                    .push(format!("the picture's real-world size is in {unit}, which isn't read")),
+                unit => self.warnings.push(format!(
+                    "the picture's real-world size is in {unit}, which isn't read"
+                )),
             }
         }
         if node.tag_name().name() == "tiledimage"
@@ -315,16 +327,20 @@ impl<'a, 'i> Reader<'a, 'i> {
         let space = file.ancestors().find_map(|a| a.attribute("colorspace"));
         let is_color = matches!(slot, MapSlot::BaseColor | MapSlot::Emission);
         match space {
-            Some(cs) if is_color && cs != "srgb_texture" => self
-                .warnings
-                .push(format!("the {label} picture is in {cs}, not sRGB; its colours may look off")),
-            Some("srgb_texture") if !is_color => self
-                .warnings
-                .push(format!("the {label} picture is marked sRGB, but holds data, not colour")),
+            Some(cs) if is_color && cs != "srgb_texture" => self.warnings.push(format!(
+                "the {label} picture is in {cs}, not sRGB; its colours may look off"
+            )),
+            Some("srgb_texture") if !is_color => self.warnings.push(format!(
+                "the {label} picture is marked sRGB, but holds data, not colour"
+            )),
             _ => {}
         }
         let path = self.folder.join(&relative);
-        self.maps.push(MapFile { slot, relative, path });
+        self.maps.push(MapFile {
+            slot,
+            relative,
+            path,
+        });
         Ok(())
     }
 
@@ -336,7 +352,9 @@ impl<'a, 'i> Reader<'a, 'i> {
         slot: MapSlot,
     ) -> Result<Option<Vec<f32>>, String> {
         self.read.push(name);
-        let Some(inp) = input(shader, name) else { return Ok(None) };
+        let Some(inp) = input(shader, name) else {
+            return Ok(None);
+        };
         if is_connected(&inp) {
             self.follow(inp, slot)?;
             return Ok(None);
@@ -344,7 +362,13 @@ impl<'a, 'i> Reader<'a, 'i> {
         Ok(inp.attribute("value").map(floats))
     }
 
-    fn scalar(&mut self, shader: Node<'a, 'i>, name: &'static str, slot: MapSlot, default: f32) -> Result<f32, String> {
+    fn scalar(
+        &mut self,
+        shader: Node<'a, 'i>,
+        name: &'static str,
+        slot: MapSlot,
+        default: f32,
+    ) -> Result<f32, String> {
         Ok(self
             .slot_value(shader, name, slot)?
             .and_then(|v| v.first().copied())
@@ -354,10 +378,13 @@ impl<'a, 'i> Reader<'a, 'i> {
     /// A weight is a constant only; a connected one reads as 1.
     fn weight(&mut self, shader: Node<'a, 'i>, name: &'static str, default: f32) -> f32 {
         self.read.push(name);
-        let Some(inp) = input(shader, name) else { return default };
+        let Some(inp) = input(shader, name) else {
+            return default;
+        };
         if is_connected(&inp) {
-            self.warnings
-                .push(format!("{name} is driven by a picture or node, which isn't read; 1 is used"));
+            self.warnings.push(format!(
+                "{name} is driven by a picture or node, which isn't read; 1 is used"
+            ));
             return 1.0;
         }
         inp.attribute("value")
@@ -392,7 +419,10 @@ pub fn parse(text: &str, folder: &Path) -> Result<Material, String> {
         read: Vec::new(),
     };
 
-    let materials: Vec<_> = root.descendants().filter(|n| is_tag(n, "surfacematerial")).collect();
+    let materials: Vec<_> = root
+        .descendants()
+        .filter(|n| is_tag(n, "surfacematerial"))
+        .collect();
     let (shader, displacement) = match materials.first() {
         Some(&mat) => {
             if materials.len() > 1 {
@@ -404,7 +434,10 @@ pub fn parse(text: &str, folder: &Path) -> Result<Material, String> {
             let link = input(mat, "surfaceshader")
                 .filter(is_connected)
                 .ok_or("the material names no surface shader")?;
-            (r.target(link)?, input(mat, "displacementshader").filter(is_connected))
+            (
+                r.target(link)?,
+                input(mat, "displacementshader").filter(is_connected),
+            )
         }
         None => {
             let shader = root
@@ -429,7 +462,10 @@ pub fn parse(text: &str, folder: &Path) -> Result<Material, String> {
     };
     let tag = shader.tag_name().name();
     let s = spec(tag).ok_or_else(|| {
-        format!("the surface shader is a {tag}; the app reads {}", SHADERS.join(", "))
+        format!(
+            "the surface shader is a {tag}; the app reads {}",
+            SHADERS.join(", ")
+        )
     })?;
 
     let base_weight = match tag {
@@ -451,8 +487,9 @@ pub fn parse(text: &str, folder: &Path) -> Result<Material, String> {
         "gltf_pbr" => r.weight(shader, "emissive_strength", 1.0),
         "open_pbr_surface" => {
             if r.weight(shader, "emission_luminance", 0.0) > 0.0 {
-                r.warnings
-                    .push("emission brightness is set on the material, not read from the file".into());
+                r.warnings.push(
+                    "emission brightness is set on the material, not read from the file".into(),
+                );
                 1.0
             } else {
                 0.0
@@ -471,7 +508,8 @@ pub fn parse(text: &str, folder: &Path) -> Result<Material, String> {
     for inp in shader.children().filter(|c| is_tag(c, "input")) {
         let name = inp.attribute("name").unwrap_or("");
         if is_connected(&inp) && name != "tangent" && !r.read.contains(&name) {
-            r.warnings.push(format!("{name} is connected, which isn't read"));
+            r.warnings
+                .push(format!("{name} is connected, which isn't read"));
         }
     }
 
@@ -608,10 +646,22 @@ mod tests {
     fn ambientcg_open_pbr_with_file_prefix() {
         let folder = Path::new("/lib/Concrete034");
         let m = parse(AMBIENT_CG, folder).unwrap();
-        assert_eq!(rel(&m, MapSlot::BaseColor), Some("./Concrete034_1K-JPG_Color.jpg"));
-        assert_eq!(rel(&m, MapSlot::Normal), Some("./Concrete034_1K-JPG_NormalGL.jpg"));
-        assert_eq!(rel(&m, MapSlot::Roughness), Some("./Concrete034_1K-JPG_Roughness.jpg"));
-        assert_eq!(rel(&m, MapSlot::Height), Some("./Concrete034_1K-JPG_Displacement.jpg"));
+        assert_eq!(
+            rel(&m, MapSlot::BaseColor),
+            Some("./Concrete034_1K-JPG_Color.jpg")
+        );
+        assert_eq!(
+            rel(&m, MapSlot::Normal),
+            Some("./Concrete034_1K-JPG_NormalGL.jpg")
+        );
+        assert_eq!(
+            rel(&m, MapSlot::Roughness),
+            Some("./Concrete034_1K-JPG_Roughness.jpg")
+        );
+        assert_eq!(
+            rel(&m, MapSlot::Height),
+            Some("./Concrete034_1K-JPG_Displacement.jpg")
+        );
         let color = m.map(MapSlot::BaseColor).unwrap();
         assert_eq!(color.path, folder.join("./Concrete034_1K-JPG_Color.jpg"));
         assert_eq!(m.maps.len(), 4);
@@ -623,10 +673,22 @@ mod tests {
     #[test]
     fn poly_haven_standard_surface_through_a_nodegraph() {
         let m = parse(POLY_HAVEN, Path::new("/lib/brick_wall_001")).unwrap();
-        assert_eq!(rel(&m, MapSlot::BaseColor), Some("textures/brick_wall_001_diff_1k.jpg"));
-        assert_eq!(rel(&m, MapSlot::Roughness), Some("textures/brick_wall_001_rough_1k.exr"));
-        assert_eq!(rel(&m, MapSlot::Normal), Some("textures/brick_wall_001_nor_gl_1k.exr"));
-        assert_eq!(rel(&m, MapSlot::Height), Some("textures/brick_wall_001_disp_1k.png"));
+        assert_eq!(
+            rel(&m, MapSlot::BaseColor),
+            Some("textures/brick_wall_001_diff_1k.jpg")
+        );
+        assert_eq!(
+            rel(&m, MapSlot::Roughness),
+            Some("textures/brick_wall_001_rough_1k.exr")
+        );
+        assert_eq!(
+            rel(&m, MapSlot::Normal),
+            Some("textures/brick_wall_001_nor_gl_1k.exr")
+        );
+        assert_eq!(
+            rel(&m, MapSlot::Height),
+            Some("textures/brick_wall_001_disp_1k.png")
+        );
         assert_eq!(m.metalness, 0.0);
         assert!(m.warnings.is_empty(), "{:?}", m.warnings);
     }
