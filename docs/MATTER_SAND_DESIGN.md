@@ -49,7 +49,7 @@ struct MatterPoint {            // 160 B
 
 One new binding-free include, `shaders/matter_material.wgsl`, holds all material maths. It sees one particle's F, its velocity gradient and the material constants, and returns the new F, plastic state and stress. It never reads the grid, a binding or a record. This is the seam the unified solver needs: the maths moves unchanged, only the transfer is rewritten.
 
-- **SVD** (McAdams et al. 2011, "Computing the SVD of 3×3 matrices with minimal branching"): F = U Σ Vᵀ with U and V proper rotations. Four Jacobi sweeps with quaternion Givens rotations, then a Givens QR. Fixed cost, no branches that diverge. This is what sand's friction rule runs on: it only makes sense on Σ, the three stretches.
+- **SVD** (McAdams et al. 2011, "Computing the SVD of 3×3 matrices with minimal branching"): F = U Σ Vᵀ with U and V proper rotations. Six Jacobi sweeps with approximate Givens rotations (the paper's four leave up to 0.7% error on random F near identity), then a Givens QR. Fixed cost, no branches that diverge. This is what sand's friction rule runs on: it only makes sense on Σ, the three stretches.
 - **Order inside `node.grid_to_matter`**, after it forms C (whose rows are the velocity gradient): F ← (I + dt·C)·F, SVD, return map (section 3), rebuild F = U Σ' Vᵀ, J = det Σ', then τ = U·diag(2μ·ε + λ·tr ε)·Uᵀ with ε = log Σ'. Write F, τ, v_c and q. One SVD per particle per substep.
 - **`node.matter_to_grid`** reads τ from the record: affine rows become m·C − (dt·V0·4/dx²)·τ, the full matrix instead of today's scalar pressure. It no longer needs λ or Cohesion.
 - **`node.matter_stats`** computes elastic energy V0·(μ‖ε‖² + ½λ(tr ε)²) with its own SVD, once a tick.
@@ -64,14 +64,14 @@ The constants reach the passes as scalars from `node.matter_domain` (μ, λ, α,
 
 **Return map** on ε = log|Σ| (each σ clamped to at least 10⁻⁴), with β the cohesion as a tensile log-strain and α = √(2/3)·2 sin φ / (3 − sin φ) from the Friction Angle φ (α = 0.386 at 35°):
 
-1. tr = Σε + v_c (the volume correction, Tampubolon et al. 2017: volume gained while grains were apart is paid back before pressure builds).
-2. **Pulled apart** (tr ≥ β): Σ' = exp(β/3)·I, v_c ← tr − β, δq = ‖ε − β/3‖.
-3. Otherwise v_c ← 0, ε̂ = ε − (tr/3)·1, δγ = ‖ε̂‖ + α·(3λ + 2μ)/(2μ)·(tr − β).
-4. **Holding** (δγ ≤ 0): Σ' = Σ.
-5. **Sliding** (δγ > 0): Σ' = exp(ε − δγ·ε̂/‖ε̂‖), δq = δγ.
+1. ε_c = ε + v_c/3 and tr = Σε_c (the volume correction, Tampubolon et al. 2017: volume gained while grains were apart counts as stretch, so it is paid back before pressure builds).
+2. **Pulled apart** (tr ≥ β): Σ' = exp(β/3)·I, v_c ← tr − β, δq = ‖ε_c − β/3‖.
+3. Otherwise v_c ← 0, ε̂ = ε_c − (tr/3)·1, δγ = ‖ε̂‖ + α·(3λ + 2μ)/(2μ)·(tr − β).
+4. **Holding** (δγ ≤ 0): Σ' = exp(ε_c).
+5. **Sliding** (δγ > 0): Σ' = exp(ε_c − δγ·ε̂/‖ε̂‖), δq = δγ.
 6. q ← q + δq.
 
-With β = 0 this is Klár's cone and taichi_elements' `sand_projection` (engine/mpm_solver.py), the reference transcription. β > 0 shifts the cone's tip into tension: the material carries some pull and gains shear strength α·(3λ + 2μ)·β, which is Drucker-Prager with cohesion.
+With β = 0 this is Klár's cone and taichi_elements' `sand_projection` (engine/mpm_solver.py), except that taichi drops the volume correction in the holding case; here it is kept in F, so no volume is lost. Written in `shaders/matter_material.wgsl`. β > 0 shifts the cone's tip into tension: the material carries some pull and gains shear strength α·(3λ + 2μ)·β, which is Drucker-Prager with cohesion.
 
 **Soil:** β = β₀·exp(−q / q_s). β₀ comes from the Cohesion dial in kPa, divided by α·(3λ + 2μ) so the dial means the same at any Stiffness or Friction Angle. Intact soil holds; where it shears, q grows, cohesion fades and it breaks into clumps and loose sand. q_s starts at 0.05 and is tuned on stills. Friction hardening (Klár's h₀–h₃) is left out: one Friction Angle dial reads better on stage, and q is already stored if it is wanted later.
 

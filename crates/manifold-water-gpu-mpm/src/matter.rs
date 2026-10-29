@@ -15,6 +15,8 @@ use manifold_water_liquid::world_tiles::{Reach, run_tiles};
 pub mod coupling;
 #[doc = "The f64 CPU oracle, compiled for unit tests and the `gpu-proofs` binary."]
 pub mod look;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod material_gpu_tests;
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 #[doc(hidden)]
 pub mod reference;
