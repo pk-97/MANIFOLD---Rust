@@ -210,7 +210,7 @@ impl SubstepHistory {
         {
             return Ok(());
         }
-        manifold_node_engine::load::expand::admit_candidate_bytes(
+        manifold_node_engine::load::expand::admit_world_bytes(
             device.modifier_memory_snapshot(),
             history_bytes(pool_tiles, slots),
         )

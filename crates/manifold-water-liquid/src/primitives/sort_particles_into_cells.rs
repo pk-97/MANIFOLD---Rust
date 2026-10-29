@@ -322,7 +322,7 @@ impl ParticleSorter {
         {
             return Ok(());
         }
-        let buffer = manifold_node_engine::load::expand::admit_candidate_bytes(
+        let buffer = manifold_node_engine::load::expand::admit_world_bytes(
             device.modifier_memory_snapshot(),
             range_bytes,
         )

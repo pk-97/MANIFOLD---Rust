@@ -80,11 +80,8 @@ fn ensure(buffer: &mut Option<GpuBuffer>, device: &GpuDevice, bytes: u64) -> Res
         return Ok(());
     }
     *buffer = None;
-    manifold_node_engine::load::expand::admit_candidate_bytes(
-        device.modifier_memory_snapshot(),
-        bytes,
-    )
-    .map_err(|error| error.to_string())?;
+    manifold_node_engine::load::expand::admit_world_bytes(device.modifier_memory_snapshot(), bytes)
+        .map_err(|error| error.to_string())?;
     *buffer = Some(device.try_create_buffer(bytes, BufferUse::Gpu)?);
     Ok(())
 }

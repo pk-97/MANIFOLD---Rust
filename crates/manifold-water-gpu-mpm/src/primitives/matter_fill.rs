@@ -283,7 +283,7 @@ impl Primitive for MatterFill {
                     .map_or(0, |b| b.size.saturating_mul(3) / 2),
             );
             let device = ctx.gpu_encoder().device;
-            let created = manifold_node_engine::load::expand::admit_candidate_bytes(
+            let created = manifold_node_engine::load::expand::admit_world_bytes(
                 device.modifier_memory_snapshot(),
                 grown,
             )

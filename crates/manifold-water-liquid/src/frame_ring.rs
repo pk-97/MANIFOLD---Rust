@@ -57,7 +57,7 @@ impl FrameRing {
     ) -> Result<RingWrite, String> {
         let mut grown = false;
         if self.slots.len() < RING || self.slots.iter().any(|s| s.size < bytes) {
-            manifold_node_engine::load::expand::admit_candidate_bytes(
+            manifold_node_engine::load::expand::admit_world_bytes(
                 device.modifier_memory_snapshot(),
                 RING as u64 * bytes,
             )

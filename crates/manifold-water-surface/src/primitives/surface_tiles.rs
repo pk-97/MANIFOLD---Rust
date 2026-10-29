@@ -192,7 +192,7 @@ fn shared(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
 impl Held {
     fn new(device: &GpuDevice, layout: Layout) -> Result<Self, String> {
         let layout = layout.checked()?;
-        manifold_node_engine::load::expand::admit_candidate_bytes(
+        manifold_node_engine::load::expand::admit_world_bytes(
             device.modifier_memory_snapshot(),
             layout.bytes(),
         )
@@ -362,6 +362,8 @@ manifold_node_engine::primitive! {
         kernels: Option<Kernels> = None,
         // When the held tiles last dropped under a third of the pool.
         shrink_since: Option<Instant> = None,
+        // When the World's budget last refused a growth.
+        refused_at: Option<Instant> = None,
     },
 }
 
@@ -376,6 +378,10 @@ impl SurfaceTiles {
         let pool = held.layout.pool_tiles;
         if let Some(grown) = held.grown() {
             self.shrink_since = None;
+            // A refused growth is tried again only after the hold.
+            if self.refused_at.is_some_and(|at| at.elapsed() < SHRINK_HOLD) {
+                return pool;
+            }
             return grown;
         }
         let Some(shrunk) = held.shrunk() else {
@@ -457,16 +463,42 @@ impl Primitive for SurfaceTiles {
             let gpu = ctx.gpu_encoder();
             self.kernels.get_or_insert_with(|| Kernels::new(gpu.device));
             if self.held.as_ref().is_none_or(|held| held.layout != layout) {
-                self.held = None;
-                Held::new(gpu.device, layout).map(|held| self.held = Some(held))
+                // The old pool goes before the new one is made, so the two
+                // are never held at once.
+                let last = self.held.take().map(|held| held.layout.pool_tiles);
+                match Held::new(gpu.device, layout) {
+                    Ok(held) => {
+                        self.held = Some(held);
+                        Ok(None)
+                    }
+                    // A growth the World's budget refuses keeps the last
+                    // pool: the water draws where it holds tiles.
+                    Err(error) => match last.filter(|&last| last < layout.pool_tiles) {
+                        Some(pool_tiles) => {
+                            self.refused_at = Some(Instant::now());
+                            Held::new(gpu.device, Layout { pool_tiles, ..layout }).map(|held| {
+                                self.held = Some(held);
+                                Some(error)
+                            })
+                        }
+                        None => Err(error),
+                    },
+                }
             } else {
-                Ok(())
+                Ok(None)
             }
         };
-        if let Err(error) = prepared {
-            ctx.error(format!("Surface Tiles: {error}"));
-            return;
+        match prepared {
+            Ok(None) => {}
+            Ok(Some(refused)) => ctx.error(format!(
+                "Surface Tiles: the drawn water stays on its last tiles: {refused}"
+            )),
+            Err(error) => {
+                ctx.error(format!("Surface Tiles: {error}"));
+                return;
+            }
         }
+        let layout = self.held.as_ref().expect("held after prepare").layout;
         ctx.outputs
             .set_scalar("pool_tiles", ParamValue::Float(layout.pool_tiles as f32));
         ctx.outputs

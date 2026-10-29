@@ -148,7 +148,7 @@ impl PrefixScan {
     fn storage(&mut self, device: &GpuDevice, words: usize) -> Result<&GpuBuffer, String> {
         if self.buffer.is_none() || self.words < words {
             let bytes = (words * 4) as u64;
-            manifold_node_engine::load::expand::admit_candidate_bytes(
+            manifold_node_engine::load::expand::admit_world_bytes(
                 device.modifier_memory_snapshot(),
                 bytes,
             )

@@ -197,7 +197,7 @@ impl Primitive for WhitewaterObstacleSource {
             if buffer.as_ref().is_some_and(|b| b.size == bytes) {
                 continue;
             }
-            let created = manifold_node_engine::load::expand::admit_candidate_bytes(
+            let created = manifold_node_engine::load::expand::admit_world_bytes(
                 device.modifier_memory_snapshot(),
                 bytes,
             )

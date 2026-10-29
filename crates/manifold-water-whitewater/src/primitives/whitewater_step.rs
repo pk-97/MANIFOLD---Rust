@@ -1044,7 +1044,7 @@ struct HandParams {
 }
 
 fn allocate(device: &GpuDevice, bytes: u64, shared: bool) -> Result<GpuBuffer, String> {
-    manifold_node_engine::load::expand::admit_candidate_bytes(
+    manifold_node_engine::load::expand::admit_world_bytes(
         device.modifier_memory_snapshot(),
         bytes,
     )
@@ -1257,7 +1257,7 @@ impl Step {
                 self.influence_epoch = None;
                 self.outputs = Outputs::default();
                 let held = shape.held_bytes(particles);
-                manifold_node_engine::load::expand::admit_candidate_bytes(device.modifier_memory_snapshot(), held)
+                manifold_node_engine::load::expand::admit_world_bytes(device.modifier_memory_snapshot(), held)
                     .map_err(|error| format!("the pool and its scratch need {held} bytes: {error}"))?;
                 let scan = self.slot_scan.buffer(device, shape.slot_scan_values())?.clone();
                 self.fields = Some(Fields::new(device, &shape, scan)?);

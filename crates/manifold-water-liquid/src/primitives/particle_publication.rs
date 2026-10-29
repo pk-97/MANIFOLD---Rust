@@ -108,7 +108,7 @@ impl ParticlePublication {
             }
             // Grows only with the target, all or nothing.
             if self.live.is_none() || self.pairs.as_ref().is_none_or(|pairs| pairs[0].size < pair_bytes(slots)) {
-                manifold_node_engine::load::expand::admit_candidate_bytes(
+                manifold_node_engine::load::expand::admit_world_bytes(
                     device.modifier_memory_snapshot(),
                     scratch_bytes(slots),
                 )

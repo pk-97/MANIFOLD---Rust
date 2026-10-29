@@ -168,7 +168,7 @@ impl Primitive for LiquidSolidDistance {
         let bytes = elements * 4;
         if self.solid.as_ref().is_none_or(|solid| solid.size != bytes) {
             let device = ctx.gpu_encoder().device;
-            let created = manifold_node_engine::load::expand::admit_candidate_bytes(
+            let created = manifold_node_engine::load::expand::admit_world_bytes(
                 device.modifier_memory_snapshot(),
                 bytes,
             )

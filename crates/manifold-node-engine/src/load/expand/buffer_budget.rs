@@ -315,6 +315,48 @@ pub fn admit_candidate_bytes(
     admit_candidate_bytes_with_limit(snapshot, candidate, allowed, &policy)
 }
 
+/// The physics World's share of what the Mac allows the GPU (its recommended
+/// working set): water, sand, whitewater and their display fields grow only
+/// until the device holds this much, under the device ceiling
+/// [`admit_candidate_bytes`] keeps for everything, so a growing simulation
+/// stops before the scene and the renderer run out.
+const WORLD_SHARE_NUMERATOR: u64 = 2;
+const WORLD_SHARE_DENOMINATOR: u64 = 3;
+
+/// The World's ceiling in bytes and its policy text: its share of the
+/// recommended working set, never past the device ceiling.
+fn world_limit(recommended: u64) -> Result<(u64, String), SceneModifierExpandError> {
+    let (allowed, policy) = configured_limit(recommended)?;
+    let share = recommended / WORLD_SHARE_DENOMINATOR * WORLD_SHARE_NUMERATOR;
+    Ok(if share < allowed {
+        (
+            share,
+            format!("the physics World's two thirds of the recommended working set {recommended} bytes"),
+        )
+    } else {
+        (allowed, policy)
+    })
+}
+
+/// [`admit_candidate_bytes`] for a physics allocation: admitted against the
+/// World's share of the device ceiling.
+pub fn admit_world_bytes(
+    snapshot: Option<manifold_gpu::GpuMemorySnapshot>,
+    candidate: u64,
+) -> Result<(), SceneModifierExpandError> {
+    let snapshot = snapshot.ok_or_else(|| {
+        PreparedModifierBufferBudget::memory_unavailable("device memory limits are unavailable")
+    })?;
+    let (allowed, policy) = world_limit(snapshot.recommended_max_working_set_bytes)?;
+    admit_candidate_bytes_with_limit(snapshot, candidate, allowed, &policy)
+}
+
+/// The World's whole budget in bytes on this device: what a full World may
+/// hold, shown on the card when a growth is refused.
+pub fn world_budget_bytes(snapshot: manifold_gpu::GpuMemorySnapshot) -> u64 {
+    world_limit(snapshot.recommended_max_working_set_bytes).map_or(0, |(allowed, _)| allowed)
+}
+
 /// Admit a whole scene before any of its buffers is allocated: the bytes
 /// its plan allocates against what the device offers now (the allowance
 /// less what is already allocated), refused by name with both in MB.
@@ -611,6 +653,20 @@ mod tests {
 
         let overflow = configured_limit_from(4_000, Some("18446744073709551615")).unwrap_err();
         assert!(overflow.to_string().contains("overflows byte arithmetic"));
+    }
+
+    #[test]
+    fn the_world_takes_two_thirds_of_what_the_mac_allows() {
+        // 12 GiB recommended: the device ceiling is 9 GiB, the World's 8 GiB.
+        let at = |current: u64| manifold_gpu::GpuMemorySnapshot {
+            current_allocated_bytes: current,
+            recommended_max_working_set_bytes: 12 << 30,
+        };
+        assert_eq!(world_budget_bytes(at(0)), 8 << 30);
+        assert!(admit_world_bytes(Some(at(5 << 30)), 3 << 30).is_ok());
+        assert!(admit_world_bytes(Some(at(5 << 30)), (3 << 30) + 1).is_err());
+        // The rest of the device ceiling stays for everything else.
+        assert!(admit_candidate_bytes(Some(at(5 << 30)), 4 << 30).is_ok());
     }
 
     #[test]

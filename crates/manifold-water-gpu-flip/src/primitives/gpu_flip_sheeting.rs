@@ -391,7 +391,7 @@ impl GpuSheeting {
         if self.buffers.is_some() && self.capacity == capacity && self.pool_tiles == pool_tiles {
             return Ok(());
         }
-        manifold_node_engine::load::expand::admit_candidate_bytes(
+        manifold_node_engine::load::expand::admit_world_bytes(
             device.modifier_memory_snapshot(),
             scratch_bytes(capacity, pool_tiles),
         )

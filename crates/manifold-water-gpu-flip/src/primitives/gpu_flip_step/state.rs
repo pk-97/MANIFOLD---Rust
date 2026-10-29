@@ -38,12 +38,36 @@ impl StepState {
 
     /// The pool this tick runs on, starting at the domain's pool `start`
     /// and growing up to `ceiling`, from the last tick's and its table's late
-    /// read (`tiles.rs` next_pool).
-    pub(super) fn next_pool(&mut self, start: u32, ceiling: u32) -> u32 {
+    /// read (`tiles.rs` next_pool). A growth the World's budget refuses keeps
+    /// the last pool, which refuses births and removes water that leaves it;
+    /// the refusal comes back for the card.
+    pub(super) fn next_pool(
+        &mut self,
+        start: u32,
+        ceiling: u32,
+        memory: Option<manifold_gpu::GpuMemorySnapshot>,
+    ) -> (u32, Option<String>) {
         let read = self.tiles.as_ref().and_then(WorldTiles::late_held);
-        let next = next_pool(start, ceiling, self.pool, read);
+        let mut next = next_pool(start, ceiling, self.pool, read);
+        let mut refused = None;
+        if let Some((last, _)) = self.pool
+            && next.0 > last
+        {
+            let bytes = u64::from(next.0 - last)
+                * u64::from(manifold_water_liquid::tile_storage::TILE_CELLS)
+                * pooled_bytes_per_cell();
+            if manifold_node_engine::load::expand::admit_world_bytes(memory, bytes).is_err() {
+                let budget =
+                    memory.map_or(0, manifold_node_engine::load::expand::world_budget_bytes);
+                refused = Some(format!(
+                    "the World's memory ({:.1} GB) is full: the water stays on {last} tiles, new water is refused and water leaving them is removed",
+                    budget as f64 / 1e9
+                ));
+                next.0 = last;
+            }
+        }
         self.pool = Some(next);
-        next.0
+        (next.0, refused)
     }
 
     /// Size every array for a pool of `pool` tiles and `slots` before anything is encoded;

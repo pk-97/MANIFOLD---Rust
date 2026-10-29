@@ -296,7 +296,7 @@ impl Primitive for MatterState {
                 continue;
             }
             let bytes = bytes.max(32);
-            match manifold_node_engine::load::expand::admit_candidate_bytes(
+            match manifold_node_engine::load::expand::admit_world_bytes(
                 device.modifier_memory_snapshot(),
                 bytes,
             )

@@ -94,9 +94,15 @@ impl Primitive for GpuFlipStep {
                 return;
             }
         };
-        let next = self
-            .state
-            .next_pool(start, tiles::growth_ceiling(start, wall_faces, open_faces));
+        let memory = ctx.gpu_encoder().device.modifier_memory_snapshot();
+        let (next, refused) = self.state.next_pool(
+            start,
+            tiles::growth_ceiling(start, wall_faces, open_faces),
+            memory,
+        );
+        if let Some(refused) = refused {
+            ctx.error(format!("{NAME}: {refused}"));
+        }
         let (pool, narrow_band) = self
             .state
             .narrow_band

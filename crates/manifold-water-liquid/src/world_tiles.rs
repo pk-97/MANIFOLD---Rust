@@ -334,11 +334,8 @@ pub struct WorldTiles {
 }
 
 fn admit(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
-    manifold_node_engine::load::expand::admit_candidate_bytes(
-        device.modifier_memory_snapshot(),
-        bytes,
-    )
-    .map_err(|error| error.to_string())?;
+    manifold_node_engine::load::expand::admit_world_bytes(device.modifier_memory_snapshot(), bytes)
+        .map_err(|error| error.to_string())?;
     device.try_create_buffer(bytes, BufferUse::Upload)
 }
 

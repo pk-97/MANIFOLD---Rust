@@ -173,7 +173,7 @@ impl LiquidBodyBuffers {
                     .iter()
                     .max_by_key(|build| build.nodes())
                     .map_or("a shape", |build| build.name.as_str());
-                manifold_node_engine::load::expand::admit_candidate_bytes(
+                manifold_node_engine::load::expand::admit_world_bytes(
                     gpu.device.modifier_memory_snapshot(),
                     bytes,
                 )

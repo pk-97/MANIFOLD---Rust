@@ -158,16 +158,13 @@ pub fn retire_stats_for_test(
 }
 
 fn admit_buffer(device: &GpuDevice, bytes: u64, usage: BufferUse) -> Result<GpuBuffer, String> {
-    manifold_node_engine::load::expand::admit_candidate_bytes(
-        device.modifier_memory_snapshot(),
-        bytes,
-    )
-    .map_err(|error| error.to_string())
-    .and_then(|()| {
-        device
-            .try_create_buffer(bytes, usage)
-            .map_err(|error| error.to_string())
-    })
+    manifold_node_engine::load::expand::admit_world_bytes(device.modifier_memory_snapshot(), bytes)
+        .map_err(|error| error.to_string())
+        .and_then(|()| {
+            device
+                .try_create_buffer(bytes, usage)
+                .map_err(|error| error.to_string())
+        })
 }
 
 manifold_node_engine::primitive! {

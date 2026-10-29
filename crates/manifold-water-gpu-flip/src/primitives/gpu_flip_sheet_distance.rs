@@ -127,7 +127,7 @@ impl SheetDistance {
             return Ok(());
         }
         let bytes = pool_len(pool_tiles) * 4;
-        manifold_node_engine::load::expand::admit_candidate_bytes(
+        manifold_node_engine::load::expand::admit_world_bytes(
             device.modifier_memory_snapshot(),
             (2 + u64::from(self.through_solids)) * bytes,
         )

@@ -179,7 +179,7 @@ impl WetMap {
             return Ok(());
         }
         let bytes = map_words() * 4;
-        manifold_node_engine::load::expand::admit_candidate_bytes(
+        manifold_node_engine::load::expand::admit_world_bytes(
             device.modifier_memory_snapshot(),
             bytes,
         )

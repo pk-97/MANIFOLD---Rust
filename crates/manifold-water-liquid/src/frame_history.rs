@@ -571,7 +571,7 @@ impl FrameHistory<GpuBuffer> {
             particle_bytes,
             fields,
             |total| {
-                manifold_node_engine::load::expand::admit_candidate_bytes(
+                manifold_node_engine::load::expand::admit_world_bytes(
                     device.modifier_memory_snapshot(),
                     total,
                 )

@@ -109,18 +109,15 @@ const STATIC_SCRATCH_BYTES: u64 = 32;
 pub(super) const STATIC_TRIPLE_OFFSET: u64 = 16;
 
 pub(super) fn allocate(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
-    manifold_node_engine::load::expand::admit_candidate_bytes(
-        device.modifier_memory_snapshot(),
-        bytes,
-    )
-    .map_err(|error| error.to_string())
-    .and_then(|()| device.try_create_buffer(bytes, BufferUse::Gpu))
+    manifold_node_engine::load::expand::admit_world_bytes(device.modifier_memory_snapshot(), bytes)
+        .map_err(|error| error.to_string())
+        .and_then(|()| device.try_create_buffer(bytes, BufferUse::Gpu))
 }
 
 /// A buffer that carries state from step to step: shared, so it starts at
 /// zero without an encoder.
 pub(super) fn allocate_zeroed(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
-    let buffer = manifold_node_engine::load::expand::admit_candidate_bytes(
+    let buffer = manifold_node_engine::load::expand::admit_world_bytes(
         device.modifier_memory_snapshot(),
         bytes,
     )
