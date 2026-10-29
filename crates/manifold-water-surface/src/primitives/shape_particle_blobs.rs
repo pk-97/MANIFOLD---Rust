@@ -1,25 +1,40 @@
-//! `node.shape_particle_blobs` — one spherical surface kernel per sorted
-//! liquid particle: its centre and its drawn radius (Particle Scale × the
-//! particle's radius). A per-element map on the codegen path.
+//! `node.shape_particle_blobs` — one surface blob per sorted liquid particle,
+//! shaped by the particles within a simulation cell of it (Yu and Turk 2013):
+//! its centre smoothed toward theirs, stretched along the sheet or strand
+//! they lie in, and shrunk toward the particle's own radius when it is alone
+//! (`shaders/shape_particle_blobs.wgsl`).
 
 use std::borrow::Cow;
 
-use manifold_gpu::GpuBinding;
+use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
 use manifold_water_liquid::float_param;
-use manifold_water_liquid::fluid_particles::FluidBlob;
+use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob};
+use manifold_water_liquid::tile_pool::tile_pool;
 
-/// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
+// The kernel after the world-tile read side.
+static BODY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{READ_SIDE}\n{}",
+        include_str!("shaders/shape_particle_blobs.wgsl")
+    )
+});
+
+/// Field order identical to the shader's `Params`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct BlobUniforms {
+struct Uniforms {
+    cell_size: f32,
+    sim_cell_size: f32,
     particle_scale: f32,
-    dispatch_count: u32,
+    count: u32,
+    pool_tiles: u32,
+    entries: u32,
     _pad0: u32,
     _pad1: u32,
 }
@@ -27,28 +42,37 @@ struct BlobUniforms {
 manifold_node_engine::primitive! {
     name: ShapeParticleBlobs,
     type_id: "node.shape_particle_blobs",
-    purpose: "Give each sorted liquid particle a spherical surface kernel: the particle's centre and a radius of particle_scale × the particle's own radius. node.particle_volume blends the spheres within reach of each node into the level set. An inactive particle (radius 0) gives a kernel of radius 0.",
+    purpose: "Give each sorted liquid particle an ellipsoidal surface blob shaped by its neighbours (Yu and Turk 2013): the particles within one sim_cell_size of it, weighted 1 - (d / sim_cell_size)^3, found through the display cells they are sorted into. The blob's centre moves 0.9 of the way to their weighted mean; its axes follow their weighted spread, the shortest at least a quarter of the longest, at the round blob's volume, so blobs in a sheet flatten into it; with fewer than 3 neighbours the stretch and smoothing fade out. A blob with no other particle within its blend radius (1.5 round radii, node.particle_volume's) shrinks from particle_scale × the particle's radius toward the radius itself, halfway with one, so lone drops draw at their true size while a thinned sheet keeps its size. The stretch is at most 2. A lone drop's semi-axes are at least 0.75 display cells, a joined blob's 0.75 sim_cell_size (or its round radius if smaller), so sheets keep their thickness at every Surface Detail. Each blob holds its centre, its round radius r and the symmetric shape matrix A: a point at offset y from the centre is inside when |A y| < r. An inactive particle (radius 0) gives a blob of radius 0.",
     inputs: {
         sorted: Array(FluidParticle) required,
+        cell_ranges: Array(CellRange) required,
+        tiles: Array(u32) required,
+        cell_size: ScalarF32 optional,
+        sim_cell_size: ScalarF32 optional,
+        pool_tiles: ScalarF32 optional,
         particle_scale: ScalarF32 optional,
     },
     outputs: {
         blobs: Array(FluidBlob),
     },
     params: [
+        float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
+        float_param!("sim_cell_size", "Simulation Cell Size", 0.0625, 0.0001, 100.0),
+        float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
         float_param!("particle_scale", "Particle Scale", 3.0, 0.25, 8.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Feed it the sorted particles from node.sort_particles_into_cells. Wire its blobs to node.particle_volume, and the same Particle Scale value into both. Particle Scale is live: changing it reshapes the next frame's surface without touching the simulation. Output slots of inactive particles have radius 0.",
+    composition_notes: "Feed it the sorted particles and cell_ranges from node.sort_particles_into_cells, with tiles, pool_tiles and cell_size from the node.surface_tiles it sorted over and sim_cell_size from the solver. Wire its blobs to node.particle_volume, and the same Particle Scale value into both. Particle Scale is live: changing it reshapes the next frame's surface without touching the simulation. It reads each particle's neighbours, so it is a graph fusion boundary.",
     examples: [],
     picker: { label: "Shape Particle Blobs", category: Atom },
-    summary: "Turns each liquid particle into a round blob sized by its radius, which the liquid surface is built from.",
+    summary: "Turns each liquid particle into a blob shaped by its neighbours, flat in sheets and small when alone, which the liquid surface is built from.",
     category: Particles3D,
     role: Map,
-    aliases: ["particle spheres", "liquid blobs", "particle kernels"],
-    fusion_kind: Pointwise,
-    wgsl_body: include_str!("shaders/shape_particle_blobs_body.wgsl"),
-    input_access: [Coincident],
+    aliases: ["particle spheres", "liquid blobs", "particle kernels", "anisotropic kernels"],
+    boundary_reason: BarrieredReduction,
+    extra_fields: {
+        shape_pipeline: Option<GpuComputePipeline> = None,
+    },
 }
 
 impl Primitive for ShapeParticleBlobs {
@@ -69,28 +93,65 @@ impl Primitive for ShapeParticleBlobs {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        let pool = match tile_pool(ctx, "Shape Particle Blobs") {
+            Ok(pool) => pool,
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
+        };
         let particle_scale = ctx.scalar_or_param("particle_scale", 3.0);
-        let gpu = ctx.gpu_encoder();
-        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(sorted), Some(blobs)) = (ctx.inputs.array("sorted"), ctx.outputs.array("blobs"))
-        else {
+        let sim_cell_size = ctx.scalar_or_param("sim_cell_size", 0.0625);
+        if !(sim_cell_size > 0.0 && sim_cell_size.is_finite()) {
+            ctx.error(format!(
+                "Shape Particle Blobs: simulation cell {sim_cell_size} is not a length"
+            ));
+            return;
+        }
+        if self.shape_pipeline.is_none() {
+            let gpu = ctx.gpu_encoder();
+            self.shape_pipeline = Some(gpu.device.create_compute_pipeline(
+                BODY.as_str(),
+                "cs_main",
+                "node.shape_particle_blobs",
+            ));
+        }
+        let (Some(sorted), Some(ranges), Some(tiles), Some(blobs)) = (
+            ctx.inputs.array("sorted"),
+            ctx.inputs.array("cell_ranges"),
+            ctx.inputs.array("tiles"),
+            ctx.outputs.array("blobs"),
+        ) else {
             return;
         };
+        if pool.elements() * std::mem::size_of::<CellRange>() as u64 > ranges.size {
+            ctx.error(format!(
+                "Shape Particle Blobs: a pool of {} tiles is larger than its cell_ranges, which hold one range per pool element",
+                pool.pool_tiles
+            ));
+            return;
+        }
         let count = (blobs.size / std::mem::size_of::<FluidBlob>() as u64)
             .min(sorted.size / std::mem::size_of::<FluidParticle>() as u64)
             as u32;
         if count == 0 {
             return;
         }
-        let uniforms = BlobUniforms {
+        let uniforms = Uniforms {
+            cell_size: pool.cell_size,
+            sim_cell_size,
             particle_scale,
-            dispatch_count: count,
+            count,
+            pool_tiles: pool.pool_tiles,
+            entries: table_entries(pool.pool_tiles),
             _pad0: 0,
             _pad1: 0,
         };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
-            pipeline,
+            self.shape_pipeline
+                .as_ref()
+                .expect("shape particle blobs pipeline prepared"),
             &[
                 GpuBinding::Bytes {
                     binding: 0,
@@ -103,6 +164,16 @@ impl Primitive for ShapeParticleBlobs {
                 },
                 GpuBinding::Buffer {
                     binding: 2,
+                    buffer: ranges,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 3,
+                    buffer: tiles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 4,
                     buffer: blobs,
                     offset: 0,
                 },
@@ -110,84 +181,27 @@ impl Primitive for ShapeParticleBlobs {
             [count.div_ceil(256), 1, 1],
             "node.shape_particle_blobs",
         );
+        gpu.native_enc.compute_memory_barrier_buffers();
     }
 }
 
 manifold_node_engine::param_tooltips!("node.shape_particle_blobs", {
-    "particle_scale" => "How large each particle's blob is, as a multiple of the particle's radius.",
+    "particle_scale" => "How large each particle's blob is, as a multiple of the particle's radius. A particle with few neighbours draws smaller, down to its own radius.",
 });
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn fluid_shape_fixed_sphere_shader_validates() {
-        let source = manifold_node_engine::freeze::codegen::standalone_for_spec::<
-            super::ShapeParticleBlobs,
-        >()
-        .expect("shape codegen");
-        let module = naga::front::wgsl::parse_str(&source).expect("shape WGSL");
+    fn composed_shader_is_valid_wgsl() {
+        let module = naga::front::wgsl::parse_str(&super::BODY)
+            .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&super::BODY)));
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         )
         .validate(&module)
-        .expect("shape validation");
-    }
-}
-
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod gpu_tests {
-    use super::*;
-    use bytemuck::Zeroable;
-    use manifold_node_engine::testkit::array_harness::{Harness, params, read};
-
-    #[test]
-    fn blobs_are_particle_centres_with_scaled_radii() {
-        let mut harness = Harness::new();
-        let mut particles = Vec::new();
-        // Mixed radii, every seventh slot inactive, plus zeroed capacity.
-        for i in 0..300u32 {
-            let radius = if i % 7 == 3 {
-                0.0
-            } else {
-                0.017 + (i % 11) as f32 * 0.009
-            };
-            particles.push(FluidParticle {
-                position_radius: [
-                    -1.9 + (i % 13) as f32 * 0.29,
-                    -1.9 + ((i / 13) % 9) as f32 * 0.41,
-                    -1.9 + (i / 117) as f32 * 1.3,
-                    radius,
-                ],
-                velocity: [0.0; 3],
-                id: i + 1,
-            });
-        }
-        particles.extend_from_slice(&[FluidParticle::zeroed(); 3]);
-        let (input, _) = harness.array(&particles, particles.len());
-        for scale in [0.25, 2.2, 3.0, 8.0] {
-            let (blobs_slot, blobs_buf) = harness.array::<FluidBlob>(&[], particles.len());
-            let (_, errors) = harness.run(
-                &mut ShapeParticleBlobs::new(),
-                &[("sorted", input)],
-                &[("blobs", blobs_slot)],
-                &params(&[("particle_scale", scale)]),
-            );
-            assert!(errors.is_empty(), "{errors:?}");
-            let blobs: Vec<FluidBlob> = read(&blobs_buf, particles.len());
-            let mut active = 0;
-            for (blob, particle) in blobs.iter().zip(&particles) {
-                let [x, y, z, r] = particle.position_radius;
-                let expected = if r > 0.0 {
-                    active += 1;
-                    [x, y, z, scale * r]
-                } else {
-                    [0.0; 4]
-                };
-                assert_eq!(blob.center_radius, expected, "scale {scale}");
-            }
-            assert!(active > 200 && active < particles.len());
-        }
+        .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(std::mem::size_of::<super::Uniforms>(), 32);
     }
 }
 

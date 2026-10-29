@@ -1,10 +1,13 @@
 //! `node.field_smooth_blend`: one step of the water field build's smoothing
 //! over the nodes of a world-tile pool. A step smooths the field with the
-//! [1 2 1] / 4 filter along x, y and z, eases the result back toward the
-//! field by the node's weight and holds it within a leash of the reference.
+//! [1 2 1] / 4 filter along x, y and z (and again a simulation cell apart
+//! when the display is finer), eases the result back toward the field by the
+//! node's weight and holds it within a leash of the reference.
 //! One workgroup per tile slot stages the tile and one node round it
 //! (`shaders/field_smooth_blend.wgsl`).
-use crate::field_build::{FIELD_BAND_CELLS, FIELD_SMOOTHNESS_MAX};
+use crate::field_build::{
+    FIELD_BAND_CELLS, FIELD_SMOOTHNESS_MAX, MAX_DISPLAY_STRIDE, display_stride,
+};
 use crate::float_param;
 use crate::tile_pool::tile_pool;
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
@@ -14,13 +17,25 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
 use std::borrow::Cow;
 
-// The kernel after the world-tile read side.
-static BODY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    format!(
-        "{READ_SIDE}\n{}",
-        include_str!("shaders/field_smooth_blend.wgsl")
-    )
-});
+/// The kernel after the world-tile read side, its workgroup arrays sized for
+/// `stride`: the staged region of side 8 + 2 · halo, and that less its two
+/// end columns.
+fn body(stride: u32) -> String {
+    let halo = if stride == 1 { 1 } else { stride + 1 };
+    let side = 8 + 2 * halo;
+    let source = include_str!("shaders/field_smooth_blend.wgsl")
+        .replacen(
+            "const FS_A_LEN: u32 = 4096u;",
+            &format!("const FS_A_LEN: u32 = {}u;", side * side * side),
+            1,
+        )
+        .replacen(
+            "const FS_B_LEN: u32 = 3584u;",
+            &format!("const FS_B_LEN: u32 = {}u;", (side - 2) * side * side),
+            1,
+        );
+    format!("{READ_SIDE}\n{source}")
+}
 
 /// Field order identical to the shader's `Params`.
 #[repr(C)]
@@ -31,33 +46,35 @@ struct Uniforms {
     band_cells: f32,
     pool_tiles: u32,
     entries: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+    stride: u32,
+    sim_cell_size: f32,
+    _pad: u32,
 }
 
 manifold_node_engine::primitive! {
     name: FieldSmoothBlend,
     type_id: "node.field_smooth_blend",
-    purpose: "One step of the water field's smoothing, per node of a world-tile pool: prior smoothed with the [1, 2, 1] / 4 filter along x, then y, then z, blended back toward prior by the node's weight and held within a leash of the reference. Node arrays on the world tiles of a pool, one element per pooled node, all read at the same pool index. cell_size is one lattice cell in metres. Where |reference| is at least band_cells cells the prior passes through unchanged. Elsewhere the output is prior + weight · (smoothed - prior), clamped to reference ± smoothness × FIELD_LEASH_CELLS (half a cell). A node in a tile the table does not hold reads prior's canonical element, and each filter pass leaves it at the far value, 3 cells. The canonical element and free slots hold the far value.",
+    purpose: "One step of the water field's smoothing, per node of a world-tile pool: prior smoothed with the [1, 2, 1] / 4 filter along x, then y, then z, blended back toward prior by the node's weight and held within a leash of the reference. Node arrays on the world tiles of a pool, one element per pooled node, all read at the same pool index. cell_size is one lattice cell in metres and sim_cell_size the simulation's cell, a whole number (1 to 3) of lattice cells: above 1, each axis filter is followed by the same filter between nodes a simulation cell apart, so the smoothing reaches as far at every Surface Detail. Where |reference| is at least band_cells simulation cells the prior passes through unchanged. Elsewhere the output is prior + weight · (smoothed - prior), clamped to reference ± smoothness × FIELD_LEASH_CELLS (half a simulation cell). A node in a tile the table does not hold reads prior's canonical element, and each filter pass leaves it at the far value, 3 cells. The canonical element and free slots hold the far value.",
     inputs: {
         prior: Array(f32) required,
         weights: Array(f32) required,
         reference: Array(f32) required,
         tiles: Array(u32) required,
         cell_size: ScalarF32 optional,
+        sim_cell_size: ScalarF32 optional,
         smoothness: ScalarF32 optional, band_cells: ScalarF32 optional,
         pool_tiles: ScalarF32 optional,
     },
     outputs: { field: Array(f32), },
     params: [
         float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
+        float_param!("sim_cell_size", "Simulation Cell Size", 0.0625, 0.0001, 100.0),
         float_param!("smoothness", "Smoothness", 1.0, 0.0, FIELD_SMOOTHNESS_MAX),
         float_param!("band_cells", "Band Cells", FIELD_BAND_CELLS, 0.0, 16.0),
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Chain FIELD_SMOOTH_STEPS (3) of these after node.particle_volume: prior is the field the step starts from (the splat, then the step before), reference is node.particle_volume's level set, weights come from node.surface_weights, all pooled node arrays on the same tiles, with tiles, pool_tiles and cell_size from the same world tiles (node.surface_tiles for the display). Smoothness 1 is the tuned surface (the field build's half-cell leash), 0 returns the reference, 2 doubles the leash; band defaults to the field build's constant. It reads the nodes round each tile, so it is a graph fusion boundary.",
+    composition_notes: "Chain FIELD_SMOOTH_STEPS (3) of these after node.particle_volume: prior is the field the step starts from (the splat, then the step before), reference is node.particle_volume's level set, weights come from node.surface_weights, all pooled node arrays on the same tiles, with tiles, pool_tiles and cell_size from the same world tiles (node.surface_tiles for the display) and sim_cell_size from the domain. Smoothness 1 is the tuned surface (the field build's half-cell leash), 0 returns the reference, 2 doubles the leash; band defaults to the field build's constant. It reads the nodes round each tile, so it is a graph fusion boundary.",
     examples: [],
     picker: { label: "Field Smooth Blend", category: Atom },
     summary: "Smooths a liquid surface one step, easing it back toward the original where it is thin, and never lets it drift far from the true surface.",
@@ -66,7 +83,7 @@ manifold_node_engine::primitive! {
     aliases: ["smoothing blend", "leashed smoothing", "weighted smoothing", "smooth lattice"],
     boundary_reason: BarrieredReduction,
     extra_fields: {
-        smooth_pipeline: Option<GpuComputePipeline> = None,
+        smooth_pipelines: [Option<GpuComputePipeline>; MAX_DISPLAY_STRIDE as usize] = Default::default(),
     },
 }
 
@@ -90,6 +107,14 @@ impl Primitive for FieldSmoothBlend {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let pool = match tile_pool(ctx, "Field Smooth Blend") {
             Ok(pool) => pool,
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
+        };
+        let sim_cell_size = ctx.scalar_or_param("sim_cell_size", 0.0625);
+        let stride = match display_stride("Field Smooth Blend", sim_cell_size, pool.cell_size) {
+            Ok(stride) => stride,
             Err(error) => {
                 ctx.error(error);
                 return;
@@ -140,14 +165,14 @@ impl Primitive for FieldSmoothBlend {
             band_cells,
             pool_tiles: pool.pool_tiles,
             entries: table_entries(pool.pool_tiles),
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
+            stride,
+            sim_cell_size,
+            _pad: 0,
         };
         let gpu = ctx.gpu_encoder();
-        let pipeline = self.smooth_pipeline.get_or_insert_with(|| {
+        let pipeline = self.smooth_pipelines[stride as usize - 1].get_or_insert_with(|| {
             gpu.device
-                .create_compute_pipeline(BODY.as_str(), "cs_main", "node.field_smooth_blend")
+                .create_compute_pipeline(&body(stride), "cs_main", "node.field_smooth_blend")
         });
         let buffer = |binding, buffer| GpuBinding::Buffer {
             binding,
@@ -180,14 +205,18 @@ mod cpu_tests {
 
     #[test]
     fn composed_shader_is_valid_wgsl() {
-        let module = naga::front::wgsl::parse_str(&BODY)
-            .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&BODY)));
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .unwrap_or_else(|error| panic!("{error:?}"));
+        for stride in 1..=MAX_DISPLAY_STRIDE {
+            let source = body(stride);
+            let module = naga::front::wgsl::parse_str(&source)
+                .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&source)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        }
+        assert!(body(3).contains("FS_A_LEN: u32 = 4096u") && body(1).contains("FS_A_LEN: u32 = 1000u"));
         assert_eq!(std::mem::size_of::<Uniforms>(), 32);
     }
 }

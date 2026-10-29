@@ -59,8 +59,10 @@ pub(crate) const REACH: Reach = Reach {
     cell_reach: TILE,
 };
 
-/// The most the display subdivides a simulation cell per axis.
-pub(crate) const MAX_RESOLUTION_SCALE: f32 = 4.0;
+/// The most the display subdivides a simulation cell per axis: the most the
+/// smoothing and Close Gaps reach across.
+pub(crate) const MAX_RESOLUTION_SCALE: f32 =
+    manifold_water_liquid::field_build::MAX_DISPLAY_STRIDE as f32;
 
 /// The first pool, in tiles; it grows by [`grown_pool`] and shrinks by
 /// [`shrunk_pool`], never below this.
@@ -343,7 +345,7 @@ manifold_node_engine::primitive! {
         extent: Array(f32),
     },
     params: [
-        int_param!("resolution_scale", "Resolution Scale", 1.0, 1.0, 4.0),
+        int_param!("resolution_scale", "Resolution Scale", 1.0, 1.0, 3.0),
         float_param!("sim_cell_size", "Water Cell Size", 0.0625, 0.0001, 100.0),
     ],
     depth_rule: Terminal,
@@ -511,7 +513,7 @@ mod tests {
         assert_eq!(display_cell_size(0.25, 2.0).unwrap(), 0.125);
         // The resolution scale rounds and clamps to what the node offers.
         assert_eq!(display_cell_size(0.25, 2.6).unwrap(), 0.25 / 3.0);
-        assert_eq!(display_cell_size(0.25, 9.0).unwrap(), 0.0625);
+        assert_eq!(display_cell_size(0.25, 9.0).unwrap(), 0.25 / 3.0);
         assert_eq!(display_cell_size(0.25, 0.2).unwrap(), 0.25);
         assert!(display_cell_size(0.0, 1.0).is_err());
         assert!(display_cell_size(f32::NAN, 1.0).is_err());

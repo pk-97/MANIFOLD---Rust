@@ -58,9 +58,7 @@ fn sort_blobs(
     order.sort_by_key(|&i| key(&blobs[i]));
     let mut sorted: Vec<FluidBlob> = order
         .iter()
-        .map(|&i| FluidBlob {
-            center_radius: blobs[i],
-        })
+        .map(|&i| FluidBlob::round([blobs[i][0], blobs[i][1], blobs[i][2]], blobs[i][3]))
         .collect();
     let mut ranges = vec![CellRange::default(); pool];
     for (slot, blob) in sorted.iter().enumerate() {
@@ -347,9 +345,7 @@ fn air_reads_the_band_and_free_slots_and_canon_read_far() {
     let mut ranges = vec![CellRange::default(); len];
     ranges[local_index([3, 3, 3]) as usize] = CellRange { start: 0, count: 1 };
     let blobs = [
-        FluidBlob {
-            center_radius: blob,
-        },
+        FluidBlob::round([blob[0], blob[1], blob[2]], blob[3]),
         FluidBlob::default(),
     ];
     let got = run(&words, 4, &blobs, &ranges, &vec![NO_SOLID; len], blob_reach);

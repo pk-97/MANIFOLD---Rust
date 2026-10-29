@@ -1047,6 +1047,108 @@ pub(crate) fn wire_collider_trees(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Wire the simulation cell into every display smoothing step and Close Gaps
+/// saved without it, from the wire feeding the `sim_cell_size` of the
+/// `node.particle_volume` on the same tiles, so both reach a simulation cell
+/// at every Surface Detail. A port already wired is kept. Idempotent.
+pub(crate) fn wire_display_stride(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    let source = |node: u32, port: &str| {
+        def.wires
+            .iter()
+            .find(|w| w.to_node == node && w.to_port == port)
+            .map(|w| (w.from_node, w.from_port.clone()))
+    };
+    let volumes: Vec<((u32, String), (u32, String))> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.particle_volume")
+        .filter_map(|n| Some((source(n.id, "tiles")?, source(n.id, "sim_cell_size")?)))
+        .collect();
+    let added: Vec<EffectGraphWire> = def
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.type_id.as_str(), "node.field_smooth_blend" | "node.field_close"))
+        .filter(|n| source(n.id, "sim_cell_size").is_none())
+        .filter_map(|n| {
+            let tiles = source(n.id, "tiles")?;
+            let (_, (from_node, from_port)) = volumes.iter().find(|(t, _)| *t == tiles)?;
+            Some(EffectGraphWire {
+                from_node: *from_node,
+                from_port: from_port.clone(),
+                to_node: n.id,
+                to_port: "sim_cell_size".into(),
+            })
+        })
+        .collect();
+    let changed = !added.is_empty();
+    def.wires.extend(added);
+    changed
+}
+
+/// Shape Particle Blobs reads each particle's neighbours through the display
+/// cells it was sorted into: a saved blob node without them takes the
+/// cell ranges, tiles, pool, display cell and simulation cell of the Particle
+/// Volume its blobs feed.
+pub(crate) fn wire_blob_neighbours(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    const PORTS: [&str; 5] = ["cell_ranges", "tiles", "pool_tiles", "cell_size", "sim_cell_size"];
+    let source = |node: u32, port: &str| {
+        def.wires
+            .iter()
+            .find(|w| w.to_node == node && w.to_port == port)
+            .map(|w| (w.from_node, w.from_port.clone()))
+    };
+    let added: Vec<EffectGraphWire> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.shape_particle_blobs")
+        .filter(|n| source(n.id, "cell_ranges").is_none())
+        .filter_map(|n| {
+            let volume = def.wires.iter().find(|w| {
+                w.from_node == n.id
+                    && w.from_port == "blobs"
+                    && w.to_port == "blobs"
+                    && def
+                        .nodes
+                        .iter()
+                        .any(|v| v.id == w.to_node && v.type_id == "node.particle_volume")
+            })?;
+            Some(PORTS.into_iter().filter_map(move |port| {
+                let (from_node, from_port) = source(volume.to_node, port)?;
+                (source(n.id, port).is_none()).then(|| EffectGraphWire {
+                    from_node,
+                    from_port,
+                    to_node: n.id,
+                    to_port: port.into(),
+                })
+            }))
+        })
+        .flatten()
+        .collect();
+    let changed = !added.is_empty();
+    def.wires.extend(added);
+    changed
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "wire_blob_neighbours",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 460,
+        apply: wire_blob_neighbours,
+    }
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "wire_display_stride",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 450,
+        apply: wire_display_stride,
+    }
+}
+
 inventory::submit! {
     manifold_node_engine::load::migration::GraphMigration {
         name: "wire_collider_trees",

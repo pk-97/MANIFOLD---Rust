@@ -20,23 +20,53 @@ const _: () = {
     assert!(offset_of!(FluidParticle, id) == offset_of!(ParticleRecord, id));
 };
 
-/// One spherical surface kernel, from `node.shape_particle_blobs`: the
-/// particle's centre and its drawn radius (Particle Scale × the particle's
-/// radius). `node.particle_volume` blends the spheres near each node into
-/// the level set.
+/// One surface kernel, from `node.shape_particle_blobs`: an ellipsoid round
+/// the particle's smoothed centre. `node.particle_volume` blends the blobs
+/// near each node into the level set. A point at offset y from the centre is
+/// inside the blob when |A y| < r, A the symmetric shape matrix: the identity
+/// for a round blob of radius r, flattened along a thin sheet's normal and
+/// widened along it, or a multiple of the identity that shrinks a lone drop.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct FluidBlob {
-    /// Centre xyz; w = radius in metres, 0 = inactive.
+    /// Centre xyz; w = r, the round blob's radius in metres, 0 = inactive.
     pub center_radius: [f32; 4],
+    /// A's diagonal xx, yy, zz; w = how far the blob's weight reaches over
+    /// a round blob's, its longest semi-axis over r · size, which bounds the
+    /// nodes it reaches.
+    pub shape_diagonal: [f32; 4],
+    /// A's xy, xz, yz; w = size, the blob's shrink: the volume weighs it by
+    /// |size · A y|, so a shrunk blob blends as far as a full one.
+    pub shape_off_diagonal: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<FluidBlob>() == 16);
+const _: () = assert!(std::mem::size_of::<FluidBlob>() == 48);
 
-pub const FLUID_BLOB_SPECS: &[ChannelSpec] = &[ChannelSpec {
-    name: well_known::CENTER_RADIUS,
-    ty: ChannelElementType::Vec4F,
-}];
+impl FluidBlob {
+    /// A round blob of radius `r` round `centre`.
+    pub fn round(centre: [f32; 3], r: f32) -> Self {
+        Self {
+            center_radius: [centre[0], centre[1], centre[2], r],
+            shape_diagonal: [1.0, 1.0, 1.0, 1.0],
+            shape_off_diagonal: [0.0, 0.0, 0.0, 1.0],
+        }
+    }
+}
+
+pub const FLUID_BLOB_SPECS: &[ChannelSpec] = &[
+    ChannelSpec {
+        name: well_known::CENTER_RADIUS,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::SHAPE_DIAGONAL,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::SHAPE_OFF_DIAGONAL,
+        ty: ChannelElementType::Vec4F,
+    },
+];
 
 impl KnownItem for FluidBlob {
     const SPECS: &'static [ChannelSpec] = FLUID_BLOB_SPECS;

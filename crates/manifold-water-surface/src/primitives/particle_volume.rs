@@ -13,6 +13,9 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
+use manifold_water_liquid::field_build::{
+    BLOB_CENTRE_SMOOTHING, BLOB_MAX_STRETCH, BLOB_NEIGHBOUR_CELLS, display_stride,
+};
 use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob};
 use manifold_water_liquid::tile_pool::tile_pool;
 use manifold_water_liquid::{PARTICLE_RADIUS_CELLS, float_param};
@@ -33,11 +36,15 @@ struct Uniforms {
     blob_reach: f32,
     pool_tiles: u32,
     entries: u32,
+    window: f32,
+    run: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
-/// Most cells of kernel support (1.5 radii) a node's search window may hold;
-/// the shader's window span is sized for it.
-const MAX_SUPPORT_CELLS: f32 = 16.0;
+/// Most cells a node's search window may reach; the shader's window span is
+/// sized for it.
+const MAX_SUPPORT_CELLS: f32 = 20.0;
 
 /// The largest blob radius, metres: Particle Scale times the largest particle
 /// radius (`particle_radius` simulation cells).
@@ -45,18 +52,38 @@ fn blob_reach(particle_scale: f32, sim_cell_size: f32, particle_radius: f32) -> 
     particle_scale * particle_radius * sim_cell_size
 }
 
-/// The reach refused unless it is a length whose support the search window
-/// covers.
-fn check_reach(blob_reach: f32, cell_size: f32) -> Result<(), String> {
+/// How far from the cell its particle is sorted into a blob reaches,
+/// metres: the support (1.5 radii) of the most stretched blob, plus the
+/// farthest node.shape_particle_blobs moves a centre off its particle.
+fn search_reach(blob_reach: f32, sim_cell_size: f32) -> f32 {
+    1.5 * blob_reach * BLOB_MAX_STRETCH
+        + BLOB_CENTRE_SMOOTHING * BLOB_NEIGHBOUR_CELLS * sim_cell_size
+}
+
+/// Cells per run of the window walk: about one simulation cell's blobs, so a
+/// run holds about the same blobs at every Surface Detail. A divisor of the
+/// tile's 8, so runs never cross a tile.
+fn walk_run(stride: u32) -> u32 {
+    match stride.pow(3) {
+        0..=1 => 1,
+        2..=3 => 2,
+        4..=7 => 4,
+        _ => 8,
+    }
+}
+
+/// The reach refused unless it is a length whose search reach `window` the
+/// node's search window covers.
+fn check_reach(blob_reach: f32, window: f32, cell_size: f32) -> Result<(), String> {
     if !(blob_reach.is_finite() && blob_reach > 0.0) {
         return Err(format!(
             "Particle Volume: blob_reach {blob_reach} is not a length"
         ));
     }
-    let support_cells = 1.5 * blob_reach / cell_size;
-    if support_cells > MAX_SUPPORT_CELLS {
+    let window_cells = window / cell_size;
+    if window_cells.is_nan() || window_cells > MAX_SUPPORT_CELLS {
         return Err(format!(
-            "Particle Volume: blob_reach {blob_reach} m is {support_cells} cells of support; a node searches at most {MAX_SUPPORT_CELLS}"
+            "Particle Volume: blob_reach {blob_reach} m reaches {window_cells} cells; a node searches at most {MAX_SUPPORT_CELLS}"
         ));
     }
     Ok(())
@@ -65,7 +92,7 @@ fn check_reach(blob_reach: f32, cell_size: f32) -> Result<(), String> {
 manifold_node_engine::primitive! {
     name: ParticleVolume,
     type_id: "node.particle_volume",
-    purpose: "The liquid's level set on the display's world tiles: at each node (node p at (p - 1/2) cells, the low corner of cell p), blended spheres (Zhu and Bridson 2005): over the blobs within R = 1.5 blob reaches (particle_scale × particle_radius simulation cells × sim_cell_size, the largest blob radius), weighted (1 - (|x - c|/R)^2)^3, the weighted mean centre c̄ and radius r̄ give |x - c̄| - r̄, negative inside, so particles up to 2R apart blend into one body; a node no blob reaches reads three blob reaches. Each blob visits the inclusive FLIP grid support box from floor((centre - R)/cell + 1/2) through floor((centre + R)/cell + 1/2)+1. The blobs arrive sorted into the display cells and a node reads the cells within R of it. A node inside a solid (solid is the solid's distance on the same tiles, negative inside) takes at least its depth in the solid less half a cell: water against a wall reaches half a cell into it, so its surface meets the face at an angle behind it instead of lying on it, and deeper in no node reads as inside the liquid. A free slot and the canonical element hold three cells, the far value.",
+    purpose: "The liquid's level set on the display's world tiles: at each node (node p at (p - 1/2) cells, the low corner of cell p), blended ellipsoids (Zhu and Bridson 2005): each blob carries a shape matrix A (stretched along sheets, shrunk when alone) and a size, and over the blobs within R = 1.5 blob reaches (particle_scale × particle_radius simulation cells × sim_cell_size, the largest blob radius) of the node, weighted (1 - (|size · A (c - x)|/R)^2)^3, the blend runs on each blob's stretched offset q = A (c - x), radius r and gradient scale g = |A q|/|q|; the level set is (|q̄| - r̄)/ḡ, the blended ellipsoid's algebraic distance over its gradient, negative inside and Zhu and Bridson's |x - c̄| - r̄ for round blobs, so particles up to 2R apart blend into one body; a node no blob reaches reads three blob reaches. Each blob visits the inclusive FLIP grid support box from floor((centre - R)/cell + 1/2) through floor((centre + R)/cell + 1/2)+1. The blobs arrive sorted into the display cells and a node reads the cells within R of it. A node inside a solid (solid is the solid's distance on the same tiles, negative inside) takes at least its depth in the solid less half a cell: water against a wall reaches half a cell into it, so its surface meets the face at an angle behind it instead of lying on it, and deeper in no node reads as inside the liquid. A free slot and the canonical element hold three cells, the far value.",
     inputs: {
         blobs: Array(FluidBlob) required,
         cell_ranges: Array(CellRange) required,
@@ -87,7 +114,7 @@ manifold_node_engine::primitive! {
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire blobs from node.shape_particle_blobs and cell_ranges from the node.sort_particles_into_cells that sorted them over the display tiles (one range per pool element, or nothing runs, a named error), solid the display solid on the same tiles, tiles, pool_tiles and cell_size from node.surface_tiles. Wire particle_scale from the value the blobs read, so the reach follows Particle Scale live, and sim_cell_size from the solver's cell size; particle_radius is the largest particle radius in simulation cells (the default is every solver's). The reach is at most 16 display cells of support. It reads the blobs round each tile, so it is a graph fusion boundary. Chain the field smoothing on the same tiles after it.",
+    composition_notes: "Wire blobs from node.shape_particle_blobs and cell_ranges from the node.sort_particles_into_cells that sorted them over the display tiles (one range per pool element, or nothing runs, a named error), solid the display solid on the same tiles, tiles, pool_tiles and cell_size from node.surface_tiles. Wire particle_scale from the value the blobs read, so the reach follows Particle Scale live, and sim_cell_size from the solver's cell size; particle_radius is the largest particle radius in simulation cells (the default is every solver's). A blob reaches at most 20 display cells from its particle's cell, stretch and centre move included. It reads the blobs round each tile, so it is a graph fusion boundary. Chain the field smoothing on the same tiles after it.",
     examples: [],
     picker: { label: "Particle Volume", category: Atom },
     summary: "Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn.",
@@ -129,10 +156,18 @@ impl Primitive for ParticleVolume {
         let sim_cell_size = ctx.scalar_or_param("sim_cell_size", 0.0625);
         let particle_radius = ctx.scalar_or_param("particle_radius", PARTICLE_RADIUS_CELLS);
         let reach = blob_reach(particle_scale, sim_cell_size, particle_radius);
-        if let Err(error) = check_reach(reach, pool.cell_size) {
+        let window = search_reach(reach, sim_cell_size);
+        if let Err(error) = check_reach(reach, window, pool.cell_size) {
             ctx.error(error);
             return;
         }
+        let stride = match display_stride("Particle Volume", sim_cell_size, pool.cell_size) {
+            Ok(stride) => stride,
+            Err(error) => {
+                ctx.error(error);
+                return;
+            }
+        };
         if self.volume_pipeline.is_none() {
             let gpu = ctx.gpu_encoder();
             self.volume_pipeline = Some(gpu.device.create_compute_pipeline(
@@ -165,6 +200,10 @@ impl Primitive for ParticleVolume {
             blob_reach: reach,
             pool_tiles: pool.pool_tiles,
             entries: table_entries(pool.pool_tiles),
+            window,
+            run: walk_run(stride),
+            _pad1: 0,
+            _pad2: 0,
         };
         let gpu = ctx.gpu_encoder();
         // One workgroup per slot, and one more for the canonical element.
@@ -224,18 +263,27 @@ mod cpu_tests {
         )
         .validate(&module)
         .unwrap_or_else(|error| panic!("{error:?}"));
-        assert_eq!(std::mem::size_of::<Uniforms>(), 16);
+        assert_eq!(std::mem::size_of::<Uniforms>(), 32);
     }
 
     #[test]
     fn a_reach_beyond_the_search_window_is_refused() {
-        // 1.5 * 0.1 m is 2.4 cells of a 0.0625 m cell and 15 of a 0.01 m cell.
-        assert!(check_reach(0.1, 0.0625).is_ok());
-        assert!(check_reach(0.1, 0.01).is_ok());
-        assert!(check_reach(0.1, 0.009).is_err());
-        assert!(check_reach(blob_reach(3.0, 0.0625, PARTICLE_RADIUS_CELLS), 0.0625 / 4.0).is_ok());
+        // 0.15 m is 2.4 cells of a 0.0625 m cell, 18.75 of a 0.008 m cell and
+        // 21.4 of a 0.007 m cell.
+        assert!(check_reach(0.1, 0.15, 0.0625).is_ok());
+        assert!(check_reach(0.1, 0.15, 0.008).is_ok());
+        assert!(check_reach(0.1, 0.15, 0.007).is_err());
+        // Particle Scale 3 fits at every Surface Detail.
+        let sim = 0.0625;
+        let reach = blob_reach(3.0, sim, PARTICLE_RADIUS_CELLS);
+        let window = search_reach(reach, sim);
+        for stride in 1..=3 {
+            assert!(check_reach(reach, window, sim / stride as f32).is_ok());
+        }
+        // The window covers the most stretched blob and the centre's move.
+        assert!(window > 1.5 * reach * BLOB_MAX_STRETCH + 0.5 * sim);
         for bad in [0.0, -0.1, f32::NAN, f32::INFINITY] {
-            assert!(check_reach(bad, 0.0625).is_err(), "reach {bad}");
+            assert!(check_reach(bad, 0.15, 0.0625).is_err(), "reach {bad}");
         }
     }
 }

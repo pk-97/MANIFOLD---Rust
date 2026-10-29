@@ -201,6 +201,36 @@
       {
         "fromNode": 5,
         "fromPort": "cell_ranges",
+        "toNode": 6,
+        "toPort": "cell_ranges"
+      },
+      {
+        "fromNode": 0,
+        "fromPort": "tiles",
+        "toNode": 6,
+        "toPort": "tiles"
+      },
+      {
+        "fromNode": 0,
+        "fromPort": "pool_tiles",
+        "toNode": 6,
+        "toPort": "pool_tiles"
+      },
+      {
+        "fromNode": 0,
+        "fromPort": "cell_size",
+        "toNode": 6,
+        "toPort": "cell_size"
+      },
+      {
+        "fromNode": 0,
+        "fromPort": "sim_cell_size",
+        "toNode": 6,
+        "toPort": "sim_cell_size"
+      },
+      {
+        "fromNode": 5,
+        "fromPort": "cell_ranges",
         "toNode": 7,
         "toPort": "cell_ranges"
       },
@@ -337,6 +367,12 @@
         "toPort": "cell_size"
       },
       {
+        "fromNode": 0,
+        "fromPort": "sim_cell_size",
+        "toNode": 43,
+        "toPort": "sim_cell_size"
+      },
+      {
         "fromNode": 43,
         "fromPort": "field",
         "toNode": 47,
@@ -379,6 +415,12 @@
         "toPort": "cell_size"
       },
       {
+        "fromNode": 0,
+        "fromPort": "sim_cell_size",
+        "toNode": 47,
+        "toPort": "sim_cell_size"
+      },
+      {
         "fromNode": 47,
         "fromPort": "field",
         "toNode": 51,
@@ -419,6 +461,12 @@
         "fromPort": "cell_size",
         "toNode": 51,
         "toPort": "cell_size"
+      },
+      {
+        "fromNode": 0,
+        "fromPort": "sim_cell_size",
+        "toNode": 51,
+        "toPort": "sim_cell_size"
       },
       {
         "fromNode": 51,
@@ -485,6 +533,12 @@
         "fromPort": "cell_size",
         "toNode": 60,
         "toPort": "cell_size"
+      },
+      {
+        "fromNode": 0,
+        "fromPort": "sim_cell_size",
+        "toNode": 60,
+        "toPort": "sim_cell_size"
       },
       {
         "fromNode": 7,
