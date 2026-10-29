@@ -1,5 +1,5 @@
 //! `manifold frame-time <project.manifold> --frames N [--frame-clock] [--cell-size M]
-//! [--solve-level L] [--sim-rate HZ] [--stamp-every K] [--splash-frames S] [--png-frame T --png <path>]` —
+//! [--solve-level L] [--sim-rate HZ] [--stamp-every K] [--splash-frames S] [--png-frame T[,T…] --png <path>]` —
 //! the whole frame of a real project the way the app runs it: the
 //! production loader, the headless content thread, the project's own frame
 //! rate and output size, from the clip's start. By default it uses production
@@ -74,7 +74,9 @@ struct Args {
     stamp_every: usize,
     granularity: ProfileGranularity,
     splash_frames: usize,
-    png: Option<(usize, String)>,
+    /// The frames to save and where: one frame writes `path` itself, several
+    /// write `path` with `_<frame>` before its extension, a filmstrip from one run.
+    png: Option<(Vec<usize>, String)>,
     transport_log: Option<String>,
     pre_play_delay_seed: Option<u64>,
 }
@@ -84,7 +86,7 @@ fn usage_exit(msg: &str) -> ! {
     eprintln!(
         "usage: manifold frame-time <project.manifold> --frames N [--frame-clock] [--cell-size M] [--solve-level L] [--sim-rate 15|20|30|60] \
          [--stamp-every K] [--stamp-granularity dispatch|node] [--splash-frames S] \
-         [--png-frame T --png <path>] [--transport-log <path>] [--pre-play-delay-seed N]"
+         [--png-frame T[,T…] --png <path>] [--transport-log <path>] [--pre-play-delay-seed N]"
     );
     std::process::exit(2);
 }
@@ -143,7 +145,16 @@ fn parse(args: &[String]) -> Args {
     let png = match (value(args, "--png-frame"), value(args, "--png")) {
         (None, None) => None,
         (Some(_), None) | (None, Some(_)) => usage_exit("--png-frame and --png go together"),
-        (Some(_), Some(path)) => Some((number("--png-frame", None), path)),
+        (Some(at), Some(path)) => Some((
+            at.split(',')
+                .map(|t| {
+                    t.trim().parse::<usize>().unwrap_or_else(|_| {
+                        usage_exit("--png-frame takes frame numbers separated by commas")
+                    })
+                })
+                .collect(),
+            path,
+        )),
     };
     let transport_log = value(args, "--transport-log");
     let pre_play_delay_seed = value(args, "--pre-play-delay-seed").map(|s| {
@@ -1227,9 +1238,17 @@ fn probe(args: &Args) -> Result<(), String> {
             ));
         }
         if let Some((at, path)) = &args.png
-            && *at == index
+            && at.contains(&index)
         {
-            write_png(&mut ct, path);
+            if at.len() == 1 {
+                write_png(&mut ct, path);
+            } else {
+                let path = std::path::Path::new(path);
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("frame");
+                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("png");
+                let framed = path.with_file_name(format!("{stem}_{index}.{ext}"));
+                write_png(&mut ct, &framed.to_string_lossy());
+            }
         }
         let clock = ct.physics_metrics.clock;
         frames.push(Frame {

@@ -6,7 +6,9 @@
 
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 
-use super::fields::{FieldRow, MATERIAL_BINDING};
+use super::fields::{
+    Choice, FieldControl, FieldRow, FieldValue, MATERIAL_BINDING, always, enabled, wrong_value,
+};
 use super::water::{
     BACK_WALL, BILLBOARD, BOUNDS_FIELD, CEILING, CELL_SIZE_ROW, DOMAIN, DOMAIN_SIZE, DRAW_FIELD,
     FILL_HEIGHT, FLOOR, FOLLOW_AIR, FOLLOW_GRAVITY_X, FOLLOW_GRAVITY_Y, FOLLOW_GRAVITY_Z,
@@ -152,10 +154,84 @@ pub static SAND_ROWS: [PropertyRow; 48] = [
     FOLLOW_RESET,
 ];
 
-pub static SAND_FIELDS: [FieldRow; 3] = [BOUNDS_FIELD, DRAW_FIELD, MATERIAL_BINDING];
+/// What the Sand is made of, in [`Matter::ALL`] order. The key is the
+/// project file's name for it.
+const MATTERS: &[Choice] = &[
+    Choice {
+        key: "sand",
+        label: "Sand",
+    },
+    Choice {
+        key: "snow",
+        label: "Snow",
+    },
+    Choice {
+        key: "clay",
+        label: "Clay",
+    },
+    Choice {
+        key: "mud",
+        label: "Mud",
+    },
+    Choice {
+        key: "goo",
+        label: "Goo",
+    },
+    Choice {
+        key: "jelly",
+        label: "Jelly",
+    },
+];
 
-/// What a new item of `matter` looks like on its own Material, over the
-/// Sand template's look, each from what the material is made of:
+/// What the Sand is made of. Changing it keeps the domain, its cells and
+/// the fill; the app swaps the look and surface with it (`scene_edit`).
+const MATTER_FIELD: FieldRow = FieldRow {
+    id: "matter",
+    label: "Matter",
+    section: Simulation,
+    control: FieldControl::Closed(MATTERS),
+    applies: always,
+    disabled: enabled,
+    read: |fields| match fields {
+        ItemFields::Sand(s) => FieldValue::Choice(MATTERS[s.matter.index() as usize].key.to_owned()),
+        _ => FieldValue::Choice(String::new()),
+    },
+    write: |fields, value| {
+        let (ItemFields::Sand(s), FieldValue::Choice(key)) = (&mut *fields, value) else {
+            return Err(wrong_value("matter", value));
+        };
+        let at = MATTERS
+            .iter()
+            .position(|choice| choice.key == key)
+            .ok_or_else(|| wrong_value("matter", value))?;
+        s.matter = Matter::ALL[at];
+        // Sand draws as grains, the rest as their surface.
+        s.draw = if s.matter == Matter::Sand {
+            WaterDraw::Particles
+        } else {
+            WaterDraw::Surface
+        };
+        Ok(())
+    },
+};
+
+pub static SAND_FIELDS: [FieldRow; 4] = [MATTER_FIELD, BOUNDS_FIELD, DRAW_FIELD, MATERIAL_BINDING];
+
+/// The look a Sand of `matter` gives its own Material: the Sand template's
+/// look with what it is made of over it ([`matter_look`]).
+pub fn sand_look(matter: Matter) -> Vec<(String, f32)> {
+    let mut look = super::water_look(crate::scene_doc::ItemKind::Sand);
+    for (property, value) in matter_look(matter) {
+        match look.iter_mut().find(|(name, _)| name == property) {
+            Some((_, old)) => *old = *value,
+            None => look.push(((*property).to_owned(), *value)),
+        }
+    }
+    look
+}
+
+/// What a Sand of `matter` looks like over the Sand template's look, each
+/// from what the material is made of:
 /// - Snow: ice grains (IOR 1.31) a fraction of a millimetre across at about
 ///   0.9 albedo, glinting. Light runs millimetres to a centimetre inside,
 ///   blue the furthest, so creases and thin edges glow faintly blue; a
@@ -167,7 +243,7 @@ pub static SAND_FIELDS: [FieldRow; 3] = [BOUNDS_FIELD, DRAW_FIELD, MATERIAL_BIND
 /// - Goo: honey, clear (transmission 1) with its amber from absorption
 ///   through its own thickness, at honey's IOR 1.49.
 /// - Jelly: gelatin, clear and absorbing red, at IOR 1.34.
-pub fn matter_look(matter: Matter) -> &'static [(&'static str, f32)] {
+fn matter_look(matter: Matter) -> &'static [(&'static str, f32)] {
     match matter {
         Matter::Sand => &[],
         Matter::Snow => &[

@@ -320,21 +320,11 @@ pub(crate) fn add(
             id.clone(),
             fields,
         )));
-        // The template's look, with what the Sand is made of over it.
-        let mut look = scene_schema::water_look(entry.kind);
-        for (property, value) in matter.map_or(&[][..], scene_schema::matter_look) {
-            match look.iter_mut().find(|(name, _)| name == property) {
-                Some((_, old)) => *old = *value,
-                None => look.push(((*property).to_owned(), *value)),
-            }
-        }
+        // The template's look, with what a Sand is made of over it.
+        let look = matter.map_or_else(|| scene_schema::water_look(entry.kind), scene_schema::sand_look);
         commands.extend(
-            look.into_iter()
-                .filter(|(property, _)| {
-                    let family = scene_schema::MATERIAL_FAMILY;
-                    !family.automatic.contains(&property.as_str())
-                        && !family.internal.iter().any(|(param, _)| param == property)
-                })
+            writable_look(look)
+                .into_iter()
                 .map(|(property, value)| write(layer, &material_id, &property, 0.0, value)),
         );
     }
@@ -631,6 +621,52 @@ pub(crate) fn set_field(
             commands.extend(ocean_material(project, layer, doc, found, &fields)?);
         }
         return Ok(Some(batch(commands, "Set Shape", None)));
+    }
+    // A Sand made of something else keeps its domain, cells and fill, and
+    // takes the new matter's look and surface, and its name while it still
+    // has the old matter's.
+    if let (ItemFields::Sand(old), ItemFields::Sand(new)) = (&found.fields, &fields)
+        && old.matter != new.matter
+    {
+        let mut commands: Vec<Box<dyn Command>> = vec![Box::new(SetSceneItemFieldsCommand::new(
+            layer.clone(),
+            item.clone(),
+            fields.clone(),
+        ))];
+        commands.extend(swap_writes(
+            project,
+            layer,
+            item,
+            scene_schema::matter_starts(old.matter),
+            scene_schema::matter_starts(new.matter),
+        ));
+        let mut renamed = vec![(item.clone(), found.name.clone())];
+        if let Some(material) = &new.material {
+            commands.extend(swap_writes(
+                project,
+                layer,
+                material,
+                &writable_look(scene_schema::sand_look(old.matter)),
+                &writable_look(scene_schema::sand_look(new.matter)),
+            ));
+            if let Some(found) = doc.find(material) {
+                renamed.push((material.clone(), found.name.clone()));
+            }
+        }
+        // As when added, the Sand and its material share the one fresh name.
+        let renamed: Vec<_> = renamed
+            .into_iter()
+            .filter(|(_, name)| named_after(name, old.matter.name()))
+            .collect();
+        let taken: Vec<&str> = names(doc)
+            .into_iter()
+            .filter(|name| !renamed.iter().any(|(_, old)| old == name))
+            .collect();
+        let fresh = unique_name(new.matter.name(), &taken);
+        for (id, _) in renamed {
+            commands.push(Box::new(RenameSceneItemCommand::new(layer.clone(), id, fresh.clone())));
+        }
+        return Ok(Some(batch(commands, "Set Matter", None)));
     }
     // A layer fed into Emission shows at once: an emission the performer has
     // not touched starts as the Emission feature does, white at full strength.
@@ -1013,6 +1049,57 @@ pub(crate) fn material_feature(
 
 /// Writes moving each of `material`'s `seeds` params to its seed value, only
 /// where the performer has left it at its default.
+/// A look's values a Material takes from it: its feature modes follow the
+/// features field and its internal params stay the renderer's.
+fn writable_look(look: Vec<(String, f32)>) -> Vec<(String, f32)> {
+    let family = scene_schema::MATERIAL_FAMILY;
+    look.into_iter()
+        .filter(|(property, _)| {
+            !family.automatic.contains(&property.as_str())
+                && !family.internal.iter().any(|(param, _)| param == property)
+        })
+        .collect()
+}
+
+/// The writes that move `item` from the values `old` set to those `new`
+/// sets: each of `new`'s, and its default for any only `old` set, each
+/// undoing to what it holds now.
+fn swap_writes<A: AsRef<str>, B: AsRef<str>>(
+    project: &Project,
+    layer: &LayerId,
+    item: &ItemId,
+    old: &[(A, f32)],
+    new: &[(B, f32)],
+) -> Vec<Box<dyn Command>> {
+    let Some(inst) = instance(project, layer) else {
+        return Vec::new();
+    };
+    let dropped = old
+        .iter()
+        .filter(|(property, _)| !new.iter().any(|(set, _)| set.as_ref() == property.as_ref()))
+        .filter_map(|(property, _)| {
+            let param = inst.params.get(&param_id(item, property.as_ref()))?;
+            Some((property.as_ref(), param.spec.default_value))
+        });
+    new.iter()
+        .map(|(property, value)| (property.as_ref(), *value))
+        .chain(dropped)
+        .filter_map(|(property, value)| {
+            let held = inst.params.get(&param_id(item, property))?.base;
+            ((held - value).abs() > f32::EPSILON).then(|| write(layer, item, property, held, value))
+        })
+        .collect()
+}
+
+/// Whether `name` is still `base` or a numbered copy of it ("Snow 2").
+fn named_after(name: &str, base: &str) -> bool {
+    name == base
+        || name
+            .strip_prefix(base)
+            .and_then(|rest| rest.strip_prefix(' '))
+            .is_some_and(|n| n.parse::<u32>().is_ok())
+}
+
 fn seed_writes(
     project: &Project,
     layer: &LayerId,
@@ -1463,6 +1550,7 @@ pub(crate) fn chain_move(
 mod tests {
     use super::*;
     use manifold_core::PresetTypeId;
+    use manifold_core::scene_doc::Matter;
     use manifold_core::types::LayerType;
 
     /// Setting a Shape to Ocean writes the water look onto the Ocean's own
@@ -1564,6 +1652,48 @@ mod tests {
                 ("Swarm Gusts", ForceType::Wind)
             ]
         );
+    }
+
+    /// Snow made into clay keeps its cells and takes clay's look under clay's
+    /// name, and one undo brings the snow back.
+    #[test]
+    fn a_sand_made_of_something_else_keeps_its_cells_and_swaps_its_look() {
+        let (mut project, layer, _) = cube_scene();
+        let mut snow = add(&project, &layer, "matter.snow", None, &[]).unwrap();
+        snow.command.execute(&mut project);
+        let sand = snow.select.unwrap();
+        write(&layer, &sand, "cell_size", 0.0, 0.2).execute(&mut project);
+        let material = match &doc(&project, &layer).unwrap().find(&sand).unwrap().fields {
+            ItemFields::Sand(fields) => fields.material.clone().unwrap(),
+            other => panic!("{other:?}"),
+        };
+        let radius = |project: &Project| {
+            base(instance(project, &layer).unwrap(), &material, "subsurface_radius_b")
+        };
+        assert_eq!(radius(&project), Some(0.012));
+
+        let mut swap = set_field(
+            &project,
+            &layer,
+            &sand,
+            "matter",
+            &FieldPick::Choice("clay".into()),
+        )
+        .unwrap()
+        .unwrap();
+        swap.command.execute(&mut project);
+        let doc_now = doc(&project, &layer).unwrap();
+        let found = doc_now.find(&sand).unwrap();
+        assert!(matches!(&found.fields, ItemFields::Sand(s) if s.matter == Matter::Clay));
+        assert_eq!(found.name, "Clay");
+        assert_eq!(doc_now.find(&material).unwrap().name, "Clay");
+        let inst = instance(&project, &layer).unwrap();
+        assert_eq!(base(inst, &sand, "cell_size"), Some(0.2));
+        assert_eq!(radius(&project), Some(0.002));
+
+        swap.command.undo(&mut project);
+        assert_eq!(radius(&project), Some(0.012));
+        assert_eq!(doc(&project, &layer).unwrap().find(&sand).unwrap().name, "Snow");
     }
 
     /// A dropped download folder names its one material file, a folder of

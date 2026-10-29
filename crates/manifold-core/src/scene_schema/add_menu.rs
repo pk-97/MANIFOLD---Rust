@@ -651,6 +651,18 @@ pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 5] = [
     ),
 ];
 
+/// The surface a Sand of `matter` starts with: its Add menu entry's starts.
+pub fn matter_starts(matter: Matter) -> &'static [(&'static str, f32)] {
+    entry_starts(match matter {
+        Matter::Sand => "sand",
+        Matter::Snow => "matter.snow",
+        Matter::Clay => "matter.clay",
+        Matter::Mud => "matter.mud",
+        Matter::Goo => "matter.goo",
+        Matter::Jelly => "matter.jelly",
+    })
+}
+
 /// The card values the entry `key` starts at, beyond its recipe's defaults.
 pub fn entry_starts(key: &str) -> &'static [(&'static str, f32)] {
     FORCE_STARTS

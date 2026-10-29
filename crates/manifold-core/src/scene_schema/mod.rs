@@ -36,7 +36,9 @@ mod water;
 mod water_source;
 mod world;
 
-pub use add_menu::{ADD_ENTRIES, AddEntry, FORCE_STARTS, add_entry, entry_starts, unique_name};
+pub use add_menu::{
+    ADD_ENTRIES, AddEntry, FORCE_STARTS, add_entry, entry_starts, matter_starts, unique_name,
+};
 pub use camera::{CAMERA_ROWS, CLIP_PLANE, ORBIT_CLOSEST};
 pub use copies::{
     COPIES_ROLE, COPIES_ROWS, START_COUNT, SURFACE_ROLE, TURN_ON_COPIES, acts_on_copies, can_copy,
@@ -65,7 +67,7 @@ pub use object::{OBJECT_ROWS, has_shape_name, shape_name};
 pub use ocean::OCEAN_LOOK;
 use ocean::OCEAN_TABLES;
 pub use physics::{BODY_ROLE, PHYSICS_ROWS, PhysicsPart, physics_parts, physics_unavailable};
-pub use sand::{SAND_ROWS, matter_look};
+pub use sand::{SAND_ROWS, sand_look};
 pub use scene_level::{DEFAULT_MATERIAL_REASON, SCENE_LEVEL_ROWS};
 pub use scene_wide::{
     LOOP_CAMERA_ONLY, LOOP_CAMERA_ROWS, LOOP_GAP_ROW, NO_LOOP_CAMERA, NO_SCENE_LOOP, add_refused,
