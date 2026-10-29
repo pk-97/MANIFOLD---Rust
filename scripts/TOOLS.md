@@ -15,7 +15,7 @@ Checks:
 Machine:
   gpu-queue               GPU lock: `-- <cmd>` (waits for the MANIFOLD app to quit, else NOT RUN), `status`  [scripts/gpu_queue.py]
   claude-pane             launch a Claude Code session in a new tmux pane without stealing focus  [scripts/claude-pane.sh]
-  prune-cache             delete incremental build caches untouched for a day (launchd runs it daily at 4:00)  [scripts/prune_build_cache.sh]
+  cache-cleanup           delete incremental build caches untouched for a day, waiting for a gap between compiles (launchd runs it daily at 4:00)  [scripts/manifold-cache-cleanup.sh]
 
 Render and measure:
   capture                 render any preset to PNG frames: OUT_DIR --preset <json> [--frames N] (the visual oracle)  [scripts/gpu_queue.py -- cargo run -p manifold-nodes --features gpu-proofs --example fluid_capture --]

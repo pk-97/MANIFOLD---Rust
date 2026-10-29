@@ -43,8 +43,8 @@ VERBS = [
     ("Machine",
      "claude-pane", "claude-pane.sh", "launch a Claude Code session in a new tmux pane without stealing focus"),
     ("Machine",
-     "prune-cache", "prune_build_cache.sh",
-     "delete incremental build caches untouched for a day (launchd runs it daily at 4:00)"),
+     "cache-cleanup", "manifold-cache-cleanup.sh",
+     "delete incremental build caches untouched for a day, waiting for a gap between compiles (launchd runs it daily at 4:00)"),
 
     ("Render and measure",
      "capture", GPU + ["cargo", "run", "-p", "manifold-nodes", "--features", "gpu-proofs", "--example", "fluid_capture", "--"],
