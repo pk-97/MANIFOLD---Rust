@@ -3,13 +3,15 @@
 //   count_main: each live point adds one to its occupancy cell, two point
 //     spacings on a side (eight points when packed), in an open-addressed
 //     table of (cell key, count) pairs the node clears first.
-//   emit_main: each point reads its own cell and the cells one and two steps
-//     along each axis, FULL points making a cell filled. A point with an empty
-//     cell one step away is at the surface and draws the grains that cover
-//     its patch. One with an empty cell two steps away lies just under it and
-//     draws one grain the point's size, which fills the gaps between the
-//     surface grains; deeper, no camera sees it and its grains are holes the
-//     draw skips.
+//   emit_main: each point reads its own cell and the cells one to three
+//     steps along each axis, FULL points making a cell filled. A point with an
+//     empty cell within two steps is near the surface and draws the grains
+//     that cover its patch. One with an empty cell three steps away draws one
+//     grain the point's size, which fills the gaps between the surface
+//     grains; deeper, no camera sees it and its grains are holes the draw
+//     skips. A point near a step's edge switches as its neighbours' counts
+//     move, so the full grains reach two steps in and each switch happens
+//     under them, out of sight.
 // A surface point of radius r draws n = ceil(2 r² / g²) grains of Grain Size
 // g, about one and a half times its patch's area, at most K. Past K the grains
 // grow to r · sqrt(2 / K) instead of leaving gaps, so a coarse cell with a
@@ -173,7 +175,7 @@ fn emit_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if mg_count(c) < FULL {
         drawn = cover;
     }
-    for (var d = 1; d <= 2 && drawn == 0u; d = d + 1) {
+    for (var d = 1; d <= 3 && drawn == 0u; d = d + 1) {
         let filled = mg_count(c + vec3<i32>(d, 0, 0)) >= FULL
             && mg_count(c - vec3<i32>(d, 0, 0)) >= FULL
             && mg_count(c + vec3<i32>(0, d, 0)) >= FULL
@@ -181,7 +183,7 @@ fn emit_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             && mg_count(c + vec3<i32>(0, 0, d)) >= FULL
             && mg_count(c - vec3<i32>(0, 0, d)) >= FULL;
         if !filled {
-            drawn = select(1u, cover, d == 1);
+            drawn = select(1u, cover, d <= 2);
         }
     }
     for (var j = drawn; j < k; j = j + 1u) {

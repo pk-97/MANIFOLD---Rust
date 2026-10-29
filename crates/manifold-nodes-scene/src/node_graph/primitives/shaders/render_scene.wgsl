@@ -298,15 +298,19 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
         prev_vertex = prev_positions[vid].xyz;
     }
     // An instance of an array that moves on its own starts from where it was
-    // last frame; any other instance has not moved in its own space.
+    // last frame; any other instance has not moved in its own space. One
+    // that was a hole last frame (an all-zero record) has just appeared, so
+    // it has not moved either: its last record is not a place.
     var prev_rot = rot;
     var prev_msign = msign;
     var prev_pos_scale = inst.pos_scale;
     if u.render_mode.w > 0.5 {
         let prev_inst = prev_instances[iid];
-        prev_rot = euler_xyz(prev_inst.rot_pad.xyz);
-        prev_msign = mirror_sign(prev_inst.rot_pad.w);
-        prev_pos_scale = prev_inst.pos_scale;
+        if any(prev_inst.pos_scale != vec4<f32>(0.0)) || any(prev_inst.rot_pad != vec4<f32>(0.0)) {
+            prev_rot = euler_xyz(prev_inst.rot_pad.xyz);
+            prev_msign = mirror_sign(prev_inst.rot_pad.w);
+            prev_pos_scale = prev_inst.pos_scale;
+        }
     }
     let prev_local_pos = (u.prev_instance_inner * vec4<f32>(prev_vertex, 1.0)).xyz;
     let prev_inst_pos = prev_rot * ((prev_local_pos * prev_msign) * prev_pos_scale.w) + prev_pos_scale.xyz;
