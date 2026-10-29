@@ -89,14 +89,14 @@ centre, the flame colour, its power following the flames.
 | scene shadows in smoke | off | off | on | on |
 
 Cost on an M4 Max at 1080p, whole frame less the same scene without the
-gas, World Cell Size 0.0625 m, Fire box 1.5 × 3 × 1.5 m, Smoke 2 × 4 × 2 m:
+gas (2.0 ms), World Cell Size 0.0625 m, Fire box 1.5 × 3 × 1.5 m, Smoke 2 × 4 × 2 m:
 
 | | Low | Medium | High | Extra High |
 |---|---|---|---|---|
 | Fire cells | 12 × 24 × 12 | 24 × 48 × 24 | 48 × 96 × 48 | 96 × 192 × 96 |
-| Fire, ms | 0.5 | 0.9 | 3.0 | 19 |
+| Fire, ms | 0.5 | 0.9 | 3.2 | 20 |
 | Smoke cells | 16 × 32 × 16 | 32 × 64 × 32 | 64 × 128 × 64 | 128 × 256 × 128 |
-| Smoke, ms | 0.5 | 1.1 | 4.8 | 42 |
+| Smoke, ms | 0.4 | 1.0 | 4.9 | 42 |
 
 Low and Medium are bound by dispatch count (about 60 small dispatches),
 not cells. High is the live default; Extra High is for renders.
