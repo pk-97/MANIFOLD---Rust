@@ -2,7 +2,7 @@
 
 <!-- index: Design for cutting GPU FLIP water memory: one world-tile table per World shared by every Water's sim, surface and whitewater, so Waters push on each other and merge; one memory budget from the device; scratch fields sharing one arena by lifetime; no padding or dead lanes; spray off the surface table; pools that shrink; 16-bit storage. Starts from the 28 Oct inventory and the waterBoxTests 22 GB refusal. -->
 
-**Status:** phase 1 partly landed (0aaaee527: spray and foam hold no display tiles, the display pool shrinks). D1 and D2 are per World since 29 Oct (Peter). Each phase needs Peter's go-ahead.
+**Status:** phase 1 partly landed (0aaaee527: spray and foam hold no display tiles, the display pool shrinks). D1 and D2 are per World since 29 Oct (Peter). Phase 2 partly landed: water, sand, whitewater and their display fields draw on one World budget, two thirds of the recommended working set (`admit_world_bytes`, 0dc6b91cd, 22b597bac); a refused water growth keeps its last pool, stops births and says so on the card. The rest of D7's order (spray, off screen, farthest) is not built. One lattice per World (2308d0a60): every solver's cell is the World's Cell Size times its item's Quality scale, so their tile keys line up, but each solver still holds its own table (D2 not built). Each phase needs Peter's go-ahead.
 **Companions:** [GPU_FLIP_END_GAME_DESIGN.md](GPU_FLIP_END_GAME_DESIGN.md) (D4 memory follows the water, D5 16-bit storage, D12 one shared grid, D13 spray as impostors), [WATER_FINE_BLOCKS_DESIGN.md](WATER_FINE_BLOCKS_DESIGN.md) (its second display table becomes a fine level here, D2).
 
 ## Why
