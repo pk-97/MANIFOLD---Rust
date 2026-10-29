@@ -314,7 +314,7 @@ pub(super) const SURFACE_CLOSE_GAPS: PropertyRow =
         .name("Close Gaps")
         .tip("Closes holes and gaps in the surface up to two surface cells across, so a thin sheet holds together instead of breaking into beads. Pieces closer than that join up")
         .toggle()
-        .default(0.0)
+        .default(1.0)
         .when(surface);
 pub(super) const FOLLOW_GRAVITY_X: PropertyRow = follows(WORLD_FOLLOWS[0], "the World's Gravity X");
 pub(super) const FOLLOW_GRAVITY_Y: PropertyRow = follows(WORLD_FOLLOWS[1], "the World's Gravity Y");
