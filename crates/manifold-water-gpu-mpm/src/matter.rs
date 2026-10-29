@@ -327,9 +327,13 @@ pub enum MatterKind {
 pub const MATTER_KINDS: [&str; 6] = ["sand", "snow", "clay", "mud", "goo", "jelly"];
 
 /// Snow at Stiffness 1: Stomakhin et al. 2013's reference snow (Table 2),
-/// E₀ = 1.4e5 Pa, ν = 0.2, hardening ξ = 10, 400 kg/m³.
+/// E₀ = 1.4e5 Pa, ν = 0.2, hardening ξ = 10, at [`SNOW_REFERENCE_DENSITY`].
+/// Snow is an open foam of ice, so its E follows the square of its density
+/// (Gibson and Ashby's foam law): fresh powder at 100 kg/m³ is 16 times
+/// softer and slumps, wet snow at 600 about twice as stiff.
 const SNOW_YOUNG: f64 = 1.4e5;
 const SNOW_POISSON: f64 = 0.2;
+const SNOW_REFERENCE_DENSITY: f64 = 400.0;
 /// The Hardening a new Snow starts at, ξ.
 pub const SNOW_HARDENING: f32 = 10.0;
 /// matter_material.wgsl's MM_SNOW_HARDENING_MAX: the most packing stiffens
@@ -337,7 +341,10 @@ pub const SNOW_HARDENING: f32 = 10.0;
 const SNOW_HARDENING_MAX: f64 = 5.0;
 /// Jelly: a gelatin dessert's Young's modulus, about 20 kPa, nearly
 /// incompressible (ν = 0.45). A metre-tall block sags under its own weight,
-/// as real jelly that size would.
+/// as real jelly that size would. Its wobble dies away by a Kelvin-Voigt
+/// damping viscosity, the Viscosity dial: gelatin loses about a tenth of its
+/// energy a wobble (loss tangent near 0.1), about 80 Pa·s for a dessert half
+/// a metre tall.
 const JELLY_YOUNG: f64 = 2.0e4;
 const JELLY_POISSON: f64 = 0.45;
 /// Clay: modelling clay yields at about 10 kPa in shear. Its true Young's
@@ -381,8 +388,11 @@ pub struct MatterDials {
     pub hardening: f64,
     /// Clay, mud and goo: the shear yield stress, Pa.
     pub yield_stress: f64,
-    /// Clay, mud and goo: the plastic viscosity, Pa·s.
+    /// Clay, mud and goo: the plastic viscosity, Pa·s. Jelly: its damping
+    /// viscosity, Pa·s.
     pub viscosity: f64,
+    /// Snow: its density, kg/m³, which its stiffness follows.
+    pub density: f64,
 }
 
 /// One material's constants as the material stage takes them
@@ -402,7 +412,8 @@ pub struct MatterMaterial {
     pub friction_angle: f64,
     /// Viscoplastic: the deviatoric log strain it yields at, τ_y / (√2 μ).
     pub yield_strain: f64,
-    /// Viscoplastic: η / μ, s.
+    /// Viscoplastic: η / μ, s, of its plastic flow. Elastic: η / μ of its
+    /// damping.
     pub relax_time: f64,
     /// Snow: ξ.
     pub hardening: f64,
@@ -448,12 +459,22 @@ impl MatterMaterial {
             }
             MatterKind::Snow => Self {
                 hardening: dials.hardening.max(0.0),
-                ..elastic(MatterRule::Snow, SNOW_YOUNG, SNOW_POISSON)
+                ..elastic(
+                    MatterRule::Snow,
+                    SNOW_YOUNG * (dials.density / SNOW_REFERENCE_DENSITY).powi(2),
+                    SNOW_POISSON,
+                )
             },
             MatterKind::Clay => flowing(CLAY_YOUNG, CLAY_POISSON),
             MatterKind::Mud => flowing(MUD_YOUNG, MUD_POISSON),
             MatterKind::Goo => flowing(GOO_YOUNG, GOO_POISSON),
-            MatterKind::Jelly => elastic(MatterRule::Elastic, JELLY_YOUNG, JELLY_POISSON),
+            MatterKind::Jelly => {
+                let m = elastic(MatterRule::Elastic, JELLY_YOUNG, JELLY_POISSON);
+                Self {
+                    relax_time: dials.viscosity.max(0.0) / m.mu,
+                    ..m
+                }
+            }
         }
     }
 
@@ -489,6 +510,16 @@ impl MatterMaterial {
             MatterRule::Snow | MatterRule::Elastic => 0.5,
             MatterRule::Viscoplastic => 1.0,
         }
+    }
+
+    /// The longest substep an elastic material's damping stays stable at, s:
+    /// explicit Kelvin-Voigt diffuses momentum at η/ρ, so a substep spreads
+    /// it at most a twelfth of a cell squared ([`damping_fitting_cap`]).
+    /// None without damping.
+    pub fn viscous_limit(&self, density: f64, dx: f64) -> Option<f64> {
+        let viscosity = self.relax_time * self.mu;
+        (self.rule == MatterRule::Elastic && viscosity > 0.0)
+            .then(|| density * dx * dx / (12.0 * viscosity))
     }
 
     /// The fastest pressure wave, √((λ + 2μ)/ρ) m/s, at the most packing
@@ -586,6 +617,12 @@ pub fn stiffness_fitting_cap(dx: f64, unit_wave_speed: f64, v_est: f64) -> f64 {
     // A hair inside the cap, so f32 rounding of the wave speed downstream
     // cannot tip the count to one past it.
     (max_wave / unit_wave_speed * (1.0 - 1e-5)).max(0.0)
+}
+
+/// The largest damping viscosity, Pa·s, whose [`MatterMaterial::viscous_limit`]
+/// fits [`MAX_SUBSTEPS`] (D4: limited, never silently).
+pub fn damping_fitting_cap(density: f64, dx: f64) -> f64 {
+    density * dx * dx * f64::from(MAX_SUBSTEPS) / (12.0 * TICK) * (1.0 - 1e-5)
 }
 
 /// Nodes of a lattice with `nodes` per axis, in u64 so no byte size wraps.
@@ -718,6 +755,30 @@ mod tests {
         let v = free_fall_speed(4.0) as f32;
         let n = |dx: f32| substeps_per_tick(dx, c as f32, v, None, None);
         assert_eq!([n(0.0625), n(0.125), n(0.25)], [21, 11, 6]);
+    }
+
+    /// Jelly damped at the most the cap holds runs at the substep cap, never
+    /// past it, at any cell size and density; undamped jelly has no limit.
+    #[test]
+    fn jelly_damping_at_its_cap_fits_the_substeps() {
+        let dials = |viscosity| MatterDials {
+            stiffness: 1.0,
+            friction_angle: 0.0,
+            cohesion_kpa: 0.0,
+            hardening: 0.0,
+            yield_stress: 0.0,
+            viscosity,
+            density: 1050.0,
+        };
+        for (dx, density) in [(0.02, 1050.0), (0.05, 900.0), (0.15, 1300.0)] {
+            let cap = damping_fitting_cap(density, dx);
+            let jelly = MatterMaterial::of(MatterKind::Jelly, dials(cap));
+            let limit = jelly.viscous_limit(density, dx).expect("damped") as f32;
+            let n = substeps_per_tick(dx as f32, 0.0, 0.0, None, Some(limit));
+            assert_eq!(n, MAX_SUBSTEPS, "dx {dx}");
+        }
+        let still = MatterMaterial::of(MatterKind::Jelly, dials(0.0));
+        assert_eq!(still.viscous_limit(1050.0, 0.05), None);
     }
 
     /// One kPa of Cohesion holds the same shear strength whatever the

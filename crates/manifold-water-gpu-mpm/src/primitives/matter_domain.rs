@@ -24,7 +24,8 @@ use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::matter::{
     COHESION_SOFTENING, FRICTION_ANGLE_RANGE, MATTER_KINDS, MAX_SUBSTEPS, MatterDials, MatterKind,
     MatterMaterial, RADIUS_SCALE, REACTION_WORDS, SAND_DENSITY, SAND_FRICTION_ANGLE,
-    SNOW_HARDENING, field_min, free_fall_speed, lattice_nodes, matter_nodes, matter_pool_tiles,
+    SNOW_HARDENING, damping_fitting_cap, field_min, free_fall_speed, lattice_nodes, matter_nodes,
+    matter_pool_tiles,
     momentum_unit, stiffness_fitting_cap, substeps_for_interval, substeps_per_tick,
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
@@ -415,6 +416,7 @@ manifold_node_engine::primitive! {
         // The fill's pool height and Initial Fill range in that box's cells.
         fill_cells: (u32, [[u32; 2]; 3]) = (0, [[0; 2]; 3]),
         limited: bool = false,
+        damping_limited: bool = false,
         published: Option<[f32; OUTPUTS.len()]> = None,
         // A shaped fill's role is a region row, so the fill reads its shape.
         bodies: LiquidBodies = LiquidBodies::with_regions(),
@@ -1445,6 +1447,28 @@ impl MatterDomain {
             hardening: ranged("hardening", SNOW_HARDENING, HARDENING_RANGE),
             yield_stress: ranged("yield_stress", 1.0e4, YIELD_STRESS_RANGE),
             viscosity: ranged("viscosity", 20.0, VISCOSITY_RANGE),
+            density: f64::from(density),
+        };
+        // Jelly's damping is explicit: past the most the substep cap holds it
+        // would blow up, so it runs at that and the domain says so (D4).
+        let dials = if kind == MatterKind::Jelly {
+            let cap = damping_fitting_cap(f64::from(density), f64::from(cell_size));
+            let damping_limited = dials.viscosity > cap;
+            if damping_limited != self.damping_limited {
+                self.damping_limited = damping_limited;
+                if damping_limited {
+                    log::warn!(
+                        "[matter] Damping {:.0} Pa·s needs more than {MAX_SUBSTEPS} substeps at this cell size; running at {cap:.0}",
+                        dials.viscosity
+                    );
+                }
+            }
+            MatterDials {
+                viscosity: dials.viscosity.min(cap),
+                ..dials
+            }
+        } else {
+            dials
         };
         // The wave speed scales with Stiffness (D3): the largest Stiffness
         // whose substeps fit the cap runs, and the domain says so.
@@ -1475,7 +1499,11 @@ impl MatterDomain {
             Some(owner) => live_body_limit(owner, cell_size, wave, density),
             None => None,
         };
-        let nominal_substeps = substeps_per_tick(cell_size, wave, v_est as f32, body_limit, None);
+        let viscous_limit = material
+            .viscous_limit(f64::from(density), f64::from(cell_size))
+            .map(|limit| limit as f32);
+        let nominal_substeps =
+            substeps_per_tick(cell_size, wave, v_est as f32, body_limit, viscous_limit);
         // A frame without ticks reports what one Sim Rate interval runs, so
         // the substep count and unit hold steady between ticks.
         let duration = if frame.ticks == 0 {

@@ -83,7 +83,7 @@ const fn thickness(property: &'static str, default: f32, range: (f32, f32)) -> P
         .range(range.0, range.1)
 }
 
-pub static SAND_ROWS: [PropertyRow; 48] = [
+pub static SAND_ROWS: [PropertyRow; 50] = [
     POS_X,
     POS_Y,
     POS_Z,
@@ -123,7 +123,7 @@ pub static SAND_ROWS: [PropertyRow; 48] = [
         .default(10.0)
         .range(0.0, 20.0)
         .when(snow),
-    density("snow_density", 400.0, "How packed the snow is: about 100 for fresh powder, 400 for settled snow, 600 for wet snow").when(snow),
+    density("snow_density", 400.0, "How packed the snow is, which sets how heavy and how stiff it is: about 100 for fresh powder that slumps, 400 for settled snow that holds a wall, 600 for wet snow").when(snow),
     firmness("clay_firmness", 1.0e4, (1.0e3, 5.0e4)).when(clay),
     thickness("clay_thickness", 20.0, (0.0, 500.0)).when(clay),
     density("clay_density", 1800.0, "How heavy the clay is, which sets how it sags and how bodies sink into it").when(clay),
@@ -134,6 +134,14 @@ pub static SAND_ROWS: [PropertyRow; 48] = [
     thickness("goo_thickness", 2000.0, (1.0, 1.0e4)).when(goo),
     density("goo_density", 1400.0, "How heavy the goo is, which sets how fast it pours").when(goo),
     density("jelly_density", 1050.0, "How heavy the jelly is, which sets how far it sags and how long it wobbles").when(jelly),
+    row("jelly_damping", DOMAIN, Simulation, perform(CardBand::Scene, 3))
+        .param("viscosity")
+        .name("Damping")
+        .unit(Unit::PascalSeconds)
+        .tip("How fast a wobble dies away. Gelatin is about 80, which settles in a few bounces; 0 wobbles on and on, a few hundred barely wobbles. High values cost more steps a frame at small Cell Sizes")
+        .default(80.0)
+        .range(0.0, 500.0)
+        .when(jelly),
     row("points_per_cell", DOMAIN, Simulation, setup()).name("Particles per Cell"),
     row("seed", DOMAIN, Simulation, setup()).name("Seed"),
     SURFACE_DETAIL,
@@ -144,7 +152,11 @@ pub static SAND_ROWS: [PropertyRow; 48] = [
     row("grain_size", Reach::Own("sand_grains"), Surface, setup())
         .name("Grain Size")
         .unit(Unit::Metres)
-        .tip("How big each grain is, apart from the Cell Size. Smaller grains draw more of them at the surface, up to 16 a particle; past that they grow instead of leaving gaps")
+        .tip("How big each grain is, apart from the Cell Size. Smaller grains draw more of them at the surface, up to Grains per Point a particle; past that they grow instead of leaving gaps")
+        .when(grains),
+    row("grains", Reach::Own("sand_grains"), Surface, setup())
+        .name("Grains per Point")
+        .tip("The most grains one surface particle draws. Raise it to let Grain Size go smaller: 64 reaches a quarter of the size 16 does. Draw cost and memory grow with it, about 4× from 16 to 64")
         .when(grains),
     FOLLOW_GRAVITY_X,
     FOLLOW_GRAVITY_Y,

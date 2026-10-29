@@ -41,7 +41,9 @@ struct MatterMaterial {
     yield_strain: f32,
     // Viscoplastic: η / μ, seconds: past yield, the strain relaxes toward
     // the yield surface at this time constant, so the stress past yield in
-    // steady shear is η times the shear rate (a Bingham fluid).
+    // steady shear is η times the shear rate (a Bingham fluid). Elastic: η / μ
+    // of its Kelvin-Voigt damping, so the stress adds η times the strain rate
+    // and a wobble dies away.
     relax_time: f32,
     // Snow: ξ, how fast compaction stiffens it.
     hardening: f32,
@@ -296,10 +298,13 @@ fn matter_update(f: mat3x3<f32>, grad_v: mat3x3<f32>, dt: f32, plastic: MatterPl
     }
     state.strain = state.strain + kept.w;
     let stretch = exp(kept.xyz);
-    return MatterUpdate(
-        mm_compose(svd, stretch),
-        matter_stress(svd.u, kept.xyz, m),
-        state,
-        stretch.x * stretch.y * stretch.z,
-    );
+    let j = stretch.x * stretch.y * stretch.z;
+    var tau = matter_stress(svd.u, kept.xyz, m);
+    if m.kind == MATTER_ELASTIC {
+        // Kelvin-Voigt: Cauchy stress η (∇v + ∇vᵀ), Kirchhoff J times it. A
+        // turn or a move has no symmetric velocity gradient, so only the
+        // wobble loses energy.
+        tau = tau + (j * m.relax_time * m.mu) * (grad_v + transpose(grad_v));
+    }
+    return MatterUpdate(mm_compose(svd, stretch), tau, state, j);
 }
