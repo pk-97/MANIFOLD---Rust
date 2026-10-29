@@ -18,6 +18,9 @@ pub struct FieldOptionVm {
     pub checked: bool,
     /// Why this choice cannot be picked now: drawn disabled with the reason.
     pub disabled: Option<String>,
+    /// A choice with children opens them as its own menu, in place of this
+    /// one, instead of picking.
+    pub children: Vec<FieldOptionVm>,
 }
 
 /// How a field row picks its value, with the choices resolved to names.

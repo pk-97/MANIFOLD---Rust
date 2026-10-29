@@ -77,6 +77,47 @@ pub(crate) fn pick_list_action(
     ))
 }
 
+/// The menu a pick-list row opens under `button`: each option sends its
+/// `SceneFieldSet`, and an option with children opens them as a new menu in
+/// the same place.
+fn menu_of(
+    options: &[crate::panels::scene_setup_panel::FieldOptionVm],
+    layer: &manifold_foundation::LayerId,
+    item: &manifold_foundation::ItemId,
+    field: &str,
+    button: NodeId,
+) -> crate::panels::PanelAction {
+    use crate::panels::PanelAction;
+    use crate::panels::dropdown::DropdownItem;
+    let items = options
+        .iter()
+        .map(|option| DropdownItem {
+            // No hover text on a menu item: a disabled choice names its reason.
+            label: match &option.disabled {
+                Some(reason) => format!("{} \u{2014} {reason}", option.label),
+                None => option.label.clone(),
+            },
+            enabled: option.disabled.is_none(),
+            separator_after: false,
+            checked: option.checked,
+            action: Some(if option.children.is_empty() {
+                PanelAction::Project(crate::ProjectAction::SceneFieldSet {
+                    layer_id: layer.clone(),
+                    item: item.clone(),
+                    field: field.to_owned(),
+                    pick: option.pick.clone(),
+                })
+            } else {
+                menu_of(&option.children, layer, item, field, button)
+            }),
+        })
+        .collect();
+    PanelAction::Root(RootAction::SceneSetupActionMenuClicked {
+        button_node_id: button,
+        items,
+    })
+}
+
 /// A click on a scene item's structural field row (the section 8 action
 /// rows): a pick list opens the shared menu under the row's button, every
 /// option carrying the `SceneFieldSet` it sends; a switch sends its flip; a
@@ -89,7 +130,6 @@ pub(crate) fn field_row_action(
     button: NodeId,
 ) -> Vec<crate::panels::PanelAction> {
     use crate::panels::PanelAction;
-    use crate::panels::dropdown::DropdownItem;
     use crate::panels::scene_setup_panel::FieldControlVm;
     let (
         Some(crate::param_surface::RowAffordance::Field {
@@ -106,31 +146,7 @@ pub(crate) fn field_row_action(
         return Vec::new();
     }
     match control {
-        FieldControlVm::Pick { options, .. } => {
-            let items = options
-                .iter()
-                .map(|option| DropdownItem {
-                    // No hover text on a menu item: a disabled choice names its reason.
-                    label: match &option.disabled {
-                        Some(reason) => format!("{} \u{2014} {reason}", option.label),
-                        None => option.label.clone(),
-                    },
-                    enabled: option.disabled.is_none(),
-                    separator_after: false,
-                    checked: option.checked,
-                    action: Some(PanelAction::Project(crate::ProjectAction::SceneFieldSet {
-                        layer_id: layer.clone(),
-                        item: item.clone(),
-                        field: field.clone(),
-                        pick: option.pick.clone(),
-                    })),
-                })
-                .collect();
-            vec![PanelAction::Root(RootAction::SceneSetupActionMenuClicked {
-                button_node_id: button,
-                items,
-            })]
-        }
+        FieldControlVm::Pick { options, .. } => vec![menu_of(options, layer, item, field, button)],
         FieldControlVm::Switch { toggle, .. } => {
             vec![PanelAction::Project(crate::ProjectAction::SceneFieldSet {
                 layer_id: layer.clone(),

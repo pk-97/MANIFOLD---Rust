@@ -281,6 +281,15 @@ pub(super) fn dispatch_project(
             let built = crate::scene_edit::ungroup(project, layer_id, group).map(Some);
             send_scene_edit(content_tx, layer_id, built)
         }
+        // A library material picked on a Material's Texture.
+        ProjectAction::SceneFieldSet {
+            layer_id,
+            item,
+            field,
+            pick: manifold_core::scene_surface::FieldPick::File(path),
+        } if field == "texture" && manifold_core::materialx::is_materialx(path) => {
+            super::import_material_file(path.into(), layer_id, item)
+        }
         ProjectAction::SceneFieldSet {
             layer_id,
             item,

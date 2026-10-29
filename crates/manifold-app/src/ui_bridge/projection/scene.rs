@@ -359,6 +359,7 @@ fn closed(choices: &[Choice], held: &FieldValue) -> Vec<FieldOptionVm> {
             pick: FieldPick::Choice(choice.key.to_owned()),
             checked: matches!(held, FieldValue::Choice(key) if key == choice.key),
             disabled: None,
+            children: Vec::new(),
         })
         .collect()
 }
@@ -381,6 +382,7 @@ fn item_options(
                 disabled: item_disabled(doc, item, field, other)
                     .filter(|_| !checked)
                     .map(str::to_owned),
+                children: Vec::new(),
             });
         }
     });
@@ -435,6 +437,7 @@ fn control(
                 pick: FieldPick::Item(None),
                 checked: matches!(held, FieldValue::Item(None)),
                 disabled: None,
+                children: Vec::new(),
             }];
             options.extend(item_options(doc, item, row.id, items, &held));
             pick(options)
@@ -454,6 +457,7 @@ fn control(
                 pick: FieldPick::All,
                 checked: everything,
                 disabled: None,
+                children: Vec::new(),
             }];
             doc.walk(|other, _| {
                 if other.id != item.id && items(other) {
@@ -466,6 +470,7 @@ fn control(
                         disabled: refused(doc, item, other)
                             .filter(|_| !checked)
                             .map(str::to_owned),
+                        children: Vec::new(),
                     });
                 }
             });
@@ -473,11 +478,32 @@ fn control(
         }
         FieldControl::ClosedOrLayer(choices) => {
             let mut options = closed(choices, &held);
+            // A Material's Texture offers the starter library as its own menu.
+            let library = crate::file_dialogs::starter_library();
+            if item.kind() == ItemKind::Material && row.id == "texture" && !library.is_empty() {
+                options.push(FieldOptionVm {
+                    label: "Library \u{203a}".to_owned(),
+                    pick: FieldPick::Choice(String::new()),
+                    checked: false,
+                    disabled: None,
+                    children: library
+                        .iter()
+                        .map(|(name, file)| FieldOptionVm {
+                            label: name.clone(),
+                            pick: FieldPick::File(file.to_string_lossy().into_owned()),
+                            checked: false,
+                            disabled: None,
+                            children: Vec::new(),
+                        })
+                        .collect(),
+                });
+            }
             options.extend(layers.iter().map(|(id, name)| FieldOptionVm {
                 label: name.clone(),
                 pick: FieldPick::Layer(id.clone()),
                 checked: matches!(&held, FieldValue::Layer(held) if held == id),
                 disabled: None,
+                children: Vec::new(),
             }));
             pick(options)
         }
@@ -493,6 +519,7 @@ fn control(
                         pick: FieldPick::Choice(key),
                         checked,
                         disabled: None,
+                        children: Vec::new(),
                     }
                 })
                 .collect(),

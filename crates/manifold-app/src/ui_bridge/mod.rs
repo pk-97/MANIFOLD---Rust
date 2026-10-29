@@ -48,6 +48,25 @@ use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 
 /// Result of dispatching a panel action.
+/// A picked MaterialX file is a whole material: it is read off the UI
+/// thread, then lands with its values in one undo step.
+pub(crate) fn import_material_file(
+    path: std::path::PathBuf,
+    layer: &manifold_core::LayerId,
+    item: &manifold_core::ItemId,
+) -> DispatchResult {
+    DispatchResult {
+        import_model: Some((
+            path,
+            crate::import_worker::ImportTarget::Material {
+                layer: layer.clone(),
+                item: item.clone(),
+            },
+        )),
+        ..DispatchResult::handled()
+    }
+}
+
 pub struct DispatchResult {
     /// Set by the `SaveToLibrary`/`SaveToProject` card-menu actions
     ///: the resolved kind + current effective
@@ -312,22 +331,11 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                     extensions,
                 );
                 match picked {
-                    // A material file is read off the UI thread, then lands
-                    // with its values in one undo step.
                     Some(path)
                         if field == "texture_file"
                             && manifold_core::materialx::is_materialx(&path.to_string_lossy()) =>
                     {
-                        DispatchResult {
-                            import_model: Some((
-                                path,
-                                crate::import_worker::ImportTarget::Material {
-                                    layer: layer_id.clone(),
-                                    item: item.clone(),
-                                },
-                            )),
-                            ..DispatchResult::handled()
-                        }
+                        import_material_file(path, layer_id, item)
                     }
                     Some(path) => {
                         let pick = manifold_core::scene_surface::FieldPick::File(

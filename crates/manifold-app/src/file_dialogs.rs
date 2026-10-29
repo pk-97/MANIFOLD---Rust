@@ -431,6 +431,41 @@ fn starter_materials() -> Option<PathBuf> {
     .find_map(|dir| dir.canonicalize().ok().filter(|dir| dir.is_dir()))
 }
 
+/// The starter library's materials, read once: each folder's name in words
+/// ("ScatteredLeaves009" reads "Scattered Leaves") and its material file,
+/// sorted by name.
+pub(crate) fn starter_library() -> &'static [(String, PathBuf)] {
+    static LIBRARY: std::sync::OnceLock<Vec<(String, PathBuf)>> = std::sync::OnceLock::new();
+    LIBRARY.get_or_init(|| {
+        let Some(entries) = starter_materials().and_then(|dir| std::fs::read_dir(dir).ok()) else {
+            return Vec::new();
+        };
+        let mut library: Vec<_> = entries
+            .filter_map(|entry| {
+                let folder = entry.ok()?.path();
+                let Some(Ok(file)) = crate::scene_edit::material_file_of(&folder) else {
+                    return None;
+                };
+                Some((material_name(&folder.file_name()?.to_string_lossy()), file))
+            })
+            .collect();
+        library.sort();
+        library
+    })
+}
+
+/// A library folder's name in words, its catalogue number dropped.
+fn material_name(folder: &str) -> String {
+    let mut name = String::new();
+    for c in folder.chars().take_while(|c| !c.is_ascii_digit()) {
+        if c.is_uppercase() && !name.is_empty() {
+            name.push(' ');
+        }
+        name.push(c);
+    }
+    name
+}
+
 /// The folder a dialog opens in. Pure, so the fallback rules are testable.
 ///
 /// Save As on a saved project starts in that project's folder, so it saves a
