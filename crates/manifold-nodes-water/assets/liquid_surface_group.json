@@ -95,12 +95,6 @@
         }
       },
       {
-        "handle": "Surface Weights",
-        "id": 33,
-        "nodeId": "liquid_weights",
-        "typeId": "node.surface_weights"
-      },
-      {
         "handle": "Smoothness",
         "id": 35,
         "nodeId": "liquid_smoothness",
@@ -283,58 +277,10 @@
         "toPort": "sim_cell_size"
       },
       {
-        "fromNode": 5,
-        "fromPort": "sorted",
-        "toNode": 33,
-        "toPort": "particles"
-      },
-      {
-        "fromNode": 5,
-        "fromPort": "cell_ranges",
-        "toNode": 33,
-        "toPort": "cell_ranges"
-      },
-      {
-        "fromNode": 61,
-        "fromPort": "out",
-        "toNode": 33,
-        "toPort": "reference"
-      },
-      {
-        "fromNode": 0,
-        "fromPort": "sim_cell_size",
-        "toNode": 33,
-        "toPort": "sim_cell_size"
-      },
-      {
-        "fromNode": 0,
-        "fromPort": "tiles",
-        "toNode": 33,
-        "toPort": "tiles"
-      },
-      {
-        "fromNode": 0,
-        "fromPort": "pool_tiles",
-        "toNode": 33,
-        "toPort": "pool_tiles"
-      },
-      {
-        "fromNode": 0,
-        "fromPort": "cell_size",
-        "toNode": 33,
-        "toPort": "cell_size"
-      },
-      {
         "fromNode": 61,
         "fromPort": "out",
         "toNode": 43,
         "toPort": "prior"
-      },
-      {
-        "fromNode": 33,
-        "fromPort": "weights",
-        "toNode": 43,
-        "toPort": "weights"
       },
       {
         "fromNode": 61,
@@ -379,12 +325,6 @@
         "toPort": "prior"
       },
       {
-        "fromNode": 33,
-        "fromPort": "weights",
-        "toNode": 47,
-        "toPort": "weights"
-      },
-      {
         "fromNode": 61,
         "fromPort": "out",
         "toNode": 47,
@@ -425,12 +365,6 @@
         "fromPort": "field",
         "toNode": 51,
         "toPort": "prior"
-      },
-      {
-        "fromNode": 33,
-        "fromPort": "weights",
-        "toNode": 51,
-        "toPort": "weights"
       },
       {
         "fromNode": 61,
@@ -505,12 +439,6 @@
         "toPort": "level_set"
       },
       {
-        "fromNode": 33,
-        "fromPort": "velocity",
-        "toNode": 11,
-        "toPort": "velocity"
-      },
-      {
         "fromNode": 7,
         "fromPort": "levelset",
         "toNode": 60,
@@ -551,6 +479,42 @@
         "fromPort": "field",
         "toNode": 61,
         "toPort": "in_1"
+      },
+      {
+        "fromNode": 6,
+        "fromPort": "counts",
+        "toNode": 7,
+        "toPort": "counts"
+      },
+      {
+        "fromNode": 5,
+        "fromPort": "sorted",
+        "toNode": 7,
+        "toPort": "sorted"
+      },
+      {
+        "fromNode": 7,
+        "fromPort": "weights",
+        "toNode": 43,
+        "toPort": "weights"
+      },
+      {
+        "fromNode": 7,
+        "fromPort": "weights",
+        "toNode": 47,
+        "toPort": "weights"
+      },
+      {
+        "fromNode": 7,
+        "fromPort": "weights",
+        "toNode": 51,
+        "toPort": "weights"
+      },
+      {
+        "fromNode": 7,
+        "fromPort": "velocity",
+        "toNode": 11,
+        "toPort": "velocity"
       }
     ]
   },

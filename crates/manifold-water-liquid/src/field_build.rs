@@ -1,5 +1,5 @@
 //! The water field build's constants: how deep the field's band reaches,
-//! how it is smoothed, how surface weights are counted, and how far the field
+//! how it is smoothed, how much each node is smoothed, and how far the field
 //! is carried into drawn solids. One home, so the build, the march and the
 //! card read the same numbers. Settled by the level-set prototype on the Dam
 //! Break at 64 and 128 (GPU_FLIP_END_GAME_DESIGN.md D2, "The field build,
@@ -86,32 +86,27 @@ pub const BLOB_CENTRE_SMOOTHING: f32 = 0.9;
 /// every Surface Detail.
 pub const BLOB_MIN_AXIS_CELLS: f32 = 0.75;
 
-/// Neighbour-count radius in field cells: FLIP Fluids' 1.5 radii, measured
-/// in the prototype (`neighbour_counts`).
-pub const NEIGHBOUR_COUNT_RADIUS_CELLS: f32 = 1.5;
-
-/// Radius over which particle counts and velocities reach the lattice nodes,
-/// in field cells: the prototype's `node_counts` interpolation radius.
-pub const WEIGHT_CARRY_RADIUS_CELLS: f32 = 2.0;
-
 /// Smoothing weight fades in from this fraction of the expected bulk
-/// neighbour count (no smoothing below it)...
-pub const WEIGHT_FADE_START: f32 = 0.18;
+/// neighbour count within [`BLOB_NEIGHBOUR_CELLS`] (no smoothing below
+/// it)...
+pub const WEIGHT_FADE_START: f32 = 0.27;
 
-/// ...to full smoothing at this fraction: the prototype's 20 and 40 of a
-/// bulk count of about 110.
-pub const WEIGHT_FADE_END: f32 = 0.36;
+/// ...to full smoothing at this fraction. The prototype settled 18% and 36%
+/// of the bulk count within 1.5 cells; a one-particle sheet's share of the
+/// bulk count goes as one over the radius, so within one cell the same
+/// sheet sits at the same point of the fade at 1.5 times those fractions.
+pub const WEIGHT_FADE_END: f32 = 0.54;
 
 /// How far the field is carried into a drawn solid, in cells (D2 step 5),
 /// so water meets a wall flush instead of stopping short of it.
 pub const SOLID_CARRY_CELLS: f32 = 2.0;
 
-/// Neighbours a particle in bulk water has within
-/// [`NEIGHBOUR_COUNT_RADIUS_CELLS`]: the particle density per field cell
-/// times the volume of that sphere, in cells.
-pub fn expected_bulk_neighbours(particles_per_field_cell: f32) -> f32 {
-    let r = NEIGHBOUR_COUNT_RADIUS_CELLS;
-    particles_per_field_cell * (4.0 / 3.0) * std::f32::consts::PI * r * r * r
+/// Neighbours a particle in bulk water has within [`BLOB_NEIGHBOUR_CELLS`]:
+/// the particle density per simulation cell times the volume of that
+/// sphere, in simulation cells.
+pub fn expected_bulk_neighbours(particles_per_cell: f32) -> f32 {
+    let r = BLOB_NEIGHBOUR_CELLS;
+    particles_per_cell * (4.0 / 3.0) * std::f32::consts::PI * r * r * r
 }
 
 #[cfg(test)]
@@ -143,10 +138,14 @@ mod tests {
 
     #[test]
     fn bulk_neighbours_scale_with_density() {
-        // Eight particles per cell, the FLIP default: about 113 neighbours,
-        // the prototype's bulk count.
+        // Eight particles per cell, the FLIP default: about 33.5 neighbours
+        // within a cell.
         let n = expected_bulk_neighbours(8.0);
-        assert!((n - 113.097).abs() < 0.01, "{n}");
+        assert!((n - 33.510).abs() < 0.01, "{n}");
         assert!((expected_bulk_neighbours(1.0) * 8.0 - n).abs() < 1e-3);
+        // A one-particle sheet at that density holds pi * 4 of them (four
+        // particles per square cell), the fade's lower part.
+        let sheet = std::f32::consts::PI * 4.0 / n;
+        assert!(sheet > WEIGHT_FADE_START && sheet < WEIGHT_FADE_END, "{sheet}");
     }
 }

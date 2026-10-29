@@ -29,6 +29,10 @@
 // its round radius if smaller, so a sheet is as thick at every Surface Detail
 // and a finer one only draws it sharper.
 //
+// `counts` gets each slot's neighbours within the simulation cell (0 for an
+// inactive one): node.particle_volume blends them into how much each node is
+// smoothed.
+//
 // The record (FluidBlob) holds the centre and round radius r = Particle
 // Scale × the particle's radius, the symmetric shape matrix A = V ·
 // diag(r / a) · Vᵀ, a the semi-axes along V's columns (a point at offset y
@@ -71,6 +75,7 @@ struct FluidBlob {
 @group(0) @binding(2) var<storage, read> cell_ranges: array<CellRange>;
 @group(0) @binding(3) var<storage, read> buf_tiles: array<u32>;
 @group(0) @binding(4) var<storage, read_write> blobs: array<FluidBlob>;
+@group(0) @binding(5) var<storage, read_write> counts: array<f32>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
 fn ts_table_entries() -> u32 { return params.entries; }
@@ -158,6 +163,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let own = sorted[i].position_radius;
     if !(own.w > 0.0) {
         blobs[i] = FluidBlob(vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
+        counts[i] = 0.0;
         return;
     }
     let h = params.cell_size;
@@ -214,6 +220,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
     }
+    counts[i] = neighbours;
     let mean = first / weight;
     let spread = second * (1.0 / weight)
         - mat3x3<f32>(mean * mean.x, mean * mean.y, mean * mean.z);

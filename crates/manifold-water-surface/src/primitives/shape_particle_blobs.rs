@@ -42,7 +42,7 @@ struct Uniforms {
 manifold_node_engine::primitive! {
     name: ShapeParticleBlobs,
     type_id: "node.shape_particle_blobs",
-    purpose: "Give each sorted liquid particle an ellipsoidal surface blob shaped by its neighbours (Yu and Turk 2013): the particles within one sim_cell_size of it, weighted 1 - (d / sim_cell_size)^3, found through the display cells they are sorted into. The blob's centre moves 0.9 of the way to their weighted mean; its axes follow their weighted spread, the shortest at least a quarter of the longest, at the round blob's volume, so blobs in a sheet flatten into it; with fewer than 3 neighbours the stretch and smoothing fade out. A blob with no other particle within its blend radius (1.5 round radii, node.particle_volume's) shrinks from particle_scale × the particle's radius toward the radius itself, halfway with one, so lone drops draw at their true size while a thinned sheet keeps its size. The stretch is at most 2. A lone drop's semi-axes are at least 0.75 display cells, a joined blob's 0.75 sim_cell_size (or its round radius if smaller), so sheets keep their thickness at every Surface Detail. Each blob holds its centre, its round radius r and the symmetric shape matrix A: a point at offset y from the centre is inside when |A y| < r. An inactive particle (radius 0) gives a blob of radius 0.",
+    purpose: "Give each sorted liquid particle an ellipsoidal surface blob shaped by its neighbours (Yu and Turk 2013): the particles within one sim_cell_size of it, weighted 1 - (d / sim_cell_size)^3, found through the display cells they are sorted into. The blob's centre moves 0.9 of the way to their weighted mean; its axes follow their weighted spread, the shortest at least a quarter of the longest, at the round blob's volume, so blobs in a sheet flatten into it; with fewer than 3 neighbours the stretch and smoothing fade out. A blob with no other particle within its blend radius (1.5 round radii, node.particle_volume's) shrinks from particle_scale × the particle's radius toward the radius itself, halfway with one, so lone drops draw at their true size while a thinned sheet keeps its size. The stretch is at most 2. A lone drop's semi-axes are at least 0.75 display cells, a joined blob's 0.75 sim_cell_size (or its round radius if smaller), so sheets keep their thickness at every Surface Detail. Each blob holds its centre, its round radius r and the symmetric shape matrix A: a point at offset y from the centre is inside when |A y| < r. counts holds each slot's neighbours within the simulation cell, which node.particle_volume blends into how much each node is smoothed. An inactive particle (radius 0) gives a blob of radius 0 and a count of 0.",
     inputs: {
         sorted: Array(FluidParticle) required,
         cell_ranges: Array(CellRange) required,
@@ -54,6 +54,7 @@ manifold_node_engine::primitive! {
     },
     outputs: {
         blobs: Array(FluidBlob),
+        counts: Array(f32),
     },
     params: [
         float_param!("cell_size", "Cell Size", 0.0625, 0.0001, 100.0),
@@ -62,7 +63,7 @@ manifold_node_engine::primitive! {
         float_param!("particle_scale", "Particle Scale", 3.0, 0.25, 8.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Feed it the sorted particles and cell_ranges from node.sort_particles_into_cells, with tiles, pool_tiles and cell_size from the node.surface_tiles it sorted over and sim_cell_size from the solver. Wire its blobs to node.particle_volume, and the same Particle Scale value into both. Particle Scale is live: changing it reshapes the next frame's surface without touching the simulation. It reads each particle's neighbours, so it is a graph fusion boundary.",
+    composition_notes: "Feed it the sorted particles and cell_ranges from node.sort_particles_into_cells, with tiles, pool_tiles and cell_size from the node.surface_tiles it sorted over and sim_cell_size from the solver. Wire its blobs and counts to node.particle_volume, and the same Particle Scale value into both. Particle Scale is live: changing it reshapes the next frame's surface without touching the simulation. It reads each particle's neighbours, so it is a graph fusion boundary.",
     examples: [],
     picker: { label: "Shape Particle Blobs", category: Atom },
     summary: "Turns each liquid particle into a blob shaped by its neighbours, flat in sheets and small when alone, which the liquid surface is built from.",
@@ -82,7 +83,7 @@ impl Primitive for ShapeParticleBlobs {
         _params: &ParamValues,
         inputs: &[(&str, u32)],
     ) -> Option<u32> {
-        (port == "blobs")
+        matches!(port, "blobs" | "counts")
             .then(|| {
                 inputs
                     .iter()
@@ -116,11 +117,12 @@ impl Primitive for ShapeParticleBlobs {
                 "node.shape_particle_blobs",
             ));
         }
-        let (Some(sorted), Some(ranges), Some(tiles), Some(blobs)) = (
+        let (Some(sorted), Some(ranges), Some(tiles), Some(blobs), Some(counts)) = (
             ctx.inputs.array("sorted"),
             ctx.inputs.array("cell_ranges"),
             ctx.inputs.array("tiles"),
             ctx.outputs.array("blobs"),
+            ctx.outputs.array("counts"),
         ) else {
             return;
         };
@@ -133,7 +135,7 @@ impl Primitive for ShapeParticleBlobs {
         }
         let count = (blobs.size / std::mem::size_of::<FluidBlob>() as u64)
             .min(sorted.size / std::mem::size_of::<FluidParticle>() as u64)
-            as u32;
+            .min(counts.size / 4) as u32;
         if count == 0 {
             return;
         }
@@ -175,6 +177,11 @@ impl Primitive for ShapeParticleBlobs {
                 GpuBinding::Buffer {
                     binding: 4,
                     buffer: blobs,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 5,
+                    buffer: counts,
                     offset: 0,
                 },
             ],

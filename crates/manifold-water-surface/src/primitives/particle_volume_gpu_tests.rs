@@ -8,6 +8,7 @@
 use super::*;
 use manifold_node_engine::scene::scene_object::FIELD_FAR_CELLS;
 use manifold_node_engine::scene::world_tiles::{local_index, pool_len};
+use bytemuck::Zeroable;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_water_liquid::testkit::world_box::{BoxTable, table_words_of};
 
@@ -193,8 +194,13 @@ fn run(
     let (ranges_slot, _) = harness.array(ranges, ranges.len());
     let (solid_slot, _) = harness.array(solid, len);
     let (tiles_slot, _) = harness.array(words, words.len());
+    let (counts_slot, _) = harness.array(&vec![0.0f32; blobs.len()], blobs.len());
+    let (sorted_slot, _) =
+        harness.array(&vec![FluidParticle::zeroed(); blobs.len()], blobs.len());
     // An element the node leaves unwritten stays NaN and fails every compare.
     let (out_slot, out_buffer) = harness.array(&vec![f32::NAN; len], len);
+    let (weights_slot, _) = harness.array(&vec![f32::NAN; len], len);
+    let (velocity_slot, _) = harness.array(&vec![f32::NAN; 3 * len], 3 * len);
     let (_, errors) = harness.run(
         &mut ParticleVolume::new(),
         &[
@@ -202,13 +208,20 @@ fn run(
             ("cell_ranges", ranges_slot),
             ("solid", solid_slot),
             ("tiles", tiles_slot),
+            ("counts", counts_slot),
+            ("sorted", sorted_slot),
         ],
-        &[("levelset", out_slot)],
+        &[
+            ("levelset", out_slot),
+            ("weights", weights_slot),
+            ("velocity", velocity_slot),
+        ],
         &params(&[
             ("cell_size", H),
-            // The reach is the product of the three; the scale carries it.
-            ("particle_scale", blob_reach),
-            ("sim_cell_size", 1.0),
+            // The reach is the product of the three; the scale carries it,
+            // over a simulation cell of one display cell.
+            ("particle_scale", blob_reach / H),
+            ("sim_cell_size", H),
             ("particle_radius", 1.0),
             ("pool_tiles", pool_tiles as f32),
         ]),

@@ -509,9 +509,9 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "surface_weights.rs",
-        rust_struct: "WeightUniforms",
-        shader: "shaders/surface_weights.wgsl",
+        source: "shape_particle_blobs.rs",
+        rust_struct: "Uniforms",
+        shader: "shaders/shape_particle_blobs.wgsl",
         shader_struct: "Params",
         aliases: &[],
     },

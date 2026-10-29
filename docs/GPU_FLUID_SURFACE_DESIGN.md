@@ -16,9 +16,10 @@ frame.** The mesh feeds the existing scene, material, RT and volume-optics path 
 as the CPU mesh does now.
 
 **The surface today.** The surface is a level set, not a mesh. The group sorts the
-particles into cells, shapes blobs, writes the distance field (`node.particle_volume`,
-a solid's nodes at least their depth in it), smooths it in three steps leashed to that
-field (`node.field_smooth_blend` with `node.surface_weights`), carries it into solids
+particles into cells, shapes blobs from each particle's neighbours
+(`node.shape_particle_blobs`), writes the distance field with each node's smoothing
+weight and velocity (`node.particle_volume`, a solid's nodes at least their depth in
+it), smooths it in three steps leashed to that field (`node.field_smooth_blend`), carries it into solids
 (`node.carry_liquid_into_solids`), and the renderer's march draws the group's
 `level_set` output. Sections below that name meshing, mesh smoothing, normals or a
 solid clamp are gone; the sort, blobs, bricks and volume parts describe current code.
@@ -581,7 +582,7 @@ fluid_surface ─ particles_a/b, counts, identities, blend, span ─► interpol
       │                                                                             │ blobs
       └─ grid_bounds, grid_nodes_x/y/z ─────────────────────────► particle_volume ◄─┘ + solid_now ─► level set (Array f32)
                                                                           │
-                       field_smooth_blend (+ surface_weights) ─► carry_liquid_into_solids ─► level_set
+                       field_smooth_blend (weights from particle_volume) ─► carry_liquid_into_solids ─► level_set
 ```
 
 Section 2.5 audit, per DECOMPOSING_GENERATORS.md section 2.5 (audit by analogy).

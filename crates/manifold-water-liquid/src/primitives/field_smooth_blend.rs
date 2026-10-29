@@ -74,7 +74,7 @@ manifold_node_engine::primitive! {
         float_param!("pool_tiles", "Pool Tiles", 1.0, 1.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Chain FIELD_SMOOTH_STEPS (3) of these after node.particle_volume: prior is the field the step starts from (the splat, then the step before), reference is node.particle_volume's level set, weights come from node.surface_weights, all pooled node arrays on the same tiles, with tiles, pool_tiles and cell_size from the same world tiles (node.surface_tiles for the display) and sim_cell_size from the domain. Smoothness 1 is the tuned surface (the field build's half-cell leash), 0 returns the reference, 2 doubles the leash; band defaults to the field build's constant. It reads the nodes round each tile, so it is a graph fusion boundary.",
+    composition_notes: "Chain FIELD_SMOOTH_STEPS (3) of these after node.particle_volume: prior is the field the step starts from (the splat, then the step before), reference is node.particle_volume's level set, weights come from node.particle_volume, all pooled node arrays on the same tiles, with tiles, pool_tiles and cell_size from the same world tiles (node.surface_tiles for the display) and sim_cell_size from the domain. Smoothness 1 is the tuned surface (the field build's half-cell leash), 0 returns the reference, 2 doubles the leash; band defaults to the field build's constant. It reads the nodes round each tile, so it is a graph fusion boundary.",
     examples: [],
     picker: { label: "Field Smooth Blend", category: Atom },
     summary: "Smooths a liquid surface one step, easing it back toward the original where it is thin, and never lets it drift far from the true surface.",

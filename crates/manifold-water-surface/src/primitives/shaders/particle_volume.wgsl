@@ -22,6 +22,15 @@
 // inclusive floor(c - R')..floor(c + R')+1 grid box, R' = R times its
 // weight's reach (shape_diagonal.w).
 //
+// The same blend gives each node how much the field smoothing moves it and
+// the water's velocity there: `weights` fades the weighted mean of the
+// blobs' neighbour counts (`counts`, from node.shape_particle_blobs) from
+// fade_start to fade_end, 1 in bulk water and 0 on thin sheets and drops,
+// and `velocity` (xyz at 3p..3p+2) is the weighted mean of their particles'
+// velocities (`sorted`). Both reach every node the level set does, at every
+// Surface Detail. A node no blob reaches, a free slot and the canonical
+// element hold 0 in both.
+//
 // The blobs are sorted into the display cells (`cell_ranges`, one range per
 // pool element) by their particles, and a blob's centre may sit off its
 // particle. A node searches the cells from floor(node - 1 - u) to
@@ -56,8 +65,15 @@ struct Params {
     window: f32,
     // Cells per run of the walk, 1 to 8.
     run: u32,
-    _pad1: u32,
-    _pad2: u32,
+    // The mean neighbour count at which smoothing starts, and where it is full.
+    fade_start: f32,
+    fade_end: f32,
+}
+
+struct FluidParticle {
+    position_radius: vec4<f32>,
+    velocity: vec3<f32>,
+    id: u32,
 }
 
 // Field order identical to the host's `FluidBlob`: centre xyz and radius, the
@@ -80,6 +96,10 @@ struct CellRange {
 @group(0) @binding(3) var<storage, read> solid: array<f32>;
 @group(0) @binding(4) var<storage, read> buf_tiles: array<u32>;
 @group(0) @binding(5) var<storage, read_write> levelset: array<f32>;
+@group(0) @binding(6) var<storage, read> counts: array<f32>;
+@group(0) @binding(7) var<storage, read> sorted: array<FluidParticle>;
+@group(0) @binding(8) var<storage, read_write> weights: array<f32>;
+@group(0) @binding(9) var<storage, read_write> velocity: array<f32>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
 fn ts_table_entries() -> u32 { return params.entries; }
@@ -92,14 +112,21 @@ const PV_FAR_CELLS: f32 = 3.0;
 // over 20 cells, which spans at most 8 + 2 * 21 + 1.
 const PV_MAX_WINDOW: i32 = 52;
 
-// Per node, six fixed-point sums over the blobs within R of it: the weight,
-// the weighted stretched offset q in R (xyz), the weighted radius in R and
-// the weighted gradient scale.
-var<workgroup> pv_sum: array<atomic<i32>, 3072>;
+// Per node, ten fixed-point sums over the blobs within R of it: the weight,
+// the weighted stretched offset q in R (xyz), the weighted radius in R, the
+// weighted gradient scale, the weighted neighbour count and the weighted
+// velocity (xyz).
+const PV_SUMS: u32 = 10u;
+var<workgroup> pv_sum: array<atomic<i32>, 5120>;
 // The fixed-point scale of the sums. Each term is at most a few units (q and
 // g reach 1 / size, about 4) and a node's weights sum to at most about a
 // hundred blobs, far inside an i32.
 const PV_FIXED: f32 = 1048576.0;
+// The neighbour count's scale: a count reaches about sixty.
+const PV_FIXED_COUNT: f32 = 16384.0;
+// The velocity's scale, metres per second: a hundred blobs at 100 m/s stay
+// far inside an i32, to a quarter millimetre per second.
+const PV_FIXED_VELOCITY: f32 = 4096.0;
 // The least weight a node must gather to read as near a blob: R * 0.95 from a
 // lone one. Below it the rounded sums say nothing about where the blobs are,
 // and the node reads as air.
@@ -140,19 +167,29 @@ fn cs_main(
     if lane == 0u {
         pv_held = u32(slot < params.pool_tiles && ts_slot_entry(slot) != WT_NONE);
         if slot == params.pool_tiles {
-            levelset[ts_canon()] = far;
+            let canon = ts_canon();
+            levelset[canon] = far;
+            weights[canon] = 0.0;
+            velocity[3u * canon] = 0.0;
+            velocity[3u * canon + 1u] = 0.0;
+            velocity[3u * canon + 2u] = 0.0;
         }
     }
     let band = 3.0 * reach;
-    for (var l = lane; l < 3072u; l = l + PV_THREADS) {
+    for (var l = lane; l < 512u * PV_SUMS; l = l + PV_THREADS) {
         atomicStore(&pv_sum[l], 0);
     }
     // Zhu and Bridson's blend radius: the support every blob already visits.
     let blend = 1.5 * reach;
     if workgroupUniformLoad(&pv_held) == 0u {
         if slot < params.pool_tiles {
-            levelset[slot * 512u + lane] = far;
-            levelset[slot * 512u + lane + PV_THREADS] = far;
+            for (var e = slot * 512u + lane; e < slot * 512u + 512u; e = e + PV_THREADS) {
+                levelset[e] = far;
+                weights[e] = 0.0;
+                velocity[3u * e] = 0.0;
+                velocity[3u * e + 1u] = 0.0;
+                velocity[3u * e + 2u] = 0.0;
+            }
         }
         return;
     }
@@ -220,6 +257,8 @@ fn cs_main(
             let shape_off_diagonal = blobs[b].shape_off_diagonal;
             let off = shape_off_diagonal.xyz;
             let size = shape_off_diagonal.w;
+            let count = counts[b] * PV_FIXED_COUNT;
+            let moving = sorted[b].velocity * PV_FIXED_VELOCITY;
             for (var nz = lo_node.z; nz <= hi_node.z; nz = nz + 1) {
                 for (var ny = lo_node.y; ny <= hi_node.y; ny = ny + 1) {
                     for (var nx = lo_node.x; nx <= hi_node.x; nx = nx + 1) {
@@ -241,13 +280,17 @@ fn cs_main(
                             g = length(pv_apply(diag, off, q)) / reach_q;
                         }
                         let wq = w / blend * PV_FIXED;
-                        let base = 6u * ts_local(node);
+                        let base = PV_SUMS * ts_local(node);
                         atomicAdd(&pv_sum[base], i32(round(w * PV_FIXED)));
                         atomicAdd(&pv_sum[base + 1u], i32(round(wq * q.x)));
                         atomicAdd(&pv_sum[base + 2u], i32(round(wq * q.y)));
                         atomicAdd(&pv_sum[base + 3u], i32(round(wq * q.z)));
                         atomicAdd(&pv_sum[base + 4u], i32(round(wq * r)));
                         atomicAdd(&pv_sum[base + 5u], i32(round(w * g * PV_FIXED)));
+                        atomicAdd(&pv_sum[base + 6u], i32(round(w * count)));
+                        atomicAdd(&pv_sum[base + 7u], i32(round(w * moving.x)));
+                        atomicAdd(&pv_sum[base + 8u], i32(round(w * moving.y)));
+                        atomicAdd(&pv_sum[base + 9u], i32(round(w * moving.z)));
                     }
                 }
             }
@@ -258,10 +301,20 @@ fn cs_main(
         let e = slot * 512u + l;
         // phi = (|q̄| - r̄) / ḡ in R units, from the weighted means over the
         // blobs within R; no blob within R is air.
-        let base = 6u * l;
+        let base = PV_SUMS * l;
         let weight = f32(atomicLoad(&pv_sum[base]));
         var phi = band;
+        var smoothing = 0.0;
+        var moving = vec3<f32>(0.0);
         if weight >= PV_MIN_WEIGHT * PV_FIXED {
+            let total = weight / PV_FIXED;
+            let count = f32(atomicLoad(&pv_sum[base + 6u])) / PV_FIXED_COUNT / total;
+            smoothing = clamp((count - params.fade_start) / (params.fade_end - params.fade_start), 0.0, 1.0);
+            moving = vec3<f32>(
+                f32(atomicLoad(&pv_sum[base + 7u])),
+                f32(atomicLoad(&pv_sum[base + 8u])),
+                f32(atomicLoad(&pv_sum[base + 9u])),
+            ) / PV_FIXED_VELOCITY / total;
             let qbar = vec3<f32>(
                 f32(atomicLoad(&pv_sum[base + 1u])),
                 f32(atomicLoad(&pv_sum[base + 2u])),
@@ -275,5 +328,9 @@ fn cs_main(
             phi = max(phi, -solid[e] - PV_WALL_REACH * h);
         }
         levelset[e] = phi;
+        weights[e] = smoothing;
+        velocity[3u * e] = moving.x;
+        velocity[3u * e + 1u] = moving.y;
+        velocity[3u * e + 2u] = moving.z;
     }
 }

@@ -10,7 +10,9 @@ fn particle_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         elements * std::mem::size_of::<CellRange>() as u64,
     )?;
     x.covers("solid", elements * 4)?;
-    x.covers("levelset", elements * 4)
+    x.covers("levelset", elements * 4)?;
+    x.covers("weights", elements * 4)?;
+    x.covers("velocity", elements * 12)
 }
 inventory::submit! {
     ExtentRule { type_id: "node.particle_volume", check: particle_volume }

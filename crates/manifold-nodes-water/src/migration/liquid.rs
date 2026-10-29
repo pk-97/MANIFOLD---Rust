@@ -1131,6 +1131,67 @@ pub(crate) fn wire_blob_neighbours(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Particle Volume gives the smoothing weights and the surface velocity from
+/// its own blend, so a saved Surface Weights node folds into the Particle
+/// Volume on the same tiles: the volume takes the blob node's counts and the
+/// sorted particles the weights node read, every wire from the weights
+/// node's outputs moves to the volume's, and the weights node goes.
+pub(crate) fn fold_surface_weights(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    let source = |def: &EffectGraphDef, node: u32, port: &str| {
+        def.wires
+            .iter()
+            .find(|w| w.to_node == node && w.to_port == port)
+            .map(|w| (w.from_node, w.from_port.clone()))
+    };
+    let folds: Vec<(u32, u32, u32, (u32, String))> = def
+        .nodes
+        .iter()
+        .filter(|n| n.type_id == "node.surface_weights")
+        .filter_map(|weights| {
+            let tiles = source(def, weights.id, "tiles")?;
+            let particles = source(def, weights.id, "particles")?;
+            let volume = def.nodes.iter().find(|v| {
+                v.type_id == "node.particle_volume"
+                    && source(def, v.id, "tiles").as_ref() == Some(&tiles)
+            })?;
+            let (blobs, _) = source(def, volume.id, "blobs")?;
+            Some((weights.id, volume.id, blobs, particles))
+        })
+        .collect();
+    let changed = !folds.is_empty();
+    for (weights, volume, blobs, (from_node, from_port)) in folds {
+        for wire in def.wires.iter_mut().filter(|w| w.from_node == weights) {
+            wire.from_node = volume;
+        }
+        def.wires.retain(|w| w.to_node != weights);
+        def.nodes.retain(|n| n.id != weights);
+        for (from_node, from_port, to_port) in [
+            (blobs, "counts".to_string(), "counts"),
+            (from_node, from_port, "sorted"),
+        ] {
+            if source(def, volume, to_port).is_none() {
+                def.wires.push(EffectGraphWire {
+                    from_node,
+                    from_port,
+                    to_node: volume,
+                    to_port: to_port.into(),
+                });
+            }
+        }
+    }
+    changed
+}
+
+inventory::submit! {
+    manifold_node_engine::load::migration::GraphMigration {
+        name: "fold_surface_weights",
+        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        order: 470,
+        apply: fold_surface_weights,
+    }
+}
+
 inventory::submit! {
     manifold_node_engine::load::migration::GraphMigration {
         name: "wire_blob_neighbours",
