@@ -294,8 +294,10 @@ pub const SAND_FRICTION_ANGLE: f32 = 35.0;
 /// The Friction Angle's range, degrees: below it the cone is too narrow for
 /// a cohesion to mean anything, above it sand holds cliffs it never holds.
 pub const FRICTION_ANGLE_RANGE: (f32, f32) = (5.0, 60.0);
-/// The plastic strain over which soil's cohesion falls to 1/e.
-pub const COHESION_SOFTENING: f32 = 0.05;
+/// The plastic strain over which soil's cohesion falls to 1/e: slow enough
+/// that the settling a fresh fill goes through leaves a cliff its Cohesion
+/// holds standing, so a cliff fails when the dial drops, not on its own.
+pub const COHESION_SOFTENING: f32 = 0.5;
 
 /// One material's constants as the material stage takes them
 /// (`MatterMaterial` in matter_material.wgsl), less the softening.

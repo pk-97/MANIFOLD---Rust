@@ -64,10 +64,11 @@ pub fn liquid_domains_in(nodes: &[EffectGraphNode]) -> Vec<NestedLiquidDomain> {
 /// The liquid domain an object's surface is built from. Water is recognised
 /// by its particle producer, not by the port that feeds the object: the walk
 /// starts at the object's `field` producer (a level set the renderer marches),
-/// or its `vertices` producer when no field is wired, follows every wired
-/// input upstream and stops at each liquid domain it meets. A field surface
-/// (particles → sort → blobs → volume → smoothing) and a mesh drawn from the
-/// particles both reach their domain.
+/// or its `vertices` producer when no field is wired, and at its `instances`
+/// producer, follows every wired input upstream and stops at each liquid
+/// domain it meets. A field surface (particles → sort → blobs → volume →
+/// smoothing), a mesh drawn from the particles, and particles or grains drawn
+/// as copies of a fixed mesh all reach their domain.
 pub fn liquid_domain_of(
     index: &FlatSceneIndex,
     object: &NodeId,
@@ -81,11 +82,16 @@ pub fn liquid_domain_of(
     } else {
         "vertices"
     };
-    let Some(wire) = index.input(object, port)? else {
+    let mut pending = Vec::new();
+    for port in [port, "instances"] {
+        if let Some(wire) = index.input(object, port)? {
+            pending.push(wire.from_node);
+        }
+    }
+    if pending.is_empty() {
         return Ok(None);
-    };
-    let mut pending = vec![wire.from_node];
-    let mut seen = BTreeSet::from([wire.from_node]);
+    }
+    let mut seen: BTreeSet<_> = pending.iter().copied().collect();
     let mut domains = BTreeSet::new();
     while let Some(id) = pending.pop() {
         let Some(node) = index.flat.nodes.iter().find(|node| node.id == id) else {
