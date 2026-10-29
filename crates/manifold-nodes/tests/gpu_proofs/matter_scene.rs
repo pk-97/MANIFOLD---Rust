@@ -121,8 +121,8 @@ impl MatterScene {
         );
         let fill = add(&mut graph, "node.matter_fill");
         let state = add(&mut graph, "node.matter_state");
-        let zero = add(&mut graph, "node.zero_array");
         let p2g = add(&mut graph, "node.matter_to_grid");
+        let solid = add(&mut graph, "node.matter_static_solid");
         let update = add(&mut graph, "node.matter_grid_update");
         let g2p = add(&mut graph, "node.grid_to_matter");
         let stats = add(&mut graph, "node.matter_stats");
@@ -142,14 +142,23 @@ impl MatterScene {
         for port in ["field_min_x", "field_min_y", "field_min_z"] {
             wire(&mut graph, (domain, port), (stats, port));
         }
-        for node in [p2g, update, g2p] {
+        for node in [p2g, update, g2p, solid] {
             wire(&mut graph, (domain, "cell_size"), (node, "cell_size"));
         }
         let reaction = add(&mut graph, "node.matter_body_reaction");
-        for node in [p2g, update, reaction, g2p, stats, state] {
+        for node in [p2g, update, reaction, g2p, stats, state, solid] {
             wire(&mut graph, (domain, "pool_tiles"), (node, "pool_tiles"));
         }
+        wire(&mut graph, (p2g, "tiles"), (stats, "tiles"));
+        for port in ["tiles", "held", "fresh", "held_args", "built"] {
+            wire(&mut graph, (p2g, port), (solid, port));
+        }
+        for node in [update, reaction] {
+            wire(&mut graph, (p2g, "held"), (node, "held"));
+            wire(&mut graph, (p2g, "held_args"), (node, "held_args"));
+        }
         for node in [update, reaction, g2p] {
+            wire(&mut graph, (solid, "solid"), (node, "static_solid"));
             wire(&mut graph, (p2g, "tiles"), (node, "tiles"));
             for port in BOUNDS {
                 wire(&mut graph, (domain, port), (node, port));
@@ -222,8 +231,7 @@ impl MatterScene {
         ] {
             wire(&mut graph, (fill, "count"), (node, port));
         }
-        wire(&mut graph, (state, "grid_accum"), (zero, "in"));
-        wire(&mut graph, (zero, "out"), (p2g, "accum"));
+        wire(&mut graph, (state, "grid_accum"), (p2g, "accum"));
         wire(&mut graph, (state, "out"), (p2g, "points"));
         wire(&mut graph, (p2g, "accum_out"), (update, "accum"));
         wire(&mut graph, (p2g, "accum_out"), (stats, "accum"));
@@ -279,7 +287,7 @@ impl MatterScene {
             &mut graph,
             &registry,
             settings,
-            [domain, fill, state, update, reaction, g2p],
+            [domain, fill, state, update, reaction, g2p, solid],
         );
         graph
             .add_external_output(frame, "particles_b")
@@ -418,7 +426,7 @@ impl MatterScene {
         graph: &mut Graph,
         registry: &PrimitiveRegistry,
         settings: &SceneSettings,
-        [domain, fill, state, update, reaction, g2p]: [NodeInstanceId; 6],
+        [domain, fill, state, update, reaction, g2p, solid]: [NodeInstanceId; 7],
     ) -> Vec<NodeInstanceId> {
         if settings.colliders.is_empty() {
             return Vec::new();
@@ -505,14 +513,22 @@ impl MatterScene {
         }
         wire(graph, (bodies, "bodies_out"), (update, "bodies"));
         wire(graph, (bodies, "bodies_out"), (reaction, "bodies"));
-        for port in ["shapes", "atlas", "collider_nodes", "collider_triangles"] {
+        wire(graph, (bodies, "bodies_out"), (solid, "bodies"));
+        for port in [
+            "shapes",
+            "collider_nodes",
+            "collider_triangles",
+            "body_count",
+            "static_key",
+        ] {
+            wire(graph, (domain, port), (solid, port));
+        }
+        for port in ["shapes", "atlas"] {
             wire(graph, (domain, port), (reaction, port));
         }
         for port in [
             "shapes",
             "atlas",
-            "collider_nodes",
-            "collider_triangles",
             "body_count",
             "field_min_x",
             "field_min_y",
@@ -521,13 +537,7 @@ impl MatterScene {
             wire(graph, (domain, port), (update, port));
         }
         wire(graph, (bodies, "bodies_out"), (g2p, "bodies"));
-        for port in [
-            "shapes",
-            "atlas",
-            "collider_nodes",
-            "collider_triangles",
-            "body_count",
-        ] {
+        for port in ["shapes", "atlas", "body_count"] {
             wire(graph, (domain, port), (g2p, port));
         }
         transforms

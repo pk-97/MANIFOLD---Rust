@@ -13,15 +13,22 @@
 // contribution floor(x + u) with u hashed from the point id and the word's
 // node key (D5), so the sums do not depend on where the tiles sit.
 //
-// One workgroup per 4³ block of stencil base nodes (the sorter's key,
-// `ranges[block]` over `order`): block 8·slot + b is octant b of slot's tile,
-// block 8P the points in tiles the table does not hold. A held block
-// accumulates into a 6³-node workgroup tile, flushed once per nonzero word;
-// a point that has left its block since the sort adds globally. Integer sums
-// make both routes bit-identical.
+// Blocks are 4³ stencil base nodes (the sorter's key, `ranges[block]` over
+// `order`): block 8·slot + b is octant b of slot's tile, block 8P the points
+// in tiles the table does not hold. The scatter runs two workgroups per held
+// slot (the table's held-slot triple), four blocks each, so it pays for the
+// tiles that hold matter and not for the pool; workgroup 0 also takes block
+// 8P. A held block accumulates into a 6³-node workgroup tile, flushed once
+// per nonzero word; a point that has left its block since the sort adds
+// globally. Integer sums make both routes bit-identical.
 //
 // A point whose scatter inputs are not finite is skipped; node.matter_stats
 // counts the same points, so D14 halts the publish.
+//
+// clear_main runs first every substep: it zeroes the accumulator over the
+// table's held tiles only (`held`, 512 threads a tile, dispatched from the
+// table's held-slot triple) and the canonical node, so an empty box costs
+// nothing. Every node the scatter writes is in a held tile or canonical.
 
 struct MatterPoint {
     position: vec3<f32>,
@@ -64,6 +71,7 @@ struct P2gParams {
 @group(0) @binding(3) var<storage, read> order: array<u32>;
 @group(0) @binding(4) var<storage, read> ranges: array<CellRange>;
 @group(0) @binding(5) var<storage, read> ts_table: array<u32>;
+@group(0) @binding(6) var<storage, read> held: array<u32>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
 fn ts_table_entries() -> u32 { return params.table_entries; }
@@ -191,10 +199,11 @@ fn scatter(pt: MatterPoint, use_tile: bool, tile_origin: vec3<i32>) {
     }
 }
 
-// Workgroup w is block w, over the points `order`/`ranges` put there.
-@compute @workgroup_size(256)
-fn scatter_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
-    let block = wg.x;
+// One block over the points `order`/`ranges` put there, by the whole
+// workgroup; called in uniform control flow.
+fn scatter_block(block: u32, lid: u32) {
+    // The last block's flush has finished with the workgroup tile.
+    workgroupBarrier();
     if lid == 0u {
         let range = ranges[block];
         block_start = range.start;
@@ -241,6 +250,32 @@ fn scatter_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_
                 let l = vec3<i32>(i32(local % 6u), i32((local / 6u) % 6u), i32(local / 36u));
                 atomicAdd(&accum[ts_cell_at(tile_origin + l) * 4u + (i % 4u)], value);
             }
+        }
+    }
+}
+
+// Workgroup w takes blocks 4·(w & 1) to 4·(w & 1) + 3 of held slot w / 2.
+@compute @workgroup_size(256)
+fn scatter_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
+    let first = held[wg.x >> 1u] * 8u + (wg.x & 1u) * 4u;
+    for (var k = 0u; k < 4u; k = k + 1u) {
+        scatter_block(first + k, lid);
+    }
+    if wg.x == 0u {
+        scatter_block(8u * params.pool_tiles, lid);
+    }
+}
+
+@compute @workgroup_size(256)
+fn clear_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let node = held[gid.x >> 9u] * 512u + (gid.x & 511u);
+    for (var w = 0u; w < 4u; w = w + 1u) {
+        atomicStore(&accum[node * 4u + w], 0);
+    }
+    if gid.x == 0u {
+        let canon = params.pool_tiles * 512u;
+        for (var w = 0u; w < 4u; w = w + 1u) {
+            atomicStore(&accum[canon * 4u + w], 0);
         }
     }
 }

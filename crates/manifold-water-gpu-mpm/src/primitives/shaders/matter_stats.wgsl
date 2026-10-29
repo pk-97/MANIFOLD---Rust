@@ -78,6 +78,14 @@ const PER_THREAD: u32 = 8u;
 @group(0) @binding(3) var<storage, read> accum: array<i32>;
 @group(0) @binding(4) var<storage, read_write> partials: array<Partial>;
 @group(0) @binding(5) var<storage, read_write> stats: array<u32>;
+@group(0) @binding(6) var<storage, read> tiles: array<u32>;
+
+// The world tile table's read side (prepended) over `tiles`: the grid
+// passes run over held tiles only, so a node of a tile the table no longer
+// holds keeps stale values and is skipped.
+fn ts_pool_tiles() -> u32 { return params.node_count >> 9u; }
+fn ts_table_entries() -> u32 { let n = 4u * max(ts_pool_tiles(), 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
+fn ts_table_word(i: u32) -> u32 { return tiles[i]; }
 
 var<workgroup> scratch: array<Partial, 256>;
 
@@ -178,6 +186,9 @@ fn point_partial(pt: MatterPoint) -> Partial {
 
 fn node_partial(i: u32) -> Partial {
     var p = empty();
+    if ts_slot_entry(i >> 9u) == WT_NONE {
+        return p;
+    }
     let node = grid[i];
     if !(finite3(node.velocity_mass.xyz) && finite(node.velocity_mass.w)) {
         p.nonfinite = 1u;

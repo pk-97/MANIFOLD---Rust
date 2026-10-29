@@ -20,11 +20,12 @@ use manifold_physics::clock::TICK;
 use manifold_physics::force_lattice::ForceLattice;
 use manifold_physics::mesh_bvh::MeshBvh;
 use manifold_water_gpu_mpm::matter::{
-    MatterGridNode, MatterPoint, REACTION_WORDS, field_min, lattice_nodes, matter_nodes,
-    momentum_unit,
+    MATTER_REACH, MatterGridNode, MatterPoint, REACTION_WORDS, field_min, lattice_nodes,
+    matter_nodes, momentum_unit,
 };
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
 use manifold_water_liquid::testkit::world_box::BoxTable;
+use manifold_water_liquid::world_tiles::{allocated_args_offset, args_words};
 
 use manifold_node_engine::scene::transform::Transform;
 
@@ -43,6 +44,16 @@ fn lattice_table(layout: &FluidDomainLayout) -> BoxTable {
 /// The table as a host array input.
 fn tiles_input(table: &BoxTable) -> (&'static str, HostArray) {
     ("tiles", HostArray::new::<u32>(table.words.len() as u32))
+}
+
+/// The grid passes' tile list over `table`: every slot held, and args whose
+/// triple at node.matter_to_grid's held offset dispatches 512 threads a slot.
+fn held_inputs(table: &BoxTable) -> (Vec<u32>, Vec<u32>) {
+    let held: Vec<u32> = (0..table.pool_tiles).collect();
+    let mut args = vec![0u32; args_words(MATTER_REACH.ring_max) as usize];
+    let at = (allocated_args_offset(MATTER_REACH.ring_max) / 4) as usize;
+    args[at..at + 3].copy_from_slice(&[2 * table.pool_tiles, 1, 1]);
+    (held, args)
 }
 
 /// Dense accumulator words, four a node, as the pooled accumulator.
@@ -442,15 +453,23 @@ fn matter_grid_update_projects_colliders() {
             ("bodies", HostArray::new::<LiquidBody>(1)),
             ("shapes", HostArray::new::<LiquidShape>(1)),
             ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
-            ("collider_nodes", HostArray::new::<Vec4Vertex>(1)),
-            ("collider_triangles", HostArray::new::<Vec4Vertex>(1)),
+            ("static_solid", HostArray::new::<Vec4Vertex>(pool)),
+            ("held", HostArray::new::<u32>(table.pool_tiles)),
             tiles_input(&table),
+            (
+                "held_args",
+                HostArray::new::<u32>(args_words(MATTER_REACH.ring_max) as u32),
+            ),
         ],
         &["grid_out"],
         |_, _| {},
     );
+    let (held, held_args) = held_inputs(&table);
     bench.fill(0, &pooled_accum(&table, &accum));
+    bench.fill(5, &vec![[0.0f32; 4]; pool as usize]);
+    bench.fill(6, &held);
     bench.fill(7, &table.words);
+    bench.fill(8, &held_args);
     bench.fill(2, &[body]);
     bench.fill(3, &[shape]);
     bench.fill(4, &atlas);
@@ -672,14 +691,24 @@ fn matter_grid_update_applies_field_lattices() {
                 HostArray::new::<f32>(4 * field.node_count() as u32),
             ),
             tiles_input(&table),
+            ("static_solid", HostArray::new::<Vec4Vertex>(pool)),
+            ("held", HostArray::new::<u32>(table.pool_tiles)),
+            (
+                "held_args",
+                HostArray::new::<u32>(args_words(MATTER_REACH.ring_max) as u32),
+            ),
         ],
         &["grid_out"],
         |_, _| {},
     );
+    let (held, held_args) = held_inputs(&table);
     bench.fill(0, &pooled_accum(&table, &accum));
     bench.fill(2, &forces);
     bench.fill(4, &table.words);
     bench.fill(3, &impulses);
+    bench.fill(5, &vec![[0.0f32; 4]; pool as usize]);
+    bench.fill(6, &held);
+    bench.fill(7, &held_args);
     let gravity = [0.0f32, -9.81, 0.0];
     for (name, value) in [
         ("pool_tiles", table.pool_tiles as f32),
@@ -863,8 +892,8 @@ fn matter_body_reaction_counts_field_velocity() {
             ("bodies", HostArray::new::<LiquidBody>(1)),
             ("shapes", HostArray::new::<LiquidShape>(1)),
             ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
-            ("collider_nodes", HostArray::new::<Vec4Vertex>(1)),
-            ("collider_triangles", HostArray::new::<Vec4Vertex>(1)),
+            ("static_solid", HostArray::new::<Vec4Vertex>(pool)),
+            ("held", HostArray::new::<u32>(table.pool_tiles)),
             ("reaction", HostArray::new::<i32>(REACTION_WORDS)),
             (
                 "forces",
@@ -875,12 +904,20 @@ fn matter_body_reaction_counts_field_velocity() {
                 HostArray::new::<f32>(4 * field.node_count() as u32),
             ),
             tiles_input(&table),
+            (
+                "held_args",
+                HostArray::new::<u32>(args_words(MATTER_REACH.ring_max) as u32),
+            ),
         ],
         &["reaction_out"],
         |_, _| {},
     );
+    let (held, held_args) = held_inputs(&table);
     bench.fill(0, &table.to_pool(&grid, MatterGridNode::default()));
+    bench.fill(4, &vec![[0.0f32; 4]; pool as usize]);
+    bench.fill(5, &held);
     bench.fill(9, &table.words);
+    bench.fill(10, &held_args);
     bench.fill(1, &[body]);
     bench.fill(2, &[shape]);
     bench.fill(3, &atlas);
@@ -1062,8 +1099,7 @@ fn matter_push_out_reaction_matches_removed_momentum() {
             ("bodies", HostArray::new::<LiquidBody>(1)),
             ("shapes", HostArray::new::<LiquidShape>(1)),
             ("atlas", HostArray::new::<u32>(atlas.len() as u32)),
-            ("collider_nodes", HostArray::new::<Vec4Vertex>(1)),
-            ("collider_triangles", HostArray::new::<Vec4Vertex>(1)),
+            ("static_solid", HostArray::new::<Vec4Vertex>(pool)),
             ("reaction", HostArray::new::<i32>(REACTION_WORDS)),
             tiles_input(&table),
         ],
@@ -1075,7 +1111,8 @@ fn matter_push_out_reaction_matches_removed_momentum() {
         ..MatterGridNode::default()
     };
     bench.fill(1, &vec![moving; pool as usize]);
-    bench.fill(8, &table.words);
+    bench.fill(5, &vec![[0.0f32; 4]; pool as usize]);
+    bench.fill(7, &table.words);
     bench.fill(3, &[shape]);
     bench.fill(4, &atlas);
     for (name, value) in [
@@ -1096,7 +1133,7 @@ fn matter_push_out_reaction_matches_removed_momentum() {
     let run = |bench: &mut Bench, body: LiquidBody| -> (Vec<MatterPoint>, Vec<i32>) {
         bench.fill(0, &points);
         bench.fill(2, &[body]);
-        bench.fill(7, &[0i32; REACTION_WORDS as usize]);
+        bench.fill(6, &[0i32; REACTION_WORDS as usize]);
         bench.run();
         (bench.read("points_out"), bench.read("reaction_out"))
     };

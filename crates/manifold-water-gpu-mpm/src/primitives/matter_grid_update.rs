@@ -6,7 +6,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::matter_common::{COLLIDER_BVH, MATTER_BOUNDS, MATTER_TREE};
+use super::matter_common::MATTER_BOUNDS;
 use crate::matter::{MatterGridNode, grid_accum_bytes, grid_bytes, momentum_unit_fits};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
@@ -66,14 +66,15 @@ manifold_node_engine::primitive! {
     inputs: {
         accum: Array(i32) required,
         grid: Array(MatterGridNode) required,
+        static_solid: Array(Vec4Vertex) required,
         bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
-        collider_nodes: Array(Vec4Vertex) optional,
-        collider_triangles: Array(Vec4Vertex) optional,
         forces: Array(f32) optional,
         impulses: Array(f32) optional,
         tiles: Array(u32) required,
+        held: Array(u32) required,
+        held_args: Array(u32) required,
         cell_size: ScalarF32 optional,
         step_dt: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
@@ -144,8 +145,9 @@ manifold_node_engine::primitive! {
     aliases: ["grid update", "mpm grid", "resolve grid"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/matter_grid_update_body.wgsl"),
-    input_access: [BufferGather, Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [READ_SIDE, LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH, MATTER_TREE, MATTER_BOUNDS, FORCE_LATTICE],
+    input_access: [BufferGather, Coincident, Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [READ_SIDE, LIQUID_POSE, LIQUID_COLLIDER, MATTER_BOUNDS, FORCE_LATTICE],
+    buffer_index: "mgu_node_of",
 }
 
 impl Primitive for MatterGridUpdate {
@@ -211,12 +213,13 @@ impl Primitive for MatterGridUpdate {
         let accum = ctx.inputs.array("accum");
         let grid = ctx.inputs.array("grid");
         let tiles = ctx.inputs.array("tiles");
+        let held = ctx.inputs.array("held");
+        let held_args = ctx.inputs.array("held_args");
+        let static_solid = ctx.inputs.array("static_solid");
         let colliders = (
             ctx.inputs.array("bodies"),
             ctx.inputs.array("shapes"),
             ctx.inputs.array("atlas"),
-            ctx.inputs.array("collider_nodes"),
-            ctx.inputs.array("collider_triangles"),
         );
         let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as i32;
         let substep_in_tick = ctx.scalar_or_param("substep_in_tick", 0.0).round().max(0.0) as i32;
@@ -227,7 +230,9 @@ impl Primitive for MatterGridUpdate {
             "Matter Grid Update",
         );
         let gpu = ctx.gpu_encoder();
-        let (Some(accum), Some(grid), Some(tiles)) = (accum, grid, tiles) else {
+        let (Some(accum), Some(grid), Some(static_solid), Some(tiles), Some(held), Some(held_args)) =
+            (accum, grid, static_solid, tiles, held, held_args)
+        else {
             return;
         };
         if !cell_size.is_finite() || cell_size <= 0.0 {
@@ -267,23 +272,15 @@ impl Primitive for MatterGridUpdate {
             ));
             return;
         }
-        // Without all five collider arrays the body loop runs zero times over
-        // the grid buffer bound in their slots.
-        let (bodies, shapes, atlas, collider_nodes, collider_triangles, body_count) =
-            match colliders {
-                (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)) => {
-                    let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64) as i32;
-                    (
-                        bodies,
-                        shapes,
-                        atlas,
-                        nodes,
-                        triangles,
-                        body_count.min(rows),
-                    )
-                }
-                _ => (grid, grid, grid, grid, grid, 0),
-            };
+        // Without all three collider arrays the body loop runs zero times
+        // over the grid buffer bound in their slots.
+        let (bodies, shapes, atlas, body_count) = match colliders {
+            (Some(bodies), Some(shapes), Some(atlas)) => {
+                let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64) as i32;
+                (bodies, shapes, atlas, body_count.min(rows))
+            }
+            _ => (grid, grid, grid, 0),
+        };
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let impulse_bytes = field.nodes.iter().map(|&n| n as u64).product::<u64>() * 16;
         let impulse_offset = tick_index
@@ -338,7 +335,7 @@ impl Primitive for MatterGridUpdate {
             _pad0: 0,
         };
         // An unwired lattice is never read (force_lattices 0, impulse_tick −1).
-        gpu.native_enc.dispatch_compute(
+        gpu.native_enc.dispatch_compute_indirect(
             pipeline,
             &[
                 GpuBinding::Bytes {
@@ -357,51 +354,57 @@ impl Primitive for MatterGridUpdate {
                 },
                 GpuBinding::Buffer {
                     binding: 3,
-                    buffer: bodies,
+                    buffer: static_solid,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 4,
-                    buffer: shapes,
+                    buffer: bodies,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 5,
-                    buffer: atlas,
+                    buffer: shapes,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 6,
-                    buffer: collider_nodes,
+                    buffer: atlas,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 7,
-                    buffer: collider_triangles,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 8,
                     buffer: field.forces.unwrap_or(grid),
                     offset: 0,
                 },
                 GpuBinding::Buffer {
-                    binding: 9,
+                    binding: 8,
                     buffer: field.impulses.unwrap_or(grid),
                     offset: impulse_offset.unwrap_or(0),
                 },
                 GpuBinding::Buffer {
-                    binding: 10,
+                    binding: 9,
                     buffer: tiles,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
+                    binding: 10,
+                    buffer: held,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
                     binding: 11,
+                    buffer: held_args,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 12,
                     buffer: grid,
                     offset: 0,
                 },
             ],
-            [nodes.div_ceil(256), 1, 1],
+            held_args,
+            super::matter_to_grid::held_args_offset(),
             "node.matter_grid_update",
         );
     }

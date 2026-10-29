@@ -968,12 +968,6 @@
             "nodeId": "matter_state"
           },
           {
-            "id": 4,
-            "typeId": "node.zero_array",
-            "handle": "Clear Grid",
-            "nodeId": "matter_clear_grid"
-          },
-          {
             "id": 5,
             "typeId": "node.matter_to_grid",
             "handle": "Points To Grid",
@@ -1034,9 +1028,177 @@
             "id": 17,
             "nodeId": "display_solid",
             "typeId": "node.liquid_solid_distance"
+          },
+          {
+            "id": 18,
+            "typeId": "node.matter_static_solid",
+            "handle": "Static Solid",
+            "nodeId": "matter_static_solid"
           }
         ],
         "wires": [
+          {
+            "fromNode": 9,
+            "fromPort": "particles_b",
+            "toNode": 10,
+            "toPort": "particles"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "count_b",
+            "toNode": 10,
+            "toPort": "particleCount"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "initialVolume",
+            "toNode": 1,
+            "toPort": "role_1"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "collider",
+            "toNode": 1,
+            "toPort": "role_0"
+          },
+          {
+            "fromNode": 9,
+            "fromPort": "particles_b",
+            "toNode": 16,
+            "toPort": "particles"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "cell_size",
+            "toNode": 16,
+            "toPort": "sim_cell_size"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bodies",
+            "toNode": 17,
+            "toPort": "bodies"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "shapes",
+            "toNode": 17,
+            "toPort": "shapes"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "atlas",
+            "toNode": 17,
+            "toPort": "atlas"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "closed_faces",
+            "toNode": 17,
+            "toPort": "closed_faces"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "body_count",
+            "toNode": 17,
+            "toPort": "body_count"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bounds_lo_x",
+            "toNode": 17,
+            "toPort": "bounds_lo_x"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bounds_lo_y",
+            "toNode": 17,
+            "toPort": "bounds_lo_y"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bounds_lo_z",
+            "toNode": 17,
+            "toPort": "bounds_lo_z"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bounds_hi_x",
+            "toNode": 17,
+            "toPort": "bounds_hi_x"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bounds_hi_y",
+            "toNode": 17,
+            "toPort": "bounds_hi_y"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "bounds_hi_z",
+            "toNode": 17,
+            "toPort": "bounds_hi_z"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "body_rows",
+            "toNode": 17,
+            "toPort": "rows"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "tiles",
+            "toNode": 17,
+            "toPort": "tiles"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "pool_tiles",
+            "toNode": 17,
+            "toPort": "pool_tiles"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "cell_size",
+            "toNode": 17,
+            "toPort": "cell_size"
+          },
+          {
+            "fromNode": 17,
+            "fromPort": "solid",
+            "toNode": 10,
+            "toPort": "solid"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "tiles",
+            "toNode": 10,
+            "toPort": "tiles"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "pool_tiles",
+            "toNode": 10,
+            "toPort": "pool_tiles"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "cell_size",
+            "toNode": 10,
+            "toPort": "display_cell_size"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "extent",
+            "toNode": 10,
+            "toPort": "extent"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "cell_size",
+            "toNode": 10,
+            "toPort": "sim_cell_size"
+          },
           {
             "fromNode": 1,
             "fromPort": "fill_min_x",
@@ -1310,12 +1472,6 @@
           {
             "fromNode": 3,
             "fromPort": "grid_accum",
-            "toNode": 4,
-            "toPort": "in"
-          },
-          {
-            "fromNode": 4,
-            "fromPort": "out",
             "toNode": 5,
             "toPort": "accum"
           },
@@ -1452,30 +1608,6 @@
             "toPort": "stats"
           },
           {
-            "fromNode": 9,
-            "fromPort": "particles_b",
-            "toNode": 10,
-            "toPort": "particles"
-          },
-          {
-            "fromNode": 9,
-            "fromPort": "count_b",
-            "toNode": 10,
-            "toPort": "particleCount"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "initialVolume",
-            "toNode": 1,
-            "toPort": "role_1"
-          },
-          {
-            "fromNode": 0,
-            "fromPort": "collider",
-            "toNode": 1,
-            "toPort": "role_0"
-          },
-          {
             "fromNode": 1,
             "fromPort": "bodies",
             "toNode": 2,
@@ -1492,6 +1624,30 @@
             "fromPort": "atlas",
             "toNode": 2,
             "toPort": "atlas"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "collider_nodes",
+            "toNode": 2,
+            "toPort": "collider_nodes"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "collider_triangles",
+            "toNode": 2,
+            "toPort": "collider_triangles"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "regions",
+            "toNode": 2,
+            "toPort": "regions"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "fill_region",
+            "toNode": 2,
+            "toPort": "fill_region"
           },
           {
             "fromNode": 1,
@@ -1980,6 +2136,36 @@
             "toPort": "tiles"
           },
           {
+            "fromNode": 5,
+            "fromPort": "held",
+            "toNode": 6,
+            "toPort": "held"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "held_args",
+            "toNode": 6,
+            "toPort": "held_args"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "held",
+            "toNode": 15,
+            "toPort": "held"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "held_args",
+            "toNode": 15,
+            "toPort": "held_args"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "tiles",
+            "toNode": 8,
+            "toPort": "tiles"
+          },
+          {
             "fromNode": 1,
             "fromPort": "closed_faces",
             "toNode": 6,
@@ -2184,144 +2370,6 @@
             "toPort": "kill_height"
           },
           {
-            "fromNode": 9,
-            "fromPort": "particles_b",
-            "toNode": 16,
-            "toPort": "particles"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "cell_size",
-            "toNode": 16,
-            "toPort": "sim_cell_size"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "bodies",
-            "toNode": 17,
-            "toPort": "bodies"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "shapes",
-            "toNode": 17,
-            "toPort": "shapes"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "atlas",
-            "toNode": 17,
-            "toPort": "atlas"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "closed_faces",
-            "toNode": 17,
-            "toPort": "closed_faces"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "body_count",
-            "toNode": 17,
-            "toPort": "body_count"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "bounds_lo_x",
-            "toNode": 17,
-            "toPort": "bounds_lo_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "bounds_lo_y",
-            "toNode": 17,
-            "toPort": "bounds_lo_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "bounds_lo_z",
-            "toNode": 17,
-            "toPort": "bounds_lo_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "bounds_hi_x",
-            "toNode": 17,
-            "toPort": "bounds_hi_x"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "bounds_hi_y",
-            "toNode": 17,
-            "toPort": "bounds_hi_y"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "bounds_hi_z",
-            "toNode": 17,
-            "toPort": "bounds_hi_z"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "body_rows",
-            "toNode": 17,
-            "toPort": "rows"
-          },
-          {
-            "fromNode": 16,
-            "fromPort": "tiles",
-            "toNode": 17,
-            "toPort": "tiles"
-          },
-          {
-            "fromNode": 16,
-            "fromPort": "pool_tiles",
-            "toNode": 17,
-            "toPort": "pool_tiles"
-          },
-          {
-            "fromNode": 16,
-            "fromPort": "cell_size",
-            "toNode": 17,
-            "toPort": "cell_size"
-          },
-          {
-            "fromNode": 17,
-            "fromPort": "solid",
-            "toNode": 10,
-            "toPort": "solid"
-          },
-          {
-            "fromNode": 16,
-            "fromPort": "tiles",
-            "toNode": 10,
-            "toPort": "tiles"
-          },
-          {
-            "fromNode": 16,
-            "fromPort": "pool_tiles",
-            "toNode": 10,
-            "toPort": "pool_tiles"
-          },
-          {
-            "fromNode": 16,
-            "fromPort": "cell_size",
-            "toNode": 10,
-            "toPort": "display_cell_size"
-          },
-          {
-            "fromNode": 16,
-            "fromPort": "extent",
-            "toNode": 10,
-            "toPort": "extent"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "cell_size",
-            "toNode": 10,
-            "toPort": "sim_cell_size"
-          },
-          {
             "fromNode": 1,
             "fromPort": "mu",
             "toNode": 8,
@@ -2362,6 +2410,114 @@
             "fromPort": "wall_friction",
             "toNode": 15,
             "toPort": "wall_friction"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "tiles",
+            "toNode": 18,
+            "toPort": "tiles"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "held",
+            "toNode": 18,
+            "toPort": "held"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "fresh",
+            "toNode": 18,
+            "toPort": "fresh"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "held_args",
+            "toNode": 18,
+            "toPort": "held_args"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "built",
+            "toNode": 18,
+            "toPort": "built"
+          },
+          {
+            "fromNode": 13,
+            "fromPort": "bodies_out",
+            "toNode": 18,
+            "toPort": "bodies"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "shapes",
+            "toNode": 18,
+            "toPort": "shapes"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "collider_nodes",
+            "toNode": 18,
+            "toPort": "collider_nodes"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "collider_triangles",
+            "toNode": 18,
+            "toPort": "collider_triangles"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "body_count",
+            "toNode": 18,
+            "toPort": "body_count"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "static_key",
+            "toNode": 18,
+            "toPort": "static_key"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "cell_size",
+            "toNode": 18,
+            "toPort": "cell_size"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "pool_tiles",
+            "toNode": 18,
+            "toPort": "pool_tiles"
+          },
+          {
+            "fromNode": 18,
+            "fromPort": "solid",
+            "toNode": 6,
+            "toPort": "static_solid"
+          },
+          {
+            "fromNode": 18,
+            "fromPort": "solid",
+            "toNode": 15,
+            "toPort": "static_solid"
+          },
+          {
+            "fromNode": 18,
+            "fromPort": "solid",
+            "toNode": 7,
+            "toPort": "static_solid"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "collider_nodes",
+            "toNode": 17,
+            "toPort": "collider_nodes"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "collider_triangles",
+            "toNode": 17,
+            "toPort": "collider_triangles"
           }
         ]
       }

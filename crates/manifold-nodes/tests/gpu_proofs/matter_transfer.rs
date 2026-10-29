@@ -132,30 +132,40 @@ impl Chain {
         let acc = graph.add_node(Box::new(HostArray::new::<i32>(4 * pool)));
         let grd = graph.add_node(Box::new(HostArray::new::<MatterGridNode>(pool)));
         let add = |graph: &mut Graph, id: &str| graph.add_node(registry.construct(id).expect(id));
-        let zero = add(&mut graph, "node.zero_array");
         let p2g = add(&mut graph, "node.matter_to_grid");
+        let solid = add(&mut graph, "node.matter_static_solid");
         let update = add(&mut graph, "node.matter_grid_update");
         let g2p = add(&mut graph, "node.grid_to_matter");
-        graph.connect((acc, "out"), (zero, "in")).unwrap();
         graph.connect((pts, "out"), (p2g, "points")).unwrap();
-        graph.connect((zero, "out"), (p2g, "accum")).unwrap();
+        graph.connect((acc, "out"), (p2g, "accum")).unwrap();
         graph
             .connect((p2g, "accum_out"), (update, "accum"))
             .unwrap();
         graph.connect((grd, "out"), (update, "grid")).unwrap();
         graph.connect((pts, "out"), (g2p, "points")).unwrap();
         graph.connect((update, "grid_out"), (g2p, "grid")).unwrap();
+        for port in ["tiles", "held", "fresh", "held_args", "built"] {
+            graph.connect((p2g, port), (solid, port)).unwrap();
+        }
+        for port in ["held", "held_args"] {
+            graph.connect((p2g, port), (update, port)).unwrap();
+        }
         for node in [update, g2p] {
             graph.connect((p2g, "tiles"), (node, "tiles")).unwrap();
+            graph
+                .connect((solid, "solid"), (node, "static_solid"))
+                .unwrap();
         }
         graph.add_external_output(p2g, "tiles").expect("tiles");
 
         for node in [p2g, g2p] {
             set(&mut graph, node, "active_count", points.len() as f32);
         }
-        for node in [p2g, update, g2p] {
+        for node in [p2g, update, g2p, solid] {
             set(&mut graph, node, "cell_size", dx);
             set(&mut graph, node, "pool_tiles", pool_tiles as f32);
+        }
+        for node in [p2g, update, g2p] {
             set(&mut graph, node, "step_dt", p.dt as f32);
         }
         for node in [update, g2p] {

@@ -34,3 +34,27 @@ fn matter_wall_stop(v: vec3<f32>, x: vec3<f32>, lo: vec3<f32>, hi: vec3<f32>, wa
     }
     return out;
 }
+
+// The static collider meshes, from node.matter_static_solid's cache at the
+// node: s = (n·(1 + row), φ), n the nearest mesh's outward normal and row its
+// body. The body's row, or −1 where no mesh holds the node (φ ≥ 0).
+fn matter_static_row(s: vec4<f32>) -> i32 {
+    let len = length(s.xyz);
+    return select(-1, i32(round(len - 1.0)), s.w < 0.0 && len > 0.5);
+}
+
+// liquid_collider_project's rule on the cached normal: relative to the body's
+// velocity at the node, the inward normal part of v goes and the tangential
+// part shrinks by `friction` times the speed stopped.
+fn matter_static_project(v: vec3<f32>, s: vec4<f32>, v_body: vec3<f32>, friction: f32) -> vec3<f32> {
+    let normal = normalize(s.xyz);
+    let v_rel = v - v_body;
+    let v_n = dot(v_rel, normal);
+    if v_n >= 0.0 {
+        return v;
+    }
+    let t = v_rel - v_n * normal;
+    let t_len = length(t);
+    let keep = max(0.0, t_len + v_n * friction);
+    return v_body + select(vec3<f32>(0.0), t * (keep / t_len), t_len > 0.0);
+}

@@ -5,7 +5,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::matter_common::{COLLIDER_BVH, MATTER_BOUNDS, MATTER_TREE};
+use super::matter_common::MATTER_BOUNDS;
 use crate::matter::{MatterGridNode, REACTION_WORDS, grid_bytes, momentum_unit_fits};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
@@ -66,15 +66,16 @@ manifold_node_engine::primitive! {
     purpose: "Add the liquid's push on each dynamic body for this substep: repeat the grid's collider projection node by node and atomically add the momentum each body took from the node (and its turning moment about the body's centre of mass) to that body's reaction words, plus the same terms weighted by the substep's place in the tick.",
     inputs: {
         grid: Array(MatterGridNode) required,
+        static_solid: Array(Vec4Vertex) required,
         bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
-        collider_nodes: Array(Vec4Vertex) optional,
-        collider_triangles: Array(Vec4Vertex) optional,
         reaction: Array(i32) optional,
         forces: Array(f32) optional,
         impulses: Array(f32) optional,
         tiles: Array(u32) required,
+        held: Array(u32) required,
+        held_args: Array(u32) required,
         cell_size: ScalarF32 optional,
         step_dt: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
@@ -150,9 +151,10 @@ manifold_node_engine::primitive! {
     fusion_kind: Boundary,
     boundary_reason: Blocked,
     wgsl_body: include_str!("shaders/matter_body_reaction_body.wgsl"),
-    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [READ_SIDE, LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH, MATTER_TREE, MATTER_BOUNDS, FORCE_LATTICE],
+    input_access: [Coincident, Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [READ_SIDE, LIQUID_POSE, LIQUID_COLLIDER, MATTER_BOUNDS, FORCE_LATTICE],
     atomic_outputs: ["reaction_out"],
+    buffer_index: "mbr_node_of",
 }
 
 impl Primitive for MatterBodyReaction {
@@ -217,12 +219,13 @@ impl Primitive for MatterBodyReaction {
         let dynamic_count = int(ctx, "dynamic_count", 0.0);
         let grid = ctx.inputs.array("grid");
         let tiles = ctx.inputs.array("tiles");
+        let held = ctx.inputs.array("held");
+        let held_args = ctx.inputs.array("held_args");
+        let static_solid = ctx.inputs.array("static_solid");
         let colliders = (
             ctx.inputs.array("bodies"),
             ctx.inputs.array("shapes"),
             ctx.inputs.array("atlas"),
-            ctx.inputs.array("collider_nodes"),
-            ctx.inputs.array("collider_triangles"),
         );
         let reaction = ctx.outputs.array("reaction_out");
         let field = ForceLatticeBinding::read(
@@ -237,15 +240,20 @@ impl Primitive for MatterBodyReaction {
         let (
             Some(grid),
             Some(tiles),
-            (
-                Some(bodies),
-                Some(shapes),
-                Some(atlas),
-                Some(collider_nodes),
-                Some(collider_triangles),
-            ),
+            Some(held),
+            Some(held_args),
+            Some(static_solid),
+            (Some(bodies), Some(shapes), Some(atlas)),
             Some(reaction),
-        ) = (grid, tiles, colliders, reaction)
+        ) = (
+            grid,
+            tiles,
+            held,
+            held_args,
+            static_solid,
+            colliders,
+            reaction,
+        )
         else {
             return;
         };
@@ -330,7 +338,7 @@ impl Primitive for MatterBodyReaction {
             dispatch_count: nodes,
             _pad: [0; 3],
         };
-        gpu.native_enc.dispatch_compute(
+        gpu.native_enc.dispatch_compute_indirect(
             pipeline,
             &[
                 GpuBinding::Bytes {
@@ -344,56 +352,62 @@ impl Primitive for MatterBodyReaction {
                 },
                 GpuBinding::Buffer {
                     binding: 2,
-                    buffer: bodies,
+                    buffer: static_solid,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 3,
-                    buffer: shapes,
+                    buffer: bodies,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 4,
-                    buffer: atlas,
+                    buffer: shapes,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 5,
-                    buffer: collider_nodes,
+                    buffer: atlas,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 6,
-                    buffer: collider_triangles,
+                    buffer: reaction,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 7,
-                    buffer: reaction,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 8,
                     buffer: field.forces.unwrap_or(grid),
                     offset: 0,
                 },
                 GpuBinding::Buffer {
-                    binding: 9,
+                    binding: 8,
                     buffer: field.impulses.unwrap_or(grid),
                     offset: 0,
                 },
                 GpuBinding::Buffer {
-                    binding: 10,
+                    binding: 9,
                     buffer: tiles,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
+                    binding: 10,
+                    buffer: held,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
                     binding: 11,
+                    buffer: held_args,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 12,
                     buffer: reaction,
                     offset: 0,
                 },
             ],
-            [nodes.div_ceil(256), 1, 1],
+            held_args,
+            super::matter_to_grid::held_args_offset(),
             "node.matter_body_reaction",
         );
     }

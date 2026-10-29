@@ -3,8 +3,8 @@ fn ts_pool_tiles() -> u32 { return matter_pool_tiles; }
 fn ts_table_entries() -> u32 { let n = 4u * max(matter_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
 fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 
-// node.matter_grid_update — fusable BUFFER body. One thread per pooled world-tile
-// node (the canonical node, past the last slot, resolves to the zero element); node
+// node.matter_grid_update — BUFFER body. One thread per node of a held world
+// tile (`mgu_node_of`); node
 // p sits at world p·cell_size, found through the world-tile table (`buf_tiles`):
 //   v_before = momentum / mass       (node.matter_body_reaction replays from it)
 //   v = v_before + dt · (g + forces(x))              (forces from tick_index's lattice)
@@ -24,19 +24,16 @@ fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 // (LiquidBody), `shapes` (LiquidShape) and `atlas` (distances two halves
 // per word) are gathered; the sampling is liquid_collider.wgsl's.
 
+// The pooled node thread `t` resolves: the dispatch covers only the table's
+// held tiles (`held`, from node.matter_to_grid), 512 threads a tile, so
+// empty space costs nothing.
+fn mgu_node_of(t: u32) -> u32 {
+    return buf_held[t >> 9u] * 512u + (t & 511u);
+}
+
 fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
-}
-
-fn cb_node(i: u32) -> vec4<f32> {
-    let n = buf_collider_nodes[i];
-    return vec4<f32>(n.x, n.y, n.z, n.w);
-}
-
-fn cb_triangle(i: u32) -> vec4<f32> {
-    let t = buf_collider_triangles[i];
-    return vec4<f32>(t.x, t.y, t.z, t.w);
 }
 
 // The tick's force at x: push and drag rate, then drag rate × wind.
@@ -72,6 +69,7 @@ fn body(
     idx: u32,
     count: u32,
     e_grid: Element,
+    e_static_solid: Element2,
     cell_size: f32,
     step_dt: f32,
     gravity_x: f32,
@@ -160,6 +158,16 @@ fn body(
         vec3<f32>(wall_velocity_hi_x, wall_velocity_hi_y, wall_velocity_hi_z),
         wall_friction,
     );
+    let solid = vec4<f32>(e_static_solid.x, e_static_solid.y, e_static_solid.z, e_static_solid.w);
+    let solid_row = matter_static_row(solid);
+    if solid_row >= 0 && solid_row < body_count {
+        let sb = buf_bodies[u32(solid_row)];
+        v = matter_static_project(
+            v, solid,
+            liquid_body_velocity(sb.linear_velocity.xyz, sb.angular_velocity.xyz, sb.position_inv_mass.xyz, x),
+            sb.linear_velocity.w,
+        );
+    }
 
     for (var b = 0; b < body_count; b = b + 1) {
         let bd = buf_bodies[u32(b)];
@@ -168,19 +176,15 @@ fn body(
             continue;
         }
         let sh = buf_shapes[u32(shape_index)];
+        // A static mesh is read from the cache above.
         if sh.tree == 1u {
-            v = mt_collider_project(
-                v, x, bd.position_inv_mass.xyz, bd.rotation, bd.linear_velocity.xyz,
-                bd.angular_velocity.xyz, bd.linear_velocity.w,
-                sh.tree_node, sh.tree_triangle, cell_size,
-            );
-        } else {
-            v = liquid_collider_project(
-                v, x, bd.position_inv_mass.xyz, bd.rotation, bd.linear_velocity.xyz,
-                bd.angular_velocity.xyz, bd.linear_velocity.w, sh.origin_spacing,
-                vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z), sh.atlas_offset, sh.scale_min.xyz,
-            );
+            continue;
         }
+        v = liquid_collider_project(
+            v, x, bd.position_inv_mass.xyz, bd.rotation, bd.linear_velocity.xyz,
+            bd.angular_velocity.xyz, bd.linear_velocity.w, sh.origin_spacing,
+            vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z), sh.atlas_offset, sh.scale_min.xyz,
+        );
     }
 
     let limit = 0.9 * vel_unit;

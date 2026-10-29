@@ -1,7 +1,8 @@
 //! What the matter atoms share at run time: the Bounds walls, the static
 //! collider tree and the material maths.
 
-/// The Bounds box's Wall faces as placed, applied to nodes on or past each plane.
+/// The Bounds box's Wall faces as placed, applied to nodes on or past each
+/// plane, and the static meshes' projection from their cache.
 pub(super) const MATTER_BOUNDS: &str = include_str!("shaders/matter_bounds.wgsl");
 
 pub(super) use manifold_water_liquid::bodies::COLLIDER_BVH;

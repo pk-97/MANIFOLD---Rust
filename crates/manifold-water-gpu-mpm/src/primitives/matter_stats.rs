@@ -16,11 +16,11 @@ use crate::matter::{MatterGridNode, MatterPoint, STATS_WORDS, grid_accum_bytes, 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::world_tiles::pool_len;
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_words};
 
 static SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
-        "{}\n{}",
+        "{READ_SIDE}\n{}\n{}",
         include_str!("shaders/matter_material.wgsl"),
         include_str!("shaders/matter_stats.wgsl")
     )
@@ -87,6 +87,7 @@ manifold_node_engine::primitive! {
         points: Array(MatterPoint) required,
         grid: Array(MatterGridNode) required,
         accum: Array(i32) required,
+        tiles: Array(u32) required,
         stats: Array(u32) required,
         field_min_x: ScalarF32 optional, field_min_y: ScalarF32 optional, field_min_z: ScalarF32 optional,
         pool_tiles: ScalarF32 optional,
@@ -180,13 +181,15 @@ impl Primitive for MatterStats {
         let points = ctx.inputs.array("points");
         let grid = ctx.inputs.array("grid");
         let accum = ctx.inputs.array("accum");
+        let tiles = ctx.inputs.array("tiles");
         let stats = ctx.inputs.array("stats");
         // In place on the stats input; a gated substep leaves it untouched.
         ctx.mark_gpu_accessed();
         if !run_now {
             return;
         }
-        let (Some(points), Some(grid), Some(accum), Some(stats)) = (points, grid, accum, stats)
+        let (Some(points), Some(grid), Some(accum), Some(tiles), Some(stats)) =
+            (points, grid, accum, tiles, stats)
         else {
             return;
         };
@@ -194,9 +197,12 @@ impl Primitive for MatterStats {
             ctx.error("Matter stats: the stats array holds fewer than 17 words");
             return;
         }
-        if grid.size < grid_bytes(pool_tiles) || accum.size < grid_accum_bytes(pool_tiles) {
+        if grid.size < grid_bytes(pool_tiles)
+            || accum.size < grid_accum_bytes(pool_tiles)
+            || tiles.size < table_words(pool_tiles) * 4
+        {
             ctx.error(format!(
-                "Matter stats: the grid or accumulator is shorter than a pool of {pool_tiles} tiles"
+                "Matter stats: the grid, accumulator or tile table is shorter than a pool of {pool_tiles} tiles"
             ));
             return;
         }
@@ -266,6 +272,11 @@ impl Primitive for MatterStats {
             GpuBinding::Buffer {
                 binding: 5,
                 buffer: stats,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 6,
+                buffer: tiles,
                 offset: 0,
             },
         ];

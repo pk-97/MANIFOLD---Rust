@@ -31,7 +31,11 @@ fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 // and the inward normal part of its velocity relative to the body is
 // removed. Tangential motion is untouched and no relative speed is added.
 // `bodies`, `shapes` and `atlas` are gathered; sampling is
-// liquid_collider.wgsl's.
+// liquid_collider.wgsl's. Static meshes (tree shapes) are read from
+// node.matter_static_solid's cache (`static_solid`, gathered): φ trilinear
+// over the 8 nodes round the moved point, its normal from the same corners
+// and its body from the deepest; they are prescribed, so they take no
+// reaction.
 //
 // Reaction (D30): the momentum a point loses there, m·v_n·n with
 // m = V0·density, goes to a dynamic body (inv_mass > 0) as the same four
@@ -46,16 +50,6 @@ fn g2m_finite3(v: vec3<f32>) -> bool {
 fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
-}
-
-fn cb_node(i: u32) -> vec4<f32> {
-    let n = buf_collider_nodes[i];
-    return vec4<f32>(n.x, n.y, n.z, n.w);
-}
-
-fn cb_triangle(i: u32) -> vec4<f32> {
-    let t = buf_collider_triangles[i];
-    return vec4<f32>(t.x, t.y, t.z, t.w);
 }
 
 fn g2m_hash(v: u32) -> u32 {
@@ -175,6 +169,44 @@ fn body(
     // Salted apart from node.matter_body_reaction's node keys, which share
     // the words.
     let key = g2m_hash(idx ^ 0x9e3779b9u ^ g2m_hash(u32(tick_index) * 4096u + u32(substep_in_tick)));
+    let sq = p.position * inv_dx;
+    let s0 = floor(sq);
+    let sf = sq - s0;
+    var s_phi = 0.0;
+    var s_grad = vec3<f32>(0.0);
+    var s_row = -1;
+    var s_deep = 0.0;
+    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
+        let o = vec3<u32>(corner & 1u, (corner >> 1u) & 1u, corner >> 2u);
+        let at = ts_cell_at(vec3<i32>(s0) + vec3<i32>(o));
+        // A corner off the stored tiles reads as clear of every mesh.
+        var e = vec4<f32>(0.0, 0.0, 0.0, 4.0 * cell_size);
+        if at < ts_canon() {
+            let c = buf_static_solid[at];
+            e = vec4<f32>(c.x, c.y, c.z, c.w);
+        }
+        let side = vec3<f32>(o);
+        let wv = mix(vec3<f32>(1.0) - sf, sf, side);
+        let dw = 2.0 * side - vec3<f32>(1.0);
+        s_phi = s_phi + wv.x * wv.y * wv.z * e.w;
+        s_grad = s_grad + e.w * vec3<f32>(dw.x * wv.y * wv.z, wv.x * dw.y * wv.z, wv.x * wv.y * dw.z);
+        let row = matter_static_row(e);
+        if row >= 0 && e.w < s_deep {
+            s_deep = e.w;
+            s_row = row;
+        }
+    }
+    let s_len_sq = dot(s_grad, s_grad) * inv_dx * inv_dx;
+    if s_phi < 0.0 && s_row >= 0 && s_row < body_count && s_len_sq > 0.0 {
+        let normal = s_grad * inv_dx * inverseSqrt(s_len_sq);
+        p.position = p.position + normal * min(-s_phi * inverseSqrt(s_len_sq), -s_phi);
+        let sb = buf_bodies[u32(s_row)];
+        let v_rel = p.velocity - liquid_body_velocity(sb.linear_velocity.xyz, sb.angular_velocity.xyz, sb.position_inv_mass.xyz, p.position);
+        let v_n = dot(v_rel, normal);
+        if v_n < 0.0 {
+            p.velocity = p.velocity - v_n * normal;
+        }
+    }
     for (var b = 0; b < body_count; b = b + 1) {
         let bd = buf_bodies[u32(b)];
         let shape_index = i32(bd.accel_shape.w);
@@ -184,30 +216,21 @@ fn body(
         let sh = buf_shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let centre = bd.position_inv_mass.xyz;
-        var phi = 0.0;
-        var grad = vec3<f32>(0.0);
-        var max_scale = 1.0;
+        // A static mesh was read from the cache above.
         if sh.tree == 1u {
-            // A static collider's exact mesh, at scale 1.
-            let local = mt_local(p.position, centre, bd.rotation);
-            phi = mt_phi(sh.tree_node, sh.tree_triangle, local, cell_size);
-            if phi >= 0.0 {
-                continue;
-            }
-            grad = mt_gradient(sh.tree_node, sh.tree_triangle, local, cell_size, bd.rotation);
-        } else {
-            let g = liquid_lattice_coord(p.position, centre, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
-            if !liquid_lattice_holds(g, dims) {
-                continue;
-            }
-            phi = liquid_lattice_distance(sh.atlas_offset, dims, g);
-            if phi >= 0.0 {
-                continue;
-            }
-            grad = liquid_lattice_gradient(sh.atlas_offset, dims, g, sh.origin_spacing.w, bd.rotation, sh.scale_min.xyz);
-            // To φ = 0 along the normal, no farther than the surface can be.
-            max_scale = max(sh.scale_min.x, max(sh.scale_min.y, sh.scale_min.z));
+            continue;
         }
+        let g = liquid_lattice_coord(p.position, centre, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
+        if !liquid_lattice_holds(g, dims) {
+            continue;
+        }
+        let phi = liquid_lattice_distance(sh.atlas_offset, dims, g);
+        if phi >= 0.0 {
+            continue;
+        }
+        let grad = liquid_lattice_gradient(sh.atlas_offset, dims, g, sh.origin_spacing.w, bd.rotation, sh.scale_min.xyz);
+        // To φ = 0 along the normal, no farther than the surface can be.
+        let max_scale = max(sh.scale_min.x, max(sh.scale_min.y, sh.scale_min.z));
         let length_sq = dot(grad, grad);
         if !(length_sq > 0.0) {
             continue;

@@ -1009,15 +1009,17 @@ pub(crate) fn whitewater_off_display_tiles(def: &mut EffectGraphDef) -> bool {
 }
 
 /// Wire the static colliders' trees beside every saved collider wire: each
-/// wire carrying a domain's `atlas` gains the domain's `collider_nodes` and
-/// `collider_triangles` into the same node, so a Fixed Collider's exact mesh
-/// reaches every reader. A port already wired is kept. Idempotent.
+/// wire carrying a GPU FLIP domain's `atlas` gains the domain's
+/// `collider_nodes` and `collider_triangles` into the same node, so a Fixed
+/// Collider's exact mesh reaches every reader. Matter's solver wires its own
+/// trees (its grid passes read them through node.matter_static_solid). A
+/// port already wired is kept. Idempotent.
 pub(crate) fn wire_collider_trees(def: &mut EffectGraphDef) -> bool {
     use manifold_core::effect_graph_def::EffectGraphWire;
     let domains: Vec<u32> = def
         .nodes
         .iter()
-        .filter(|n| n.type_id == GPU_FLIP_DOMAIN_TYPE_ID || n.type_id == MATTER_DOMAIN_TYPE_ID)
+        .filter(|n| n.type_id == GPU_FLIP_DOMAIN_TYPE_ID)
         .map(|n| n.id)
         .collect();
     let mut added: Vec<EffectGraphWire> = Vec::new();

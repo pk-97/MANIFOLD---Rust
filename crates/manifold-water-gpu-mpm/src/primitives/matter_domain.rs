@@ -351,6 +351,7 @@ manifold_node_engine::primitive! {
         momentum_unit: ScalarF32,
         body_count: ScalarF32, body_rows: ScalarF32, first_tick: ScalarF32,
         dynamic_count: ScalarF32,
+        static_key: ScalarF32,
         field_nodes_x: ScalarF32, field_nodes_y: ScalarF32, field_nodes_z: ScalarF32,
         field_spacing: ScalarF32,
         force_lattices: ScalarF32,
@@ -419,6 +420,10 @@ manifold_node_engine::primitive! {
         body_buffers: LiquidBodyBuffers = LiquidBodyBuffers::default(),
         body_rows: f32 = 0.0,
         rows_fresh: bool = false,
+        // The static meshes' rows, shapes and trees as last published, and
+        // the count of their changes node.matter_static_solid rebuilds on.
+        static_hash: u64 = 0,
+        static_key: f32 = 0.0,
         coupled: Coupling = Coupling::default(),
         reaction: Option<GpuBuffer> = None,
         impulses: LiquidImpulses = LiquidImpulses::default(),
@@ -592,7 +597,7 @@ const COHESION_KPA_RANGE: (f32, f32) = (0.0, 20.0);
 const DENSITY_RANGE: (f32, f32) = (100.0, 3000.0);
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 67] = [
+const OUTPUTS: [&str; 68] = [
     "fill_min_x",
     "fill_min_y",
     "fill_min_z",
@@ -660,6 +665,7 @@ const OUTPUTS: [&str; 67] = [
     "wall_velocity_hi_y",
     "wall_velocity_hi_z",
     "fill_region",
+    "static_key",
 ];
 const TICKS: usize = 22;
 const EPOCH: usize = 24;
@@ -1121,6 +1127,27 @@ impl TickSampled for MatterDomain {
 
 inventory::submit! { TickSampledRegistration::new::<MatterDomain>() }
 
+/// The static meshes (tree shapes) as this frame's last tick places them,
+/// with every shape and the trees' sizes: a moved, added or rebuilt static
+/// mesh changes it.
+fn static_hash(bodies: &LiquidBodies) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    let shapes = bodies.shapes();
+    bytemuck::cast_slice::<LiquidShape, u8>(shapes).hash(&mut hasher);
+    bodies.collider_nodes().len().hash(&mut hasher);
+    bodies.collider_triangles().len().hash(&mut hasher);
+    let rows = bodies.last_rows();
+    let last_tick = &rows[rows.len() - bodies.count().min(rows.len())..];
+    for row in last_tick {
+        let shape = row.accel_shape[3];
+        if shape >= 0.0 && shapes.get(shape as usize).is_some_and(|s| s.tree == 1) {
+            bytemuck::bytes_of(row).hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
 impl MatterDomain {
     /// Keep the reaction and the provided body, shape and atlas buffers
     /// current.
@@ -1345,6 +1372,11 @@ impl MatterDomain {
                 .rows(first_tick, frame.ticks, coupled_rows)?
                 .len() as f32;
             self.body_rows = rows;
+            let hash = static_hash(&self.bodies);
+            if hash != self.static_hash {
+                self.static_hash = hash;
+                self.static_key = (self.static_key + 1.0) % 16_777_216.0;
+            }
             rows
         } else {
             self.body_rows
@@ -1520,6 +1552,7 @@ impl MatterDomain {
             ("body_rows", rows),
             ("first_tick", first_tick as f32),
             ("dynamic_count", dynamic_count as f32),
+            ("static_key", self.static_key),
             // The shaped fill's region row in a tick, -1 for a box or none:
             // the fill seeds only the box cells inside its shape.
             (

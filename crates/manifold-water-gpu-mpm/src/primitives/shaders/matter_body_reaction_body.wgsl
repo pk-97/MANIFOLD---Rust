@@ -4,8 +4,8 @@ fn ts_table_entries() -> u32 { let n = 4u * max(matter_pool_tiles, 1u); return 1
 fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 
 // node.matter_body_reaction — BUFFER body, atomic scatter
-// One thread per pooled world-tile node (node p at world p·cell_size, found
-// through `buf_tiles`; the canonical node does nothing),
+// One thread per node of a held world tile (`mbr_node_of`; node p at world
+// p·cell_size, found through `buf_tiles`),
 // after node.matter_grid_update. It repeats grid_update's projection from the
 // node's velocity after forces (v_before + dt·(g + forces(x)), plus impulses(x)
 // on the impulse tick's first substep, the Bounds box's Wall faces, then each body in order, the
@@ -25,16 +25,6 @@ fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
-}
-
-fn cb_node(i: u32) -> vec4<f32> {
-    let n = buf_collider_nodes[i];
-    return vec4<f32>(n.x, n.y, n.z, n.w);
-}
-
-fn cb_triangle(i: u32) -> vec4<f32> {
-    let t = buf_collider_triangles[i];
-    return vec4<f32>(t.x, t.y, t.z, t.w);
 }
 
 fn reaction_hash(v: u32) -> u32 {
@@ -96,10 +86,17 @@ fn body_reaction_impulses(x: vec3<f32>, origin: vec3<f32>, spacing: f32, dims: v
     return sum;
 }
 
+// The pooled node thread `t` resolves: only the table's held tiles
+// (`held`, from node.matter_to_grid), 512 threads a tile.
+fn mbr_node_of(t: u32) -> u32 {
+    return buf_held[t >> 9u] * 512u + (t & 511u);
+}
+
 fn body(
     idx: u32,
     count: u32,
     e_grid: Element,
+    e_static_solid: Element2,
     cell_size: f32,
     step_dt: f32,
     gravity_x: f32,
@@ -179,6 +176,16 @@ fn body(
         vec3<f32>(wall_velocity_hi_x, wall_velocity_hi_y, wall_velocity_hi_z),
         wall_friction,
     );
+    let solid = vec4<f32>(e_static_solid.x, e_static_solid.y, e_static_solid.z, e_static_solid.w);
+    let solid_row = matter_static_row(solid);
+    if solid_row >= 0 && solid_row < body_count {
+        let sb = buf_bodies[u32(solid_row)];
+        v = matter_static_project(
+            v, solid,
+            liquid_body_velocity(sb.linear_velocity.xyz, sb.angular_velocity.xyz, sb.position_inv_mass.xyz, x),
+            sb.linear_velocity.w,
+        );
+    }
 
     let counts = 16777216.0 / momentum_unit;
     let weight = f32(substep_in_tick) / f32(max(substeps_per_tick, 1));
@@ -190,20 +197,15 @@ fn body(
             continue;
         }
         let sh = buf_shapes[u32(shape_index)];
-        var projected = v;
+        // A static mesh was projected from the cache above.
         if sh.tree == 1u {
-            projected = mt_collider_project(
-                v, x, bd.position_inv_mass.xyz, bd.rotation, bd.linear_velocity.xyz,
-                bd.angular_velocity.xyz, bd.linear_velocity.w,
-                sh.tree_node, sh.tree_triangle, cell_size,
-            );
-        } else {
-            projected = liquid_collider_project(
-                v, x, bd.position_inv_mass.xyz, bd.rotation, bd.linear_velocity.xyz,
-                bd.angular_velocity.xyz, bd.linear_velocity.w, sh.origin_spacing,
-                vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z), sh.atlas_offset, sh.scale_min.xyz,
-            );
+            continue;
         }
+        let projected = liquid_collider_project(
+            v, x, bd.position_inv_mass.xyz, bd.rotation, bd.linear_velocity.xyz,
+            bd.angular_velocity.xyz, bd.linear_velocity.w, sh.origin_spacing,
+            vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z), sh.atlas_offset, sh.scale_min.xyz,
+        );
         let inv_mass = bd.position_inv_mass.w;
         if inv_mass > 0.0 && any(projected != v) {
             let impulse = m * (v - projected);

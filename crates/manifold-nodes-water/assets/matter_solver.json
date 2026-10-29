@@ -50,12 +50,6 @@
       "nodeId": "state"
     },
     {
-      "id": 4,
-      "typeId": "node.zero_array",
-      "handle": "Clear Grid",
-      "nodeId": "matter_clear_grid"
-    },
-    {
       "id": 5,
       "typeId": "node.matter_to_grid",
       "handle": "Points To Grid",
@@ -96,6 +90,12 @@
       "typeId": "node.matter_body_reaction",
       "handle": "Body Reaction",
       "nodeId": "matter_body_reaction"
+    },
+    {
+      "id": 18,
+      "typeId": "node.matter_static_solid",
+      "handle": "Static Solid",
+      "nodeId": "matter_static_solid"
     }
   ],
   "wires": [
@@ -372,12 +372,6 @@
     {
       "fromNode": 3,
       "fromPort": "grid_accum",
-      "toNode": 4,
-      "toPort": "in"
-    },
-    {
-      "fromNode": 4,
-      "fromPort": "out",
       "toNode": 5,
       "toPort": "accum"
     },
@@ -629,18 +623,6 @@
     },
     {
       "fromNode": 1,
-      "fromPort": "collider_nodes",
-      "toNode": 6,
-      "toPort": "collider_nodes"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "collider_triangles",
-      "toNode": 6,
-      "toPort": "collider_triangles"
-    },
-    {
-      "fromNode": 1,
       "fromPort": "body_count",
       "toNode": 6,
       "toPort": "body_count"
@@ -662,18 +644,6 @@
       "fromPort": "atlas",
       "toNode": 7,
       "toPort": "atlas"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "collider_nodes",
-      "toNode": 7,
-      "toPort": "collider_nodes"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "collider_triangles",
-      "toNode": 7,
-      "toPort": "collider_triangles"
     },
     {
       "fromNode": 1,
@@ -806,18 +776,6 @@
       "fromPort": "atlas",
       "toNode": 15,
       "toPort": "atlas"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "collider_nodes",
-      "toNode": 15,
-      "toPort": "collider_nodes"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "collider_triangles",
-      "toNode": 15,
-      "toPort": "collider_triangles"
     },
     {
       "fromNode": 1,
@@ -1078,6 +1036,36 @@
       "toPort": "tiles"
     },
     {
+      "fromNode": 5,
+      "fromPort": "held",
+      "toNode": 6,
+      "toPort": "held"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "held_args",
+      "toNode": 6,
+      "toPort": "held_args"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "held",
+      "toNode": 15,
+      "toPort": "held"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "held_args",
+      "toNode": 15,
+      "toPort": "held_args"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "tiles",
+      "toNode": 8,
+      "toPort": "tiles"
+    },
+    {
       "fromNode": 1,
       "fromPort": "closed_faces",
       "toNode": 6,
@@ -1322,6 +1310,102 @@
       "fromPort": "wall_friction",
       "toNode": 15,
       "toPort": "wall_friction"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "tiles",
+      "toNode": 18,
+      "toPort": "tiles"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "held",
+      "toNode": 18,
+      "toPort": "held"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "fresh",
+      "toNode": 18,
+      "toPort": "fresh"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "held_args",
+      "toNode": 18,
+      "toPort": "held_args"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "built",
+      "toNode": 18,
+      "toPort": "built"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "bodies_out",
+      "toNode": 18,
+      "toPort": "bodies"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "shapes",
+      "toNode": 18,
+      "toPort": "shapes"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "collider_nodes",
+      "toNode": 18,
+      "toPort": "collider_nodes"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "collider_triangles",
+      "toNode": 18,
+      "toPort": "collider_triangles"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "body_count",
+      "toNode": 18,
+      "toPort": "body_count"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "static_key",
+      "toNode": 18,
+      "toPort": "static_key"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "cell_size",
+      "toNode": 18,
+      "toPort": "cell_size"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "pool_tiles",
+      "toNode": 18,
+      "toPort": "pool_tiles"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "solid",
+      "toNode": 6,
+      "toPort": "static_solid"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "solid",
+      "toNode": 15,
+      "toPort": "static_solid"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "solid",
+      "toNode": 7,
+      "toPort": "static_solid"
     }
   ]
 }

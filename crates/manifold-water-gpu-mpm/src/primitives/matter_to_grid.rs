@@ -3,7 +3,10 @@
 //! node owns the world tile table Matter's grid lives on and the sort of the
 //! points into the table's 4³ node blocks, both rebuilt every
 //! `REBUILD_SUBSTEPS` substeps; one workgroup per block accumulates into a
-//! workgroup tile and flushes into the pooled accumulator.
+//! workgroup tile and flushes into the pooled accumulator. It clears the
+//! accumulator over the held tiles first and hands the held-tile list and its
+//! dispatch triple to the grid passes, so they pay only for tiles that hold
+//! matter.
 
 use manifold_gpu::BufferUse;
 use std::borrow::Cow;
@@ -24,7 +27,9 @@ use manifold_water_liquid::primitives::sort_particles_into_cells::{
     ParticleSorter, SortCount, SortJob, SortLabels, block_keys, record_read,
 };
 use manifold_water_liquid::tile_pool::pool_tiles_wire;
-use manifold_water_liquid::world_tiles::{Allocation, MATTER_POINTS, PointCount, WorldTiles};
+use manifold_water_liquid::world_tiles::{
+    Allocation, MATTER_POINTS, PointCount, WorldTiles, allocated_args_offset,
+};
 
 // The kernel after the table's read side it indexes its nodes through.
 static SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
@@ -82,6 +87,14 @@ manifold_node_engine::primitive! {
         accum_out: Array(i32),
         // The world tile table of the pooled grid (`table_words(pool_tiles)` words).
         tiles: Array(u32),
+        // The table's held slots, and the args whose triple at
+        // `held_args_offset()` dispatches 512 threads per held slot.
+        held: Array(u32),
+        held_args: Array(u32),
+        // The slots this substep's table build handed out (their triple in
+        // `held_args` at `fresh_args_offset`), and 1 when it built, else 0.
+        fresh: Array(u32),
+        built: ScalarF32,
     },
     params: [
         ParamDef { name: Cow::Borrowed("cell_size"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(0.0625), range: Some((1.0e-4, 100.0)), enum_values: &[] },
@@ -94,7 +107,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("momentum_unit"), label: "Momentum Unit (m/s)", ty: ParamType::Float, default: ParamValue::Float(128.0), range: Some((1.0e-3, 1.0e9)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Region body of the Live Matter group, after node.zero_array clears the accumulator and before node.matter_grid_update resolves it. accum/accum_out alias one Array(i32) of 4 words per pooled node (momentum xyz, mass), provided by node.matter_state for the same pool_tiles. Node p sits at p·cell_size. The tiles output is the world tile table every pooled matter atom reads; it and the point sort are rebuilt on substeps that are a multiple of the rebuild interval. cell_size, pool_tiles and momentum_unit come from node.matter_domain (node.matter_grid_update must read the same momentum_unit); step_dt, tick_index and substep_in_tick from the substep boundary. Points with id 0 are skipped.",
+    composition_notes: "Region body of the Live Matter group, before node.matter_static_solid and node.matter_grid_update. It clears the accumulator over the held tiles itself, then scatters into it. accum/accum_out alias one Array(i32) of 4 words per pooled node (momentum xyz, mass), provided by node.matter_state for the same pool_tiles. Node p sits at p·cell_size. The tiles output is the world tile table every pooled matter atom reads; it and the point sort are rebuilt on substeps that are a multiple of the rebuild interval. cell_size, pool_tiles and momentum_unit come from node.matter_domain (node.matter_grid_update must read the same momentum_unit); step_dt, tick_index and substep_in_tick from the substep boundary. Points with id 0 are skipped. held/held_args are the held slots and their dispatch triple for the grid passes; fresh and built tell node.matter_static_solid which slots this substep's build handed out.",
     examples: ["SandColumn"],
     picker: { label: "Matter to Grid", category: Atom },
     summary: "Spreads each liquid particle's weight and motion onto the simulation grid around it.",
@@ -104,6 +117,7 @@ manifold_node_engine::primitive! {
     boundary_reason: BarrieredReduction,
     extra_fields: {
         kernel: Option<GpuComputePipeline> = None,
+        clear: Option<GpuComputePipeline> = None,
         tiles: Option<WorldTiles> = None,
         sorter: ParticleSorter = ParticleSorter::default(),
         order: Option<GpuBuffer> = None,
@@ -120,6 +134,13 @@ impl Primitive for MatterToGrid {
                 "node.matter_to_grid",
             ));
         }
+        if self.clear.is_none() {
+            self.clear = Some(device.create_compute_pipeline(
+                SHADER.as_str(),
+                "clear_main",
+                "node.matter_to_grid.clear",
+            ));
+        }
         self.sorter.prepare_pooled_blocks(device);
         if self.gate.is_none() {
             self.gate = Some(open_gate(device));
@@ -127,12 +148,16 @@ impl Primitive for MatterToGrid {
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        port == "tiles"
+        matches!(port, "tiles" | "held" | "held_args" | "fresh")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
+        let tiles = self.tiles.as_ref()?;
         match port {
-            "tiles" => self.tiles.as_ref().map(WorldTiles::table),
+            "tiles" => Some(tiles.table()),
+            "held" => Some(&tiles.lists().by_rank),
+            "held_args" => Some(tiles.args()),
+            "fresh" => Some(&tiles.lists().fresh),
             _ => None,
         }
     }
@@ -149,7 +174,7 @@ impl Primitive for MatterToGrid {
                 .find(|(p, _)| *p == "accum")
                 .map(|&(_, n)| n),
             // Provided storage, sized to the tile pool at run time.
-            "tiles" => Some(1),
+            "tiles" | "held" | "held_args" | "fresh" => Some(1),
             _ => None,
         }
     }
@@ -180,6 +205,17 @@ impl Primitive for MatterToGrid {
         // In place on the accumulator input; the GPU is touched on every path.
         let points = ctx.inputs.array("points");
         let accum = ctx.inputs.array("accum");
+        let fresh = self.tiles.as_ref().is_none_or(|t| t.pool_tiles() != pool);
+        let active = points.map_or(0, |p| active_elements::<MatterPoint>(p.size, requested));
+        // A table that has never been built (no ranges yet) builds on whatever
+        // substep the points first appear.
+        let build = active > 0
+            && step_dt > 0.0
+            && (fresh
+                || self.sorter.ranges().is_none()
+                || substep_in_tick.is_multiple_of(REBUILD_SUBSTEPS));
+        ctx.outputs
+            .set_scalar("built", ParamValue::Float(f32::from(u8::from(build))));
         let gpu = ctx.gpu_encoder();
         let kernel = self
             .kernel
@@ -200,7 +236,6 @@ impl Primitive for MatterToGrid {
             ));
             return;
         }
-        let fresh = self.tiles.as_ref().is_none_or(|t| t.pool_tiles() != pool);
         if fresh {
             self.tiles = None;
             match WorldTiles::new(gpu.device, pool, MATTER_REACH, MATTER_POINTS) {
@@ -216,8 +251,14 @@ impl Primitive for MatterToGrid {
                 }
             }
         }
-        let active = active_elements::<MatterPoint>(points.size, requested);
+        let clear = self
+            .clear
+            .as_ref()
+            .expect("clear kernel built by prepare_pipelines");
         if active == 0 || step_dt <= 0.0 {
+            // The grid passes still run over the last build's held tiles.
+            let tiles = self.tiles.as_ref().expect("tiles built above");
+            encode_clear(gpu.native_enc, clear, tiles, accum, pool);
             return;
         }
         if !momentum_unit_fits(momentum_unit, cell_size, step_dt) {
@@ -244,12 +285,7 @@ impl Primitive for MatterToGrid {
         let order = self.order.as_ref().expect("order allocated above");
         let gate = self.gate.as_ref().expect("gate built by prepare_pipelines");
         let inv_cell = 1.0 / cell_size;
-        // A table that has never been built (no ranges yet) builds on whatever
-        // substep the points first appear.
-        if fresh
-            || self.sorter.ranges().is_none()
-            || substep_in_tick.is_multiple_of(REBUILD_SUBSTEPS)
-        {
+        if build {
             tiles.encode_allocation(
                 gpu.native_enc,
                 &Allocation {
@@ -293,6 +329,7 @@ impl Primitive for MatterToGrid {
                 return;
             }
         }
+        encode_clear(gpu.native_enc, clear, tiles, accum, pool);
         let ranges = self
             .sorter
             .ranges()
@@ -339,14 +376,70 @@ impl Primitive for MatterToGrid {
                 buffer: tiles.table(),
                 offset: 0,
             },
+            GpuBinding::Buffer {
+                binding: 6,
+                buffer: &tiles.lists().by_rank,
+                offset: 0,
+            },
         ];
-        gpu.native_enc.dispatch_compute(
+        gpu.native_enc.dispatch_compute_indirect(
             kernel,
             &bindings,
-            [block_keys(pool) as u32, 1, 1],
+            tiles.args(),
+            held_args_offset(),
             "node.matter_to_grid",
         );
     }
+}
+
+/// The byte offset in `held_args` of the triple over every held slot, 512
+/// threads a slot: the grid passes dispatch from it.
+pub(crate) fn held_args_offset() -> u64 {
+    allocated_args_offset(MATTER_REACH.ring_max)
+}
+
+/// Zeroes the accumulator over the held tiles and the canonical node.
+fn encode_clear(
+    enc: &mut manifold_gpu::GpuEncoder,
+    clear: &GpuComputePipeline,
+    tiles: &WorldTiles,
+    accum: &GpuBuffer,
+    pool: u32,
+) {
+    let uniforms = P2gParams {
+        cell_size: 0.0,
+        active_count: 0,
+        step_dt: 0.0,
+        density: 0.0,
+        tick_index: 0,
+        substep_in_tick: 0,
+        momentum_unit: 0.0,
+        pool_tiles: pool,
+        table_entries: table_entries(pool),
+        _pad: [0; 3],
+    };
+    enc.dispatch_compute_indirect(
+        clear,
+        &[
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: accum,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 6,
+                buffer: &tiles.lists().by_rank,
+                offset: 0,
+            },
+        ],
+        tiles.args(),
+        held_args_offset(),
+        "node.matter_to_grid.clear",
+    );
 }
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
