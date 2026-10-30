@@ -1,15 +1,15 @@
-// node.matter_grains — a matter frame's loose sand drawn as grains, where
-// the surface would draw it as blobs: flying grains, thin streams and the
-// spray off an impact. Hand WGSL under exclusion 1 (atomics across passes):
+// node.matter_grains — a matter frame's outer layer and loose sand drawn as
+// grains: the sand's skin, flying grains, thin streams and the spray off an
+// impact. Hand WGSL under exclusion 1 (atomics across passes):
 //   count_main: each live point adds one to its occupancy cell, two point
 //     spacings on a side (eight points when packed), in an open-addressed
 //     table of (cell key, count) pairs the node clears first.
 //   emit_main: each point sums its own cell and the 26 round it. Fewer than
-//     LOOSE points there is loose sand and draws its grains; more is bulk,
-//     which the surface draws, and its grains are holes the draw skips. A
-//     grain fades in by size as its block thins from LOOSE to LOOSE_FULL, so
+//     OUTER points there is the outer layer or loose sand, which draws its
+//     grains; more is the deep bulk, whose grains are holes the draw skips. A
+//     grain fades in by size as its block thins from OUTER to OUTER_FULL, so
 //     no grain pops in or out from one frame to the next.
-// A loose point of radius r draws n = ceil(2 r² / g²) grains of Grain Size
+// A drawing point of radius r draws n = ceil(2 r² / g²) grains of Grain Size
 // g, about one and a half times its patch's area, at most K, which the host
 // sets from Grain Size and the rest radius (so any Cell Size reaches any
 // Grain Size) within its slot budget. Past K the grains grow to
@@ -22,7 +22,9 @@
 // turns it about z, moving z about x, falling about both, so still sand stays
 // still and moving sand tumbles at its rolling rate. A point past the live
 // count, with radius 0 or with no id draws holes.
-// bulk (write_bulk 1) is the particles with only the sparsest points shrunk
+// bulk (write_bulk 1) is the particles the surface builds from: a point
+// drawing grains shrinks to UNDER its radius, so the surface sits just under
+// its grains and shows only between them, and the sparsest points shrink
 // away, from BULK_KEPT points in the block down to none at BULK_GONE: spray
 // and lone grains leave the surface, while a sheet one point thick keeps it
 // under its grains, so thin flows do not tear into holes.
@@ -64,12 +66,14 @@ struct Copy {
 // A point's radius over its spacing (matter.rs RADIUS_SCALE): an occupancy
 // cell of two spacings is radius · 2 / RADIUS_SCALE on a side.
 const RADIUS_SCALE: f32 = 0.6203505;
-// Points in a point's 3³ block of cells below which it is loose and draws
-// grains at full size, and at which they have faded to nothing: packed sand
-// holds 216, a flat surface about half that, a one-point-thick sheet about
-// a sixth and a lone grain one.
-const LOOSE_FULL: f32 = 12.0;
-const LOOSE: f32 = 36.0;
+// Points in a point's 3³ block of cells below which it draws grains at full
+// size, and at which they have faded to nothing: packed sand holds 216, a
+// flat surface about half that, a one-point-thick sheet about a sixth and a
+// lone grain one, so the outer layer and everything looser draw grains.
+const OUTER_FULL: f32 = 150.0;
+const OUTER: f32 = 200.0;
+// The share of its radius a grain-drawing point gives the surface under it.
+const UNDER: f32 = 0.5;
 const BULK_GONE: f32 = 6.0;
 const BULK_KEPT: f32 = 18.0;
 // Probes before a lookup or insert gives up: a full table reads as empty
@@ -185,10 +189,11 @@ fn emit_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var n = 0; n < 27; n = n + 1) {
         block = block + mg_count(c + vec3<i32>(n % 3 - 1, (n / 3) % 3 - 1, n / 9 - 1));
     }
-    let fade = 1.0 - smoothstep(LOOSE_FULL, LOOSE, f32(block));
+    let fade = 1.0 - smoothstep(OUTER_FULL, OUTER, f32(block));
     if params.write_bulk == 1u {
         var kept = q;
-        kept.position_radius.w = radius * smoothstep(BULK_GONE, BULK_KEPT, f32(block));
+        let under = mix(1.0, UNDER, fade);
+        kept.position_radius.w = radius * under * smoothstep(BULK_GONE, BULK_KEPT, f32(block));
         bulk[p] = kept;
     }
     let drawn = select(0u, cover, fade > 0.0);
