@@ -1,11 +1,13 @@
 //! Per-patch culling of indexed meshes (`shaders/cull_patches.wgsl`). A patch
-//! is a run of [`PATCH_TRIANGLES`] consecutive triangles of the index buffer:
-//! imports order their triangles with [`patch_order`] and `node.grid_indices`
-//! writes Terrain in tiles, so each run is compact. Each patch's box and
-//! normal cone are worked out on the GPU once per mesh content. Each view
+//! is a run of [`PATCH_TRIANGLES`] consecutive triangles of the index buffer
+//! (imports order their triangles with [`patch_order`] and `node.grid_indices`
+//! writes Terrain in tiles, so each run is compact; each run's box and normal
+//! cone are worked out on the GPU once per mesh content), or, for a mesh
+//! with a cluster hierarchy (`mesh_clusters.rs`), a cluster of it. Each view
 //! (the camera, every shadow caster) then copies only the indices of the
-//! patches it can see into an index buffer of its own and draws that,
-//! indexed and indirect, so hidden geometry costs no vertex work.
+//! patches it can see, on its own detail cut, into an index buffer of its
+//! own and draws that, indexed and indirect, so hidden geometry costs no
+//! vertex work and far geometry draws coarser.
 
 use manifold_gpu::{BufferUse, GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 use manifold_node_engine::content_revision::ContentVersion;
@@ -14,8 +16,10 @@ use manifold_node_engine::content_revision::ContentVersion;
 /// `node.grid_indices` (tiles of 8 x 8 quads) hold the same number.
 pub(crate) const PATCH_TRIANGLES: u32 = 128;
 const PATCH_INDICES: u32 = PATCH_TRIANGLES * 3;
-/// One patch record: box min, box max, normal cone.
-const PATCH_BYTES: u64 = 48;
+/// One patch record, as `mesh_clusters.rs` lays a cluster's out.
+const PATCH_BYTES: u64 = 24 * 4;
+/// Byte offset of the cluster array's dispatch words (`mesh_clusters.rs`).
+const CLUSTER_DISPATCH_BYTES: u64 = 4 * 4;
 /// Fewest patches worth a cull: a smaller mesh draws whole.
 const MIN_PATCHES: u32 = 8;
 /// Workgroups along x before a dispatch wraps to the next row.
@@ -72,10 +76,13 @@ pub(crate) fn patch_order(positions: &[[f32; 3]], indices: &[u32]) -> Vec<u32> {
 struct PatchArgs {
     clip_model: [[f32; 4]; 4],
     eye: [f32; 4],
+    viewport: [f32; 2],
     index_count: u32,
     patch_count: u32,
     block: u32,
-    _pad: u32,
+    clusters: u32,
+    _pad0: u32,
+    _pad1: u32,
 }
 
 /// One view's cull of one mesh.
@@ -89,6 +96,8 @@ pub(super) struct PatchView<'a> {
     /// The arguments buffer and the view's block in it.
     pub args: &'a GpuBuffer,
     pub block: u64,
+    /// The view's size in pixels, which picks the detail cut.
+    pub viewport: [u32; 2],
 }
 
 /// One object slot's patches and the views' index buffers.
@@ -106,6 +115,7 @@ pub(super) struct PatchCull {
     bounds: Option<GpuComputePipeline>,
     args: Option<GpuComputePipeline>,
     cull: Option<GpuComputePipeline>,
+    clamp: Option<GpuComputePipeline>,
     slots: Vec<Slot>,
 }
 
@@ -137,6 +147,7 @@ impl PatchCull {
             self.bounds = Some(make("patch_bounds"));
             self.args = Some(make("patch_args"));
             self.cull = Some(make("cull_patches"));
+            self.clamp = Some(make("clamp_args"));
         }
     }
 
@@ -173,10 +184,13 @@ impl PatchCull {
         let uniforms = PatchArgs {
             clip_model: [[0.0; 4]; 4],
             eye: [0.0; 4],
+            viewport: [0.0; 2],
             index_count,
             patch_count: patches,
             block: 0,
-            _pad: 0,
+            clusters: 0,
+            _pad0: 0,
+            _pad1: 0,
         };
         encoder.dispatch_compute(
             self.bounds.as_ref().expect("built above"),
@@ -208,9 +222,10 @@ impl PatchCull {
 
     /// Cull slot `slot`'s patches for view `view` (0 the camera, 1 + c
     /// shadow caster c) into that view's index buffer, which is returned,
-    /// counting the kept indices into block `view.block`. Runs after
-    /// [`Self::bounds`] behind a buffer barrier; the draw that reads the
-    /// result needs one more.
+    /// counting the kept indices into block `view.block`. The patches are
+    /// `clusters` when the mesh has a hierarchy, else the runs of `indices`
+    /// whose records [`Self::bounds`] wrote behind a buffer barrier. The
+    /// draw that reads the result needs one more barrier.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn cull(
         &mut self,
@@ -220,11 +235,15 @@ impl PatchCull {
         index_slot: usize,
         indices: &GpuBuffer,
         index_count: u32,
+        clusters: Option<&GpuBuffer>,
         view: &PatchView<'_>,
     ) -> Option<GpuBuffer> {
         self.pipelines(device);
         let entry = self.slots.get_mut(slot)?;
-        let bounds = entry.bounds.as_ref()?;
+        let (records, source) = match clusters {
+            Some(clusters) => (clusters, clusters),
+            None => (entry.bounds.as_ref()?, indices),
+        };
         if entry.views.len() <= index_slot {
             entry.views.resize_with(index_slot + 1, || None);
         }
@@ -246,10 +265,13 @@ impl PatchCull {
         let uniforms = PatchArgs {
             clip_model,
             eye,
+            viewport: [view.viewport[0] as f32, view.viewport[1] as f32],
             index_count,
             patch_count: patches,
             block: view.block as u32,
-            _pad: 0,
+            clusters: u32::from(clusters.is_some()),
+            _pad0: 0,
+            _pad1: 0,
         };
         let uniform = GpuBinding::Bytes {
             binding: 0,
@@ -269,36 +291,65 @@ impl PatchCull {
             "node.render_scene patch args",
         );
         encoder.compute_memory_barrier_buffers();
+        let bindings = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: source,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: records,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: view.args,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 5,
+                buffer: &out,
+                offset: 0,
+            },
+        ];
+        let cull = self.cull.as_ref().expect("built above");
+        match clusters {
+            // The array's header holds the dispatch for its cluster count.
+            Some(clusters) => encoder.dispatch_compute_indirect(
+                cull,
+                &bindings,
+                clusters,
+                CLUSTER_DISPATCH_BYTES,
+                "node.render_scene cull clusters",
+            ),
+            None => encoder.dispatch_compute(
+                cull,
+                &bindings,
+                groups(patches),
+                "node.render_scene cull patches",
+            ),
+        }
+        encoder.compute_memory_barrier_buffers();
         encoder.dispatch_compute(
-            self.cull.as_ref().expect("built above"),
+            self.clamp.as_ref().expect("built above"),
             &[
                 GpuBinding::Bytes {
                     binding: 0,
                     data: bytemuck::bytes_of(&uniforms),
                 },
                 GpuBinding::Buffer {
-                    binding: 2,
-                    buffer: indices,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: bounds,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
                     binding: 4,
                     buffer: view.args,
                     offset: 0,
                 },
-                GpuBinding::Buffer {
-                    binding: 5,
-                    buffer: &out,
-                    offset: 0,
-                },
             ],
-            groups(patches),
-            "node.render_scene cull patches",
+            [1, 1, 1],
+            "node.render_scene clamp patch args",
         );
         Some(out)
     }

@@ -2011,6 +2011,9 @@ struct ObjectDraw<'ctx> {
     /// The indexed mesh's detail levels (`mesh_lods.rs`), which a draw that
     /// culls its copies picks from per copy and view.
     lods: Option<&'ctx manifold_gpu::GpuBuffer>,
+    /// The single mesh's crack-free cluster hierarchy (`mesh_clusters.rs`):
+    /// its patch cull draws each part at the coarsest level under a pixel.
+    clusters: Option<&'ctx manifold_gpu::GpuBuffer>,
     /// This frame's GPU-written draw arguments (buffer, byte offset) for an
     /// object with a live extent or trimmed instances: raster passes draw
     /// indirectly with them.
@@ -2155,7 +2158,7 @@ impl ObjectDraw<'_> {
             && !self.points
             && !self.routes_to_transparent()
             && self.live_extent.is_none()
-            && patch_cull::worth_culling(self.vertex_count)
+            && (self.clusters.is_some() || patch_cull::worth_culling(self.vertex_count))
     }
 
     /// Transmission is a separate raster route even when authored alpha stays
@@ -3011,6 +3014,7 @@ impl RenderScene {
             mesh: inputs.slot_of("vertices"),
             indices: None,
             lods: None,
+            clusters: None,
             prev_positions: None,
             weights: None,
             topology: None,
@@ -3245,7 +3249,7 @@ impl RenderScene {
             self.author_rt_flags(ctx, &pre, &rt_ready, &mut draws, has_transmission);
         self.plan_prev_positions(ctx, &mut draws, pre.velocity_wired, has_transmission);
         self.encode_copy_cull(ctx, &mut draws, [pre.width, pre.height]);
-        self.encode_patch_cull(ctx, &mut draws);
+        self.encode_patch_cull(ctx, &mut draws, [pre.width, pre.height]);
 
         // ---- Ensure cached GPU resources (mutable phase) — BUG-trh7 stage 2,
         // `ensure_gpu_resources`; the E2a format peek moved inside it, ahead

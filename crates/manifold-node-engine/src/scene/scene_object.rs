@@ -64,6 +64,9 @@ pub struct SceneObject {
     /// Optional detail levels of the indexed mesh (`mesh_lods.rs` lays them
     /// out), which an instanced draw picks from per copy.
     pub lods: Option<Slot>,
+    /// Optional crack-free cluster hierarchy of the indexed mesh
+    /// (`mesh_clusters.rs` lays it out), which a single draw cuts per view.
+    pub clusters: Option<Slot>,
     /// Optional per-vertex appearance weights consumed by `render_scene`.
     pub weights: Option<Slot>,
     /// `Array<Vec4Vertex>` slot: each vertex's position a frame ago, from a

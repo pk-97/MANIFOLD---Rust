@@ -566,7 +566,7 @@ fn cull_patches_wgsl_validates() {
             e.emit_to_string(src)
         );
     }
-    for entry in ["patch_bounds", "patch_args", "cull_patches"] {
+    for entry in ["patch_bounds", "patch_args", "clamp_args", "cull_patches"] {
         assert!(
             module.entry_points.iter().any(|ep| ep.name == entry),
             "cull_patches.wgsl must expose {entry}"

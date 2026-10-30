@@ -2,7 +2,7 @@
 
 <!-- index: How render_scene stops paying for triangles nobody sees: indexed terrain, culled copies in shadows, small patches culled on the GPU, detail levels by screen size, terrain tiles by distance, and NVIDIA cluster ray tracing with the Vulkan port. -->
 
-**Status:** IN PROGRESS. P1, P2 and P3 landed 2026-10-30; what comes next is Peter's call (see Findings). P4 to P7 are specified at their phase start, against the code as it stands then.
+**Status:** IN PROGRESS. P1, P2, P3, P5a and P5 landed 2026-10-30; P4 is next. P4, P6 and P7 are specified at their phase start, against the code as it stands then.
 **Companions:** [RAYTRACING_DESIGN.md](RAYTRACING_DESIGN.md) (acceleration structures), [VULKAN_BACKEND_DESIGN.md](VULKAN_BACKEND_DESIGN.md) (P7 ray tracing), [GLB_IMPORT_OPTIMIZATION_GUIDE.md](GLB_IMPORT_OPTIMIZATION_GUIDE.md) (the manual decimation this replaces).
 
 ## The claim
@@ -68,7 +68,7 @@ As built, without new graph ports: a patch is a run of 128 consecutive triangles
 
 Each view gets its own cull: the camera (frustum and back-face cone, for meshes that skip back faces) and each shadow light (its own frustum). The CPU per-object frustum test stays as the first reject. Not yet covered: per-patch culling inside instanced draws (copies, swarms, Scene Loop cells), and meshes a modifier deforms (see Findings).
 
-### P5a Detail levels for copies (built)
+### P5a Detail levels for copies (landed)
 
 A mesh producer may publish `lods: Array(u32)` (layout in `primitives/mesh_lods.rs`: a 16-word header of up to four levels, each its first word, index count and simplification error in mesh units, then each level's indices into the same vertices). `node.gltf_mesh_source` builds them on its loader thread with meshoptimizer when the output is wired; the scene compiler wires them only for imported meshes drawn as copies. The copy cull (`cull_instances.wgsl`) picks each surviving copy's coarsest level whose error projects to at most one pixel at the copy's nearest point, counts copies per level, and lays the survivors out level by level so each level is one indexed indirect draw (its block's base instance points at its run). Each view picks its own levels: the camera by render size, each shadow caster by its map size. RT, picking and every unculled pass keep the full mesh.
 
@@ -80,9 +80,11 @@ The scene pass draws into memoryless MSAA targets, which cannot spill when the t
 
 Depth pyramid and the two-phase draw of D3, camera views only.
 
-### P5 Detail levels for imports
+### P5 Detail levels for single imports (landed)
 
-The patch hierarchy of D4, built on the loader thread and cached with the parsed mesh. This is the first phase that changes pixels.
+Measured on the 943k-triangle coastal cliff scan alone, M4 Max, 1080p: render_scene 15.1 to 5.8 ms filling the frame, 3.0 to 0.75 ms far away. Stills differ only by fine noise spread over the surface, no seams.
+
+As built: `node.gltf_mesh_source` publishes `clusters: Array(u32)` (layout in `primitives/mesh_clusters.rs`) on its loader thread with meshoptimizer's clusterlod, UV seams protected. The scene compiler wires it for an imported mesh drawn once, not as copies, when it is big enough (`worth_clusters`). The patch cull (`cull_patches.wgsl`) then runs one workgroup per cluster from the array's own dispatch words, instead of runs of the index buffer: a cluster draws when its own group's error projects over a pixel and the group it was refined from projects at or under one (D4), each view by its own size, so the camera and each shadow map pick their own cut. The view's index buffer keeps the full mesh's size, so a cut that would overflow it is clamped. A mesh the hierarchy can't be built for is laid out as runs that are always on the cut. RT, picking and unculled passes keep the full mesh.
 
 ### P6 Terrain tiles by distance
 
@@ -97,7 +99,3 @@ With the Vulkan ray tracing port: per-patch acceleration structures and a partit
 - Imported parts stay indexed under the per-vertex modifier types (`ModifierTypeEntry::per_vertex`: Bend, Twist, Taper, Rotate, Morph, Boil, Ripple, Melt, Slice, Voxelize, Fold, Wave Shear, Shake, Spatial Echoes, Elastic Sculpture, Math View). Types whose stages read whole triangles or hash the vertex index (Inflate, Displace by Texture, Surface Waves, Facet Normals, Shatter Mesh, Cut Out Box, Glitch Jitter, the fragment types), morphs and fragment cuts still flatten them (`scene_compile/mesh.rs` `use_indexed`).
 - In an RT scan scene the ray tracer, not triangle count, was the cost (83 ms AO+GI, 56 ms reflections, 13 ms raster); RT reuse waits for the 5080.
 - The b1 terrain's 50 ms main pass is fragment work (the covers' material shading), not geometry; patch culling cannot reach it with the whole terrain in view.
-
-## Open
-
-- `meshopt` 0.7 (meshoptimizer 1.3) is in. Its `clod` module builds the patch hierarchy D4 needs; P5 checks it on a real scan.

@@ -13,6 +13,7 @@ use super::copies;
 use super::group::Frame;
 use super::material::surface_for;
 use super::ocean;
+use crate::node_graph::primitives::mesh_clusters;
 use crate::node_graph::scene_graph::wire;
 
 /// The wires that bind one object's mesh, material and transform to its
@@ -292,9 +293,14 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     }
     if let Some(indices) = indices {
         b.wire(indices.0, indices.1, object, "indices");
-        // Copies of an imported mesh draw far ones at its detail levels.
-        if matches!(fields.shape, Shape::Mesh { .. }) && (own_copies || group_copies.is_some()) {
-            b.wire(indices.0, "lods", object, "lods");
+        // Copies of an imported mesh draw far ones at its detail levels;
+        // a big single one draws each part of itself at its own.
+        if let Shape::Mesh { vertex_count, .. } = &fields.shape {
+            if own_copies || group_copies.is_some() {
+                b.wire(indices.0, "lods", object, "lods");
+            } else if mesh_clusters::worth_clusters(*vertex_count) {
+                b.wire(indices.0, "clusters", object, "clusters");
+            }
         }
     }
     for (source, port) in maps {

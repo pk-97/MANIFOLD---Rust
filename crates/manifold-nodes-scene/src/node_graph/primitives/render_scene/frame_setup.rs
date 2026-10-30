@@ -608,6 +608,12 @@ impl RenderScene {
                         .filter(|&slot| ctx.inputs.slot_content_ready(slot))
                         .and_then(|slot| ctx.inputs.array_slot(slot)),
                 ),
+                clusters: indices.and(
+                    object
+                        .clusters
+                        .filter(|&slot| ctx.inputs.slot_content_ready(slot))
+                        .and_then(|slot| ctx.inputs.array_slot(slot)),
+                ),
                 live_args: None,
                 vertices_content,
                 mesh_revision: mesh_slot.and_then(|s| ctx.inputs.mesh_revision_of(s)),
@@ -880,13 +886,18 @@ impl RenderScene {
         &mut self,
         ctx: &mut EffectNodeContext<'_, '_>,
         draws: &mut [ObjectDraw<'_>],
+        viewport: [u32; 2],
     ) {
         if draws.iter().all(|d| d.patches.is_none()) {
             return;
         }
         let epoch = ctx.rebuild_epoch;
         let gpu = ctx.gpu_encoder();
-        for draw in draws.iter().filter(|d| d.patches.is_some()) {
+        // A mesh with a cluster hierarchy carries its patch records.
+        for draw in draws
+            .iter()
+            .filter(|d| d.patches.is_some() && d.clusters.is_none())
+        {
             let Some(indices) = draw.indices else {
                 continue;
             };
@@ -908,7 +919,7 @@ impl RenderScene {
                 let p = draw.uniforms.camera_pos;
                 [p[0], p[1], p[2]]
             });
-            let (slot, count) = (draw.slot as usize, draw.vertex_count);
+            let (slot, count, clusters) = (draw.slot as usize, draw.vertex_count, draw.clusters);
             let (clip, model) = (draw.uniforms.view_proj, draw.uniforms.model);
             let (Some(patches), Some(indices)) = (draw.patches.as_mut(), draw.indices) else {
                 continue;
@@ -920,12 +931,14 @@ impl RenderScene {
                 0,
                 indices,
                 count,
+                clusters,
                 &patch_cull::PatchView {
                     clip: &clip,
                     model: &model,
                     eye,
                     args: &patches.args,
                     block: patches.first_block,
+                    viewport,
                 },
             );
         }

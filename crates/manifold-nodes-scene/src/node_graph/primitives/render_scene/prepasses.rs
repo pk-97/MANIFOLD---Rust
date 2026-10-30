@@ -263,12 +263,14 @@ impl RenderScene {
                                 1 + slot,
                                 indices,
                                 d.vertex_count,
+                                d.clusters,
                                 &patch_cull::PatchView {
                                     clip: &vp,
                                     model: &d.uniforms.model,
                                     eye: None,
                                     args: &patches.args,
                                     block,
+                                    viewport: [side, side],
                                 },
                             )?;
                             culled_any = true;

@@ -20,6 +20,7 @@ use super::material::surface_for;
 use super::object::object_wires;
 use crate::node_graph::gltf_import::model_file::{ClipDurations, Morph, Rig, model_file};
 use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, FilePart};
+use crate::node_graph::primitives::mesh_clusters;
 
 /// `node.gltf_mesh_source`'s smallest buffer, in vertices.
 const MIN_CAPACITY: u32 = 36;
@@ -613,9 +614,12 @@ pub(crate) fn emit_combined(b: &mut Builder<'_>, group: &Item, frame: &Frame) ->
         }
         if let Some(indices) = drawn.indices {
             b.wire(indices.0, indices.1, object, "indices");
-            // Copies draw far ones at the mesh's detail levels.
+            // Copies draw far ones at the mesh's detail levels; a big
+            // single part draws each part of itself at its own.
             if frame.copies.is_some() {
                 b.wire(indices.0, "lods", object, "lods");
+            } else if mesh_clusters::worth_clusters(*vertex_count) {
+                b.wire(indices.0, "clusters", object, "clusters");
             }
         }
         for (source, port) in maps {
