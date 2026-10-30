@@ -53,10 +53,6 @@ fn level_at(c: FieldCorners) -> f32 {
     );
 }
 
-fn node_value(n: vec3<i32>) -> f32 {
-    return levelset[ts_cell_at(n)];
-}
-
 // The level set at an object-space point: the trilinear of the node values at
 // q = p / cell + 1/2.
 fn sample_field(p: vec3<f32>) -> f32 {

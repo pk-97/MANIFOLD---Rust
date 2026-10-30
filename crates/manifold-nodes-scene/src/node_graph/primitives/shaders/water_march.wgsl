@@ -87,14 +87,19 @@ fn bspline_dw(t: f32) -> vec4<f32> {
 
 // The cubic B-spline field at p: its gradient in field units per metre (xyz,
 // prototype `normal_cubic`, levelset_proto/src/main.rs:134-156) and its value
-// (w). The 4 x 4 x 4 nodes lie in the home's tile or its neighbours, so the
-// table is walked once.
+// (w). The 4 x 4 x 4 nodes lie in at most two tiles a side, the home's tile
+// or its neighbours: their slots are found once, before the taps.
 fn field_cubic(p: vec3<f32>) -> vec4<f32> {
     let g = field_node_coord(p, u.cell.x);
     field_enter(g);
     let fl = floor(g);
     let t = g - fl;
     let base = vec3<i32>(fl) - vec3<i32>(1);
+    let tile0 = base >> vec3<u32>(3u);
+    var slots: array<u32, 8>;
+    for (var k = 0; k < 8; k++) {
+        slots[k] = ts_slot_of(tile0 + vec3<i32>(k & 1, (k >> 1u) & 1, k >> 2u));
+    }
     let wx = bspline_w(t.x);
     let wy = bspline_w(t.y);
     let wz = bspline_w(t.z);
@@ -108,7 +113,10 @@ fn field_cubic(p: vec3<f32>) -> vec4<f32> {
     for (var c = 0; c < 4; c++) {
         for (var b = 0; b < 4; b++) {
             for (var a = 0; a < 4; a++) {
-                let v = node_value(base + vec3<i32>(a, b, c));
+                let n = base + vec3<i32>(a, b, c);
+                let o = (n >> vec3<u32>(3u)) - tile0;
+                let slot = slots[o.x + 2 * o.y + 4 * o.z];
+                let v = levelset[select(slot * 512u + ts_local(n), ts_canon(), slot == WT_NONE)];
                 gx += v * dx[a] * wy[b] * wz[c];
                 gy += v * wx[a] * dy[b] * wz[c];
                 gz += v * wx[a] * wy[b] * dz[c];
