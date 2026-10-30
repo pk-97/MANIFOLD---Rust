@@ -125,10 +125,12 @@ pub static LIGHT_ROWS: [PropertyRow; 49] = [
     metres("aim_x"),
     metres("aim_y"),
     metres("aim_z"),
+    // A Sun's shadows follow the camera in cascades, so only lamps that
+    // fall off with distance have a Range.
     row("range", LIGHT, Light, setup())
         .unit(Unit::Metres)
         .limit(AT_LEAST_ZERO)
-        .when(lamp),
+        .when(point_or_spot),
     row("light_size", LIGHT, Light, setup())
         .unit(Unit::Metres)
         .limit(AT_LEAST_ZERO)
