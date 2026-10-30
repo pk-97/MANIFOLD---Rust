@@ -1,6 +1,6 @@
 // Classify each full-resolution texel BEFORE reducing. RGB is premultiplied
 // by layer coverage. Camera input is already premultiplied; multiplying it
-// by opacity again would darken partially covered silhouettes (BUG-imds).
+// by opacity again would darken partially covered silhouettes.
 // Exact loads preserve one-pixel silhouettes and categorical near/far flags.
 @group(0) @binding(0) var color: texture_2d<f32>;
 @group(0) @binding(1) var coc: texture_2d<f32>;

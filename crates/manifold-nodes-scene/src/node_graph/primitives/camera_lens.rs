@@ -6,15 +6,14 @@
 //! other field (position, basis, near/far, projection mode, cached view
 //! matrix) through unchanged. This is "the one lens": insert it once between a camera
 //! source (`node.orbit_camera` / `node.free_camera` / `node.look_at_camera`)
-//! and its consumers so depth-of-field (CINEMATIC_POST's `coc_from_depth`),
-//! motion blur (CINEMATIC_POST's `motion_blur`), and exposure
-//! (`node.render_scene`) all read the same lens instead of duplicating
-//! four params per consumer.
+//! and its consumers so depth of field (`node.coc_from_depth`), motion blur
+//! (`node.motion_blur`) and exposure (`node.render_scene`) all read the same
+//! lens instead of duplicating four params per consumer.
 //!
 //! Defaults are chosen to make an unwired, untouched `camera_lens` node a
 //! near-no-op: `focus_distance = 0` (neutral, per `LensParams`'s `<= 0` =
-//! hyperfocal contract), `shutter_angle = 180` (motion blur on, per Peter's
-//! P4 directive — 0 still means "no motion blur" as behavior), `exposure_ev
+//! hyperfocal contract), `shutter_angle = 180` (motion blur on; 0 means no
+//! motion blur), `exposure_ev
 //! = 0` (neutral — `render_scene` multiplies by `exp2(0) = 1`). `f_stop`'s
 //! *param* default is `32.0`, NOT `LensParams::PINHOLE`'s literal
 //! `f32::INFINITY` — `f32::INFINITY` is safe as a Rust const on the
@@ -25,8 +24,8 @@
 //! workspace's `serde_json` version — not assumed). 32 is the top of the
 //! slider's working band, and the neutral value must live INSIDE the band:
 //! the exposure stamper widens every stamped slider's range to contain its
-//! seeded value, so the old 1000 seed stretched every f-stop slider to
-//! 0.5–1000 (Peter's 2026-08-27 unusable-ranges report). Note 32 is NOT a
+//! seeded value, so a seed of 1000 would stretch every f-stop slider to
+//! 0.5–1000. Note 32 is NOT a
 //! "DoF off" value — no f-stop is, on close-up scenes f/32 blurs visibly
 //! past the focus plane; off is `node.bokeh_gather`'s `enabled` toggle.
 
@@ -73,10 +72,8 @@ manifold_node_engine::primitive! {
             // the working band — NOT "DoF off" (off is bokeh's enabled
             // toggle; f/32 still blurs past the focus plane on close-ups).
             default: ParamValue::Float(32.0),
-            // 0.5–32: the cinematic working band is f/1–f/8; the old 0.5–1000
-            // span made the slider read as an on/off toggle (Peter 2026-08-26).
-            // A stored 1000 from pre-fix projects is rewritten to 32 on load
-            // (the load-time repair).
+            // 0.5–32: the cinematic working band is f/1–f/8; a wider span
+            // makes the slider read as an on/off toggle.
             range: Some((0.5, 32.0)),
             enum_values: &[],
         },

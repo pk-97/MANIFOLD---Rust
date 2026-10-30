@@ -6,11 +6,7 @@ use super::cinematic_tail::build_cinematic_tail;
 use super::scene_graph::{float, plain_node, wire};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode};
-use manifold_core::scene_index::FlatSceneIndex;
 use std::collections::HashSet;
-
-mod repair;
-pub use repair::restore_camera_effects;
 
 const RENDER: &str = "node.render_scene";
 const LENS: &str = "node.camera_lens";
@@ -19,145 +15,6 @@ const TAIL: &[&str] = &[
     "node.bokeh_gather",
     "node.motion_blur",
 ];
-
-/// Find effects belonging to this render/camera pair through actual wires,
-/// including group boundaries. Unrelated or ambiguous effects never become
-/// controls for the selected camera.
-pub fn camera_effect_controls(index: &FlatSceneIndex, scene: &NodeId) -> Vec<NodeId> {
-    let Ok(Some(camera)) = index.input(scene, "camera") else {
-        return Vec::new();
-    };
-    let Ok(render) = index.node(scene) else {
-        return Vec::new();
-    };
-    let input = |id: u32, port: &str| {
-        let mut sources = index
-            .flat
-            .wires
-            .iter()
-            .filter(|edge| edge.to_node == id && edge.to_port == port);
-        let first = sources.next()?;
-        if sources.next().is_some() {
-            return None;
-        }
-        Some((first.from_node, first.from_port.as_str()))
-    };
-    let camera_source = Some((camera.from_node, camera.from_port.as_str()));
-    let mut live = HashSet::new();
-    let mut pending: Vec<_> = index
-        .flat
-        .nodes
-        .iter()
-        .filter(|node| node.type_id == "system.final_output")
-        .map(|node| node.id)
-        .collect();
-    while let Some(id) = pending.pop() {
-        if live.insert(id) {
-            pending.extend(
-                index
-                    .flat
-                    .wires
-                    .iter()
-                    .filter(|edge| edge.to_node == id)
-                    .map(|edge| edge.from_node),
-            );
-        }
-    }
-    let mut controls = Vec::new();
-    for ty in ["node.bokeh_gather", "node.motion_blur"] {
-        let mut matching = index.flat.nodes.iter().filter(|node| {
-            if node.type_id != ty || !live.contains(&node.id) {
-                return false;
-            }
-            if ty == "node.motion_blur" {
-                return input(node.id, "camera") == camera_source
-                    && input(node.id, "velocity") == Some((render.id, "velocity"))
-                    && input(node.id, "in").is_some_and(|(from, port)| {
-                        color_reaches_render(index, from, port, render.id)
-                    });
-            }
-            if !input(node.id, "in")
-                .is_some_and(|(from, port)| color_reaches_render(index, from, port, render.id))
-            {
-                return false;
-            }
-            let Some((mut id, mut port)) = input(node.id, "width") else {
-                return false;
-            };
-            // Older scenes may retain a dilation node between CoC and bokeh.
-            for _ in 0..8 {
-                let Some(source) = index.flat.nodes.iter().find(|source| source.id == id) else {
-                    return false;
-                };
-                if port != "out" {
-                    return false;
-                }
-                if source.type_id == "node.coc_from_depth" {
-                    return input(id, "camera") == camera_source
-                        && input(id, "depth") == Some((render.id, "depth"));
-                }
-                if source.type_id != "node.coc_dilate" {
-                    return false;
-                }
-                let Some(upstream) = input(id, "in") else {
-                    return false;
-                };
-                (id, port) = upstream;
-            }
-            false
-        });
-        if let Some(node) = matching.next()
-            && matching.next().is_none()
-        {
-            controls.push(node.node_id.clone());
-        }
-    }
-    controls
-}
-
-/// Follow the colour-producing side of a known post chain back to the scene.
-/// A random texture feeding an effect must not make that effect a camera
-/// control, while the authored AO/post groups remain valid colour lineage.
-fn color_reaches_render(index: &FlatSceneIndex, from: u32, port: &str, render_id: u32) -> bool {
-    fn visit(
-        index: &FlatSceneIndex,
-        id: u32,
-        port: &str,
-        render_id: u32,
-        seen: &mut HashSet<u32>,
-    ) -> bool {
-        if id == render_id && port == "color" {
-            return true;
-        }
-        if !seen.insert(id) {
-            return false;
-        }
-        if port != "out" {
-            return false;
-        }
-        index
-            .flat
-            .wires
-            .iter()
-            .filter(|wire| {
-                wire.to_node == id
-                    && matches!(
-                        wire.to_port.as_str(),
-                        "in" | "color" | "a" | "b" | "top" | "bottom" | "source"
-                    )
-            })
-            .any(|wire| {
-                visit(
-                    index,
-                    wire.from_node,
-                    wire.from_port.as_str(),
-                    render_id,
-                    seen,
-                )
-            })
-    }
-    visit(index, from, port, render_id, &mut HashSet::new())
-}
 
 /// Add the standard camera effects to an unambiguous bare scene. This is a
 /// cold authoring/load operation, never a render-time repair. The caller owns
@@ -327,7 +184,7 @@ mod tests {
     use super::super::scene_graph::bool_val;
     use super::*;
 
-    pub(super) fn bare_scene() -> EffectGraphDef {
+    fn bare_scene() -> EffectGraphDef {
         serde_json::from_value(serde_json::json!({"version":2,"nodes":[
             {"id":1,"nodeId":"camera","typeId":"node.orbit_camera",
              "params":{"distance":{"type":"Float","value":7.0}}},
@@ -381,72 +238,5 @@ mod tests {
         let original = graph.clone();
         assert!(!prepare_camera_effects(&mut graph).unwrap());
         assert_eq!(graph, original);
-    }
-
-    #[test]
-    fn camera_controls_follow_wires_across_groups_and_ignore_unrelated_effects() {
-        let mut graph = bare_scene();
-        prepare_camera_effects(&mut graph).unwrap();
-        graph.nodes.insert(
-            0,
-            plain_node(90, "unrelated_blur", "node.motion_blur", "Unrelated"),
-        );
-        graph.nodes.insert(
-            0,
-            plain_node(91, "unrelated_dof", "node.bokeh_gather", "Unrelated"),
-        );
-        let scene = NodeId::new("scene");
-        let index = FlatSceneIndex::build(&graph).unwrap();
-        let controls = camera_effect_controls(&index, &scene);
-        assert_eq!(controls.len(), 2);
-        assert!(
-            controls
-                .iter()
-                .all(|id| id.as_str().starts_with("scene_camera_"))
-        );
-        let motion = graph
-            .nodes
-            .iter()
-            .find(|node| node.type_id == "node.motion_blur" && node.id != 90)
-            .unwrap()
-            .id;
-        // A blur using the raw camera instead of the scene's lens is not a
-        // working control for this camera, even if its colour output is live.
-        graph
-            .wires
-            .iter_mut()
-            .find(|edge| edge.to_node == motion && edge.to_port == "camera")
-            .unwrap()
-            .from_node = 1;
-        let index = FlatSceneIndex::build(&graph).unwrap();
-        assert_eq!(camera_effect_controls(&index, &scene), controls[..1]);
-    }
-
-    #[test]
-    fn effect_with_scene_side_inputs_but_unrelated_colour_is_not_a_camera_control() {
-        let mut graph = bare_scene();
-        prepare_camera_effects(&mut graph).unwrap();
-        graph.nodes.push(plain_node(
-            90,
-            "unrelated_image",
-            "node.constant_color",
-            "Image",
-        ));
-        let motion = graph
-            .nodes
-            .iter()
-            .find(|node| node.type_id == "node.motion_blur")
-            .unwrap()
-            .id;
-        let input = graph
-            .wires
-            .iter_mut()
-            .find(|edge| edge.to_node == motion && edge.to_port == "in")
-            .unwrap();
-        input.from_node = 90;
-        input.from_port = "out".into();
-        let index = FlatSceneIndex::build(&graph).unwrap();
-        let scene = NodeId::new("scene");
-        assert!(camera_effect_controls(&index, &scene).is_empty());
     }
 }

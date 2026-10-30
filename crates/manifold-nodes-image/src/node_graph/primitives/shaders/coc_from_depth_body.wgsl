@@ -36,8 +36,8 @@
 //
 // PARAMS: [max_radius, world_to_mm]. DERIVED_UNIFORMS: [fov_y, near, far,
 // focus_distance, f_stop]. Matches coc_from_depth.wgsl (the hand parity
-// oracle). `world_to_mm` calibrates the mm-per-world-unit reading for the
-// scene at hand (BUG-bdwd); default 1000.0 reproduces the old behavior.
+// oracle). `world_to_mm` is the mm one world unit reads as (default 1000.0,
+// one unit per metre).
 const SENSOR_H_MM: f32 = 24.0;
 // BLUR_REFERENCE_HEIGHT in primitives/mod.rs.
 const REFERENCE_H: f32 = 1080.0;
@@ -62,10 +62,9 @@ fn body(
     let coc_radius_mm = aperture_radius_mm * f_mm * signed_delta
         / (d_mm * max(s_mm - f_mm, 1.0));
     let coc_radius_px = clamp(abs(coc_radius_mm) / SENSOR_H_MM * REFERENCE_H, 0.0, max_radius);
-    // focus_distance <= 0 is the LensParams hyperfocal/neutral contract —
-    // exactly 0 CoC radius. Without this, S_mm = 0 makes the denominator 1 and the
-    // formula degenerates to f_mm^2/f_stop: MAX blur at every aperture
-    // (Peter's 2026-08-27 fully-soft frame after dragging Focus to 0).
+    // focus_distance <= 0 is the LensParams neutral contract: exactly 0 CoC
+    // radius. Without it S_mm = 0 makes the denominator 1 and the formula
+    // degenerates to f_mm^2/f_stop, the widest blur at every aperture.
     let coc_q = select(coc_radius_px, 0.0, focus_distance <= 0.0);
     let normalized = coc_q / max_radius;
     // Sign flag: 1.0 = nearer than focus, 0.0 = far-or-in-focus.

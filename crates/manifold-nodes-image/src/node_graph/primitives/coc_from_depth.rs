@@ -1,8 +1,6 @@
 //! `node.coc_from_depth` — physically-based circle-of-confusion from scene
-//! depth + a Camera. The CoC-computation
-//! half of DoF v1; pair with `node.variable_blur` (H then V, ping-ponged) for
-//! the gather — this atom does ONLY the per-pixel CoC math, no blur (the
-//! no-fused-monolith rule: CoC and gather are two dispatches, not one).
+//! depth + a Camera. It does only the per-pixel CoC math; `node.bokeh_gather`
+//! (or `node.variable_blur`, H then V) does the blur in its own dispatch.
 //!
 //! Thin-lens model, world units in meters for lens physics:
 //! ```text
@@ -28,16 +26,11 @@
 //! everywhere regardless of focus_distance/depth — an unlensed camera
 //! produces a bit-clean zero CoC buffer (invariant I2).
 //!
-//! `world_to_mm` (default 1000.0) calibrates how many mm one world unit is
-//! intended to read as for the scene at hand (BUG-bdwd). The old hardcoded
-//! 1000.0 assumed 1 world unit = 1 meter, so a glTF model at any other
-//! scale read through the lens physics as a physically-mismatched camera
-//! (D_mm/S_mm tiny on a <1-unit scene → CoC explodes past max_radius at
-//! every f_stop; huge on a >1-unit scene → no blur at all). The import
-//! stamps `world_to_mm = 1000/radius` (scene radius reads as ~1 meter) and
-//! the project migration carries existing projects across; the default of
-//! 1000.0 keeps any graph without the param byte-identical to the old
-//! behavior.
+//! `world_to_mm` (default 1000.0, one world unit per metre) sets how many mm
+//! one world unit reads as. Without it a model at any other scale reads as
+//! a mismatched lens: a sub-unit scene blurs past `max_radius` at every
+//! f-stop, a huge one never blurs. The import stamps
+//! `world_to_mm = 1000/radius`, so the scene's radius reads as about a metre.
 //!
 //! `camera` reads `fov_y`/`near`/`far` (projection facts) and
 //! `lens.focus_distance`/`lens.f_stop` (the Camera's lens block, the ONE
@@ -82,7 +75,7 @@ struct CocFromDepthUniforms {
 manifold_node_engine::primitive! {
     name: CocFromDepth,
     type_id: "node.coc_from_depth",
-    purpose: "Physically-based circle-of-confusion radius from scene depth + a Camera (thin-lens model, signed CoC): f_mm = 24mm / (2*tan(fov_y/2)); aperture_radius_mm = f_mm/(2*f_stop); D_mm = linearize_depth(raw_depth, near, far) * world_to_mm; S_mm = focus_distance * world_to_mm; signed = D_mm - S_mm; coc_radius_mm = aperture_radius_mm*f_mm*signed / (D_mm*max(S_mm-f_mm, 1.0)); coc_radius_px = clamp(|coc_radius_mm|/24mm * 1080, 0, max_radius): pixels of a 1080 px tall frame, whatever the output size, so R is a share of the frame and node.bokeh_gather scales its own max_radius to the frame it renders. Output R/B = coc_radius_px / max_radius (the [0,1] radius magnitude, unchanged for existing readers), G = signed < 0 ? 1.0 : 0.0 (sign flag: nearer than focus = 1, far-or-in-focus = 0), A = 1.0. Wire into node.variable_blur's or node.bokeh_gather's `width` input with max_radius matched. f_stop = infinity (pinhole) makes the radius zero everywhere. `world_to_mm` (default 1000.0 = the old 1-unit-per-meter constant) calibrates the mm-per-world-unit reading for the scene at hand (BUG-bdwd): the glTF import stamps 1000/scene_radius so any scene scale renders with musical f-stops. Reads fov_y/near/far and the Camera's lens (focus_distance/f_stop, written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding.",
+    purpose: "Physically-based circle-of-confusion radius from scene depth + a Camera (thin-lens model, signed CoC): f_mm = 24mm / (2*tan(fov_y/2)); aperture_radius_mm = f_mm/(2*f_stop); D_mm = linearize_depth(raw_depth, near, far) * world_to_mm; S_mm = focus_distance * world_to_mm; signed = D_mm - S_mm; coc_radius_mm = aperture_radius_mm*f_mm*signed / (D_mm*max(S_mm-f_mm, 1.0)); coc_radius_px = clamp(|coc_radius_mm|/24mm * 1080, 0, max_radius): pixels of a 1080 px tall frame, whatever the output size, so R is a share of the frame and node.bokeh_gather scales its own max_radius to the frame it renders. Output R/B = coc_radius_px / max_radius (the [0,1] radius magnitude, unchanged for existing readers), G = signed < 0 ? 1.0 : 0.0 (sign flag: nearer than focus = 1, far-or-in-focus = 0), A = 1.0. Wire into node.variable_blur's or node.bokeh_gather's `width` input with max_radius matched. f_stop = infinity (pinhole) makes the radius zero everywhere. `world_to_mm` (default 1000.0, one unit per metre) sets the mm one world unit reads as: the glTF import stamps 1000/scene_radius so any scene scale renders with musical f-stops. Reads fov_y/near/far and the Camera's lens (focus_distance/f_stop, written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding.",
     inputs: {
         depth: Texture2D required,
         camera: Camera required,
@@ -99,13 +92,9 @@ manifold_node_engine::primitive! {
             range: Some((1.0, 64.0)),
             enum_values: &[],
         },
-        // Plumbing, not a performance control (BUG-bdwd): calibrates the
-        // mm-per-world-unit reading for the scene at hand. Default 1000.0
-        // reproduces the old 1-unit=1-meter behavior exactly for any graph
-        // that lacks the param; the import stamps 1000/scene_radius and the
-        // migration multiplies stored f_stops by the radius (look-preserving).
-        // Declared with no range so no card slider is generated for it, and
-        // a scalar binding target would read it fine if one ever appeared.
+        // Scene calibration, not a look control: the mm one world unit reads
+        // as (default one unit per metre; the import stamps
+        // 1000/scene_radius). No range, so no card slider.
         ParamDef {
             name: Cow::Borrowed("world_to_mm"),
             label: "World To Mm",
@@ -117,7 +106,7 @@ manifold_node_engine::primitive! {
     ],
     // depth_rule: reads `depth` (not color) at the same texel with no UV remap — mechanically pointwise like the other single-texture-input compute atoms (hash_field_by_seed, field_combine)
     depth_rule: Inherit,
-    composition_notes: "CoC-radius computation half of DoF v1 — pair with two node.variable_blur nodes (Horizontal then Vertical, ping-ponged) for the gather; this atom does no blurring itself (no-fused-monolith). `max_radius` MUST match the downstream variable_blur nodes' own `max_radius` param — this atom normalizes coc_radius_px by ITS max_radius before emitting, and variable_blur denormalizes by its OWN max_radius (step_size = width_sample * max_radius + 1.0); a mismatch desyncs the blur radius from the physically-computed CoC radius. `depth` expects render_scene's raw [0,1] `depth` output (not pre-linearized). `focus_distance`/`f_stop` are read off the wired Camera's lens block (set upstream by node.camera_lens — insert one camera_lens between the camera source and both render_scene and this node so DoF and exposure read the same lens).",
+    composition_notes: "Feeds node.bokeh_gather's `width` (or two node.variable_blur nodes, Horizontal then Vertical); this atom does no blurring itself. `max_radius` MUST match the blur's own `max_radius`: this atom normalizes coc_radius_px by ITS max_radius, and the blur scales back by its OWN, so a mismatch desyncs the blur from the physical CoC. `depth` expects render_scene's raw [0,1] `depth` output (not pre-linearized). `focus_distance`/`f_stop` are read off the wired Camera's lens block (set upstream by node.camera_lens — insert one camera_lens between the camera source and both render_scene and this node so DoF and exposure read the same lens).",
     examples: ["preset.generator.cinematic_scene"],
     picker: { label: "CoC From Depth", category: Atom },
     summary: "Computes how out-of-focus each pixel should be from scene depth and a physical camera lens — the depth-of-field math, before any blurring happens.",
@@ -359,11 +348,10 @@ mod hand_computed_coc {
         [normalized, near_flag, normalized, 1.0]
     }
 
-    /// focus_distance <= 0 is the LensParams hyperfocal/neutral contract
-    /// (2026-08-27): exactly 0 CoC at any aperture. Before this, S_mm = 0
-    /// made the denominator max(S-f,1) = 1 and the formula degenerated to
-    /// f_mm^2/f_stop — max-radius blur at EVERY aperture (Peter's fully-soft
-    /// frame after dragging Focus to the slider's left end).
+    /// focus_distance <= 0 is the LensParams neutral contract: exactly 0 CoC
+    /// at any aperture. Without it S_mm = 0 makes the denominator
+    /// max(S-f,1) = 1 and the formula degenerates to f_mm^2/f_stop, the
+    /// widest blur at every aperture.
     #[test]
     fn zero_focus_distance_is_neutral_not_max_blur() {
         let got = coc_output(0.5, 0.0, 1.4, 24.0, WORLD_TO_MM);
@@ -501,14 +489,13 @@ mod hand_computed_coc {
         );
     }
 
-    /// **Scene-scale invariance (BUG-bdwd)**: the CoC formula is homogeneous
-    /// of degree 1 in `world_to_mm / f_stop` when depth/focus scale ∝ R. At a
-    /// FIXED f_stop N, a scene whose geometry stores model units at radius R
-    /// and reads `world_to_mm = 1000/R` (the import's calibration — scene
-    /// radius reads as ~1 meter) produces the SAME CoC as the old
-    /// hardcoded-1000 path did at unit scale, regardless of R. This is the
-    /// property that makes musical f-stops work at any scene size.
-    /// **Migration look-preservation (BUG-bdwd)**: at each scene bounding-radius
+    /// **Scene-scale invariance**: the CoC formula is homogeneous of degree 1
+    /// in `world_to_mm / f_stop` when depth/focus scale ∝ R. At a fixed
+    /// f_stop N, a scene of radius R read with `world_to_mm = 1000/R` (the
+    /// import's calibration: the radius reads as about a metre) gives the
+    /// same CoC as a unit-scale scene at 1000, whatever R. This is what makes
+    /// musical f-stops work at any scene size.
+    /// **Migration look-preservation**: at each scene bounding-radius
     /// R, the import stamps stored content at model scale (focus = 2.2R, camera
     /// near/far from Framing's per-R values — the same numbers the graph
     /// actually stores). The migration multiplies the stored `f_stop` by R and

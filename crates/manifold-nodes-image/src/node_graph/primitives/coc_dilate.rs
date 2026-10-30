@@ -125,8 +125,7 @@ mod gpu_tests {
     //! spike, so a broken kernel can't hide behind a flat fill.
     //!
     //! Flat-field no-op sanity: dilating a uniform CoC field returns the
-    //! same flat field unchanged (BUG-137's fix shape doesn't smear a
-    //! constant field into something else).
+    //! same flat field unchanged.
     use half::f16;
 
     use manifold_gpu::{
@@ -159,8 +158,7 @@ mod gpu_tests {
     }
 
     /// Synthetic CoC-shaped input: a sharp step at x == w/2 (0.1 CoC on the
-    /// left half, 0.9 on the right — a depth-discontinuity silhouette, the
-    /// exact shape BUG-137 names) PLUS a single isolated spike at (2, 2) set
+    /// left half, 0.9 on the right — a depth-discontinuity silhouette) PLUS a single isolated spike at (2, 2) set
     /// to 1.0. The left half and the spike are "nearer than focus" (G=1.0);
     /// the right half is "far" (G=0.0). R and B carry the magnitude. This
     /// makes the R and G max channels exercise different paths, so a kernel

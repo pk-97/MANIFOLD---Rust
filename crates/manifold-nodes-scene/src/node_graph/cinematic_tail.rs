@@ -1,10 +1,6 @@
-//! Shared cinematic tail for native and imported scenes: the DoF chain (`coc_from_depth` →
-//! `bokeh_gather`) plus the velocity-directed `motion_blur`,
-//! templated node-for-node on the CinematicScene reference preset.
-//! Reinstated after the 2026-07-12 SSAO-only carve-out once BUG-136 (motion
-//! blur no visible effect) was root-caused in P0 of that design: never a
-//! code defect — the playing layers simply lacked the chain. Extracted from
-//! `scene.rs` (god-file ceiling, `godfile_regrowth.rs`).
+//! Shared cinematic tail for native and imported scenes: the DoF chain
+//! (`auto_focus` → `coc_from_depth` → `bokeh_gather`) plus the
+//! velocity-directed `motion_blur`.
 
 use manifold_core::effect_graph_def::{
     EffectGraphNode, EffectGraphWire, GROUP_INPUT_TYPE_ID, GROUP_OUTPUT_TYPE_ID, GROUP_TYPE_ID,
@@ -24,17 +20,15 @@ pub(crate) struct CinematicTail {
     pub bokeh_id: u32,
 }
 
-/// Build the DoF group + motion_blur node with neutral lens-era params
-/// (CoC/bokeh `max_radius` = 24 — the CinematicScene value; motion blur
-/// keeps its node default cap). The caller chooses the initial enabled state and wires the shared
-/// lens in, so depth-of-field
-/// and shutter read the SAME lens the exposure and FOV card knob surface.
+/// Build the DoF group + motion_blur node (CoC/bokeh `max_radius` = 24;
+/// motion blur keeps its node default cap). The caller chooses the initial
+/// enabled state and wires the shared lens in, so depth of field and shutter
+/// read the same lens the exposure and FOV card knobs set.
 ///
-/// `scene_radius` is the imported bbox bounding-sphere radius (BUG-bdwd):
-/// the CoC node gets `world_to_mm = 1000/radius` so the scene's model units
-/// read as real meter-scale distances in the lens physics (a unit-scale
-/// scene reads 1 unit = 1 meter, the old constant — a 0.01-unit scene reads
-/// 1 unit = 100m).
+/// `scene_radius` is the scene's bounding-sphere radius: the CoC node gets
+/// `world_to_mm = 1000/radius`, so the radius reads as about a metre in the
+/// lens physics (a unit-scale scene reads 1 unit = 1 m, a 0.01-unit scene
+/// 1 unit = 100 m).
 pub(crate) fn build_cinematic_tail(
     fresh_id: &mut impl FnMut() -> u32,
     scene_radius: f32,
@@ -49,8 +43,8 @@ pub(crate) fn build_cinematic_tail(
         GROUP_INPUT_TYPE_ID,
         "input",
     ));
-    // Focus follows what the camera looks at unless the card switches it to
-    // manual; only depth of field reads focus.
+    // Focus follows what the camera looks at unless the card turns Auto
+    // Focus off; only depth of field reads focus.
     let focus_id = fresh_id();
     dof_nodes.push(plain_node(focus_id, "focus", "node.auto_focus", "focus"));
     let coc_id = fresh_id();

@@ -62,7 +62,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if u.blur_alpha != 0u {
         // Scene textures and the layer compositor use premultiplied alpha.
         // Preserve that convention through reconstruction: unpremultiplying
-        // here makes faint optical coverage display as solid rims (BUG-imds).
+        // here makes faint optical coverage display as solid rims.
         var original_pm = original;
 
         // The half-resolution gather has no support below one source pixel.

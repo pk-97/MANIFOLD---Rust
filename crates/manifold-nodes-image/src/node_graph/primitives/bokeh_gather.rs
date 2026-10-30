@@ -93,7 +93,7 @@ pub struct BokehPipelines {
 manifold_node_engine::primitive! {
     name: BokehGather,
     type_id: "node.bokeh_gather",
-    purpose: "Layered depth of field with half-resolution aperture gathers, separate premultiplied near/far color pyramids, conservative tile bounds and depth-aware full-resolution reconstruction. Signed CoC: R is blur magnitude in [0,1], G is 1 for foreground and 0 for background/in-focus. max_radius uses source pixels and must match the CoC producer. In-focus color is preserved. blur_alpha filters scene transparency in premultiplied space; its legacy false default preserves source alpha. Circle, hexagonal and octagonal apertures are supported. Disabled aliases input to output. Internal dependent mip/tile passes retain the BarrieredReduction fusion exemption.",
+    purpose: "Layered depth of field with half-resolution aperture gathers, separate premultiplied near/far color pyramids, conservative tile bounds and depth-aware full-resolution reconstruction. Signed CoC: R is blur magnitude in [0,1], G is 1 for foreground and 0 for background/in-focus. max_radius is in pixels of a 1080 px tall frame, scaled to the output, and must match the CoC producer. In-focus color is preserved. blur_alpha filters scene transparency in premultiplied space; off, it keeps source alpha. Circle, hexagonal and octagonal apertures are supported. Disabled aliases input to output. Internal dependent mip/tile passes retain the BarrieredReduction fusion exemption.",
     inputs: {
         in: Texture2D required,
         width: Texture2D required,
@@ -112,10 +112,8 @@ manifold_node_engine::primitive! {
         },
         ParamDef {
             name: Cow::Borrowed("enabled"),
-            // "Depth of Field", not "Enabled": this param is stamped onto the
-            // scene panel's Camera card next to motion_blur's own toggle, and
-            // two rows both labeled "Enabled" are indistinguishable (Peter
-            // 2026-08-27).
+            // "Depth of Field", not "Enabled": the Camera card shows it next
+            // to motion blur's own toggle.
             label: "Depth of Field",
             ty: ParamType::Bool,
             default: ParamValue::Bool(true),
