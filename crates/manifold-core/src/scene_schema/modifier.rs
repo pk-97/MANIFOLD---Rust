@@ -299,7 +299,8 @@ const CORE_TYPES: [ModifierTypeEntry; 7] = [
         "SpatialEchoes",
         false,
         &SPATIAL_ECHOES_ROWS,
-    ).per_vertex(),
+    )
+    .per_vertex(),
     entry(
         ModifierType::ElasticSculpture,
         "elastic_sculpture",
@@ -308,7 +309,8 @@ const CORE_TYPES: [ModifierTypeEntry; 7] = [
         true,
         &ELASTIC_SCULPTURE_ROWS,
     )
-    .smooth().per_vertex(),
+    .smooth()
+    .per_vertex(),
     entry(
         ModifierType::VortexFragments,
         "vortex_fragments",
@@ -344,7 +346,8 @@ const SCENE_WIDE_TYPES: [ModifierTypeEntry; 3] = [
         "MathView",
         false,
         &super::scene_wide::MATH_VIEW_ROWS,
-    ).per_vertex(),
+    )
+    .per_vertex(),
     entry(
         ModifierType::SceneMirror,
         "scene_mirror",

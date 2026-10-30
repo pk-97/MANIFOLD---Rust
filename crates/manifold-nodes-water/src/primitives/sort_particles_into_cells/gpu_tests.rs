@@ -739,7 +739,9 @@ fn sort_particles_into_cells_through_a_count_record_ignores_the_slots_past_it() 
     // Three words beside each slot, distinct per slot (GPU FLIP's affines are
     // twelve): each must land beside its particle, past the live end untouched.
     const COMPANION: usize = 3;
-    let beside: Vec<u32> = (0..slots * COMPANION).map(|j| 0x1000_0000 + j as u32).collect();
+    let beside: Vec<u32> = (0..slots * COMPANION)
+        .map(|j| 0x1000_0000 + j as u32)
+        .collect();
     let companion = device.create_buffer(beside.len() as u64 * 4, BufferUse::Upload);
     // SAFETY: a shared buffer of exactly these words; no GPU work in flight.
     unsafe { companion.write(0, bytemuck::cast_slice(&beside)) };
@@ -799,7 +801,12 @@ fn sort_particles_into_cells_through_a_count_record_ignores_the_slots_past_it() 
     }
     assert_words("sorted", &read_words(&sorted), &want_sorted, stride);
     assert_words("order", &read_words(&order), &want_order, 1);
-    assert_words("companion", &read_words(&companion_sorted), &want_companion, COMPANION);
+    assert_words(
+        "companion",
+        &read_words(&companion_sorted),
+        &want_companion,
+        COMPANION,
+    );
 }
 
 /// The pooled sort keys each live particle on the pool index of its world

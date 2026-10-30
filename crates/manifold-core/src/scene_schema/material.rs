@@ -18,9 +18,7 @@ use super::fields::{
     Choice, FieldControl, FieldRow, FieldValue, enabled, is_material, wrong_value,
 };
 use super::{Exposure, PropertyRow, Reach, row};
-use crate::scene_doc::{
-    ItemFields, MaterialFields, MaterialType, TextureFeeds, TextureSource,
-};
+use crate::scene_doc::{ItemFields, MaterialFields, MaterialType, TextureFeeds, TextureSource};
 
 /// The family rule for the material node's own params.
 #[derive(Debug, Clone, Copy)]

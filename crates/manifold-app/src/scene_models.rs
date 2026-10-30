@@ -134,9 +134,9 @@ pub(crate) fn read_all(project: &mut Project) {
         }
     }
     for path in files {
-        match manifold_nodes_scene::node_graph::gltf_import::read_file_facts(
-            std::path::Path::new(&path),
-        ) {
+        match manifold_nodes_scene::node_graph::gltf_import::read_file_facts(std::path::Path::new(
+            &path,
+        )) {
             Ok((facts, _)) => attach(project, None, &path, &facts),
             Err(message) => log::warn!("[scene] {path}: {message}"),
         }

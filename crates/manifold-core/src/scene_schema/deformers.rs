@@ -209,7 +209,9 @@ pub static SHAKE_ROWS: [PropertyRow; 5] = [
 
 /// The deformer types, in menu order.
 pub static DEFORMER_TYPES: [ModifierTypeEntry; 19] = [
-    entry(ModifierType::Bend, "bend", "Bend", "Bend", true, &BEND_ROWS).smooth().per_vertex(),
+    entry(ModifierType::Bend, "bend", "Bend", "Bend", true, &BEND_ROWS)
+        .smooth()
+        .per_vertex(),
     entry(
         ModifierType::Twist,
         "twist",
@@ -218,7 +220,8 @@ pub static DEFORMER_TYPES: [ModifierTypeEntry; 19] = [
         true,
         &TWIST_ROWS,
     )
-    .smooth().per_vertex(),
+    .smooth()
+    .per_vertex(),
     entry(
         ModifierType::Taper,
         "taper",
@@ -227,7 +230,8 @@ pub static DEFORMER_TYPES: [ModifierTypeEntry; 19] = [
         true,
         &TAPER_ROWS,
     )
-    .smooth().per_vertex(),
+    .smooth()
+    .per_vertex(),
     entry(
         ModifierType::Inflate,
         "inflate",
@@ -244,7 +248,8 @@ pub static DEFORMER_TYPES: [ModifierTypeEntry; 19] = [
         "Rotate",
         false,
         &ROTATE_ROWS,
-    ).per_vertex(),
+    )
+    .per_vertex(),
     entry(
         ModifierType::DisplaceByTexture,
         "displace_by_texture",
@@ -261,8 +266,11 @@ pub static DEFORMER_TYPES: [ModifierTypeEntry; 19] = [
         "Morph",
         false,
         &MORPH_ROWS,
-    ).per_vertex(),
-    entry(ModifierType::Boil, "boil", "Boil", "Boil", true, &BOIL_ROWS).smooth().per_vertex(),
+    )
+    .per_vertex(),
+    entry(ModifierType::Boil, "boil", "Boil", "Boil", true, &BOIL_ROWS)
+        .smooth()
+        .per_vertex(),
     entry(
         ModifierType::Ripple,
         "ripple",
@@ -271,8 +279,11 @@ pub static DEFORMER_TYPES: [ModifierTypeEntry; 19] = [
         true,
         &RIPPLE_ROWS,
     )
-    .smooth().per_vertex(),
-    entry(ModifierType::Melt, "melt", "Melt", "Melt", true, &MELT_ROWS).smooth().per_vertex(),
+    .smooth()
+    .per_vertex(),
+    entry(ModifierType::Melt, "melt", "Melt", "Melt", true, &MELT_ROWS)
+        .smooth()
+        .per_vertex(),
     // Each vertex jumps by its own stepped hash, so the glitch reads on the
     // shape's own vertices; split finer it only turns to fuzz.
     entry(
@@ -298,7 +309,8 @@ pub static DEFORMER_TYPES: [ModifierTypeEntry; 19] = [
         "Slice",
         true,
         &SLICE_ROWS,
-    ).per_vertex(),
+    )
+    .per_vertex(),
     entry(
         ModifierType::Voxelize,
         "voxelize",
@@ -306,8 +318,11 @@ pub static DEFORMER_TYPES: [ModifierTypeEntry; 19] = [
         "Voxelize",
         true,
         &VOXELIZE_ROWS,
-    ).per_vertex(),
-    entry(ModifierType::Fold, "fold", "Fold", "Fold", true, &FOLD_ROWS).smooth().per_vertex(),
+    )
+    .per_vertex(),
+    entry(ModifierType::Fold, "fold", "Fold", "Fold", true, &FOLD_ROWS)
+        .smooth()
+        .per_vertex(),
     entry(
         ModifierType::FacetNormals,
         "facet_normals",
@@ -324,7 +339,8 @@ pub static DEFORMER_TYPES: [ModifierTypeEntry; 19] = [
         true,
         &WAVE_SHEAR_ROWS,
     )
-    .smooth().per_vertex(),
+    .smooth()
+    .per_vertex(),
     entry(
         ModifierType::CutOutBox,
         "cut_out_box",
@@ -340,5 +356,6 @@ pub static DEFORMER_TYPES: [ModifierTypeEntry; 19] = [
         "Shake",
         false,
         &SHAKE_ROWS,
-    ).per_vertex(),
+    )
+    .per_vertex(),
 ];

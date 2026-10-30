@@ -14,9 +14,9 @@ mod sample_mesh_triangles;
 manifold_core::testkit_visible! { mod mesh_stagger_envelope; }
 manifold_core::testkit_visible! { mod analytic_echo_instances; }
 mod bake_equirect_envmap;
-mod daylight;
 mod consecutive_edges;
 mod curve_solid_source;
+mod daylight;
 mod mesh_fragment;
 mod pack_curve_xy;
 mod polygon_curve;
@@ -57,8 +57,8 @@ pub mod gltf_texture_source;
 pub mod hdri_source;
 mod hypercube_vertices;
 mod instance_position_jitter;
-pub(crate) mod mesh_lods;
 pub(crate) mod mesh_clusters;
+pub(crate) mod mesh_lods;
 manifold_core::testkit_visible! { mod instance_rotation_jitter; }
 mod camera_sky;
 mod cut_out_box;
