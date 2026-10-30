@@ -296,6 +296,9 @@ pub static RETIRED_PARAMS: &[(&str, &str)] = &[
     // Copy spacing counts box sizes (`copy_size_spacing`); an old metres
     // value is dropped so the load does not fail.
     ("node.rigid_body", "copy_spacing"),
+    // Depth of field gathers a round aperture: its shape made no visible
+    // difference, since the blur reads colour already averaged.
+    ("node.bokeh_gather", "aperture"),
 ];
 
 /// Whether any param of `type_id` is listed in [`RETIRED_PARAMS`].

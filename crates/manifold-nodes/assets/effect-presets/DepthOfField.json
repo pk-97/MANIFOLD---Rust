@@ -113,21 +113,6 @@
           "High"
         ],
         "oscSuffix": "Quality"
-      },
-      {
-        "id": "aperture",
-        "name": "Aperture",
-        "min": 0.0,
-        "max": 2.0,
-        "defaultValue": 0.0,
-        "wholeNumbers": true,
-        "isToggle": false,
-        "isTrigger": false,
-        "valueLabels": [
-          "Circle",
-          "Hexagon",
-          "Octagon"
-        ]
       }
     ],
     "bindings": [
@@ -295,19 +280,6 @@
           "kind": "node",
           "nodeId": "bokeh",
           "param": "quality"
-        },
-        "convert": {
-          "type": "EnumRound"
-        }
-      },
-      {
-        "id": "aperture",
-        "label": "Aperture",
-        "defaultValue": 0.0,
-        "target": {
-          "kind": "node",
-          "nodeId": "bokeh",
-          "param": "aperture"
         },
         "convert": {
           "type": "EnumRound"

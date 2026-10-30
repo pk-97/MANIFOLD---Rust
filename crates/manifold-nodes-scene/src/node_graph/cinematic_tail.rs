@@ -68,9 +68,6 @@ pub(crate) fn build_cinematic_tail(
     bokeh_node
         .params
         .insert("enabled".to_string(), bool_val(enabled));
-    bokeh_node
-        .params
-        .insert("aperture".to_string(), enum_val(0));
     bokeh_node.params.insert("quality".to_string(), enum_val(1));
     bokeh_node
         .params

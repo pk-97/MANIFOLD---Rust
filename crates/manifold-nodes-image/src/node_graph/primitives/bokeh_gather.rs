@@ -15,12 +15,8 @@ use std::borrow::Cow;
 struct BokehGatherUniforms {
     max_radius: f32,
     enabled: u32,
-    aperture: u32,
     quality: u32,
     blur_alpha: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
 }
 
 #[repr(C)]
@@ -45,7 +41,6 @@ manifold_core::testkit_visible! {
 #[derive(Clone, Copy)]
 pub(crate) struct BokehSettings {
     pub radius: f32,
-    pub aperture: u32,
     pub quality: u32,
     /// Filter premultiplied scene RGB and alpha together for the compositor.
     pub blur_alpha: bool,
@@ -121,14 +116,6 @@ manifold_node_engine::primitive! {
             enum_values: &[],
         },
         ParamDef {
-            name: Cow::Borrowed("aperture"),
-            label: "Aperture Shape",
-            ty: ParamType::Enum,
-            default: ParamValue::Enum(0),
-            range: Some((0.0, 2.0)),
-            enum_values: &["Circle", "Hexagon", "Octagon"],
-        },
-        ParamDef {
             name: Cow::Borrowed("quality"),
             label: "Quality",
             ty: ParamType::Enum,
@@ -149,7 +136,7 @@ manifold_node_engine::primitive! {
     composition_notes: "Connect source color and signed CoC from coc_from_depth. Keep max_radius equal on the CoC producer and this node. Half-resolution processing is internal, so existing graph dimensions and bindings remain unchanged. Near/far color is separated before reduction; camera graphs enable blur_alpha to feather transparent silhouettes; full-resolution reconstruction retains focused detail. No temporal history or frame-dependent jitter. The generated gather stays a BarrieredReduction boundary because mip levels and tile bounds depend on prior passes.",
     examples: ["preset.generator.cinematic_scene"],
     picker: { label: "Bokeh Gather", category: Atom },
-    summary: "Depth-of-field blur with clean foreground coverage and circular or polygonal highlights.",
+    summary: "Depth-of-field blur with clean foreground coverage and round highlights.",
     category: BlurAndSharpen,
     role: Filter,
     aliases: ["bokeh", "bokeh blur", "circular dof", "disc blur", "depth of field", "bokeh gather"],
@@ -442,12 +429,8 @@ impl BokehGather {
                 let uniforms = BokehGatherUniforms {
                     max_radius: radius * 0.5,
                     enabled: field,
-                    aperture: settings.aperture.min(2),
                     quality: settings.quality.min(2),
                     blur_alpha: u32::from(settings.blur_alpha),
-                    _pad0: 0,
-                    _pad1: 0,
-                    _pad2: 0,
                 };
                 dispatch_standalone_2d(
                     gpu,
@@ -542,10 +525,6 @@ impl Primitive for BokehGather {
     }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let max_radius = ctx.param_f32("max_radius", 24.0);
-        let aperture = match ctx.params.get("aperture") {
-            Some(ParamValue::Enum(v)) => *v,
-            _ => 0,
-        };
         let quality = match ctx.params.get("quality") {
             Some(ParamValue::Enum(v)) => *v,
             _ => 1,
@@ -570,7 +549,6 @@ impl Primitive for BokehGather {
             out,
             BokehSettings {
                 radius,
-                aperture,
                 quality,
                 blur_alpha,
             },

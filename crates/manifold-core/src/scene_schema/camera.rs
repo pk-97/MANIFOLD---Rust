@@ -85,7 +85,7 @@ const fn place(property: &'static str) -> PropertyRow {
         .limit(HardLimit::Unlimited)
 }
 
-pub static CAMERA_ROWS: [PropertyRow; 67] = [
+pub static CAMERA_ROWS: [PropertyRow; 66] = [
     // Orbit: a three-quarter view of the origin through a 50 mm lens, framed
     // as the old base scene framed its cube.
     row("orbit", RIG, Camera, perform(CardBand::Camera, 0))
@@ -210,7 +210,6 @@ pub static CAMERA_ROWS: [PropertyRow; 67] = [
         Exposure::Automatic("scales with the frame; Focus and F-Stop set the blur"),
     )
     .param("max_radius"),
-    row("aperture", BOKEH, DepthOfField, setup()),
     row("quality", BOKEH, DepthOfField, setup()),
     row(
         "blur_alpha",

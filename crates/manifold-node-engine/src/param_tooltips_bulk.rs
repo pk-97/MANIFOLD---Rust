@@ -62,7 +62,6 @@ crate::param_tooltips!("node.blur", {
 crate::param_tooltips!("node.bokeh_gather", {
     "max_radius" => "The widest depth-of-field blur, in pixels of a 1080 px tall frame; it scales with the output. Keep this equal to the CoC From Depth node's maximum radius.",
     "enabled" => "Soften objects outside the camera's focus distance. Turning this off keeps the scene sharp.",
-    "aperture" => "The shape of out-of-focus highlights: circular, six-sided or eight-sided.",
     "quality" => "Higher quality uses more samples for smoother out-of-focus detail. Medium balances detail and rendering cost.",
     "blur_alpha" => "Let blur spread into transparent areas around an object. Camera depth of field enables this to soften silhouettes.",
 });
