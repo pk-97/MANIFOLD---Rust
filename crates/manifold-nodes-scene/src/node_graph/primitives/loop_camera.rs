@@ -353,6 +353,8 @@ impl Primitive for LoopCamera {
         // once per loop and lands back on the base fov at the wrap.
         let fov = (fov_y + zoom_pulse_amp * (std::f32::consts::PI * phase).sin()).max(0.01);
         let mut cam = Camera::look_at(pos, target, [0.0, 1.0, 0.0], fov, near, far);
+        // The look target is a point just ahead on the path, not a subject.
+        cam.aim_distance = None;
         cam.rotate_local(yaw, pitch, roll);
         cam.world_period =
             Some(fwd.map(|component| component * patterns_per_loop * pattern_length * cell_size));
@@ -542,6 +544,7 @@ mod tests {
         let target = [pos[0], pos[1], pos[2] + 1.0];
         let mut expected = Camera::look_at(pos, target, [0.0, 1.0, 0.0], 0.9, 0.05, 200.0);
         expected.world_period = Some([0.0, 0.0, cell]);
+        expected.aim_distance = None;
         assert_eq!(
             base, expected,
             "zero roll/pitch/yaw must not perturb the camera at all"

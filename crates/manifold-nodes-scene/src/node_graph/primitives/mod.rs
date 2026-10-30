@@ -95,6 +95,7 @@ pub mod render_scene;
 mod ripple_mesh;
 manifold_core::testkit_visible! { mod rotate_3d; }
 mod camera_lens;
+pub mod auto_focus;
 pub(crate) mod camera_orbit;
 pub(crate) mod camera_switch;
 mod free_camera;

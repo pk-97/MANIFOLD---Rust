@@ -102,6 +102,9 @@ impl GeneratorRegistry {
         manifold_nodes_image::node_graph::primitives::motion_blur::MotionBlur::prewarm_pipelines(
             device,
         );
+        manifold_nodes_scene::node_graph::primitives::auto_focus::AutoFocus::prewarm_pipelines(
+            device,
+        );
 
         // Sweep every registered generic atom so standalone codegen pipelines
         // are ready before live graph execution. Hand-written and

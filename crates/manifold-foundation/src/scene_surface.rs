@@ -171,6 +171,9 @@ pub enum CardLabel {
 #[serde(rename_all = "camelCase")]
 pub enum Feature {
     DepthOfField,
+    /// Depth of field's focus follows the camera's target, or the frame
+    /// centre for a camera without one.
+    AutoFocus,
     MotionBlur,
     /// A light's type: 0 Sun, 1 Point, 2 Spot.
     LightType,
@@ -215,6 +218,7 @@ impl Feature {
     pub fn off_reason(self) -> &'static str {
         match self {
             Self::DepthOfField => "Depth of field is off",
+            Self::AutoFocus => "Auto Focus sets it",
             Self::MotionBlur => "Motion blur is off",
             Self::LightType => "This light type does not use it",
             Self::EnvironmentMode => "This environment mode does not use it",

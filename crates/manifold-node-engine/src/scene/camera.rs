@@ -111,6 +111,10 @@ pub struct Camera {
     /// (motion vectors, TAA, RT reprojection) on that frame. 0 for a camera
     /// no switch picked.
     pub shot: u64,
+    /// How far along `fwd` the point the rig aims at lies: an orbit's target
+    /// or a look-at target. `None` for a rig that aims at no point (free,
+    /// loop). `node.auto_focus` focuses there.
+    pub aim_distance: Option<f32>,
 }
 
 impl Camera {
@@ -167,6 +171,7 @@ impl Camera {
             lens: LensParams::PINHOLE,
             world_period: None,
             shot: 0,
+            aim_distance: None,
         }
     }
 
@@ -238,6 +243,7 @@ impl Camera {
             lens: LensParams::PINHOLE,
             world_period: None,
             shot: 0,
+            aim_distance: Some(distance.abs()),
         }
     }
 
@@ -305,6 +311,7 @@ impl Camera {
             lens: LensParams::PINHOLE,
             world_period: None,
             shot: 0,
+            aim_distance: None,
         }
     }
 
@@ -336,6 +343,7 @@ impl Camera {
             lens: LensParams::PINHOLE,
             world_period: None,
             shot: 0,
+            aim_distance: Some(length3(sub3(target, pos))),
         }
     }
 
@@ -353,12 +361,26 @@ impl Camera {
         let right = normalize3(cross3(fwd, up_hint));
         let up = normalize3(cross3(right, fwd));
         let target = [pos[0] + fwd[0], pos[1] + fwd[1], pos[2] + fwd[2]];
+        // The aimed-at point moves with the frame, so a scaled frame moves it
+        // nearer or farther.
+        let aim_distance = self.aim_distance.map(|d| {
+            let aim = transform_point(
+                parent,
+                [
+                    self.pos[0] + self.fwd[0] * d,
+                    self.pos[1] + self.fwd[1] * d,
+                    self.pos[2] + self.fwd[2] * d,
+                ],
+            );
+            length3(sub3(aim, pos))
+        });
         Self {
             pos,
             fwd,
             right,
             up,
             view: look_at_rh(pos, target, up),
+            aim_distance,
             ..self
         }
     }
@@ -582,6 +604,10 @@ fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
 
 fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn length3(v: [f32; 3]) -> f32 {
+    dot3(v, v).sqrt()
 }
 
 fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {

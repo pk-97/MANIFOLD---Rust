@@ -4,7 +4,7 @@
 //! section wobbles the camera about its own position, after the rig.
 
 use manifold_foundation::param_range::HardLimit;
-use manifold_foundation::scene_surface::{CardBand, ControlGroup, Feature, Gate, Unit};
+use manifold_foundation::scene_surface::{CardBand, ControlGroup, Feature, Gate, Modes, Unit};
 
 use super::fields::{
     Choice, FieldControl, FieldRow, FieldValue, always, enabled, is_object_or_group, wrong_value,
@@ -17,6 +17,7 @@ const LENS: Reach = Reach::Own("lens");
 const COC: Reach = Reach::Own("coc");
 const BOKEH: Reach = Reach::Own("bokeh");
 const BLUR: Reach = Reach::Own("motion_blur");
+const FOCUS: Reach = Reach::Own("focus");
 use ControlGroup::{Camera, DepthOfField, MotionBlur, Shake};
 const SHAKE: Reach = Reach::Own("shake");
 const PHASE: Reach = Reach::Own("phase");
@@ -84,7 +85,7 @@ const fn place(property: &'static str) -> PropertyRow {
         .limit(HardLimit::Unlimited)
 }
 
-pub static CAMERA_ROWS: [PropertyRow; 66] = [
+pub static CAMERA_ROWS: [PropertyRow; 67] = [
     // Orbit: a three-quarter view of the origin through a 50 mm lens, framed
     // as the old base scene framed its cube.
     row("orbit", RIG, Camera, perform(CardBand::Camera, 0))
@@ -143,8 +144,8 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
     place("target_z").when(look_at),
     clip("near").when(look_at),
     clip("far").default(HORIZON_FAR).when(look_at),
-    // Depth of field and motion blur, both off in a new scene; each switch
-    // sits above the rows it gates.
+    // Depth of field, its auto focus and motion blur, all on in a new scene;
+    // each switch sits above the rows it gates.
     row(
         "dof_enabled",
         BOKEH,
@@ -153,19 +154,30 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
     )
     .param("enabled")
     .switch(Feature::DepthOfField)
-    .default(0.0),
+    .default(1.0),
+    row(
+        "auto_focus",
+        FOCUS,
+        DepthOfField,
+        perform(CardBand::Look, 1),
+    )
+    .param("auto")
+    .switch(Feature::AutoFocus)
+    .gate(Gate::Fold(Feature::DepthOfField))
+    .default(1.0),
+    // Read only while Auto Focus is off.
     row(
         "focus_distance",
         LENS,
         DepthOfField,
-        perform(CardBand::Look, 1),
+        perform(CardBand::Look, 2),
     )
-    .gate(Gate::Dim(Feature::DepthOfField))
+    .gate(Gate::Only(Feature::AutoFocus, Modes(0b01)))
     .unit(Unit::Metres)
     .range(NEAREST_FOCUS, 100.0)
     .limit(HardLimit::AtLeast(NEAREST_FOCUS))
     .default(10.0),
-    row("f_stop", LENS, DepthOfField, perform(CardBand::Look, 2))
+    row("f_stop", LENS, DepthOfField, perform(CardBand::Look, 3))
         .gate(Gate::Fold(Feature::DepthOfField))
         .limit(HardLimit::AtLeast(0.5)),
     row(
@@ -176,7 +188,7 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
     )
     .param("enabled")
     .switch(Feature::MotionBlur)
-    .default(0.0),
+    .default(1.0),
     row(
         "shutter_angle",
         LENS,

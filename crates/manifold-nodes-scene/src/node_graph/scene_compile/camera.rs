@@ -170,6 +170,9 @@ fn tail(b: &mut Builder<'_>, camera: &ItemId, lens: u32) -> u32 {
         if let Some(coc) = find_type(&node, "node.coc_from_depth") {
             b.adopt(owner, "coc", coc);
         }
+        if let Some(focus) = find_type(&node, "node.auto_focus") {
+            b.adopt(owner, "focus", focus);
+        }
         b.push_node(node);
     }
     b.adopt(owner, "bokeh", tail.bokeh_id);

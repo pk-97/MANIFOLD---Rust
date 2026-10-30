@@ -49,6 +49,10 @@ pub(crate) fn build_cinematic_tail(
         GROUP_INPUT_TYPE_ID,
         "input",
     ));
+    // Focus follows what the camera looks at unless the card switches it to
+    // manual; only depth of field reads focus.
+    let focus_id = fresh_id();
+    dof_nodes.push(plain_node(focus_id, "focus", "node.auto_focus", "focus"));
     let coc_id = fresh_id();
     let mut coc_node = plain_node(coc_id, "coc", "node.coc_from_depth", "coc");
     coc_node
@@ -86,7 +90,9 @@ pub(crate) fn build_cinematic_tail(
         "output",
     ));
     dof_wires.push(wire(dof_in_id, "depth", coc_id, "depth"));
-    dof_wires.push(wire(dof_in_id, "camera", coc_id, "camera"));
+    dof_wires.push(wire(dof_in_id, "camera", focus_id, "camera"));
+    dof_wires.push(wire(dof_in_id, "depth", focus_id, "depth"));
+    dof_wires.push(wire(focus_id, "out", coc_id, "camera"));
     dof_wires.push(wire(coc_id, "out", bokeh_id, "width"));
     dof_wires.push(wire(dof_in_id, "color", bokeh_id, "in"));
     dof_wires.push(wire(bokeh_id, "out", dof_out_id, "out"));
