@@ -426,7 +426,12 @@ impl CoverRule {
                 self.slope_softness.to_radians().max(1e-3),
                 self.water,
             ],
-            [self.above, self.below, self.height_softness.max(1e-3), self.soil],
+            [
+                self.above,
+                self.below,
+                self.height_softness.max(1e-3),
+                self.soil,
+            ],
             [self.breakup, 1.0 / self.breakup_size.max(0.1), 0.0, 0.0],
         ]
     }

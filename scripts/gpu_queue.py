@@ -377,15 +377,23 @@ def _cargo_has_no_run(command):
     return "--no-run" in command[:separator]
 
 
+# Headless `manifold` processes this process started and keeps alive between
+# GPU runs (`look_loop.py`'s warm process): the app's binary, not the app.
+own_headless_pids = set()
+
+
 def app_pids():
     """Pids of running MANIFOLD apps: exact process name, so neither a
-    headless tool nor this script's own shell ever matches."""
+    headless tool nor this script's own shell ever matches. A headless
+    subcommand of the app's binary matches by name; one run inside a hold
+    never waits, and one kept between holds is in `own_headless_pids`."""
     try:
         out = subprocess.run(["pgrep", "-x", APP_PROCESS], capture_output=True,
                              text=True, timeout=5).stdout
     except (OSError, subprocess.SubprocessError):
         return []
-    return [int(pid) for pid in out.split() if pid.isdigit()]
+    return [int(pid) for pid in out.split()
+            if pid.isdigit() and int(pid) not in own_headless_pids]
 
 
 def app_wait_seconds():

@@ -26,6 +26,29 @@ impl PresetRuntime {
         self.state_store.cleanup_all();
     }
 
+    /// Give every node of `type_id` a fresh instance from the registry,
+    /// keeping its params, and return how many. `manifold look-loop` uses
+    /// this after a shader edit: the fresh node compiles the edited text,
+    /// while every other node, simulation state included, stays as it is.
+    pub fn rebuild_nodes_of_type(&mut self, type_id: &str) -> usize {
+        let registry = super::chain_dispatch::primitive_registry();
+        let mut rebuilt = 0;
+        for inst in self.graph.nodes_mut() {
+            if inst.node.type_id().as_str() != type_id {
+                continue;
+            }
+            let Some(fresh) = registry.construct(type_id) else {
+                continue;
+            };
+            inst.node = fresh;
+            inst.node.reconfigure(&inst.params);
+            // A memoized step reruns only when its params move.
+            inst.param_epoch += 1;
+            rebuilt += 1;
+        }
+        rebuilt
+    }
+
     /// State harvest across a rebuild: for
     /// every card whose `(effect_id, def_content_key)` matches a card in the
     /// prior runtime, move the prior node *impls* (the `Box<dyn EffectNode>`

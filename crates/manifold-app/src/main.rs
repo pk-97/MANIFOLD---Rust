@@ -138,6 +138,10 @@ mod perf_soak;
 // frame of a real project with per-pass GPU timestamps, calm vs splash.
 #[cfg(feature = "perf-soak")]
 mod frame_time;
+// `manifold look-loop <project> --frame F --png <out>`: a warm still that
+// re-renders on shader and param edits, driven by `scripts/look_loop.py`.
+#[cfg(feature = "perf-soak")]
+mod look_loop;
 // Sibling frame loop for bare-glb/gltf input. Same feature gate as `perf_soak` (dispatched from inside its `run()`).
 #[cfg(feature = "perf-soak")]
 mod perf_soak_import;
@@ -254,6 +258,9 @@ fn main() {
         let args: Vec<String> = std::env::args().collect();
         if args.get(1).map(String::as_str) == Some("frame-time") {
             crate::frame_time::run(&args[1..]);
+        }
+        if args.get(1).map(String::as_str) == Some("look-loop") {
+            crate::look_loop::run(&args[1..]);
         }
     }
 

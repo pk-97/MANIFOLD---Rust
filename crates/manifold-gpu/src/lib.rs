@@ -47,6 +47,8 @@ pub struct GpuMemorySnapshot {
 // optimised SPIR-V and emits platform-specific shader modules.
 mod alloc_counts;
 mod shader_common;
+// `manifold look-loop`'s edited shader text, swapped in at compile time.
+pub mod shader_swap;
 mod workgroup_zeroing;
 
 // ─── Backend selection ────────────────────────────────────────────────

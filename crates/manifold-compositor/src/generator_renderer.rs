@@ -220,6 +220,15 @@ impl GeneratorRenderer {
         }
     }
 
+    /// Rebuild every owned generator's nodes of `type_id`
+    /// ([`PresetRuntime::rebuild_nodes_of_type`]); returns how many.
+    pub fn rebuild_nodes_of_type(&mut self, type_id: &str) -> usize {
+        self.layer_generators
+            .values_mut()
+            .map(|state| state.generator.rebuild_nodes_of_type(type_id))
+            .sum()
+    }
+
     /// Drain every owned generator's per-step CPU profiles recorded on the
     /// last profiled frame.
     pub fn take_step_profiles(
