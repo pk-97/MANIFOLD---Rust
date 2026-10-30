@@ -53,6 +53,9 @@ pub enum SetupProblemKind {
     /// The water ran out of memory: this many particles were removed because
     /// their tile got no pool slot.
     MemoryFull(u32),
+    /// The scene is longer than the water reaches at its cell size: the water
+    /// stays in that span round its sources.
+    SpanClipped,
     /// The world left a body or copy group out. Carries the world's reason.
     BodyRefused(String),
     /// A source set to Model whose Model is unset or has no mesh; the
@@ -76,6 +79,7 @@ impl SetupProblemKind {
             Self::CopiesNotMade(count) => format!("{count} copies not made; the world's copy pool is full"),
             Self::PoolFull => "Out of water particles: inflows and sheets pause until some water drains or falls away. Add a Drain or raise Cell Size.".to_owned(),
             Self::MemoryFull(count) => format!("Water memory is full: {count} particles removed. Raise Cell Size or make the water smaller."),
+            Self::SpanClipped => "The scene is longer than water reaches at this Cell Size, so water stays in the part round its sources. Raise Cell Size to reach further.".to_owned(),
             Self::BodyRefused(reason) => sentence(reason),
             Self::ModelWithoutMesh(role) => format!("This {} uses a Model with no mesh, so it does nothing. Pick a Model with a mesh.", role.title()),
         }
@@ -708,7 +712,7 @@ pub fn problems_with_runtime<'a>(
                 None,
             );
         }
-        if report.fit.pool_full || report.fit.tile_removed > 0 {
+        if report.fit.pool_full || report.fit.tile_removed > 0 || report.fit.span_clipped {
             // The pool holds a fixed number of sites, so a coarser lattice
             // holds more water; Cell Size is the Water's, beside Fill Height.
             let item = anchor
@@ -731,6 +735,9 @@ pub fn problems_with_runtime<'a>(
                     &params,
                     bounds,
                 );
+            }
+            if report.fit.span_clipped {
+                add(SetupProblemKind::SpanClipped, &params, bounds);
             }
         }
     }
@@ -1342,6 +1349,7 @@ mod tests {
                 column: ColumnOutcome::Outside,
                 pool_full: false,
                 tile_removed: 0,
+                span_clipped: false,
             },
             refusal: None,
             layout: Some(&layout()),
@@ -1405,6 +1413,7 @@ mod tests {
                 column: ColumnOutcome::Outside,
                 pool_full: false,
                 tile_removed: 0,
+                span_clipped: false,
             },
             refusal: None,
             layout: None,

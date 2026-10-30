@@ -90,30 +90,37 @@ const KEY_MARGIN_TILES: u32 = 8;
 
 /// This frame's scene box and kill height kept inside what tile keys tell
 /// apart at cell size `h`: tiles a key period apart share a key, so the
-/// water and its rings must span less. A scene longer than that is refused
-/// by name. A kill height (Bounds off) is raised to that span below the
-/// scene's top, so water falling after a body is removed before its tiles
-/// could alias the ones above.
+/// water and its rings must span less. Along an axis where the scene is
+/// longer, the box is cut to that span, as near centred on `sources` (the
+/// box round the fills and inflows) as the scene allows, and the third value
+/// says so: the water works there and holds none past it. A kill height
+/// (Bounds off) is raised to that span below the box's top, so water falling
+/// after a body is removed before its tiles could alias the ones above.
 pub fn within_key_span(
     (scene, kill): ([[f32; 3]; 2], f32),
+    sources: Option<[[f32; 3]; 2]>,
     h: f64,
-) -> Result<([[f32; 3]; 2], f32), String> {
-    let span = KEY_PERIOD_TILES.map(|t| f64::from((t - KEY_MARGIN_TILES) * TILE) * h);
-    for (axis, name) in ["X", "Y", "Z"].into_iter().enumerate() {
-        let side = f64::from(scene[1][axis] - scene[0][axis]);
-        if side > span[axis] {
-            return Err(format!(
-                "Water: the scene is {side:.2} m along {name}; at a Cell Size of {h} m the water spans at most {:.2} m. Raise Cell Size or bring the scene in.",
-                span[axis]
-            ));
+) -> ([[f32; 3]; 2], f32, bool) {
+    let span = KEY_PERIOD_TILES.map(|t| (f64::from((t - KEY_MARGIN_TILES) * TILE) * h) as f32);
+    let mut kept = scene;
+    let mut clipped = false;
+    for axis in 0..3 {
+        let [lo, hi] = [scene[0][axis], scene[1][axis]];
+        if hi - lo <= span[axis] {
+            continue;
         }
+        let centre = sources.map_or(0.5 * (lo + hi), |box_| 0.5 * (box_[0][axis] + box_[1][axis]));
+        let start = (centre - 0.5 * span[axis]).clamp(lo, hi - span[axis]);
+        kept[0][axis] = start;
+        kept[1][axis] = start + span[axis];
+        clipped = true;
     }
     let kill = if kill == NO_KILL_HEIGHT {
         kill
     } else {
-        kill.max(scene[1][1] - span[1] as f32)
+        kill.max(kept[1][1] - span[1])
     };
-    Ok((scene, kill))
+    (kept, kill, clipped)
 }
 
 /// The box round `boxes`, or None when nothing is placed or the box has no
@@ -287,23 +294,33 @@ mod tests {
         assert_eq!(bounds_distance([2.0, 0.5, 0.0], lo, hi, all), 0.0);
     }
 
-    /// At 1 mm the water spans 504 tiles on y (4.032 m) and 2040 on x and z.
+    /// At 1 mm the water spans 504 tiles on y (4.032 m) and 2040 on x and z
+    /// (16.32 m). A longer scene is cut to the span round its sources, never
+    /// past its own ends, and a deep kill height is lifted to the span below
+    /// the kept top.
     #[test]
-    fn the_key_span_refuses_a_long_scene_and_lifts_a_deep_kill() {
+    fn the_key_span_cuts_a_long_scene_round_its_sources() {
         let h = 0.001;
-        let tall = [[0.0, 0.0, 0.0], [1.0, 4.1, 1.0]];
-        let err = within_key_span((tall, NO_KILL_HEIGHT), h).unwrap_err();
-        assert!(err.contains("along Y"), "{err}");
-        let wide = [[-9.0, 0.0, 0.0], [9.0, 1.0, 1.0]];
-        let err = within_key_span((wide, -1.0), h).unwrap_err();
-        assert!(err.contains("along X"), "{err}");
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        let tall = [[0.0, 0.0, 0.0], [1.0, 10.0, 1.0]];
+        let high_tap = Some([[0.0, 6.0, 0.0], [1.0, 7.0, 1.0]]);
+        let (kept, kill, clipped) = within_key_span((tall, -1.0), high_tap, h);
+        assert!(clipped);
+        assert!(near(kept[0][1], 6.5 - 2.016) && near(kept[1][1], 6.5 + 2.016), "{kept:?}");
+        assert!(near(kill, kept[0][1]), "{kill}");
+        assert_eq!(kept[0][0], 0.0, "the short axes stay");
+        // Sources near an end keep the span inside the scene.
+        let low_tap = Some([[0.0, 0.0, 0.0], [1.0, 0.5, 1.0]]);
+        let (kept, ..) = within_key_span((tall, NO_KILL_HEIGHT), low_tap, h);
+        assert!(near(kept[0][1], 0.0) && near(kept[1][1], 4.032), "{kept:?}");
+        let wide = [[-20.0, 0.0, 0.0], [20.0, 1.0, 1.0]];
+        let (kept, ..) = within_key_span((wide, -1.0), None, h);
+        assert!(near(kept[0][0], -8.16) && near(kept[1][0], 8.16), "{kept:?}");
         let scene = [[0.0, 0.0, 0.0], [1.0, 2.0, 1.0]];
-        let (_, deep) = within_key_span((scene, -100.0), h).unwrap();
-        assert!((deep - (2.0 - 4.032)).abs() < 1e-5, "{deep}");
-        assert_eq!(within_key_span((scene, -0.5), h).unwrap().1, -0.5);
-        assert_eq!(
-            within_key_span((scene, NO_KILL_HEIGHT), h).unwrap().1,
-            NO_KILL_HEIGHT
-        );
+        let (kept, deep, clipped) = within_key_span((scene, -100.0), None, h);
+        assert!(!clipped && kept == scene);
+        assert!(near(deep, 2.0 - 4.032), "{deep}");
+        assert_eq!(within_key_span((scene, -0.5), None, h).1, -0.5);
+        assert_eq!(within_key_span((scene, NO_KILL_HEIGHT), None, h).1, NO_KILL_HEIGHT);
     }
 }

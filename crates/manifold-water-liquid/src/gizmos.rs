@@ -37,6 +37,12 @@ impl SetupReport {
         self.refusal = None;
     }
 
+    /// Whether this frame's scene was longer than the tile keys reach, so the
+    /// water works in the span round its sources ([`crate::bounds::within_key_span`]).
+    pub fn clip_span(&mut self, clipped: bool) {
+        self.fit.span_clipped = clipped;
+    }
+
     /// The geometry was refused: no fit of an earlier setup stands. The
     /// reason's text is rebuilt only when it changes.
     pub fn refuse(&mut self, reason: &str) {
@@ -206,6 +212,7 @@ mod tests {
             column: ColumnOutcome::Clipped,
             pool_full: false,
             tile_removed: 0,
+            span_clipped: false,
         };
         report.accept(clipped, Some(([2.0, 1.0, 0.0], [2.0, 1.0, 1.0])));
         let taken = snapshot(&report);

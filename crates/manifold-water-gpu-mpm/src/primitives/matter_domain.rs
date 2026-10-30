@@ -238,6 +238,7 @@ pub(crate) fn fill_region(
         column: ColumnOutcome::Fits,
         pool_full: false,
         tile_removed: 0,
+        span_clipped: false,
     };
     let fill_height = filled.height();
     let pool_cells = ((f64::from(fill_height) / dx).round() as u32).min(layout.cells[1]);
@@ -1840,10 +1841,18 @@ impl MatterDomain {
             &self.impulses,
         )?;
 
-        let (scene, kill) = within_key_span(
+        let sources = union_box(
+            columns
+                .iter()
+                .flatten()
+                .map(|fill| box_about(fill.pos, fill.scale)),
+        );
+        let (scene, kill, clipped) = within_key_span(
             self.scene(&geometry, &columns, frame.epoch),
+            sources,
             geometry.setup.cell_size,
-        )?;
+        );
+        self.setup_report.clip_span(clipped);
         let simulated: f64 = (0..u64::from(frame.ticks))
             .map(|tick| {
                 frame

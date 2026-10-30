@@ -672,6 +672,7 @@ mod tests {
             column: ColumnOutcome::Clipped,
             pool_full: false,
             tile_removed: 0,
+            span_clipped: false,
         };
         let at = |x: f32| Some(([x, 0.0, 0.0], [x + 1.0, 1.0, 1.0]));
         let snapshot = |column_box, fit| FluidDomainSnapshot {

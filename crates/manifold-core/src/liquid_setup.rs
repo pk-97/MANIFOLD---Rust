@@ -36,6 +36,10 @@ pub struct SetupFit {
     pub pool_full: bool,
     /// Particles the last tick removed because their tile got no pool slot.
     pub tile_removed: u32,
+    /// The scene is longer than the water's tile keys tell apart at its cell
+    /// size: the water works in that span round its sources and holds none
+    /// past it.
+    pub span_clipped: bool,
 }
 
 impl SetupFit {

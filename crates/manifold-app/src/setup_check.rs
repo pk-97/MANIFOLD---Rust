@@ -209,6 +209,7 @@ impl Seen<'_> {
         fit.fill_capped |= self.fit.fill_capped;
         fit.pool_full |= self.fit.pool_full;
         fit.tile_removed = fit.tile_removed.max(self.fit.tile_removed);
+        fit.span_clipped |= self.fit.span_clipped;
         fit.column = match (fit.column, self.fit.column) {
             (ColumnOutcome::Fits, ran) => ran,
             // A column that was outside also crossed the wall.

@@ -194,6 +194,7 @@ fn fill_sites(
         column: ColumnOutcome::Fits,
         pool_full: false,
         tile_removed: 0,
+        span_clipped: false,
     };
     let fill_height = filled.height();
     let min = layout.min.map(f64::from);
@@ -1426,10 +1427,19 @@ impl GpuFlipDomain {
             }
         }
         self.observed.used();
-        let (scene, kill_height) = within_key_span(
+        let sources = union_box(
+            columns
+                .iter()
+                .flatten()
+                .map(|fill| box_about(fill.pos, fill.scale))
+                .chain(self.bodies.region_boxes().map(|(_, placed)| placed)),
+        );
+        let (scene, kill_height, clipped) = within_key_span(
             self.scene(&geometry, &columns, frame.epoch, drawn_radius),
+            sources,
             geometry.setup.cell_size,
-        )?;
+        );
+        self.setup_report.clip_span(clipped);
         self.scene_box = scene;
         self.bodies.prepare_clock_vertices(
             scene[0],
