@@ -20,8 +20,8 @@ use manifold_node_engine::primitive::Primitive;
 /// The Cohesion dial's range, kPa: 0 is dry sand, 20 holds a cliff about
 /// ten metres tall.
 const COHESION_KPA_RANGE: (f32, f32) = (0.0, 20.0);
-/// The Density dial's range, kg/m³: snow and powder up to wet heavy soil.
-const DENSITY_RANGE: (f32, f32) = (100.0, 3000.0);
+/// The Density dial's range, kg/m³: snow and powder up to mercury.
+const DENSITY_RANGE: (f32, f32) = (100.0, 14000.0);
 /// Snow's Hardening ξ: 0 never stiffens as it packs; Stomakhin et al. 2013
 /// ran 5 to 10.
 const HARDENING_RANGE: (f32, f32) = (0.0, 20.0);
@@ -56,7 +56,7 @@ manifold_node_engine::primitive! {
     },
     params: [
         ParamDef { name: Cow::Borrowed("slot"), label: "Slot", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, (MAX_MATTER_SLOTS - 1) as f32)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("material"), label: "Material", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 5.0)), enum_values: &MATTER_KINDS },
+        ParamDef { name: Cow::Borrowed("material"), label: "Material", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, (MATTER_KINDS.len() - 1) as f32)), enum_values: &MATTER_KINDS },
         ParamDef { name: Cow::Borrowed("stiffness"), label: "Stiffness", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.5, 3.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("friction_angle"), label: "Friction Angle", ty: ParamType::Float, default: ParamValue::Float(SAND_FRICTION_ANGLE), range: Some(FRICTION_ANGLE_RANGE), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("cohesion"), label: "Cohesion (kPa)", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some(COHESION_KPA_RANGE), enum_values: &[] },

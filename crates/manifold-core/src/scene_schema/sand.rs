@@ -33,8 +33,10 @@ fn grains(fields: &ItemFields) -> bool {
 fn made_of(fields: &ItemFields, matter: Matter) -> bool {
     matches!(fields, ItemFields::Sand(s) if s.matter == matter)
 }
-fn sand(fields: &ItemFields) -> bool {
-    made_of(fields, Matter::Sand)
+/// Sand, gravel and pebbles: grains that pile at their friction angle.
+fn granular(fields: &ItemFields) -> bool {
+    matches!(fields, ItemFields::Sand(s)
+        if matches!(s.matter, Matter::Sand | Matter::Gravel | Matter::Pebbles))
 }
 fn snow(fields: &ItemFields) -> bool {
     made_of(fields, Matter::Snow)
@@ -51,6 +53,12 @@ fn goo(fields: &ItemFields) -> bool {
 fn jelly(fields: &ItemFields) -> bool {
     made_of(fields, Matter::Jelly)
 }
+fn liquid_metal(fields: &ItemFields) -> bool {
+    made_of(fields, Matter::LiquidMetal)
+}
+fn lava(fields: &ItemFields) -> bool {
+    made_of(fields, Matter::Lava)
+}
 
 /// Each material's Density row: one material param, its own starting value.
 const fn density(property: &'static str, default: f32, tip: &'static str) -> PropertyRow {
@@ -62,8 +70,8 @@ const fn density(property: &'static str, default: f32, tip: &'static str) -> Pro
         .default(default)
 }
 
-/// Clay's, mud's and goo's Firmness: the shear yield stress, below which it
-/// holds its shape.
+/// Clay's, mud's, goo's, liquid metal's and lava's Firmness: the shear yield
+/// stress, below which it holds its shape.
 const fn firmness(property: &'static str, default: f32, range: (f32, f32)) -> PropertyRow {
     row(property, MATERIAL, Simulation, perform(CardBand::Scene, 3))
         .param("yield_stress")
@@ -76,7 +84,8 @@ const fn firmness(property: &'static str, default: f32, range: (f32, f32)) -> Pr
         .range(range.0, range.1)
 }
 
-/// Clay's, mud's and goo's Thickness: the plastic viscosity once it flows.
+/// Clay's, mud's, goo's, liquid metal's and lava's Thickness: the plastic
+/// viscosity once it flows.
 const fn thickness(property: &'static str, default: f32, range: (f32, f32)) -> PropertyRow {
     row(property, MATERIAL, Simulation, perform(CardBand::Scene, 4))
         .param("viscosity")
@@ -87,7 +96,7 @@ const fn thickness(property: &'static str, default: f32, range: (f32, f32)) -> P
         .range(range.0, range.1)
 }
 
-pub static SAND_ROWS: [PropertyRow; 49] = [
+pub static SAND_ROWS: [PropertyRow; 55] = [
     POS_X,
     POS_Y,
     POS_Z,
@@ -113,14 +122,14 @@ pub static SAND_ROWS: [PropertyRow; 49] = [
     row("friction_angle", MATERIAL, Simulation, perform(CardBand::Scene, 3))
         .name("Friction Angle")
         .unit(Unit::Degrees)
-        .tip("How steep a pile holds. Sand flows below it and stops at it")
-        .when(sand),
+        .tip("How steep a pile holds. It flows below it and stops at it")
+        .when(granular),
     row("cohesion", MATERIAL, Simulation, perform(CardBand::Scene, 4))
         .name("Cohesion")
         .unit(Unit::Kilopascals)
         .tip("0 is dry sand. Higher holds a cliff, about half a metre per kPa; drop it live to bring the cliff down")
-        .when(sand),
-    density("density", 1600.0, "How heavy the sand is, which sets how bodies sink into it").when(sand),
+        .when(granular),
+    density("density", 1600.0, "How heavy it is, which sets how bodies sink into it").when(granular),
     row("hardening", MATERIAL, Simulation, perform(CardBand::Scene, 3))
         .name("Hardening")
         .tip("How much stiffer snow gets as it packs. Around 10 packs into firm clumps that break off; 0 stays loose powder")
@@ -146,6 +155,12 @@ pub static SAND_ROWS: [PropertyRow; 49] = [
         .default(80.0)
         .range(0.0, 500.0)
         .when(jelly),
+    firmness("metal_firmness", 0.0, (0.0, 100.0)).when(liquid_metal),
+    thickness("metal_thickness", 0.5, (0.0, 100.0)).when(liquid_metal),
+    density("metal_density", 6100.0, "How heavy the metal is: gallium is about 6100, mercury 13500").when(liquid_metal),
+    firmness("lava_firmness", 500.0, (0.0, 1.0e4)).when(lava),
+    thickness("lava_thickness", 1000.0, (10.0, 1.0e4)).when(lava),
+    density("lava_density", 2600.0, "How heavy the lava is, which sets how it spreads and how bodies sink into it").when(lava),
     row("points_per_cell", DOMAIN, Simulation, setup()).name("Particles per Cell"),
     row("seed", DOMAIN, Simulation, setup()).name("Seed"),
     SURFACE_DETAIL,
@@ -193,6 +208,22 @@ const MATTERS: &[Choice] = &[
         key: "jelly",
         label: "Jelly",
     },
+    Choice {
+        key: "gravel",
+        label: "Gravel",
+    },
+    Choice {
+        key: "pebbles",
+        label: "Pebbles",
+    },
+    Choice {
+        key: "liquidMetal",
+        label: "Liquid Metal",
+    },
+    Choice {
+        key: "lava",
+        label: "Lava",
+    },
 ];
 
 /// What the Sand is made of. Changing it keeps the domain, its cells and
@@ -219,9 +250,12 @@ const MATTER_FIELD: FieldRow = FieldRow {
             .position(|choice| choice.key == key)
             .ok_or_else(|| wrong_value("matter", value))?;
         s.matter = Matter::ALL[at];
-        // Sand and snow draw their loose part as grains and crumbs, the rest
-        // as their surface.
-        s.draw = if matches!(s.matter, Matter::Sand | Matter::Snow) {
+        // Sand, snow, gravel and pebbles draw grains over their surface, the
+        // rest their surface alone.
+        s.draw = if matches!(
+            s.matter,
+            Matter::Sand | Matter::Snow | Matter::Gravel | Matter::Pebbles
+        ) {
             WaterDraw::Particles
         } else {
             WaterDraw::Surface
@@ -264,11 +298,19 @@ pub struct GrainShape {
     pub squash: [f32; 3],
 }
 
-/// Every Matter's grains are chips, unsquashed.
-pub fn grain_shape(_matter: Matter) -> GrainShape {
-    GrainShape {
-        pebble: false,
-        squash: [1.0; 3],
+/// Pebbles are smooth flattened stones, as river and beach stones are worn:
+/// about half as thick as they are long and four fifths as wide. Every other
+/// Matter's grains are chips, unsquashed.
+pub fn grain_shape(matter: Matter) -> GrainShape {
+    match matter {
+        Matter::Pebbles => GrainShape {
+            pebble: true,
+            squash: [1.0, 0.55, 0.8],
+        },
+        _ => GrainShape {
+            pebble: false,
+            squash: [1.0; 3],
+        },
     }
 }
 
@@ -280,14 +322,20 @@ const FROM_SET: [&str; 4] = ["color_r", "color_g", "color_b", "roughness"];
 /// starter materials: its colour, roughness, normal and height pictures,
 /// box mapped at the ground's real size and carved by parallax. Sand: dune
 /// ripples. Snow: soft drifted snow. Clay: worked clay with finger smears.
-/// Mud: damp rippled mud. Goo and jelly are clear and draw no picture.
+/// Mud: damp rippled mud. Gravel: mixed grey and pink crushed stone.
+/// Pebbles: mixed river stones, one stone per pebble. Lava: dark crust with
+/// molten rock glowing in its seams. Goo, jelly and liquid metal are clear
+/// or mirror-bright and draw no picture.
 pub fn matter_set(matter: Matter) -> Option<&'static str> {
     match matter {
         Matter::Sand => Some("Ground097"),
         Matter::Snow => Some("Snow010A"),
         Matter::Clay => Some("Clay006"),
         Matter::Mud => Some("Ground094C"),
-        Matter::Goo | Matter::Jelly => None,
+        Matter::Gravel => Some("Gravel022"),
+        Matter::Pebbles => Some("Rocks022"),
+        Matter::Lava => Some("LavaCrust"),
+        Matter::Goo | Matter::Jelly | Matter::LiquidMetal => None,
     }
 }
 
@@ -306,6 +354,11 @@ pub fn matter_set(matter: Matter) -> Option<&'static str> {
 ///   through its own thickness, at honey's IOR 1.49. It takes its full tint
 ///   over a metre, so a thick blob reads amber rather than red.
 /// - Jelly: gelatin, clear and absorbing red, at IOR 1.34.
+/// - Gravel and pebbles: stone, matte.
+/// - Liquid metal: a mirror (metallic, nearly smooth) at gallium's and
+///   mercury's silver, about 0.8 reflectance.
+/// - Lava: its crust darkened to basalt's black-grey and a little glassy,
+///   its seams glowing at about six times white (the picture's emission).
 fn matter_look(matter: Matter) -> &'static [(&'static str, f32)] {
     match matter {
         Matter::Sand => &[("grain", 0.0)],
@@ -371,5 +424,25 @@ fn matter_look(matter: Matter) -> &'static [(&'static str, f32)] {
             ("volume_attenuation_color_b", 0.1),
             ("volume_attenuation_distance", 0.25),
         ],
+        Matter::Gravel | Matter::Pebbles => &[("grain", 0.0), ("specular", 0.5)],
+        Matter::LiquidMetal => &[
+            ("color_r", 0.8),
+            ("color_g", 0.81),
+            ("color_b", 0.83),
+            ("metallic", 1.0),
+            ("roughness", 0.04),
+            ("specular", 1.0),
+            ("grain", 0.0),
+        ],
+        Matter::Lava => &[
+            ("color_r", 0.32),
+            ("color_g", 0.3),
+            ("color_b", 0.29),
+            ("roughness", 0.6),
+            ("grain", 0.0),
+            ("emission_r", 1.0),
+            ("emission_g", 1.0),
+            ("emission_b", 1.0),
+            ("emission_intensity", 6.0),        ],
     }
 }

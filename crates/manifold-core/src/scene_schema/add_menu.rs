@@ -93,7 +93,7 @@ const fn model_file(key: &'static str, group: &'static str, label: &'static str)
 }
 
 /// Every Add menu entry, in menu order.
-pub static ADD_ENTRIES: [AddEntry; 68] = [
+pub static ADD_ENTRIES: [AddEntry; 72] = [
     entry(
         "object.cube",
         "Object",
@@ -242,6 +242,33 @@ pub static ADD_ENTRIES: [AddEntry; 68] = [
         "Jelly",
         || matter(Matter::Jelly, WaterDraw::Surface),
     ),
+    entry(
+        "matter.gravel",
+        "Matter",
+        "Gravel",
+        ItemKind::Sand,
+        "Gravel",
+        || matter(Matter::Gravel, WaterDraw::Particles),
+    ),
+    entry(
+        "matter.pebbles",
+        "Matter",
+        "Pebbles",
+        ItemKind::Sand,
+        "Pebbles",
+        || matter(Matter::Pebbles, WaterDraw::Particles),
+    ),
+    entry(
+        "matter.liquid_metal",
+        "Matter",
+        "Liquid Metal",
+        ItemKind::Sand,
+        "Liquid Metal",
+        || matter(Matter::LiquidMetal, WaterDraw::Surface),
+    ),
+    entry("matter.lava", "Matter", "Lava", ItemKind::Sand, "Lava", || {
+        matter(Matter::Lava, WaterDraw::Surface)
+    }),
     entry("smoke", "Smoke", "Smoke", ItemKind::Smoke, "Smoke", || {
         ItemFields::default_for(ItemKind::Smoke)
     }),
@@ -633,9 +660,11 @@ pub const FORCE_STARTS: [(&str, &[(&str, f32)]); 3] = [
 /// Each Matter's surface, built at the simulation's cell (bumps smaller than
 /// a cell are single points jittering, which boil) and smoothed as the
 /// material is. Snow's loose snow breaks off as crumbs under a centimetre
-/// across; mud and clay keep their lumps and folds, goo and jelly settle
-/// glassy smooth.
-pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 5] = [
+/// across; mud, clay and lava keep their lumps and folds, goo, jelly and
+/// liquid metal settle glassy smooth. Gravel is crushed stone about a
+/// centimetre across, piling steeper than sand; pebbles are a few
+/// centimetres across, rounder, and pile a little less steep than gravel.
+pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 9] = [
     (
         "matter.snow",
         &[
@@ -660,6 +689,34 @@ pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 5] = [
         "matter.jelly",
         &[("surface_detail", 0.0), ("surface_smoothness", 2.0)],
     ),
+    (
+        "matter.gravel",
+        &[
+            ("surface_detail", 0.0),
+            ("surface_smoothness", 1.0),
+            ("grain_size", 0.012),
+            ("friction_angle", 40.0),
+            ("density", 1650.0),
+        ],
+    ),
+    (
+        "matter.pebbles",
+        &[
+            ("surface_detail", 0.0),
+            ("surface_smoothness", 1.0),
+            ("grain_size", 0.035),
+            ("friction_angle", 37.0),
+            ("density", 1700.0),
+        ],
+    ),
+    (
+        "matter.liquid_metal",
+        &[("surface_detail", 0.0), ("surface_smoothness", 2.0)],
+    ),
+    (
+        "matter.lava",
+        &[("surface_detail", 0.0), ("surface_smoothness", 1.0)],
+    ),
 ];
 
 /// The surface a Sand of `matter` starts with: its Add menu entry's starts.
@@ -671,6 +728,10 @@ pub fn matter_starts(matter: Matter) -> &'static [(&'static str, f32)] {
         Matter::Mud => "matter.mud",
         Matter::Goo => "matter.goo",
         Matter::Jelly => "matter.jelly",
+        Matter::Gravel => "matter.gravel",
+        Matter::Pebbles => "matter.pebbles",
+        Matter::LiquidMetal => "matter.liquid_metal",
+        Matter::Lava => "matter.lava",
     })
 }
 

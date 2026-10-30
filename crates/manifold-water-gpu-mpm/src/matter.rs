@@ -354,10 +354,25 @@ pub enum MatterKind {
     Mud,
     Goo,
     Jelly,
+    Gravel,
+    Pebbles,
+    LiquidMetal,
+    Lava,
 }
 
 /// The domain's `material` enum, in [`MatterKind`] order.
-pub const MATTER_KINDS: [&str; 6] = ["sand", "snow", "clay", "mud", "goo", "jelly"];
+pub const MATTER_KINDS: [&str; 10] = [
+    "sand",
+    "snow",
+    "clay",
+    "mud",
+    "goo",
+    "jelly",
+    "gravel",
+    "pebbles",
+    "liquid metal",
+    "lava",
+];
 
 /// Snow at Stiffness 1: Stomakhin et al. 2013's reference snow (Table 2),
 /// E₀ = 1.4e5 Pa, ν = 0.2, hardening ξ = 10, at [`SNOW_REFERENCE_DENSITY`].
@@ -390,6 +405,17 @@ const MUD_YOUNG: f64 = 1.0e5;
 const MUD_POISSON: f64 = 0.4;
 const GOO_YOUNG: f64 = 5.0e4;
 const GOO_POISSON: f64 = 0.45;
+/// Liquid metal (gallium, mercury): a fluid whose real viscosity, about a
+/// thousandth of a Pa·s, is far below what a cell resolves, so it runs as
+/// thin as the grid lets it, nearly incompressible and many times heavier
+/// than water. Its stiffness is mud's, enough to hold its volume.
+const METAL_YOUNG: f64 = 1.0e5;
+const METAL_POISSON: f64 = 0.45;
+/// Lava: basalt melt, a Bingham fluid with a yield stress of a few hundred
+/// Pa and a viscosity of hundreds to thousands of Pa·s, so a flow creeps and
+/// holds a lobe at its front. It runs at clay's stiffness.
+const LAVA_YOUNG: f64 = 3.0e5;
+const LAVA_POISSON: f64 = 0.4;
 
 impl MatterKind {
     pub fn from_index(index: usize) -> Option<Self> {
@@ -400,6 +426,10 @@ impl MatterKind {
             Self::Mud,
             Self::Goo,
             Self::Jelly,
+            Self::Gravel,
+            Self::Pebbles,
+            Self::LiquidMetal,
+            Self::Lava,
         ]
         .get(index)
         .copied()
@@ -486,7 +516,7 @@ impl MatterMaterial {
             }
         };
         match kind {
-            MatterKind::Sand => {
+            MatterKind::Sand | MatterKind::Gravel | MatterKind::Pebbles => {
                 Self::sand(dials.stiffness, dials.friction_angle, dials.cohesion_kpa)
             }
             MatterKind::Snow => Self {
@@ -500,6 +530,8 @@ impl MatterMaterial {
             MatterKind::Clay => flowing(CLAY_YOUNG, CLAY_POISSON),
             MatterKind::Mud => flowing(MUD_YOUNG, MUD_POISSON),
             MatterKind::Goo => flowing(GOO_YOUNG, GOO_POISSON),
+            MatterKind::LiquidMetal => flowing(METAL_YOUNG, METAL_POISSON),
+            MatterKind::Lava => flowing(LAVA_YOUNG, LAVA_POISSON),
             MatterKind::Jelly => {
                 let m = elastic(MatterRule::Elastic, JELLY_YOUNG, JELLY_POISSON);
                 Self {

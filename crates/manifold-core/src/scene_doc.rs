@@ -650,7 +650,8 @@ impl Default for SandFields {
 /// A Sand item's material, in the Matter domain's `material` enum order
 /// (manifold-water-gpu-mpm's MATTER_KINDS): sand and soil, snow that packs
 /// and crumbles, clay that holds its shape, mud and goo that flow thickly,
-/// and jelly that springs back.
+/// jelly that springs back, gravel and pebbles that pile and roll, liquid
+/// metal that runs heavy, and lava that creeps.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Matter {
@@ -661,16 +662,24 @@ pub enum Matter {
     Mud,
     Goo,
     Jelly,
+    Gravel,
+    Pebbles,
+    LiquidMetal,
+    Lava,
 }
 
 impl Matter {
-    pub const ALL: [Matter; 6] = [
+    pub const ALL: [Matter; 10] = [
         Matter::Sand,
         Matter::Snow,
         Matter::Clay,
         Matter::Mud,
         Matter::Goo,
         Matter::Jelly,
+        Matter::Gravel,
+        Matter::Pebbles,
+        Matter::LiquidMetal,
+        Matter::Lava,
     ];
 
     /// Its index in the domain's `material` enum.
@@ -687,6 +696,10 @@ impl Matter {
             Matter::Mud => "Mud",
             Matter::Goo => "Goo",
             Matter::Jelly => "Jelly",
+            Matter::Gravel => "Gravel",
+            Matter::Pebbles => "Pebbles",
+            Matter::LiquidMetal => "Liquid Metal",
+            Matter::Lava => "Lava",
         }
     }
 }
