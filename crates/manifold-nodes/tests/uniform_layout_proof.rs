@@ -633,6 +633,10 @@ const NON_STANDALONE: &[&str] = &[
     // over one hand shader, its GasUniforms reflected in
     // uniform_layout_extended.
     "node.gas_volume",
+    // Terrain: noise, raindrop erosion and soil slides over one hand shader,
+    // kept across frames; its TerrainUniforms reflected in
+    // uniform_layout_extended.
+    "node.terrain",
     // CPU-only piece cutter: the piece is written to shared memory, no GPU kernel or uniforms.
     "node.mesh_fragment",
 ];

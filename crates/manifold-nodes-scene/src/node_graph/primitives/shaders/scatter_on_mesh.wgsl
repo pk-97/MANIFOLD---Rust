@@ -1,5 +1,11 @@
 // node.scatter_on_mesh — scatter Array<InstanceTransform> across a mesh's
 // surface, area-weighted so density is uniform regardless of triangulation.
+// The triangles are the vertices taken three at a time, or `indices` for an
+// indexed mesh. The area table is summed only when the triangles change
+// (`Summed` in scatter_on_mesh.rs); each copy's triangle and spot on it come
+// from its own hash, so while the surface moves the copy rides it. A copy
+// grows only where its CoverRule holds (cover_rule.wgsl, prepended), kept
+// with that chance, so a soft edge thins out.
 // Same 3-pass area/scan/place shape as spawn_from_mesh.wgsl (single-thread
 // prefix-scan barrier between passes — the scan never reads its result back
 // to the CPU, it stays on-GPU for the place pass exactly like the
@@ -39,6 +45,15 @@ struct Params {
     // previous, higher count wrote) would otherwise stay on screen and the
     // count fader would appear dead.
     capacity: u32,
+    // 1 when `indices` lists the triangles.
+    indexed: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+    // Where copies grow: CoverRule's slope, height and breakup.
+    rule_slope: vec4<f32>,
+    rule_height: vec4<f32>,
+    rule_breakup: vec4<f32>,
 };
 
 struct MeshVertex {
@@ -65,6 +80,16 @@ struct InstanceTransform {
 // stays on-GPU and feeds place_main directly, same shared-buffer contract
 // as spawn_from_mesh.wgsl.
 @group(0) @binding(3) var<storage, read_write> cumulative: array<f32>;
+// The triangles' vertex index triples, read only when `indexed`.
+@group(0) @binding(4) var<storage, read> indices: array<u32>;
+
+// The vertex at corner `k` of triangle `t`.
+fn corner(t: u32, k: u32) -> MeshVertex {
+    if params.indexed != 0u {
+        return vertices[indices[t * 3u + k]];
+    }
+    return vertices[t * 3u + k];
+}
 
 fn wang_hash(seed_in: u32) -> u32 {
     var seed = seed_in;
@@ -95,9 +120,9 @@ fn area_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if t >= params.triangle_count {
         return;
     }
-    let v0 = vertices[t * 3u].position;
-    let v1 = vertices[t * 3u + 1u].position;
-    let v2 = vertices[t * 3u + 2u].position;
+    let v0 = corner(t, 0u).position;
+    let v1 = corner(t, 1u).position;
+    let v2 = corner(t, 2u).position;
     cumulative[t] = length(cross(v1 - v0, v2 - v0)) * 0.5;
 }
 
@@ -166,9 +191,12 @@ fn place_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let tri = lo;
 
-    let p0 = vertices[tri * 3u].position;
-    let p1 = vertices[tri * 3u + 1u].position;
-    let p2 = vertices[tri * 3u + 2u].position;
+    let c0 = corner(tri, 0u);
+    let c1 = corner(tri, 1u);
+    let c2 = corner(tri, 2u);
+    let p0 = c0.position;
+    let p1 = c1.position;
+    let p2 = c2.position;
 
     // Uniform barycentric sample within the triangle (sqrt trick), same as
     // spawn_from_mesh.wgsl's place_main.
@@ -191,32 +219,38 @@ fn place_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let h4 = wang_hash(h3);
     let yaw = hash_float(h4) * 6.28318530718;
 
+    // The sampled triangle's flat face normal (not vertex-interpolated
+    // — "the sampled triangle's normal" per the design, and it's
+    // trivially correct on the flat triangle-list layout, same
+    // reasoning as node.facet_normals).
+    let raw_normal = cross(p1 - p0, p2 - p0);
+    let n_len = length(raw_normal);
+    var n = vec3<f32>(0.0, 1.0, 0.0);
+    if n_len > 1.0e-8 {
+        n = raw_normal / n_len;
+    }
+    // Orient to the mesh's DECLARED outward side: the winding-derived
+    // face normal flips to the hemisphere of the triangle's own vertex
+    // (shading) normals. Winding is not authoritative here — terrain
+    // grids arrive with -Y winding but +Y vertex normals, and aligning
+    // to the raw face normal planted every instance upside-down under
+    // the ground. Zero/degenerate vertex normals leave the face normal
+    // untouched.
+    let n_vertex = c0.normal + c1.normal + c2.normal;
+    if dot(n, n_vertex) < 0.0 {
+        n = -n;
+    }
+
+    // Grow only where the rule holds, kept with its chance across a soft
+    // edge.
+    let rule = CoverRule(params.rule_slope, params.rule_height, params.rule_breakup);
+    if hash_float(wang_hash(h4 ^ 0x9e3779b9u)) >= cover_rule_holds(rule, surface_pos, n.y) {
+        park_zero(i);
+        return;
+    }
+
     var euler: vec3<f32>;
     if params.align_to_normal != 0u {
-        // The sampled triangle's flat face normal (not vertex-interpolated
-        // — "the sampled triangle's normal" per the design, and it's
-        // trivially correct on the flat triangle-list layout, same
-        // reasoning as node.facet_normals).
-        let raw_normal = cross(p1 - p0, p2 - p0);
-        let n_len = length(raw_normal);
-        var n = vec3<f32>(0.0, 1.0, 0.0);
-        if n_len > 1.0e-8 {
-            n = raw_normal / n_len;
-        }
-        // Orient to the mesh's DECLARED outward side: the winding-derived
-        // face normal flips to the hemisphere of the triangle's own vertex
-        // (shading) normals. Winding is not authoritative here — terrain
-        // grids arrive with -Y winding but +Y vertex normals, and aligning
-        // to the raw face normal planted every instance upside-down under
-        // the ground. Zero/degenerate vertex normals leave the face normal
-        // untouched.
-        let n_vertex = vertices[tri * 3u].normal
-            + vertices[tri * 3u + 1u].normal
-            + vertices[tri * 3u + 2u].normal;
-        if dot(n, n_vertex) < 0.0 {
-            n = -n;
-        }
-
         // Build an orthonormal frame with `n` as the up column. `ref_axis`
         // is chosen so the tangent never nearly-parallels world Z when n is
         // near world-up (0,1,0) — the common terrain case — which keeps

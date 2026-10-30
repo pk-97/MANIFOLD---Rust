@@ -1048,12 +1048,8 @@ struct MaterialCover {
     // x, y, z: 1 where the base colour, normal and metal-rough maps are
     // wired; w Amount, 0 for no cover.
     maps: vec4<f32>,
-    // x steeper than, y flatter than, z their softness, in radians.
-    slope: vec4<f32>,
-    // x above, y below, z their softness, in world metres.
-    height: vec4<f32>,
-    // x Breakup, y 1/Breakup Size.
-    breakup: vec4<f32>,
+    // Where it lies (`cover_rule.wgsl`).
+    rule: CoverRule,
 };
 
 struct MaterialCovers {
@@ -1097,41 +1093,10 @@ fn begin_covers(box_pos: vec3<f32>, box_normal: vec3<f32>, ax: vec3<f32>, ay: ve
     cover_axes = mat3x3<f32>(ax, ay, az);
 }
 
-fn cover_hash(c: vec2<i32>) -> f32 {
-    return box_hash(c).x;
-}
-
-// Smooth value noise in [-1, 1], two octaves.
-fn cover_noise(p: vec2<f32>) -> f32 {
-    var sum = 0.0;
-    var q = p;
-    var amplitude = 0.65;
-    for (var octave = 0; octave < 2; octave++) {
-        let c = vec2<i32>(floor(q));
-        let f = fract(q);
-        let w = f * f * (3.0 - 2.0 * f);
-        let a = cover_hash(c);
-        let b = cover_hash(c + vec2<i32>(1, 0));
-        let d = cover_hash(c + vec2<i32>(0, 1));
-        let e = cover_hash(c + vec2<i32>(1, 1));
-        sum += amplitude * (mix(mix(a, b, w.x), mix(d, e, w.x), w.y) * 2.0 - 1.0);
-        amplitude = 0.35;
-        q = q * 2.7 + vec2<f32>(17.3, -5.1);
-    }
-    return sum;
-}
-
 // How much of cover `c` lies at world point `p` on ground whose geometric
 // normal points `up` of the way to world up: 0 to Amount.
 fn cover_lies(c: MaterialCover, p: vec3<f32>, up: f32) -> f32 {
-    let push = 3.0 * c.breakup.x * cover_noise(p.xz * c.breakup.y);
-    let angle = acos(clamp(up, -1.0, 1.0)) + push * c.slope.z;
-    let steeper = select(smoothstep(c.slope.x - c.slope.z, c.slope.x + c.slope.z, angle), 1.0, c.slope.x <= 0.0);
-    let flatter = select(1.0 - smoothstep(c.slope.y - c.slope.z, c.slope.y + c.slope.z, angle), 1.0, c.slope.y >= 1.5707);
-    let y = p.y + push * c.height.z;
-    let above = smoothstep(c.height.x - c.height.z, c.height.x + c.height.z, y);
-    let below = 1.0 - smoothstep(c.height.y - c.height.z, c.height.y + c.height.z, y);
-    return steeper * flatter * above * below * c.maps.w;
+    return cover_rule_holds(c.rule, p, up) * c.maps.w;
 }
 
 struct CoverRead {

@@ -405,6 +405,24 @@ impl Default for CoverRule {
     }
 }
 
+impl CoverRule {
+    /// The rule as `CoverRule` in `cover_rule.wgsl` reads it: the slopes and
+    /// their softness in radians, the heights and their softness in metres,
+    /// then Breakup and 1 / Breakup Size. Amount is the caller's.
+    pub fn packed(&self) -> [[f32; 4]; 3] {
+        [
+            [
+                self.steeper_than.to_radians(),
+                self.flatter_than.to_radians(),
+                self.slope_softness.to_radians().max(1e-3),
+                0.0,
+            ],
+            [self.above, self.below, self.height_softness.max(1e-3), 0.0],
+            [self.breakup, 1.0 / self.breakup_size.max(0.1), 0.0, 0.0],
+        ]
+    }
+}
+
 impl Material {
     /// Identity-ish unlit-white default. Provided as a no-op fallback for
     /// test fixtures and for the very-narrow case where a backend exposes

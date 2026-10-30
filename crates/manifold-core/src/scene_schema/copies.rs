@@ -64,7 +64,7 @@ const fn internal(property: &'static str, param: &'static str, why: &'static str
     card(property, param, Exposure::Internal(why))
 }
 
-pub static COPIES_ROWS: [PropertyRow; 32] = [
+pub static COPIES_ROWS: [PropertyRow; 40] = [
     card("count", "copy_count", perform(CardBand::Scene, 0))
         .default(START_COUNT)
         .tip(crate::copies_body::MAX_COPIES_REASON),
@@ -102,6 +102,30 @@ pub static COPIES_ROWS: [PropertyRow; 32] = [
         perform(CardBand::Scene, 6),
     )
     .name("Size Max"),
+    // Where the copies grow, as a Material's Covers lie: the defaults grow
+    // them everywhere.
+    surface("surface_steeper_than", "steeper_than", setup())
+        .name("Steeper Than")
+        .unit(Unit::Degrees),
+    surface("surface_flatter_than", "flatter_than", setup())
+        .name("Flatter Than")
+        .unit(Unit::Degrees),
+    surface("surface_slope_softness", "slope_softness", setup())
+        .name("Slope Softness")
+        .unit(Unit::Degrees),
+    surface("surface_above", "above", setup())
+        .name("Above")
+        .unit(Unit::Metres),
+    surface("surface_below", "below", setup())
+        .name("Below")
+        .unit(Unit::Metres),
+    surface("surface_height_softness", "height_softness", setup())
+        .name("Height Softness")
+        .unit(Unit::Metres),
+    surface("surface_breakup", "breakup", setup()).name("Breakup"),
+    surface("surface_breakup_size", "breakup_size", setup())
+        .name("Breakup Size")
+        .unit(Unit::Metres),
     surface(
         "surface_count",
         "count",
@@ -182,7 +206,7 @@ fn copied_parts(items: &[Item]) -> usize {
 pub fn copies_unavailable(item: &Item) -> Option<&'static str> {
     match &item.fields {
         ItemFields::Object(object) if !can_copy(&object.shape) => {
-            Some("An Ocean surface cannot be copied")
+            Some("An Ocean or Terrain surface cannot be copied")
         }
         ItemFields::Group(_) => match copied_parts(&item.children) {
             0 => Some("Nothing in this group has a shape to copy"),

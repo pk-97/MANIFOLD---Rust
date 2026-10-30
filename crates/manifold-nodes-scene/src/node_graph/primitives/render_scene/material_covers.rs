@@ -19,12 +19,8 @@ pub(super) struct CoverLook {
     /// x, y, z: 1 where the base colour, normal and metallic-roughness maps
     /// are wired; w Amount, 0 for no cover.
     pub maps: [f32; 4],
-    /// x steeper than, y flatter than, z their softness, in radians.
-    pub slope: [f32; 4],
-    /// x above, y below, z their softness, in world metres.
-    pub height: [f32; 4],
-    /// x Breakup, y 1 / Breakup Size.
-    pub breakup: [f32; 4],
+    /// Where it lies: `CoverRule::packed`.
+    pub rule: [[f32; 4]; 3],
 }
 
 /// Matches `MaterialCovers` in `render_scene.wgsl`.
@@ -50,14 +46,7 @@ fn look(rule: &CoverRule, cover: &Material, maps: [bool; 3]) -> CoverLook {
             cover.roughness,
         ],
         maps: [flag(maps[0]), flag(maps[1]), flag(maps[2]), rule.amount],
-        slope: [
-            rule.steeper_than.to_radians(),
-            rule.flatter_than.to_radians(),
-            rule.slope_softness.to_radians().max(1e-3),
-            0.0,
-        ],
-        height: [rule.above, rule.below, rule.height_softness.max(1e-3), 0.0],
-        breakup: [rule.breakup, 1.0 / rule.breakup_size.max(0.1), 0.0, 0.0],
+        rule: rule.packed(),
     }
 }
 

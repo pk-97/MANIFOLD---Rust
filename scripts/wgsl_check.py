@@ -192,7 +192,8 @@ STACKS = {
                            SCENE / "scene_shading.wgsl", SCENE / "look_ripple_detail.wgsl",
                            SCENE / "foam_mask.wgsl", SCENE / "look_foam.wgsl", SCENE / "look_mist.wgsl",
                            SCENE / "look_thin_water_light.wgsl", SCENE / "look_wet_surface.wgsl",
-                           SCENE / "render_scene.wgsl"]),
+                           SCENE / "cover_rule.wgsl", SCENE / "render_scene.wgsl"]),
+    "scene_scatter": (False, [SCENE / "cover_rule.wgsl", SCENE / "scatter_on_mesh.wgsl"]),
     "scene_wet_pass": (False, [WET_CONSTS, WET_LAYOUT, SCENE / "wet_pass.wgsl"]),
     "scene_foam_pass": (False, [SCENE / "water_field_common.wgsl", SCENE / "foam_pass.wgsl"]),
 }

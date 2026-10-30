@@ -21,7 +21,7 @@
 
 use manifold_core::copies_body::MAX_COPIES;
 use manifold_core::effect_graph_def::SerializedParamValue;
-use manifold_core::scene_doc::{Item, PhysicsSetting};
+use manifold_core::scene_doc::{Item, ItemFields, PhysicsSetting, Shape};
 use manifold_core::scene_schema::{BODY_ROLE, COPIES_ROLE, COPIES_ROWS, Reach, SURFACE_ROLE};
 
 use super::builder::{Builder, SCENE};
@@ -211,7 +211,7 @@ fn place_on_surfaces(b: &mut Builder<'_>) {
         let (Some(body), Some(target)) = (b.id(owner, COPIES_ROLE), doc.find(surface)) else {
             continue;
         };
-        let Some(mesh) = super::swarm::first_mesh(b, target) else {
+        let Some((mesh, indices)) = surface_mesh(b, target) else {
             continue;
         };
         let Some(frame) = super::swarm::emit_frame(b, owner, target) else {
@@ -220,6 +220,9 @@ fn place_on_surfaces(b: &mut Builder<'_>) {
         let draws = draws_of(b, item, body);
         let scatter = b.add(owner, SURFACE_ROLE, "node.scatter_on_mesh");
         b.wire(mesh.0, mesh.1, scatter, "vertices");
+        if let Some((node, port)) = indices {
+            b.wire(node, port, scatter, "indices");
+        }
         b.set_number(scatter, "max_capacity", MAX_COPIES as f32);
         b.follow(body, "copy_count", scatter, "count");
         b.apply_rows(
@@ -261,6 +264,23 @@ fn place_on_surfaces(b: &mut Builder<'_>) {
         }
     }
 }
+
+/// The mesh copies sit on in `target`: a Terrain's grid with its triangle
+/// indices, else the first mesh at or below it as a triangle list.
+fn surface_mesh(b: &Builder<'_>, target: &Item) -> Option<Surface> {
+    let owner = target.id.as_str();
+    if let ItemFields::Object(object) = &target.fields
+        && object.shape == Shape::Terrain
+    {
+        let grid = b.id(owner, "terrain")?;
+        let indices = b.id(owner, "indices")?;
+        return Some(((grid, "vertices"), Some((indices, "indices"))));
+    }
+    super::swarm::first_mesh(b, target).map(|mesh| (mesh, None))
+}
+
+/// A surface's vertices and, when it draws indexed, its triangle indices.
+type Surface = ((u32, &'static str), Option<(u32, &'static str)>);
 
 /// The objects that draw `body`'s copies: the copied Object, or every part
 /// of the copied Group.

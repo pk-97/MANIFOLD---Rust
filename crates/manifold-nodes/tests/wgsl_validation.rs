@@ -95,6 +95,8 @@ const LOOK_THIN_WATER_LIGHT: &str = include_str!(
 const LOOK_WET_SURFACE: &str = include_str!(
     "../../manifold-nodes-scene/src/node_graph/primitives/shaders/look_wet_surface.wgsl"
 );
+const COVER_RULE: &str =
+    include_str!("../../manifold-nodes-scene/src/node_graph/primitives/shaders/cover_rule.wgsl");
 const WATER_FIELD_COMMON: &str = include_str!(
     "../../manifold-nodes-scene/src/node_graph/primitives/shaders/water_field_common.wgsl"
 );
@@ -164,10 +166,13 @@ fn composed_shaders() -> Vec<(&'static str, String)> {
             LOOK_MIST,
             LOOK_THIN_WATER_LIGHT,
             LOOK_WET_SURFACE,
+            COVER_RULE,
         ]
         .join("\n"),
     ));
     composed.push(("cull_instances.wgsl", INSTANCE_TRANSFORM.to_owned()));
+    // Copies on a surface grow where the cover rule holds.
+    composed.push(("scatter_on_mesh.wgsl", COVER_RULE.to_owned()));
     composed.push((
         "water_march.wgsl",
         [read_side, FIELD_TILES, WATER_FIELD_COMMON, WATER_MARCH_CORE].join("\n"),

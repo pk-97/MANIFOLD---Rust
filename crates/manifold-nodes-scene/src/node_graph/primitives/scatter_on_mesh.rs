@@ -27,13 +27,15 @@ use manifold_gpu::BufferUse;
 use manifold_gpu::GpuBinding;
 use std::borrow::Cow;
 
+use manifold_node_engine::content_revision::ContentVersion;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::material::CoverRule;
 
 #[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct ScatterOnMeshUniforms {
     count: u32,
     seed: u32,
@@ -47,14 +49,100 @@ struct ScatterOnMeshUniforms {
     // lowered count fader removes instances instead of leaving a stale
     // drawn tail (render_scene draws buffer_size/32 unconditionally).
     capacity: u32,
+    // 1 when `indices` lists the triangles, 0 when the vertices are a
+    // triangle list.
+    indexed: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+    // Where copies grow: `CoverRule::packed`.
+    rule_slope: [f32; 4],
+    rule_height: [f32; 4],
+    rule_breakup: [f32; 4],
 }
+
+/// Where copies grow, as a Material's Covers lie (`cover_rule.wgsl`): name,
+/// label, default, low, high. The defaults hold everywhere.
+type GrowParam = (&'static str, &'static str, f32, f32, f32);
+
+const GROW_PARAMS: [GrowParam; 8] = [
+    ("steeper_than", "Steeper Than (°)", 0.0, 0.0, 90.0),
+    ("flatter_than", "Flatter Than (°)", 90.0, 0.0, 90.0),
+    ("slope_softness", "Slope Softness (°)", 5.0, 0.0, 45.0),
+    ("above", "Above (m)", -10_000.0, -10_000.0, 10_000.0),
+    ("below", "Below (m)", 10_000.0, -10_000.0, 10_000.0),
+    ("height_softness", "Height Softness (m)", 20.0, 0.0, 1000.0),
+    ("breakup", "Breakup", 0.0, 0.0, 1.0),
+    ("breakup_size", "Breakup Size (m)", 30.0, 0.1, 1000.0),
+];
+
+const fn grow_param(k: usize) -> ParamDef {
+    let (name, label, default, low, high) = GROW_PARAMS[k];
+    ParamDef {
+        name: Cow::Borrowed(name),
+        label,
+        ty: ParamType::Float,
+        default: ParamValue::Float(default),
+        range: Some((low, high)),
+        enum_values: &[],
+    }
+}
+
+/// Where copies grow, from the params, each clamped to its range.
+fn grow_rule(ctx: &EffectNodeContext<'_, '_>) -> CoverRule {
+    let value = |k: usize| {
+        let (name, _, default, low, high) = GROW_PARAMS[k];
+        ctx.scalar_or_param(name, default).clamp(low, high)
+    };
+    CoverRule {
+        amount: 1.0,
+        steeper_than: value(0),
+        flatter_than: value(1),
+        slope_softness: value(2),
+        above: value(3),
+        below: value(4),
+        height_softness: value(5),
+        breakup: value(6),
+        breakup_size: value(7),
+    }
+}
+
+/// What the area table was summed from. Positions moving over the same
+/// triangles keep it, so each copy keeps its triangle and its spot on it and
+/// rides the surface as it moves.
+#[derive(Clone, Copy, PartialEq)]
+struct Summed {
+    triangles: u32,
+    /// The mesh's triangle revision when it publishes one, else its
+    /// content's.
+    topology: Option<u64>,
+    content: Option<ContentVersion>,
+    indices: Option<ContentVersion>,
+    rebuild_epoch: u64,
+}
+
+/// What the copies were last placed from.
+#[derive(Clone, Copy, PartialEq)]
+struct Placed {
+    summed: Summed,
+    vertices: ContentVersion,
+    uniforms: ScatterOnMeshUniforms,
+}
+
+const SHADER_SRC: &str = concat!(
+    include_str!("shaders/cover_rule.wgsl"),
+    include_str!("shaders/scatter_on_mesh.wgsl"),
+);
 
 manifold_node_engine::primitive! {
     name: ScatterOnMesh,
     type_id: "node.scatter_on_mesh",
-    purpose: "Scatter an Array<InstanceTransform> across a mesh's own surface (Array<MeshVertex>), area-weighted so instance density is uniform regardless of triangulation — the instance-producing sibling of node.spawn_from_mesh's surface mode, same 3-pass area/scan/place dispatch. Each instance gets a barycentric-sampled surface position, a uniform scale hashed into [scale_min, scale_max], and either a random upright yaw or (when align_to_normal is set) a rotation that additionally tilts the instance's local +Y onto the sampled triangle's flat face normal. Deterministic for a fixed (seed, mesh) — no true randomness. Pair with node.render_copies to draw the scattered instances: a field of scanned flowers on a terrain is terrain mesh -> node.scatter_on_mesh -> node.render_copies.",
+    purpose: "Scatter an Array<InstanceTransform> across a mesh's own surface (Array<MeshVertex>, as a triangle list or with the triangles in indices), area-weighted so instance density is uniform regardless of triangulation — the instance-producing sibling of node.spawn_from_mesh's surface mode, same 3-pass area/scan/place dispatch. Each instance gets a barycentric-sampled surface position, a uniform scale hashed into [scale_min, scale_max], and either a random upright yaw or (when align_to_normal is set) a rotation that additionally tilts the instance's local +Y onto the sampled triangle's flat face normal. Deterministic for a fixed (seed, mesh) — no true randomness. Pair with node.render_copies to draw the scattered instances: a field of scanned flowers on a terrain is terrain mesh -> node.scatter_on_mesh -> node.render_copies.",
     inputs: {
         vertices: Array(MeshVertex) required,
+        // The triangles as vertex index triples, for an indexed mesh such as
+        // a Terrain's grid. Unwired, the vertices are a triangle list.
+        indices: Array(u32) optional,
         count: ScalarF32 optional,
         seed: ScalarF32 optional,
         scale_min: ScalarF32 optional,
@@ -117,6 +205,14 @@ manifold_node_engine::primitive! {
             range: None,
             enum_values: &[],
         },
+        grow_param(0),
+        grow_param(1),
+        grow_param(2),
+        grow_param(3),
+        grow_param(4),
+        grow_param(5),
+        grow_param(6),
+        grow_param(7),
     ],
     depth_rule: Terminal,
     composition_notes: "count/seed/scale_min/scale_max are port-shadows-param — wire an LFO or envelope into count to sweep flower density live, or into seed to re-roll the placement (a re-roll is a hard cut, not an animatable morph — the whole field re-samples). align_to_normal is NOT port-shadowed (a structural on/off choice, not a performance scalar): off gives every instance a random upright yaw (local +Y stays world-up); on additionally tilts +Y onto the sampled triangle's flat face normal, so instances lie flush against sloped or curved surfaces. `max_capacity` (static, never bind it to a card) declares the output's allocation ceiling; `count` sweeps live beneath it and slots beyond count park at zero scale. Set max_capacity to the count card's max so the fader's whole range is real; when max_capacity is 0/absent the buffer sizes from count at build time (legacy single-param behavior). Triangles are read as flat [v0,v1,v2] triples (standard triangle-list layout); a trailing partial triangle (vertex_count % 3 != 0) is ignored.",
@@ -132,10 +228,15 @@ manifold_node_engine::primitive! {
         // the other two entry points of the 3-pass dispatch.
         scan_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
         place_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
-        // Per-triangle cumulative-area scratch. Reallocated when the mesh's
-        // triangle count changes.
+        // Per-triangle cumulative-area table, summed again only when the
+        // triangles change (`Summed`).
         cumulative: Option<manifold_gpu::GpuBuffer> = None,
         cached_triangle_count: u32 = 0,
+        summed: Option<Summed> = None,
+        placed: Option<Placed> = None,
+        // Bound in place of `indices` for a triangle list, which never
+        // reads it.
+        no_indices: Option<manifold_gpu::GpuBuffer> = None,
         // Last observed `reset_trigger` integer, for edge-gated recompute.
         last_reset_trigger: Option<i32> = None
     },
@@ -185,10 +286,12 @@ impl Primitive for ScatterOnMesh {
             ctx.params.get("align_to_normal"),
             Some(ParamValue::Bool(true))
         );
+        let [rule_slope, rule_height, rule_breakup] = grow_rule(ctx).packed();
 
         let Some(src) = ctx.inputs.array("vertices") else {
             return;
         };
+        let indices = ctx.inputs.array("indices");
         let Some(out_buf) = ctx.outputs.array("instances") else {
             return;
         };
@@ -201,13 +304,57 @@ impl Primitive for ScatterOnMesh {
             return;
         }
         let count = count_runtime.min(capacity);
-        let triangle_count = vertex_count / 3;
+        let triangle_count = match indices {
+            Some(indices) => (indices.size / 4 / 3) as u32,
+            None => vertex_count / 3,
+        };
+        let uniforms = ScatterOnMeshUniforms {
+            count,
+            seed,
+            vertex_count,
+            triangle_count,
+            scale_min,
+            scale_max,
+            align_to_normal: u32::from(align_to_normal),
+            capacity,
+            indexed: u32::from(indices.is_some()),
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+            rule_slope,
+            rule_height,
+            rule_breakup,
+        };
+
+        // The table is summed again only when the triangles change; with no
+        // way to tell, every frame.
+        let revision = ctx.inputs.mesh_revision("vertices");
+        let content = ctx.inputs.content_version("vertices");
+        let summed = Summed {
+            triangles: triangle_count,
+            topology: revision.map(|r| r.topology),
+            content: if revision.is_some() { None } else { content },
+            indices: ctx.inputs.content_version("indices"),
+            rebuild_epoch: ctx.rebuild_epoch,
+        };
+        let knowable = (summed.topology.is_some() || summed.content.is_some())
+            && (indices.is_none() || summed.indices.is_some());
+        let summed = knowable.then_some(summed);
+        let placed = summed.zip(content).map(|(summed, vertices)| Placed {
+            summed,
+            vertices,
+            uniforms,
+        });
+        if placed.is_some() && self.placed == placed && ctx.outputs_retained() {
+            ctx.mark_outputs_unchanged();
+            return;
+        }
+        let resum = summed.is_none() || self.summed != summed;
 
         let gpu = ctx.gpu_encoder();
 
         // Lazy-compile all three entry points from the shared shader
         // source. `self.pipeline` (macro-provided) holds area_main.
-        const SHADER_SRC: &str = include_str!("shaders/scatter_on_mesh.wgsl");
         if self.pipeline.is_none() {
             self.pipeline = Some(gpu.device.create_compute_pipeline(
                 SHADER_SRC,
@@ -230,7 +377,7 @@ impl Primitive for ScatterOnMesh {
             ));
         }
 
-        // Lazy-allocate / realloc the per-triangle cumulative-area scratch.
+        // Lazy-allocate / realloc the per-triangle cumulative-area table.
         let needs_alloc = self.cumulative.is_none() || self.cached_triangle_count != triangle_count;
         if needs_alloc {
             let bytes = u64::from(triangle_count.max(1)) * 4;
@@ -238,21 +385,16 @@ impl Primitive for ScatterOnMesh {
             self.cached_triangle_count = triangle_count;
         }
         let cumulative = self.cumulative.as_ref().expect("cumulative just allocated");
+        let indices = match indices {
+            Some(indices) => indices,
+            None => self
+                .no_indices
+                .get_or_insert_with(|| gpu.device.create_buffer(4, BufferUse::Gpu)),
+        };
 
         let area_pipeline = self.pipeline.as_ref().expect("just inserted");
         let scan_pipeline = self.scan_pipeline.as_ref().expect("just inserted");
         let place_pipeline = self.place_pipeline.as_ref().expect("just inserted");
-
-        let uniforms = ScatterOnMeshUniforms {
-            count,
-            seed,
-            vertex_count,
-            triangle_count,
-            scale_min,
-            scale_max,
-            align_to_normal: u32::from(align_to_normal),
-            capacity,
-        };
 
         let bindings = [
             GpuBinding::Buffer {
@@ -274,12 +416,17 @@ impl Primitive for ScatterOnMesh {
                 buffer: cumulative,
                 offset: 0,
             },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: indices,
+                offset: 0,
+            },
         ];
 
         // area -> scan -> place, each pass reads what the previous wrote,
         // so a barrier between every stage (same shape as
         // spawn_from_mesh's surface mode).
-        if triangle_count > 0 {
+        if triangle_count > 0 && (resum || needs_alloc) {
             gpu.native_enc.dispatch_compute(
                 area_pipeline,
                 &bindings,
@@ -304,6 +451,8 @@ impl Primitive for ScatterOnMesh {
             [capacity.div_ceil(256), 1, 1],
             "node.scatter_on_mesh.place",
         );
+        self.summed = summed;
+        self.placed = placed;
     }
 }
 
@@ -319,7 +468,6 @@ impl ScatterOnMesh {
     /// on any layer, a cache hit. Called from `GeneratorRegistry::prewarm_all`
     /// at app startup.
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
-        const SHADER_SRC: &str = include_str!("shaders/scatter_on_mesh.wgsl");
         device.create_compute_pipeline(SHADER_SRC, "area_main", "node.scatter_on_mesh.area");
         device.create_compute_pipeline(SHADER_SRC, "scan_main", "node.scatter_on_mesh.scan");
         device.create_compute_pipeline(SHADER_SRC, "place_main", "node.scatter_on_mesh.place");
@@ -414,6 +562,9 @@ mod gpu_tests {
         let cumulative =
             device.create_buffer(u64::from(triangle_count.max(1)) * 4, BufferUse::Upload);
 
+        // Grow everywhere.
+        let [rule_slope, rule_height, rule_breakup] = CoverRule::default().packed();
+        let no_indices = device.create_buffer(4, BufferUse::Upload);
         let uniforms = ScatterOnMeshUniforms {
             count,
             seed,
@@ -423,6 +574,13 @@ mod gpu_tests {
             scale_max,
             align_to_normal: u32::from(align_to_normal),
             capacity,
+            indexed: 0,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+            rule_slope,
+            rule_height,
+            rule_breakup,
         };
 
         let bindings = [
@@ -443,6 +601,11 @@ mod gpu_tests {
             GpuBinding::Buffer {
                 binding: 3,
                 buffer: &cumulative,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &no_indices,
                 offset: 0,
             },
         ];
@@ -490,7 +653,7 @@ mod gpu_tests {
     #[test]
     fn same_seed_and_mesh_gives_identical_instance_buffer_across_two_runs() {
         let device = manifold_gpu::testkit::test_device();
-        let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
+        let wgsl = SHADER_SRC;
         let vertices = quad_mesh();
         let capacity = 128u32;
 
@@ -516,7 +679,7 @@ mod gpu_tests {
     #[test]
     fn different_seed_gives_different_placement() {
         let device = manifold_gpu::testkit::test_device();
-        let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
+        let wgsl = SHADER_SRC;
         let vertices = quad_mesh();
         let capacity = 128u32;
 
@@ -540,7 +703,7 @@ mod gpu_tests {
     #[test]
     fn instances_land_on_the_mesh_surface_within_scale_bounds() {
         let device = manifold_gpu::testkit::test_device();
-        let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
+        let wgsl = SHADER_SRC;
         let vertices = quad_mesh();
         let capacity = 64u32;
 
@@ -582,7 +745,7 @@ mod gpu_tests {
     #[test]
     fn align_to_normal_tilts_instances_on_a_sloped_triangle() {
         let device = manifold_gpu::testkit::test_device();
-        let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
+        let wgsl = SHADER_SRC;
 
         // A single triangle tilted 45 degrees off the XZ plane: its face
         // normal is NOT world-up, so align_to_normal must produce nonzero
@@ -641,7 +804,7 @@ mod gpu_tests {
     #[test]
     fn slots_beyond_count_park_at_zero_scale() {
         let device = manifold_gpu::testkit::test_device();
-        let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
+        let wgsl = SHADER_SRC;
         let vertices = quad_mesh();
         let capacity = 64u32;
 
@@ -674,7 +837,7 @@ mod gpu_tests {
     #[test]
     fn align_on_flat_ground_keeps_instances_upright_and_finite() {
         let device = manifold_gpu::testkit::test_device();
-        let wgsl = include_str!("shaders/scatter_on_mesh.wgsl");
+        let wgsl = SHADER_SRC;
         let vertices = quad_mesh();
         let capacity = 256u32;
 
@@ -714,7 +877,6 @@ mod gpu_tests {
         // earlier test's warmed the cache.
         let device = manifold_gpu::testkit::test_device();
         ScatterOnMesh::prewarm_pipelines(&device);
-        const SHADER_SRC: &str = include_str!("shaders/scatter_on_mesh.wgsl");
         for (entry, label) in [
             ("area_main", "node.scatter_on_mesh.area"),
             ("scan_main", "node.scatter_on_mesh.scan"),

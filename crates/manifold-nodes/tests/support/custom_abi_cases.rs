@@ -142,6 +142,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "terrain.rs",
+        rust_struct: "TerrainUniforms",
+        shader: "shaders/terrain.wgsl",
+        shader_struct: "TerrainUniforms",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "scatter_on_mesh.rs",
         rust_struct: "ScatterOnMeshUniforms",
         shader: "shaders/scatter_on_mesh.wgsl",

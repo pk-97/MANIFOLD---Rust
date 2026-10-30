@@ -111,7 +111,8 @@ const FIELD_TILES_WGSL: &str = include_str!("shaders/field_tiles.wgsl");
 /// The scene shader as every pipeline compiles it: the world-tile read side
 /// and the field's table, the instance transform helpers it shares with
 /// `cull_instances.wgsl`, the scene shading a full-screen pass shares
-/// (`scene_shading.wgsl`), the five look hooks, then the mesh shader itself.
+/// (`scene_shading.wgsl`), the five look hooks, the cover rule Copies on a
+/// surface share (`cover_rule.wgsl`), then the mesh shader itself.
 static RENDER_SCENE_WGSL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     [
         manifold_node_engine::scene::world_tiles::READ_SIDE,
@@ -124,6 +125,7 @@ static RENDER_SCENE_WGSL: std::sync::LazyLock<String> = std::sync::LazyLock::new
         include_str!("shaders/look_mist.wgsl"),
         include_str!("shaders/look_thin_water_light.wgsl"),
         include_str!("shaders/look_wet_surface.wgsl"),
+        include_str!("shaders/cover_rule.wgsl"),
         include_str!("shaders/render_scene.wgsl"),
     ]
     .concat()
