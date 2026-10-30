@@ -1,10 +1,11 @@
-//! O            if c.i64s(name, &[])?[0] != v as i64 {e net's forward pass in f32. Reference: `kick_goal_nn.py` `Net`.
+//! One net's forward pass in f32. Reference: `kick_goal_nn.py` `Net`.
 //!
 //! Layout is PyTorch's (channel, band, frame). Every conv input lives in a buffer with a
-//! one-cell zero border, so a 3x3 tap is a plain shifted row and the inner loop runs
-//! contiguously over output frames (the compiler vectorises it).
+//! one-cell zero border, so each 3x3 tap's inputs are one contiguous run of the plane and a
+//! conv is a single matrix product (see [`Conv::forward`]).
 
 use super::spectrum::BANDS;
+use crate::linalg::{Mat, MatMut, gemm};
 use crate::trained::container::{Container, ContainerError};
 
 const C1: usize = 16;
@@ -19,8 +20,16 @@ const MAX_IN_CH: usize = 4;
 struct Conv {
     cin: usize,
     cout: usize,
-    w: Vec<f32>,
-    b: Vec<f32>,
+    /// Output bands and frames.
+    h: usize,
+    w: usize,
+    /// (cout, cin · 9): PyTorch's (cout, cin, 3, 3) as it is stored.
+    weight: Vec<f32>,
+    bias: Vec<f32>,
+    /// (cin · 9, run): each input channel's nine taps, each a shifted run of its bordered plane.
+    taps: Vec<f32>,
+    /// (cout, run): the product before bias and ReLU.
+    acc: Vec<f32>,
 }
 
 impl Conv {
@@ -28,60 +37,62 @@ impl Conv {
         c: &Container,
         prefix: &str,
         name: &str,
-        cin: usize,
-        cout: usize,
+        (cin, cout): (usize, usize),
+        (h, w): (usize, usize),
     ) -> Result<Self, ContainerError> {
+        let run = Self::run(h, w);
         Ok(Self {
             cin,
             cout,
-            w: c.f32s(&format!("{prefix}{name}.weight"), &[cout, cin, 3, 3])?
+            h,
+            w,
+            weight: c
+                .f32s(&format!("{prefix}{name}.weight"), &[cout, cin, 3, 3])?
                 .to_vec(),
-            b: c.f32s(&format!("{prefix}{name}.bias"), &[cout])?.to_vec(),
+            bias: c.f32s(&format!("{prefix}{name}.bias"), &[cout])?.to_vec(),
+            taps: vec![0.0; cin * 9 * run],
+            acc: vec![0.0; cout * run],
         })
+    }
+
+    /// Output positions computed: every row over the bordered width, so a tap's inputs are one contiguous run of
+    /// the input plane. The two border columns of each row come out as junk and are dropped; the last row's are
+    /// not computed, which keeps the furthest tap's run inside the plane.
+    fn run(h: usize, w: usize) -> usize {
+        h * (w + 2) - 2
     }
 
     /// `Conv2d(3, padding=1)` then ReLU: `inp` is (cin, h + 2, w + 2) with a zero border,
     /// `out` is (cout, h, w).
-    fn forward(&self, inp: &[f32], h: usize, w: usize, out: &mut [f32]) {
+    fn forward(&mut self, inp: &[f32], out: &mut [f32]) {
+        let (h, w) = (self.h, self.w);
         let (pw, ph) = (w + 2, h + 2);
-        for oc in 0..self.cout {
-            let plane = &mut out[oc * h * w..][..h * w];
-            plane.fill(self.b[oc]);
-            for ic in 0..self.cin {
-                let k = &self.w[(oc * self.cin + ic) * 9..][..9];
-                let src = &inp[ic * ph * pw..][..ph * pw];
-                for y in 0..h {
-                    let acc = &mut plane[y * w..][..w];
-                    let r0 = &src[y * pw..][..pw];
-                    let r1 = &src[(y + 1) * pw..][..pw];
-                    let r2 = &src[(y + 2) * pw..][..pw];
-                    tap_row(acc, r0, r1, r2, k);
-                }
-            }
-            for v in plane.iter_mut() {
-                *v = v.max(0.0);
+        let run = Self::run(h, w);
+        for (ic, plane) in inp.chunks_exact(ph * pw).take(self.cin).enumerate() {
+            for tap in 0..9 {
+                let (dy, dx) = (tap / 3, tap % 3);
+                self.taps[(ic * 9 + tap) * run..][..run]
+                    .copy_from_slice(&plane[dy * pw + dx..][..run]);
             }
         }
-    }
-}
-
-#[inline]
-fn tap_row(acc: &mut [f32], r0: &[f32], r1: &[f32], r2: &[f32], k: &[f32]) {
-    let w = acc.len();
-    let (r00, r01, r02) = (&r0[..w], &r0[1..w + 1], &r0[2..w + 2]);
-    let (r10, r11, r12) = (&r1[..w], &r1[1..w + 1], &r1[2..w + 2]);
-    let (r20, r21, r22) = (&r2[..w], &r2[1..w + 1], &r2[2..w + 2]);
-    for x in 0..w {
-        let mut a = acc[x];
-        a = k[0].mul_add(r00[x], a);
-        a = k[1].mul_add(r01[x], a);
-        a = k[2].mul_add(r02[x], a);
-        a = k[3].mul_add(r10[x], a);
-        a = k[4].mul_add(r11[x], a);
-        a = k[5].mul_add(r12[x], a);
-        a = k[6].mul_add(r20[x], a);
-        a = k[7].mul_add(r21[x], a);
-        acc[x] = k[8].mul_add(r22[x], a);
+        let k = self.cin * 9;
+        gemm(
+            Mat::rows(&self.weight, self.cout, k, k),
+            Mat::rows(&self.taps, k, run, run),
+            0.0,
+            MatMut::rows(&mut self.acc, self.cout, run, run),
+        );
+        for ((plane, acc), b) in out
+            .chunks_exact_mut(h * w)
+            .zip(self.acc.chunks_exact(run))
+            .zip(&self.bias)
+        {
+            for (row, src) in plane.chunks_exact_mut(w).zip(acc.chunks(pw)) {
+                for (o, a) in row.iter_mut().zip(src) {
+                    *o = (a + b).max(0.0);
+                }
+            }
+        }
     }
 }
 
@@ -180,9 +191,9 @@ impl Cnn {
             channels,
             tbins,
             pooled_len,
-            conv1: Conv::new(c, prefix, "conv.0", channels, C1)?,
-            conv2: Conv::new(c, prefix, "conv.3", C1, C2)?,
-            conv3: Conv::new(c, prefix, "conv.6", C2, C3)?,
+            conv1: Conv::new(c, prefix, "conv.0", (channels, C1), (BANDS, frames))?,
+            conv2: Conv::new(c, prefix, "conv.3", (C1, C2), (BANDS / 2, w1))?,
+            conv3: Conv::new(c, prefix, "conv.6", (C2, C3), (BANDS / 4, w2))?,
             fc1_w: c
                 .f32s(&key("head.0.weight"), &[HIDDEN, pooled_len])?
                 .to_vec(),
@@ -207,13 +218,13 @@ impl Cnn {
     /// The net's logit for `input`, the zero-bordered (channels, BANDS + 2, frames + 2) buffer of [`input_len`].
     pub fn logit(&mut self, input: &[f32]) -> f32 {
         let (h0, w0) = (BANDS, self.frames);
-        self.conv1.forward(input, h0, w0, &mut self.out1);
+        self.conv1.forward(input, &mut self.out1);
         pool_into(&self.out1, C1, h0, w0, &mut self.in2);
         let (h1, w1) = (h0 / 2, w0 / 2);
-        self.conv2.forward(&self.in2, h1, w1, &mut self.out2);
+        self.conv2.forward(&self.in2, &mut self.out2);
         pool_into(&self.out2, C2, h1, w1, &mut self.in3);
-        let (h2, w2) = (h1 / 2, w1 / 2);
-        self.conv3.forward(&self.in3, h2, w2, &mut self.out3);
+        let w2 = w1 / 2;
+        self.conv3.forward(&self.in3, &mut self.out3);
         // AdaptiveMaxPool2d((BANDS / 4, tbins)): each row's max over each (possibly overlapping) time bin;
         // the flatten order is (channel, band, tbin).
         for (bins, row) in self

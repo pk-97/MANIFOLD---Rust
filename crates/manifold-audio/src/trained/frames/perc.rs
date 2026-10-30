@@ -7,7 +7,7 @@
 use crate::trained::container::{Container, ContainerError};
 use crate::trained::net::{BANDS, HISTORY, Spectrum};
 
-/// Medians are taken on the stack.
+/// The longest median window a model may ask for.
 const MAX_WINDOW: usize = 64;
 
 pub struct Percussive {
@@ -18,6 +18,9 @@ pub struct Percussive {
     /// Each frame's linear band levels, for the sustained median.
     lin: Vec<f32>,
     history: Vec<f32>,
+    /// Each band's last `sustain` linear levels in ascending order: the sustained median slides along with the
+    /// frames instead of being re-selected.
+    sustained: Vec<f32>,
 }
 
 impl Percussive {
@@ -37,6 +40,7 @@ impl Percussive {
             frames: 0,
             lin: vec![0.0; HISTORY * BANDS],
             history: vec![0.0; HISTORY * BANDS],
+            sustained: vec![0.0; BANDS * MAX_WINDOW],
         })
     }
 
@@ -47,24 +51,41 @@ impl Percussive {
             for (l, &db) in self.lin[at..at + BANDS].iter_mut().zip(row) {
                 *l = 10f32.powf(db / 20.0);
             }
-            let mut med = [0.0f32; MAX_WINDOW];
-            let mut per = [0.0f32; BANDS];
+            // The median across neighbouring bands slides from band to band.
             let half = self.neighbours / 2;
-            for (b, p) in per.iter_mut().enumerate() {
-                let w = &mut med[..self.neighbours];
-                for (j, m) in w.iter_mut().enumerate() {
-                    let nb = (b + j).saturating_sub(half).min(BANDS - 1);
-                    *m = self.lin[at + nb];
-                }
-                *p = *w.select_nth_unstable_by(half, f32::total_cmp).1;
+            let level = |band: usize, offset: isize| {
+                self.lin[at + (band as isize + offset).clamp(0, BANDS as isize - 1) as usize]
+            };
+            let mut window = [0.0f32; MAX_WINDOW];
+            let window = &mut window[..self.neighbours];
+            for (j, v) in window.iter_mut().enumerate() {
+                *v = level(0, j as isize - half as isize);
             }
-            for (b, &p) in per.iter().enumerate() {
-                let w = &mut med[..self.sustain];
-                for (j, m) in w.iter_mut().enumerate() {
-                    let f = (self.frames + j as u64).saturating_sub(self.sustain as u64 - 1);
-                    *m = self.lin[(f % HISTORY as u64) as usize * BANDS + b];
+            window.sort_unstable_by(f32::total_cmp);
+            let mut per = [0.0f32; BANDS];
+            for (b, p) in per.iter_mut().enumerate() {
+                if b > 0 {
+                    slide(
+                        window,
+                        level(b, -1 - half as isize),
+                        level(b, half as isize),
+                    );
                 }
-                let s = *w.select_nth_unstable_by(self.sustain / 2, f32::total_cmp).1;
+                *p = window[half];
+            }
+            // The sustained median slides from frame to frame: frame f leaves the window that frame
+            // f + sustain enters, and frames before the stream are frame 0.
+            let leaving = self.frames.saturating_sub(self.sustain as u64);
+            let old_at = (leaving % HISTORY as u64) as usize * BANDS;
+            for (b, &p) in per.iter().enumerate() {
+                let new = self.lin[at + b];
+                let w = &mut self.sustained[b * MAX_WINDOW..][..self.sustain];
+                if self.frames == 0 {
+                    w.fill(new);
+                } else {
+                    slide(w, self.lin[old_at + b], new);
+                }
+                let s = w[self.sustain / 2];
                 let pp = p * p;
                 self.history[at + b] = 10.0 * (pp / (pp + s * s + 1e-18) + 1e-6).log10();
             }
@@ -79,5 +100,22 @@ impl Percussive {
         }
         let at = (f % HISTORY as u64) as usize * BANDS;
         Some(&self.history[at..at + BANDS])
+    }
+}
+
+/// Replaces one `old` in the ascending `window` with `new`, keeping it ascending.
+fn slide(window: &mut [f32], old: f32, new: f32) {
+    let i = window.partition_point(|v| v.total_cmp(&old).is_lt());
+    debug_assert!(
+        window[i].total_cmp(&old).is_eq(),
+        "the leaving value is in the window"
+    );
+    let j = window.partition_point(|v| v.total_cmp(&new).is_lt());
+    if j > i {
+        window.copy_within(i + 1..j, i);
+        window[j - 1] = new;
+    } else {
+        window.copy_within(j..i, j + 1);
+        window[j] = new;
     }
 }
