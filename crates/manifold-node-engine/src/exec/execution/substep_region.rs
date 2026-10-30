@@ -67,18 +67,20 @@ fn host_step_before(
     })
 }
 
-/// Each co-iterating node pair whose two nodes own clocks of `members`'
-/// regions, in the order the graph registered them.
+/// Each co-iterating node pair whose two nodes own clocks of `members'`
+/// regions that still iterate this frame (a restarting or pending member
+/// takes nothing), in the order the graph registered them.
 fn for_group_pairs(
     graph: &mut Graph,
     plan: &ExecutionPlan,
     members: &[usize],
+    runs: &[RegionRun],
     mut each: impl FnMut(&dyn NodePairBehavior, &mut dyn EffectNode, &mut dyn EffectNode),
 ) {
     let owns = |node: NodeInstanceId| {
-        members
-            .iter()
-            .any(|&member| plan.substep_regions()[member].clock == Some(node))
+        members.iter().zip(runs).any(|(&member, run)| {
+            run.iteration.is_some() && plan.substep_regions()[member].clock == Some(node)
+        })
     };
     for index in 0..graph.node_pairs().len() {
         let pair = &graph.node_pairs()[index];
@@ -593,7 +595,7 @@ impl Executor {
         if let Some(gpu) = gpu.as_deref_mut() {
             gpu.native_enc.commit_wait_and_continue(gpu.device);
         }
-        for_group_pairs(graph, plan, members, |behavior, first, second| {
+        for_group_pairs(graph, plan, members, runs, |behavior, first, second| {
             behavior.before_tick(first, second, tick);
         });
         for (run, &member) in runs.iter().zip(members) {
@@ -603,7 +605,7 @@ impl Executor {
                 return StepFlow::Abort;
             }
         }
-        for_group_pairs(graph, plan, members, |behavior, first, second| {
+        for_group_pairs(graph, plan, members, runs, |behavior, first, second| {
             behavior.after_tick(first, second, tick);
         });
         StepFlow::Next
