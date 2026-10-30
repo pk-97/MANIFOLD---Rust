@@ -81,8 +81,8 @@ struct PatchArgs {
     patch_count: u32,
     block: u32,
     clusters: u32,
-    _pad0: u32,
-    _pad1: u32,
+    relief: f32,
+    far_block: u32,
 }
 
 /// One view's cull of one mesh.
@@ -98,6 +98,18 @@ pub(super) struct PatchView<'a> {
     pub block: u64,
     /// The view's size in pixels, which picks the detail cut.
     pub viewport: [u32; 2],
+    /// The camera's split of a parallax surface into the patches its trace
+    /// can shift and the far ones it leaves as they are.
+    pub far: Option<FarList>,
+}
+
+/// The far list of a camera cull: the patches whose parallax shift stays
+/// under a pixel, filled from the end of the view's index buffer.
+pub(super) struct FarList {
+    /// The world metres the parallax carves.
+    pub depth: f32,
+    /// The block counting the far list.
+    pub block: u64,
 }
 
 /// One object slot's patches and the views' index buffers.
@@ -189,8 +201,8 @@ impl PatchCull {
             patch_count: patches,
             block: 0,
             clusters: 0,
-            _pad0: 0,
-            _pad1: 0,
+            relief: 0.0,
+            far_block: 0,
         };
         encoder.dispatch_compute(
             self.bounds.as_ref().expect("built above"),
@@ -261,6 +273,29 @@ impl PatchCull {
                 Some(transform_point(&inverse, eye))
             })
             .map_or([0.0; 4], |e| [e[0], e[1], e[2], 1.0]);
+        // The carve in mesh units: across the model's narrowest axis, the
+        // deepest it can be.
+        let narrowest = (0..3)
+            .map(|col| {
+                view.model[col][..3]
+                    .iter()
+                    .map(|v| v * v)
+                    .sum::<f32>()
+                    .sqrt()
+            })
+            .fold(f32::INFINITY, f32::min);
+        // A far block is always counted, empty when the split can't run.
+        let (relief, far_block) = match &view.far {
+            Some(far) => {
+                let relief = if narrowest > 0.0 {
+                    far.depth / narrowest
+                } else {
+                    0.0
+                };
+                (relief, far.block as u32)
+            }
+            None => (0.0, 0),
+        };
         let patches = patch_count(index_count);
         let uniforms = PatchArgs {
             clip_model,
@@ -270,8 +305,8 @@ impl PatchCull {
             patch_count: patches,
             block: view.block as u32,
             clusters: u32::from(clusters.is_some()),
-            _pad0: 0,
-            _pad1: 0,
+            relief,
+            far_block,
         };
         let uniform = GpuBinding::Bytes {
             binding: 0,

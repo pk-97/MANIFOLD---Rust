@@ -12,6 +12,11 @@
 // survivors' indices into the view's index buffer and counting them into the
 // arguments; `clamp_args` keeps the count inside that buffer.
 //
+// The camera's cull of a parallax surface also sorts out the far patches,
+// where the trace would leave every pixel as it is, into a second list that
+// fills the same buffer from its end down, counted in `far_block`, so the
+// colour pass draws them without the trace.
+//
 // A cluster draws when its own group's simplified error projects past
 // MAX_PIXEL_ERROR (the coarser version is not good enough) and its refined
 // group's projects within it (it is good enough), or it is original
@@ -32,6 +37,9 @@ const NO_CONE: f32 = 2.0;
 const SLACK: f32 = 1e-4;
 // A detail level's error, projected, stays within this many pixels.
 const MAX_PIXEL_ERROR: f32 = 1.0;
+// A patch draws without the parallax trace when its carve depth spans under
+// this many pixels square to the view; see `relief_unseen`.
+const RELIEF_UNSEEN_PIXELS: f32 = 0.75;
 const NEVER: f32 = 3.4e38;
 
 struct PatchArgs {
@@ -49,8 +57,10 @@ struct PatchArgs {
     block: u32,
     // 1 when the records are a cluster array, read from word 16 on.
     clusters: u32,
-    _pad0: u32,
-    _pad1: u32,
+    // The parallax carve depth in mesh units, 0 when no patch goes to the
+    // far list; then the block counting the far list, 0 for none.
+    relief: f32,
+    far_block: u32,
 }
 
 @group(0) @binding(0) var<uniform> u: PatchArgs;
@@ -196,6 +206,14 @@ fn patch_args() {
     atomicStore(&args[base + 2u], 0u);
     atomicStore(&args[base + 3u], 0u);
     atomicStore(&args[base + 4u], 0u);
+    if u.far_block != 0u {
+        let far = u.far_block * 8u;
+        atomicStore(&args[far], 0u);
+        atomicStore(&args[far + 1u], 1u);
+        atomicStore(&args[far + 2u], 0u);
+        atomicStore(&args[far + 3u], 0u);
+        atomicStore(&args[far + 4u], 0u);
+    }
 }
 
 // The kept indices never pass the view's index buffer, sized for the full
@@ -206,6 +224,13 @@ fn patch_args() {
 fn clamp_args() {
     let base = u.block * 8u;
     atomicMin(&args[base], u.index_count);
+    if u.far_block != 0u {
+        let far = u.far_block * 8u;
+        let count = min(atomicLoad(&args[far]), u.index_count);
+        atomicStore(&args[far], count);
+        // The far list ends where the buffer does.
+        atomicStore(&args[far + 2u], u.index_count - count);
+    }
 }
 
 // True when every corner of the box lies outside the same plane of Metal's
@@ -239,10 +264,10 @@ fn faces_away(box_min: vec3<f32>, box_max: vec3<f32>, cone: vec4<f32>) -> bool {
 }
 
 // Whether an error of `error` mesh units anywhere in the sphere spans more
-// than MAX_PIXEL_ERROR pixels: the clip matrix's x and y rows give how far
-// one mesh unit moves a point on screen at w = 1, and the sphere's nearest
-// w scales it. A sphere reaching the eye plane is always over.
-fn over(center: vec3<f32>, radius: f32, error: f32) -> bool {
+// than `limit` pixels: the clip matrix's x and y rows give how far one mesh
+// unit moves a point on screen at w = 1, and the sphere's nearest w scales
+// it. A sphere reaching the eye plane is always over.
+fn over_pixels(center: vec3<f32>, radius: f32, error: f32, limit: f32) -> bool {
     let m = u.clip_model;
     let row_x = vec3<f32>(m[0].x, m[1].x, m[2].x);
     let row_y = vec3<f32>(m[0].y, m[1].y, m[2].y);
@@ -252,7 +277,26 @@ fn over(center: vec3<f32>, radius: f32, error: f32) -> bool {
         return true;
     }
     let pixels_per_unit = 0.5 * max(length(row_x) * u.viewport.x, length(row_y) * u.viewport.y) / near_w;
-    return error * pixels_per_unit > MAX_PIXEL_ERROR;
+    return error * pixels_per_unit > limit;
+}
+
+fn over(center: vec3<f32>, radius: f32, error: f32) -> bool {
+    return over_pixels(center, radius, error, MAX_PIXEL_ERROR);
+}
+
+// Whether the parallax trace leaves every pixel of the patch as it is. The
+// trace returns at once when its shift, depth * tan(angle) along the
+// surface, is under 1.5 of the pixel's footprint there
+// (`PARALLAX_MIN_SHIFT` in `render_scene.wgsl`). That footprint grows as
+// 1 / cos(angle), so the shift in pixels is at most sqrt(2) * depth *
+// sin(angle) over the pixel's size square to the view, whichever way the
+// screen axes lie: under 1.06 at RELIEF_UNSEEN_PIXELS, leaving room for
+// vertex normals that lean past the faces. The pixel is measured at the
+// patch's nearest point.
+fn relief_unseen(box_min: vec3<f32>, box_max: vec3<f32>) -> bool {
+    let center = 0.5 * (box_min + box_max);
+    let radius = 0.5 * length(box_max - box_min);
+    return !over_pixels(center, radius, u.relief, RELIEF_UNSEEN_PIXELS);
 }
 
 // Whether record `at` is on this view's detail cut.
@@ -283,10 +327,16 @@ fn cull_patches(
         kept = 0u;
         if on_cut(at) && !box_outside(box_min, box_max) && !faces_away(box_min, box_max, cone) {
             let count = records[at + 7u];
-            let slot = atomicAdd(&args[u.block * 8u], count);
-            kept = min(count, max(u.index_count, slot) - slot);
-            start = slot;
             first = records[at + 3u];
+            if u.relief > 0.0 && relief_unseen(box_min, box_max) {
+                let slot = atomicAdd(&args[u.far_block * 8u], count);
+                kept = min(count, max(u.index_count, slot) - slot);
+                start = u.index_count - slot - kept;
+            } else {
+                let slot = atomicAdd(&args[u.block * 8u], count);
+                kept = min(count, max(u.index_count, slot) - slot);
+                start = slot;
+            }
         }
     }
     let n = workgroupUniformLoad(&kept);

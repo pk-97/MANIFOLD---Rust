@@ -519,7 +519,7 @@ impl RenderScene {
                 && !points
                 && fill_mode == manifold_gpu::GpuTriangleFillMode::Fill
                 && !parallax;
-            let (pipeline, cutout_depth) = {
+            let (pipeline, cutout_depth, far_pipeline) = {
                 let gpu = ctx.gpu_encoder();
                 let pipeline = self
                     .pipeline_for(
@@ -543,7 +543,21 @@ impl RenderScene {
                     )
                     .clone()
                 });
-                (pipeline, cutout_depth)
+                let far_pipeline = parallax.then(|| {
+                    self.pipeline_for(
+                        gpu.device,
+                        material.kind,
+                        *velocity_wired,
+                        *ao_mask_wired,
+                        *denoise_aux_ready,
+                        is_blend || is_transmissive,
+                        points,
+                        opaque_fast,
+                        false,
+                    )
+                    .clone()
+                });
+                (pipeline, cutout_depth, far_pipeline)
             };
 
             let geometry_content_known = [
@@ -593,6 +607,7 @@ impl RenderScene {
                 subsurface_look: Default::default(),
                 pipeline,
                 cutout_depth,
+                far_pipeline,
                 base_color_map,
                 normal_map,
                 mr_map,
@@ -730,7 +745,12 @@ impl RenderScene {
             // Each culled draw's view takes one block, or one per detail
             // level; each culled draw also gets a view's blocks per shadow
             // caster, after the water meshes' blocks; then each patch-culled
-            // draw one for the camera and one per caster.
+            // draw one for the camera and one per caster, and a parallax
+            // surface one more for the camera's far list.
+            let far_lists = draws
+                .iter()
+                .filter(|d| d.culls_patches() && d.far_pipeline.is_some())
+                .count();
             let culled: usize = draws
                 .iter()
                 .filter(|d| d.culls_copies())
@@ -740,7 +760,11 @@ impl RenderScene {
             let gpu = ctx.gpu_encoder();
             let args = self.live_draw_args.prepare(
                 gpu.device,
-                live + culled + live_meshes + culled * casters + patched * (1 + casters),
+                live + culled
+                    + live_meshes
+                    + culled * casters
+                    + patched * (1 + casters)
+                    + far_lists,
             );
             for (slot, draw) in draws
                 .iter_mut()
@@ -829,12 +853,17 @@ impl RenderScene {
             }
             let mut patch_block = shadow_block;
             for draw in draws.iter_mut().filter(|d| d.culls_patches()) {
+                let far_block = draw
+                    .far_pipeline
+                    .is_some()
+                    .then_some(patch_block + 1 + casters as u64);
                 draw.patches = Some(PatchDraw {
                     args: args.clone(),
                     first_block: patch_block,
+                    far_block,
                     camera: None,
                 });
-                patch_block += 1 + casters as u64;
+                patch_block += 1 + casters as u64 + u64::from(far_block.is_some());
             }
         }
         // A field draws in Pass B, so it needs every resource the glass gate
@@ -943,6 +972,7 @@ impl RenderScene {
             });
             let (slot, count, clusters) = (draw.slot as usize, draw.vertex_count, draw.clusters);
             let (clip, model) = (draw.uniforms.view_proj, draw.uniforms.model);
+            let depth = draw.uniforms.relief[0];
             let (Some(patches), Some(indices)) = (draw.patches.as_mut(), draw.indices) else {
                 continue;
             };
@@ -961,6 +991,9 @@ impl RenderScene {
                     args: &patches.args,
                     block: patches.first_block,
                     viewport,
+                    far: patches
+                        .far_block
+                        .map(|block| patch_cull::FarList { depth, block }),
                 },
             );
         }

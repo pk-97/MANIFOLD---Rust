@@ -670,30 +670,33 @@ impl RenderScene {
             // draw's fill mode (Lines under wireframe) and topology (Point
             // under Points). The depth/shadow batches never see either —
             // they force Fill + Triangle in the encoder.
-            let calls = if draw.points {
+            let call = if draw.points {
                 // D8: points draw EVERY vertex in the buffer (one dot per
                 // vertex), not the triangle-multiple-of-3 count — the
                 // trailing-vertex truncation must not drop dots.
-                draw.camera_live(
-                    manifold_gpu::Draw::new(
-                        &draw.pipeline,
-                        bindings,
-                        draw.point_count,
-                        draw.instance_count,
-                    )
-                    .primitive(manifold_gpu::GpuPrimitiveType::Point),
+                manifold_gpu::Draw::new(
+                    &draw.pipeline,
+                    bindings,
+                    draw.point_count,
+                    draw.instance_count,
                 )
+                .primitive(manifold_gpu::GpuPrimitiveType::Point)
             } else {
-                draw.camera_live(
-                    manifold_gpu::Draw::new(
-                        &draw.pipeline,
-                        bindings,
-                        draw.vertex_count,
-                        draw.instance_count,
-                    )
-                    .fill_mode(draw.fill_mode),
+                manifold_gpu::Draw::new(
+                    &draw.pipeline,
+                    bindings,
+                    draw.vertex_count,
+                    draw.instance_count,
                 )
+                .fill_mode(draw.fill_mode)
             };
+            // A parallax surface's far patches draw without the trace.
+            let calls =
+                draw.camera_parts(call)
+                    .map(|(call, far)| match (&draw.far_pipeline, far) {
+                        (Some(plain), true) => call.with_pipeline(plain),
+                        _ => call,
+                    });
             if draw.routes_to_transparent() {
                 blend_entries.extend(calls.map(|call| (draw.sort_depth, draw_index, call)));
             } else if let Some(depth_pipeline) = &draw.cutout_depth {

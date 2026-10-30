@@ -271,6 +271,7 @@ impl RenderScene {
                                     args: &patches.args,
                                     block,
                                     viewport: [side, side],
+                                    far: None,
                                 },
                             )?;
                             culled_any = true;

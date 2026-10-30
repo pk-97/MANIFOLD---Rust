@@ -1965,6 +1965,9 @@ struct ObjectDraw<'ctx> {
     /// set, Pass A draws it with the opaque group and `pipeline` is the
     /// solid-surface one, shading the same triangles under depth Equal.
     cutout_depth: Option<manifold_gpu::GpuRenderPipeline>,
+    /// A parallax surface's pipeline without the trace, for its far patches
+    /// (`patch_cull::FarList`).
+    far_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     base_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
     /// The four new optional
     /// per-object texture ports, same "None = unwired, dummy-bind at
@@ -2127,6 +2130,9 @@ struct ObjectDraw<'ctx> {
 struct PatchDraw {
     args: manifold_gpu::GpuBuffer,
     first_block: u64,
+    /// A parallax surface's block for the camera's far list, after the
+    /// casters' (`patch_cull::FarList`).
+    far_block: Option<u64>,
     /// The camera's kept indices, once culled this frame.
     camera: Option<manifold_gpu::GpuBuffer>,
 }
@@ -2207,6 +2213,27 @@ impl ObjectDraw<'_> {
         &'a self,
         draw: manifold_gpu::Draw<'a>,
     ) -> impl Iterator<Item = manifold_gpu::Draw<'a>> + 'a {
+        self.camera_parts(draw).map(|(draw, _)| draw)
+    }
+
+    /// [`Self::camera_live`], each draw marked true when it is a parallax
+    /// surface's far list, which the colour pass draws without the trace.
+    fn camera_parts<'a>(
+        &'a self,
+        draw: manifold_gpu::Draw<'a>,
+    ) -> impl Iterator<Item = (manifold_gpu::Draw<'a>, bool)> + 'a {
+        let far = match &self.patches {
+            Some(PatchDraw {
+                args,
+                far_block: Some(block),
+                camera: Some(kept),
+                ..
+            }) => {
+                let offset = block * live_draw_args::ARGS_BYTES;
+                Some((self.with_args(draw, Some(kept), Some((args, offset))), true))
+            }
+            _ => None,
+        };
         let levels = match (&self.patches, &self.camera_cull) {
             (
                 Some(PatchDraw {
@@ -2217,24 +2244,30 @@ impl ObjectDraw<'_> {
             | (_, None) => 1,
             (_, Some(_)) => live_draw_args::view_blocks(self.lods.is_some()),
         };
-        (0..levels).map(move |level| {
-            if let Some(PatchDraw {
-                args,
-                first_block,
-                camera: Some(kept),
-            }) = &self.patches
-            {
-                let offset = first_block * live_draw_args::ARGS_BYTES;
-                return self.with_args(draw, Some(kept), Some((args, offset)));
-            }
-            let args = self.live_args.as_ref().map(|(args, offset)| {
-                let offset = self.camera_cull.as_ref().map_or(*offset, |cull| {
-                    cull.offset + level * live_draw_args::ARGS_BYTES
+        (0..levels)
+            .map(move |level| {
+                if let Some(PatchDraw {
+                    args,
+                    first_block,
+                    camera: Some(kept),
+                    ..
+                }) = &self.patches
+                {
+                    let offset = first_block * live_draw_args::ARGS_BYTES;
+                    return (
+                        self.with_args(draw, Some(kept), Some((args, offset))),
+                        false,
+                    );
+                }
+                let args = self.live_args.as_ref().map(|(args, offset)| {
+                    let offset = self.camera_cull.as_ref().map_or(*offset, |cull| {
+                        cull.offset + level * live_draw_args::ARGS_BYTES
+                    });
+                    (args, offset)
                 });
-                (args, offset)
-            });
-            self.with_args(draw, self.level_indices(level), args)
-        })
+                (self.with_args(draw, self.level_indices(level), args), false)
+            })
+            .chain(far)
     }
 
     /// The draws of a culled view whose first block sits at byte `offset`
