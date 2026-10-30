@@ -299,13 +299,18 @@ pub struct GrainShape {
 }
 
 /// Pebbles are smooth flattened stones, as river and beach stones are worn:
-/// about half as thick as they are long and four fifths as wide. Every other
-/// Matter's grains are chips, unsquashed.
+/// about half as thick as they are long and four fifths as wide. Snow breaks
+/// into rounded clumps, a little uneven. Every other Matter's grains are
+/// chips, unsquashed.
 pub fn grain_shape(matter: Matter) -> GrainShape {
     match matter {
         Matter::Pebbles => GrainShape {
             pebble: true,
             squash: [1.0, 0.55, 0.8],
+        },
+        Matter::Snow => GrainShape {
+            pebble: true,
+            squash: [1.0, 0.8, 0.9],
         },
         _ => GrainShape {
             pebble: false,

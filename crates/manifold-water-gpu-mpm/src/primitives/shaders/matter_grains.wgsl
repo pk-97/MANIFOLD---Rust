@@ -1,6 +1,7 @@
 // node.matter_grains — a matter frame's loose sand drawn as grains: flying
-// grains, thin streams and sheets and the spray off an impact. Resting sand
-// draws as its surface, whose material shades it as grains. Hand WGSL under exclusion 1 (atomics across passes):
+// grains, thin streams and the spray off an impact. Resting sand, sheets,
+// edges and corners draw as the surface, whose material shades it as
+// grains. Hand WGSL under exclusion 1 (atomics across passes):
 //   count_main: each live point adds one to its occupancy cell, two point
 //     spacings on a side (eight points when packed), in an open-addressed
 //     table of (cell key, count) pairs the node clears first.
@@ -71,13 +72,14 @@ struct Copy {
 const RADIUS_SCALE: f32 = 0.6203505;
 // Points in a point's 3³ block of cells below which it draws grains at full
 // size, and at which they have faded to nothing: packed sand holds 216, a
-// flat surface about half that, a one-point-thick sheet about a sixth and a
-// lone grain one, so sheets and everything looser draw grains while a
-// resting surface draws none. Grains on every surface point cost millions of
-// copies a frame and read as fuzz at a few metres, where real grains are
-// far under a pixel.
-const OUTER_FULL: f32 = 24.0;
-const OUTER: f32 = 48.0;
+// flat surface about half that, an edge a quarter, a corner an eighth (27),
+// a one-point-thick sheet about a sixth and a lone grain one. So flying
+// grains, spray and thin streams draw grains, while sheets, edges and
+// corners stay surface: a resting block's corners drew crumbs hovering off
+// them. Grains on every surface point cost millions of copies a frame and
+// read as fuzz at a few metres, where real grains are far under a pixel.
+const OUTER_FULL: f32 = 8.0;
+const OUTER: f32 = 20.0;
 // The share of its radius a grain-drawing point gives the surface under it.
 const UNDER: f32 = 0.5;
 const BULK_GONE: f32 = 6.0;

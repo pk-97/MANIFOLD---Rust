@@ -662,20 +662,35 @@ pub const FORCE_STARTS: [(&str, &[(&str, f32)]); 3] = [
     ),
 ];
 
+/// Particle Scale and Smoothness for packed grains (see [`MATTER_STARTS`]).
+const GRAIN_PARTICLE_SCALE: f32 = 1.5;
+const GRAIN_SMOOTHNESS: f32 = 0.5;
+
 /// Each Matter's surface, built at the simulation's cell (bumps smaller than
 /// a cell are single points jittering, which boil) and smoothed as the
-/// material is. Snow's loose snow breaks off as crumbs under a centimetre
-/// across; mud, clay and lava keep their lumps and folds, goo, jelly and
+/// material is. Sand, snow, gravel and pebbles draw their points at 1.5 times
+/// their size and half the smoothing: packed grains hold crisp edges and
+/// corners, which the water's larger, smoother blobs round off like a
+/// pillow. Snow breaks off in rounded clumps a few centimetres across,
+/// about one per point; mud, clay and lava keep their lumps and folds, goo, jelly and
 /// liquid metal settle glassy smooth. Gravel is crushed stone about a
 /// centimetre across, piling steeper than sand; pebbles are a few
 /// centimetres across, rounder, and pile a little less steep than gravel.
-pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 9] = [
+pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 10] = [
+    (
+        "sand",
+        &[
+            ("surface_particle_scale", GRAIN_PARTICLE_SCALE),
+            ("surface_smoothness", GRAIN_SMOOTHNESS),
+        ],
+    ),
     (
         "matter.snow",
         &[
             ("surface_detail", 0.0),
-            ("surface_smoothness", 1.0),
-            ("grain_size", 0.008),
+            ("surface_particle_scale", GRAIN_PARTICLE_SCALE),
+            ("surface_smoothness", GRAIN_SMOOTHNESS),
+            ("grain_size", 0.025),
         ],
     ),
     (
@@ -698,7 +713,8 @@ pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 9] = [
         "matter.gravel",
         &[
             ("surface_detail", 0.0),
-            ("surface_smoothness", 1.0),
+            ("surface_particle_scale", GRAIN_PARTICLE_SCALE),
+            ("surface_smoothness", GRAIN_SMOOTHNESS),
             ("grain_size", 0.012),
             ("friction_angle", 40.0),
             ("density", 1650.0),
@@ -708,7 +724,8 @@ pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 9] = [
         "matter.pebbles",
         &[
             ("surface_detail", 0.0),
-            ("surface_smoothness", 1.0),
+            ("surface_particle_scale", GRAIN_PARTICLE_SCALE),
+            ("surface_smoothness", GRAIN_SMOOTHNESS),
             ("grain_size", 0.035),
             ("friction_angle", 37.0),
             ("density", 1700.0),

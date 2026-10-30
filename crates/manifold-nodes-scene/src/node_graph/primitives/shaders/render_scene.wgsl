@@ -1697,6 +1697,14 @@ const GRAIN_MEAN: f32 = 0.82;
 // The luminance at and below which grains vary fully.
 const GRAIN_DARK_ALBEDO: f32 = 0.5;
 
+// The share of grains that are glinting facets at the finest octave, and
+// their roughness: rare and sharp, so sand in sun twinkles here and there as
+// quartz does.
+const GRAIN_GLINT_SHARE: f32 = 0.015;
+// The least a far octave's cell bends, as a share of a single grain's dome.
+const GRAIN_FAR_BEND: f32 = 0.1;
+const GRAIN_GLINT_ROUGHNESS: f32 = 0.2;
+
 // Octave `k` of the pattern on one plane: `q` the point in that plane, in the
 // octave's cells, `u` and `v` the world directions of its axes, `plane` which
 // plane it is (so the planes' grains differ), `absorbs` how fully its
@@ -1727,13 +1735,19 @@ fn grain_plane(q: vec2<f32>, u: vec3<f32>, v: vec3<f32>, plane: i32, n: vec3<f32
     let crevice = mix(0.5, 1.0, smoothstep(0.0, 0.3, sqrt(d2) - sqrt(d1)));
     let hue = 0.1 * (id.z - 0.5);
     let grain = vec3<f32>(1.0 + hue, 1.0, 1.0 - hue) * (shade * crevice / GRAIN_MEAN);
-    let glint = select(0.0, 1.0, id.y > 0.95);
+    // A cell of a far octave stands for 4^k grains but shines as one facet,
+    // so its odds of glinting halve each octave: far sand twinkles rarely
+    // and brightly instead of shining like glitter.
+    let glint = select(0.0, 1.0, id.y > 1.0 - GRAIN_GLINT_SHARE * exp2(-k));
     // The dome: tilted away from the seed, more toward the grain's edge; a
     // glint grain is a flat facet turned at random instead.
     let seed = u * to_seed.x + v * to_seed.y;
     let dome = -seed - dot(-seed, n) * n;
     let facet = 0.7 * (fract(id.zxy * 7.31) - vec3<f32>(0.5));
-    let bend = mix(1.4 * max(exp2(-k), 0.3) * dome, facet, glint);
+    // A far cell's bend is the mean of its grains' tilts, which mostly
+    // cancel: kept large, low sun lit the cells facing it several times
+    // brighter than flat sand and read as glitter.
+    let bend = mix(1.4 * max(exp2(-k), GRAIN_FAR_BEND) * dome, facet, glint);
     return GrainOctave(mix(vec3<f32>(1.0), grain, contrast), bend, glint);
 }
 
@@ -1779,7 +1793,7 @@ fn sand_grain(world_pos: vec3<f32>, n: vec3<f32>, albedo: vec3<f32>, roughness: 
     return Grain(
         albedo * mix(near.tint, far.tint, t),
         normalize(n + mix(near.bend, far.bend, t)),
-        mix(roughness, 0.12, mix(near.glint, far.glint, t)),
+        mix(roughness, GRAIN_GLINT_ROUGHNESS, mix(near.glint, far.glint, t)),
     );
 }
 
