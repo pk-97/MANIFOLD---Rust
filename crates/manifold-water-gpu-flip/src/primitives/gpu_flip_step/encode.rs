@@ -283,7 +283,7 @@ impl StepState {
             "gpu_flip.step.forces",
         );
         // A wired Sand: its grains' share at the corners, then its drag on
-        // the forced faces.
+        // the forced faces; `sand_porous` takes the shares after the solids.
         if let (Some(points), Some(share)) = (step.sand, self.sand_share.as_ref()) {
             enc.dispatch_compute(
                 &pipes.sand_corners,
@@ -357,6 +357,22 @@ impl StepState {
             // this scratch, so later intervals can retain its zero contents.
             enc.clear_buffer(&l.v);
             self.solid_velocity_is_zero = true;
+        }
+        // A wired Sand closes the faces it lies on by its grains' share,
+        // moving with it, once the solids' velocity is final
+        // (forces.wgsl `sand_porous`). It writes the solid velocity, so the
+        // next step without bodies clears that again.
+        if let (Some(_), Some(share)) = (step.sand, self.sand_share.as_ref()) {
+            enc.compute_memory_barrier_buffers();
+            over(
+                enc,
+                &pipes.sand_porous,
+                held,
+                &[buffer(20, &l.s), buffer(4, &l.v), buffer(73, share)],
+                "gpu_flip.step.sand_porous",
+            );
+            enc.compute_memory_barrier_buffers();
+            self.solid_velocity_is_zero = false;
         }
         // The Bounds walls are in the solid with the bodies, so this runs
         // with or without bodies, as the engine's postProcessSignedDistanceField

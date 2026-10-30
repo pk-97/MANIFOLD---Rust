@@ -64,6 +64,7 @@ pub(super) struct Pipelines {
     /// the water inside it.
     pub(super) sand_corners: GpuComputePipeline,
     pub(super) sand_drag: GpuComputePipeline,
+    pub(super) sand_porous: GpuComputePipeline,
     /// The pool's held share and the particles with no slot.
     pub(super) tiles_tally: GpuComputePipeline,
     /// The canonical element of every pooled field, once per pool build.
@@ -171,6 +172,7 @@ impl Pipelines {
             solid_corners: pipe("solid_corners"),
             sand_corners: pipe("sand_corners"),
             sand_drag: pipe("sand_drag"),
+            sand_porous: pipe("sand_porous"),
             tiles_tally: pipe("tiles_tally"),
             pool_canon: pipe("pool_canon"),
             nb_fresh: pipe("nb_fresh"),

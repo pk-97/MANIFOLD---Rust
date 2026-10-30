@@ -56,6 +56,7 @@ use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
+use manifold_water_liquid::fluid_particles::MatterGrain;
 use manifold_node_engine::primitive::Primitive;
 use manifold_nodes_physics::force_lattice::{FORCE_LATTICE, ForceLatticeBinding};
 use manifold_water_liquid::WATER_DENSITY;
@@ -146,9 +147,9 @@ pub(crate) struct ParticleAffine {
 /// Words of a [`ParticleAffine`]: the sort's companion record.
 const AFFINE_WORDS: u32 = (size_of::<ParticleAffine>() / 4) as u32;
 
-/// A wired Sand's bytes at each pool corner: its share and its momentum
-/// along each axis (the shader's `SAND_WORDS` words).
-pub(crate) const SAND_CORNER_BYTES: u64 = 16;
+/// A wired Sand's bytes at each pool corner: its share, its momentum along
+/// each axis and its grains' solid share (the shader's `SAND_WORDS` words).
+pub(crate) const SAND_CORNER_BYTES: u64 = 20;
 
 manifold_core::testkit_visible! {
 /// Layers of valid faces the step's face grid holds around the water at
@@ -607,8 +608,9 @@ struct Step<'a> {
     /// switching on mid-show does not hitch) and scratch reserved while it was
     /// on stays held.
     sheet_rate: f32,
-    /// A wired Sand's particles, `params.sand_count` of them: porous, they
-    /// slow the water inside them (`sand_corners`, `sand_drag`).
+    /// A wired Sand's grains, `params.sand_count` of them: porous, they slow
+    /// the water inside them (`sand_corners`, `sand_drag`) and close the
+    /// faces they lie on by their solid share (`sand_porous`).
     sand: Option<&'a GpuBuffer>,
 }
 
@@ -664,7 +666,7 @@ manifold_node_engine::primitive! {
         live_hits: Array(f32) optional,
         live_hit_count: ScalarF32 optional,
         narrow_band: ScalarF32 optional,
-        sand: Array(FluidParticle) optional,
+        sand: Array(MatterGrain) optional,
         sand_count: ScalarF32 optional,
     },
     outputs: {

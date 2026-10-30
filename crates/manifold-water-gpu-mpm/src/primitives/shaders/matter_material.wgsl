@@ -60,7 +60,7 @@ const MATTER_SLOTS: u32 = 8u;
 
 // One slot's row of the material table (matter.rs `MatterMaterial::row`):
 // μ, λ, α, β₀ | q_s, rule, yield strain, relax time | ξ, density, water
-// lift, water drag rate | wall friction and three spare.
+// lift, water drag rate | wall friction, solid share and two spare.
 struct MatterRow {
     a: vec4<f32>,
     b: vec4<f32>,

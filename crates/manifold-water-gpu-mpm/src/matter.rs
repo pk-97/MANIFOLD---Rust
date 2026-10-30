@@ -345,6 +345,15 @@ pub fn water_lift(rule: i32, bulk: f32, water: f32) -> f32 {
     }
 }
 
+/// The share of a point of `rule` and bulk density `bulk` its grains fill:
+/// what of a water's face it closes where it lies (the water step's
+/// `sand_porous`). A porous material's grains by their own density, as
+/// [`water_lift`] displaces them; a continuous one all of it.
+pub fn solid_share(rule: i32, bulk: f32) -> f32 {
+    let water = manifold_water_liquid::WATER_DENSITY;
+    (water_lift(rule, bulk, water) * bulk / water).clamp(0.0, 1.0)
+}
+
 /// The materials Matter simulates, in the domain's `material` enum order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MatterKind {
@@ -592,7 +601,7 @@ impl MatterMaterial {
     /// Its row of the material table (`node.matter_material`, read per point
     /// by matter_material.wgsl's `MatterRow`): μ, λ, α, β₀ | q_s, rule, yield
     /// strain, relax time | ξ, density, water lift, water drag rate | wall
-    /// friction and three spare.
+    /// friction, solid share and two spare.
     pub fn row(&self, density: f32) -> [f32; MATERIAL_ROW_FLOATS] {
         let rule = self.rule as i32;
         [
@@ -610,7 +619,7 @@ impl MatterMaterial {
             manifold_core::liquid_domain::SAND_WATER_DRAG * manifold_water_liquid::WATER_DENSITY
                 / density,
             self.wall_friction() as f32,
-            0.0,
+            solid_share(rule, density),
             0.0,
             0.0,
         ]
@@ -834,6 +843,13 @@ mod tests {
         assert!(lift(MatterRule::Snow, 400.0) > 1.0);
         assert!((lift(MatterRule::Elastic, 1250.0) - 0.8).abs() < 1e-6);
         assert_eq!(lift(MatterRule::Viscoplastic, 0.0), 0.0);
+        // The grains' share of the bulk: quartz packed to 1600 kg/m³ fills
+        // 60% of it, any packing of snow its ice's share, jelly all of it.
+        let solid = |rule: MatterRule, bulk| solid_share(rule as i32, bulk);
+        assert!((solid(MatterRule::Granular, 1600.0) - 1600.0 / 2650.0).abs() < 1e-6);
+        assert!((solid(MatterRule::Snow, 400.0) - 400.0 / 917.0).abs() < 1e-6);
+        assert!((solid(MatterRule::Elastic, 1250.0) - 1.0).abs() < 1e-6);
+        assert_eq!(solid(MatterRule::Viscoplastic, 0.0), 0.0);
     }
 
     #[test]

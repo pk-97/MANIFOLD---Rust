@@ -16,12 +16,19 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 use crate::matter::{MatterGridNode, MatterPoint, STATS_WORDS, grid_accum_bytes, grid_bytes};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_words};
+use manifold_water_liquid::fluid_particles::MatterGrain;
 
 use super::matter_frame::FrameParams;
 
+static GRAIN_VIEW_SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{}\n{}",
+        include_str!("shaders/matter_material.wgsl"),
+        include_str!("shaders/matter_grain_view.wgsl")
+    )
+});
 static SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
         "{READ_SIDE}\n{}\n{}",
@@ -77,8 +84,8 @@ impl StatsPipelines {
                 "node.matter_stats.finish",
             ),
             view: device.create_compute_pipeline(
-                super::matter_frame::SHADER,
-                "cs_main",
+                GRAIN_VIEW_SHADER.as_str(),
+                "grain_view",
                 "node.matter_stats.view",
             ),
         }
@@ -105,10 +112,10 @@ manifold_node_engine::primitive! {
     },
     outputs: {
         stats_out: Array(u32),
-        // Every point as an id-sorted FluidParticle at the end of each tick,
+        // Every point as an id-sorted MatterGrain at the end of each tick,
         // for a liquid stepping the same tick (node.gpu_flip_step's sand);
         // written only while read. A non-finite tick keeps the last view.
-        fluid_view: Array(FluidParticle),
+        grain_view: Array(MatterGrain),
         view_count: ScalarF32,
     },
     params: [
@@ -124,7 +131,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("tick_index"), label: "Tick Index", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0e9)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Last atom of the Live Matter region body. fluid_view and view_count feed a Water's node.gpu_flip_step sand and sand_count, which steps each World tick after Matter's (the two regions co-iterate). stats/stats_out alias node.matter_state's stats array, whose final value escapes the region to node.matter_frame (which refuses to publish a non-finite tick) and to matter_state's readback (live count, fault). Gate it with the boundary's tick_end so it runs once per tick; a skipped substep leaves the array as it was. Words: 0 non-finite, 1 clamped nodes, 2 live, 3 max speed, 4 min J, 5 max J, 6 volume, 7 max |accumulator|, 8 mass, 9-11 momentum, 12 kinetic, 13 potential, 14 elastic, 15 tick, 16 points removed because their tile had no pool slot (id 0 with volume ratio 0), 17 held pool tiles, 18 the largest hardening a snow point's packing asks for (0 with no snow). The grid and accum cover 512 * pool_tiles + 1 nodes; the canonical last node is not reduced.",
+    composition_notes: "Last atom of the Live Matter region body. grain_view and view_count feed a Water's node.gpu_flip_step sand and sand_count, which steps each World tick after Matter's (the two regions co-iterate). stats/stats_out alias node.matter_state's stats array, whose final value escapes the region to node.matter_frame (which refuses to publish a non-finite tick) and to matter_state's readback (live count, fault). Gate it with the boundary's tick_end so it runs once per tick; a skipped substep leaves the array as it was. Words: 0 non-finite, 1 clamped nodes, 2 live, 3 max speed, 4 min J, 5 max J, 6 volume, 7 max |accumulator|, 8 mass, 9-11 momentum, 12 kinetic, 13 potential, 14 elastic, 15 tick, 16 points removed because their tile had no pool slot (id 0 with volume ratio 0), 17 held pool tiles, 18 the largest hardening a snow point's packing asks for (0 with no snow). The grid and accum cover 512 * pool_tiles + 1 nodes; the canonical last node is not reduced.",
     examples: ["SandColumn"],
     picker: { label: "Matter Stats", category: Atom },
     summary: "Measures the liquid once per tick: how much there is, how fast it moves, its energy, and whether anything went wrong.",
@@ -148,11 +155,11 @@ impl Primitive for MatterStats {
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        port == "fluid_view"
+        port == "grain_view"
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        (port == "fluid_view")
+        (port == "grain_view")
             .then_some(self.view.as_ref())
             .flatten()
     }
@@ -163,7 +170,7 @@ impl Primitive for MatterStats {
         _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        if port_name == "fluid_view" {
+        if port_name == "grain_view" {
             // Provided storage: a one-record hint, grown at run time.
             return Some(1);
         }
@@ -203,7 +210,7 @@ impl Primitive for MatterStats {
         let tiles = ctx.inputs.array("tiles");
         let stats = ctx.inputs.array("stats");
         let materials = ctx.inputs.array("materials");
-        let wants_view = ctx.outputs.slot("fluid_view").is_some();
+        let wants_view = ctx.outputs.slot("grain_view").is_some();
         // In place on the stats input; a gated substep leaves it untouched.
         ctx.mark_gpu_accessed();
         if !run_now {
@@ -329,7 +336,7 @@ impl Primitive for MatterStats {
             "node.matter_stats.finish",
         );
         if wants_view && point_count > 0 {
-            let bytes = u64::from(point_count) * std::mem::size_of::<FluidParticle>() as u64;
+            let bytes = u64::from(point_count) * std::mem::size_of::<MatterGrain>() as u64;
             let mut previous_count = self.view_count;
             if self.view.as_ref().is_none_or(|view| view.size < bytes) {
                 self.view = Some(gpu.device.create_buffer(bytes, BufferUse::Gpu));
@@ -367,7 +374,7 @@ impl Primitive for MatterStats {
                     },
                     GpuBinding::Buffer {
                         binding: 4,
-                        buffer: view,
+                        buffer: materials,
                         offset: 0,
                     },
                 ],
@@ -389,6 +396,13 @@ mod tests {
     fn matter_stats_params_match_the_shader_struct() {
         assert_eq!(std::mem::size_of::<StatsParams>(), 48);
         assert!(SHADER.contains("struct StatsParams"));
+        let module = naga::front::wgsl::parse_str(&GRAIN_VIEW_SHADER).expect("grain view parses");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("grain view validates");
     }
 }
 

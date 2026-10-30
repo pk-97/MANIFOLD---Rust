@@ -240,7 +240,7 @@ impl Primitive for GpuFlipStep {
         let sand_count = sand.map_or(0, |points| {
             ctx.scalar_or_param("sand_count", 0.0).round().clamp(
                 0.0,
-                (points.size / size_of::<FluidParticle>() as u64) as f32,
+                (points.size / size_of::<MatterGrain>() as u64) as f32,
             ) as u32
         });
         let gpu = ctx.gpu_encoder();

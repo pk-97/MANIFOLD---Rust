@@ -72,6 +72,34 @@ impl KnownItem for FluidBlob {
     const SPECS: &'static [ChannelSpec] = FLUID_BLOB_SPECS;
 }
 
+/// One Matter grain as a liquid stepping the same tick sees it
+/// (`node.matter_stats`' `grain_view`, a Water step's `sand`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MatterGrain {
+    /// Metres; w = the radius of the sphere of its bulk volume, 0 for an
+    /// unused slot.
+    pub position_radius: [f32; 4],
+    /// Metres per second; w = the share of its bulk its grains fill (sand's
+    /// packing, 1 for a material with no pores).
+    pub velocity_solid: [f32; 4],
+}
+
+pub const MATTER_GRAIN_SPECS: &[ChannelSpec] = &[
+    ChannelSpec {
+        name: well_known::POSITION_RADIUS,
+        ty: ChannelElementType::Vec4F,
+    },
+    ChannelSpec {
+        name: well_known::VELOCITY_SOLID,
+        ty: ChannelElementType::Vec4F,
+    },
+];
+
+impl KnownItem for MatterGrain {
+    const SPECS: &'static [ChannelSpec] = MATTER_GRAIN_SPECS;
+}
+
 /// The run of sorted particles inside one spatial bin.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]

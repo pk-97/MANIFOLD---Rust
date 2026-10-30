@@ -173,7 +173,7 @@ struct MatterSlot<'a> {
 }
 const WATER_WETNESS: &str = "water_wetness";
 /// The Sand template's tick-end node (`node.matter_stats`), whose
-/// `fluid_view` holds every grain at the end of each tick.
+/// `grain_view` holds every grain at the end of each tick.
 const MATTER_TICK_STATS: &str = "matter_tick_stats";
 
 /// The particle frames of the first Water and the first Sand, which Smoke
@@ -301,7 +301,7 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
         // The water steps each tick against the grains at the end of the
         // same tick: the World runs Matter's tick, then the water's.
         if let (Some(&step), Some(tick_end)) = (ids.get("step"), tick_end) {
-            b.wire(tick_end, "fluid_view", step, points);
+            b.wire(tick_end, "grain_view", step, points);
             b.wire(tick_end, "view_count", step, count);
         }
         if let Some(&wetness) = ids.get(WATER_WETNESS) {
