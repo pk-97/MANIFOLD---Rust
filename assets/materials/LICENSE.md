@@ -57,6 +57,9 @@ Creative Commons CC0 1.0 Universal License.
 | Marble012 | 1.5 *est.* | broken | <https://ambientcg.com/a/Marble012> |
 | Plaster007 | 2.0 *est.* | broken | <https://ambientcg.com/a/Plaster007> |
 | Snow010A | 2.0 *est.* | broken | <https://ambientcg.com/a/Snow010A> |
+| Ground097 | 1.0 *est.* | kept | <https://ambientcg.com/a/Ground097> |
+| Ground094C | 1.0 *est.* | kept | <https://ambientcg.com/a/Ground094C> |
+| Clay006 | 0.2 | broken | <https://ambientcg.com/a/Clay006> |
 | Leaf001 | one leaf | cut-out | <https://ambientcg.com/a/Leaf001> |
 
 Leaf001 has an opacity picture, so it is a cut-out: one leaf drawn across

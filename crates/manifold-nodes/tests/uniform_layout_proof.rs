@@ -576,9 +576,6 @@ const NON_STANDALONE: &[&str] = &[
     "node.matter_to_grid",
     // Surface grains: an atomic occupancy count, then a neighbour read.
     "node.matter_grains",
-    // A carried mesh: bonds and an A/B ring of skinned vertices held across
-    // frames, its SkinParams reflected by the extended custom cases.
-    "node.matter_skin",
     // A material row copied into the table; no kernel, no uniforms.
     "node.matter_material",
     // Region detection and tracking are CPU/FFI stateful boundaries. Their

@@ -60,7 +60,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("live_count"), label: "Live Count", ty: ParamType::Float, default: ParamValue::Float(-1.0), range: Some((-1.0, 1.0e9)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("cell_size"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(0.0625), range: Some((0.0001, 100.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("points_per_cell"), label: "Points per Cell", ty: ParamType::Float, default: ParamValue::Float(8.0), range: Some((1.0, 64.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("grain_size"), label: "Grain Size", ty: ParamType::Float, default: ParamValue::Float(0.014), range: Some((0.002, 0.1)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("grain_size"), label: "Grain Size", ty: ParamType::Float, default: ParamValue::Float(0.005), range: Some((0.002, 0.1)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("spread"), label: "Spread", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 2.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
@@ -132,7 +132,7 @@ impl Primitive for MatterGrains {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let grain_size = ctx.scalar_or_param("grain_size", 0.014);
+        let grain_size = ctx.scalar_or_param("grain_size", 0.005);
         let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
         let points_per_cell = ctx.scalar_or_param("points_per_cell", 8.0).max(1.0);
         let spread = ctx.scalar_or_param("spread", 1.0);

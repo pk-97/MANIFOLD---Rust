@@ -242,6 +242,11 @@ pub static SAND_FIELDS: [FieldRow; 5] = [
 /// look with what it is made of over it ([`matter_look`]).
 pub fn sand_look(matter: Matter) -> Vec<(String, f32)> {
     let mut look = super::water_look(crate::scene_doc::ItemKind::Sand);
+    // A scanned set's pictures carry the colour and roughness, so the
+    // Material starts at the file's for them.
+    if matter_set(matter).is_some() {
+        look.retain(|(property, _)| !FROM_SET.contains(&property.as_str()));
+    }
     for (property, value) in matter_look(matter) {
         match look.iter_mut().find(|(name, _)| name == property) {
             Some((_, old)) => *old = *value,
@@ -251,31 +256,47 @@ pub fn sand_look(matter: Matter) -> Vec<(String, f32)> {
     look
 }
 
+/// The rows a Matter's scanned set gives its Material, which its look
+/// leaves to the file.
+const FROM_SET: [&str; 4] = ["color_r", "color_g", "color_b", "roughness"];
+
+/// The scanned material set a Sand of `matter` starts with, a folder of the
+/// starter materials: its colour, roughness, normal and height pictures,
+/// box mapped at the ground's real size and carved by parallax. Sand: dune
+/// ripples. Snow: soft drifted snow. Clay: worked clay with finger smears.
+/// Mud: damp rippled mud. Goo and jelly are clear and draw no picture.
+pub fn matter_set(matter: Matter) -> Option<&'static str> {
+    match matter {
+        Matter::Sand => Some("Ground097"),
+        Matter::Snow => Some("Snow010A"),
+        Matter::Clay => Some("Clay006"),
+        Matter::Mud => Some("Ground094C"),
+        Matter::Goo | Matter::Jelly => None,
+    }
+}
+
 /// What a Sand of `matter` looks like over the Sand template's look, each
-/// from what the material is made of:
-/// - Snow: ice grains (IOR 1.31) a fraction of a millimetre across at about
-///   0.9 albedo, matte as a whole (rough) with single grains glinting.
-///   Light runs millimetres to a centimetre inside, blue the furthest, so
-///   creases and thin edges glow faintly blue; a little light stays at the
-///   surface for its crust.
-/// - Clay: terracotta, satin, its light spreading a few millimetres and red
-///   the furthest.
-/// - Mud: dark wet soil under a film of water (a clear coat at water's
-///   IOR), gritty below it.
+/// from what the material is made of. Sand, snow, clay and mud take their
+/// colour, roughness and grain from their scanned set ([`matter_set`]), so
+/// the procedural grain is off and a colour here tints the picture:
+/// - Snow: ice (IOR 1.31). Light runs millimetres to a centimetre inside,
+///   blue the furthest, so creases and thin edges glow faintly blue; a
+///   little light stays at the surface for its crust.
+/// - Clay: satin, its light spreading a few millimetres, red the furthest,
+///   tinted as its picture.
+/// - Mud: soil darkened as water darkens it (its picture's colour times
+///   about 0.4), under a film of water (a clear coat at water's IOR).
 /// - Goo: honey, clear (transmission 1) with its amber from absorption
-///   through its own thickness, at honey's IOR 1.49.
+///   through its own thickness, at honey's IOR 1.49. It takes its full tint
+///   over a metre, so a thick blob reads amber rather than red.
 /// - Jelly: gelatin, clear and absorbing red, at IOR 1.34.
 fn matter_look(matter: Matter) -> &'static [(&'static str, f32)] {
     match matter {
-        Matter::Sand => &[],
+        Matter::Sand => &[("grain", 0.0)],
         Matter::Snow => &[
-            ("color_r", 0.9),
-            ("color_g", 0.92),
-            ("color_b", 0.95),
-            ("roughness", 0.75),
             ("specular", 0.5),
             ("ior", 1.31),
-            ("grain", 0.4),
+            ("grain", 0.0),
             ("subsurface_weight", 0.85),
             ("subsurface_radius_r", 0.004),
             ("subsurface_radius_g", 0.006),
@@ -285,27 +306,22 @@ fn matter_look(matter: Matter) -> &'static [(&'static str, f32)] {
             ("subsurface_color_b", 0.98),
         ],
         Matter::Clay => &[
-            ("color_r", 0.42),
-            ("color_g", 0.16),
-            ("color_b", 0.085),
-            ("roughness", 0.6),
             ("specular", 0.35),
             ("grain", 0.0),
             ("subsurface_weight", 1.0),
             ("subsurface_radius_r", 0.006),
             ("subsurface_radius_g", 0.003),
             ("subsurface_radius_b", 0.002),
-            ("subsurface_color_r", 0.42),
-            ("subsurface_color_g", 0.16),
-            ("subsurface_color_b", 0.085),
+            ("subsurface_color_r", 0.62),
+            ("subsurface_color_g", 0.47),
+            ("subsurface_color_b", 0.36),
         ],
         Matter::Mud => &[
-            ("color_r", 0.075),
-            ("color_g", 0.05),
-            ("color_b", 0.03),
-            ("roughness", 0.65),
+            ("color_r", 0.4),
+            ("color_g", 0.36),
+            ("color_b", 0.33),
             ("ior", 1.33),
-            ("grain", 1.0),
+            ("grain", 0.0),
             ("clearcoat", 0.8),
             ("clearcoat_roughness", 0.12),
         ],
@@ -322,7 +338,7 @@ fn matter_look(matter: Matter) -> &'static [(&'static str, f32)] {
             ("volume_attenuation_color_r", 0.95),
             ("volume_attenuation_color_g", 0.55),
             ("volume_attenuation_color_b", 0.08),
-            ("volume_attenuation_distance", 0.25),
+            ("volume_attenuation_distance", 1.0),
         ],
         Matter::Jelly => &[
             ("color_r", 1.0),

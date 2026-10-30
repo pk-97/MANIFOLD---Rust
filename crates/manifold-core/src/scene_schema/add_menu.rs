@@ -632,16 +632,16 @@ pub const FORCE_STARTS: [(&str, &[(&str, f32)]); 3] = [
 
 /// Each Matter's surface, built at the simulation's cell (bumps smaller than
 /// a cell are single points jittering, which boil) and smoothed as the
-/// material is. Snow's loose snow breaks off as crumbs a few centimetres
-/// across; mud keeps its lumps and goo settles glassy smooth. Jelly and clay
-/// carry their fill's own mesh and build no surface.
-pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 3] = [
+/// material is. Snow's loose snow breaks off as crumbs under a centimetre
+/// across; mud and clay keep their lumps and folds, goo and jelly settle
+/// glassy smooth.
+pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 5] = [
     (
         "matter.snow",
         &[
             ("surface_detail", 0.0),
             ("surface_smoothness", 1.0),
-            ("grain_size", 0.03),
+            ("grain_size", 0.008),
         ],
     ),
     (
@@ -649,7 +649,15 @@ pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 3] = [
         &[("surface_detail", 0.0), ("surface_smoothness", 1.0)],
     ),
     (
+        "matter.clay",
+        &[("surface_detail", 0.0), ("surface_smoothness", 1.0)],
+    ),
+    (
         "matter.goo",
+        &[("surface_detail", 0.0), ("surface_smoothness", 2.0)],
+    ),
+    (
+        "matter.jelly",
         &[("surface_detail", 0.0), ("surface_smoothness", 2.0)],
     ),
 ];

@@ -15,15 +15,12 @@ use std::sync::{Arc, OnceLock};
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::scene_doc::{ItemKind, WaterDraw};
-use manifold_core::scene_schema::{
-    MATTER_SKIN_ROLE, PHYSICS_VIEW_SWITCHES, WaterFamily, WaterTemplate,
-};
+use manifold_core::scene_schema::{PHYSICS_VIEW_SWITCHES, WaterFamily, WaterTemplate};
 use serde_json::json;
 
 use super::{
-    Builder, DISPLAY_SOLID, DISPLAY_TILES, DOTS_OUTPUT, FAMILY_OUTPUTS, LIQUID_BODY_OUTPUT,
-    VELOCITY_SWITCH, VERTICES_SWITCH, WaterScene, display_dots, display_head, feed_intervals,
-    float, surface,
+    Builder, DISPLAY_TILES, DOTS_OUTPUT, FAMILY_OUTPUTS, LIQUID_BODY_OUTPUT, VELOCITY_SWITCH,
+    WaterScene, display_dots, display_head, feed_intervals, float, surface,
 };
 
 /// The Platonic shape a drawn particle is, scaled by the particle's radius.
@@ -295,66 +292,8 @@ fn solid_surface(b: &mut Builder, surface: usize) {
     }
 }
 
-/// Jelly's and clay's draw: the surface build and the display's tiles give
-/// way to the item's Fill mesh carried by its points (node.matter_skin),
-/// drawn on the same object behind Physics View's vertex switch. The scene
-/// compiler wires the Fill's transform and mesh and the item's slot; the
-/// object keeps last frame's positions itself for motion blur.
-fn carried_draw(b: &mut Builder) {
-    b.remove(&[
-        "surface",
-        DISPLAY_TILES,
-        DISPLAY_SOLID,
-        "particle_blend",
-        "particle_push_out",
-        "water_mesh",
-    ]);
-    let skin = b.node(MATTER_SKIN_ROLE, "node.matter_skin", json!({}));
-    let [domain, state, fill, water, vertices] = [
-        "domain",
-        "state",
-        "matter_fill",
-        "water_object",
-        VERTICES_SWITCH,
-    ]
-    .map(|name| b.id(name));
-    b.wires(
-        domain,
-        skin,
-        &[
-            "fills",
-            "fill_min_x",
-            "fill_min_y",
-            "fill_min_z",
-            "cell_size",
-            "points_per_cell",
-            "simulation_time",
-            "display_time",
-            "epoch",
-        ],
-    );
-    for (from, to) in [
-        ((state, "out"), (skin, "points")),
-        ((state, "stats"), (skin, "stats")),
-        ((fill, "points"), (skin, "seeds")),
-        ((skin, "vertices"), (vertices, "in_0")),
-        ((skin, "indices"), (water, "indices")),
-    ] {
-        b.wire(from, to.0, to.1);
-    }
-}
-
 /// The Matter solver with the shared surface build, drawn as sand.
 fn mpm(draw: WaterDraw, _narrow_band: bool) -> WaterFamily {
-    mpm_family(draw, false)
-}
-
-/// The Matter solver drawn as its Fill's carried mesh (`carried_draw`).
-fn mpm_carried(draw: WaterDraw, _narrow_band: bool) -> WaterFamily {
-    mpm_family(draw, true)
-}
-
-fn mpm_family(draw: WaterDraw, carried: bool) -> WaterFamily {
     let solver: EffectGraphDef =
         serde_json::from_str(include_str!("../../../assets/matter_solver.json"))
             .expect("the Matter solver parses");
@@ -369,9 +308,7 @@ fn mpm_family(draw: WaterDraw, carried: bool) -> WaterFamily {
     sand_material(&mut b);
     let mut objects = vec!["water_object".to_owned(), "dots_object".to_owned()];
     sand_surface_draw(&mut b);
-    if carried {
-        carried_draw(&mut b);
-    } else if draw == WaterDraw::Particles {
+    if draw == WaterDraw::Particles {
         grains_draw(&mut b);
         objects.insert(1, SAND_GRAINS_OBJECT.to_owned());
     }
@@ -388,9 +325,6 @@ fn family(b: Builder, objects: Vec<String>) -> WaterFamily {
 
 macro_rules! template {
     ($name:ident, $kind:expr, $draw:expr, $narrow_band:expr, $build:expr) => {
-        template!($name, $kind, $draw, $narrow_band, false, $build);
-    };
-    ($name:ident, $kind:expr, $draw:expr, $narrow_band:expr, $carried:expr, $build:expr) => {
         fn $name() -> Arc<WaterFamily> {
             static FAMILY: OnceLock<Arc<WaterFamily>> = OnceLock::new();
             FAMILY
@@ -402,7 +336,6 @@ macro_rules! template {
                 kind: $kind,
                 draw: $draw,
                 narrow_band: $narrow_band,
-                carried: $carried,
                 family: $name,
             }
         }
@@ -445,11 +378,4 @@ template!(
     false,
     mpm
 );
-template!(
-    mpm_carried_surface,
-    ItemKind::Sand,
-    WaterDraw::Surface,
-    false,
-    true,
-    mpm_carried
-);
+

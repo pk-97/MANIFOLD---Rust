@@ -1736,7 +1736,10 @@ fn grain_octave(p: vec3<f32>, n: vec3<f32>, k: f32) -> GrainOctave {
 }
 
 fn sand_grain(world_pos: vec3<f32>, n: vec3<f32>, albedo: vec3<f32>, roughness: f32, size: f32) -> Grain {
-    let footprint = length(fwidth(world_pos));
+    // The pixel's footprint on the surface, the mean of its two sides: on a
+    // slope seen low one side is many times the other, and cells sized to the
+    // longer would draw each grain as a dash many pixels long.
+    let footprint = sqrt(length(dpdx(world_pos)) * length(dpdy(world_pos)));
     let level = max(log2(2.0 * footprint / size), 0.0);
     let k = floor(level);
     let t = level - k;

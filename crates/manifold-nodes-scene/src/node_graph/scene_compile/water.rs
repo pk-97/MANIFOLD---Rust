@@ -26,10 +26,10 @@ use std::collections::BTreeMap;
 use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
 use manifold_core::liquid_domain::{MAX_MATTER_SLOTS, MAX_WATERS};
 use manifold_core::scene_doc::{
-    Item, ItemFields, ItemKind, Quality, SceneDoc, SourceRole, SourceShape,
+    Item, ItemFields, ItemKind, Quality, SceneDoc, SourceShape,
 };
 use manifold_core::scene_schema::{
-    DOMAIN_ROLE, MATTER_SKIN_ROLE, PHYSICS_VIEW_SWITCHES, SOLID, SURFACE_DETAIL_NODES,
+    DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SOLID, SURFACE_DETAIL_NODES,
     SURFACE_DETAIL_OFFSET, WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WORLD_FOLLOWS, WaterFamily,
     role_index, rows, template_roles, water_family,
 };
@@ -465,16 +465,6 @@ fn emit(
                     value: place.slot as i32,
                 },
             );
-            // A carried Matter's skin reads its slot's row of the fill table.
-            if let Some(skin) = node(MATTER_SKIN_ROLE) {
-                b.set(
-                    skin,
-                    "slot",
-                    SerializedParamValue::Int {
-                        value: place.slot as i32,
-                    },
-                );
-            }
         }
     }
     if solver.is_none() {
@@ -542,14 +532,9 @@ fn emit(
             0
         }
     };
-    // A carried Matter's skin takes its first Fill's shape and pose, the one
-    // Initial Fill a Matter item seeds.
-    let mut skin = node(MATTER_SKIN_ROLE);
     for (port, source) in sources.into_iter().enumerate() {
-        let fill = matches!(&source.fields, ItemFields::WaterSource(fields) if fields.role == SourceRole::Fill);
-        let carries = if fill { skin.take() } else { None };
         let water = water.as_ref().map(|place| place.slot);
-        emit_source(b, source, domain, first_port + port, frame, carries, water);
+        emit_source(b, source, domain, first_port + port, frame, water);
     }
 
     // The water's look is its Material's, as for any object.
@@ -639,16 +624,15 @@ fn solver_setup(b: &mut Builder<'_>, item: &Item, domain: u32, frame: Option<u32
 /// One source: its Transform places a `node.fluid_role_source` (a unit box,
 /// or a ball one metre across) wired into the domain's `role_<port>`. A
 /// Model takes its Object's mesh and stands where the Object does, in the
-/// frame of the groups round it; with no Object picked it is off. `skin`,
-/// a carried Matter's, takes the same pose and mesh. `water` is the slot of
-/// a Water sharing a solver, which the source's particles carry.
+/// frame of the groups round it; with no Object picked it is off. `water`
+/// is the slot of a Water sharing a solver, which the source's particles
+/// carry.
 fn emit_source(
     b: &mut Builder<'_>,
     item: &Item,
     domain: u32,
     port: usize,
     frame: Option<u32>,
-    skin: Option<u32>,
     water: Option<usize>,
 ) {
     let ItemFields::WaterSource(fields) = &item.fields else {
@@ -676,17 +660,8 @@ fn emit_source(
             },
         );
     }
-    let place = |b: &mut Builder<'_>, from: u32| {
-        for to in std::iter::once(role).chain(skin) {
-            b.wire(from, "transform", to, "transform");
-        }
-    };
-    let shape = |b: &mut Builder<'_>, mesh: u32| {
-        b.wire(mesh, "source", role, "mesh_0");
-        if let Some(skin) = skin {
-            b.wire(mesh, "source", skin, "mesh");
-        }
-    };
+    let place = |b: &mut Builder<'_>, from: u32| b.wire(from, "transform", role, "transform");
+    let shape = |b: &mut Builder<'_>, mesh: u32| b.wire(mesh, "source", role, "mesh_0");
     match fields.shape {
         SourceShape::Box => place(b, transform),
         SourceShape::Sphere => {

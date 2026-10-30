@@ -71,7 +71,7 @@ pub use object::{OBJECT_ROWS, has_shape_name, shape_name};
 pub use ocean::OCEAN_LOOK;
 use ocean::OCEAN_TABLES;
 pub use physics::{BODY_ROLE, PHYSICS_ROWS, PhysicsPart, physics_parts, physics_unavailable};
-pub use sand::{SAND_ROWS, sand_look};
+pub use sand::{SAND_ROWS, matter_set, sand_look};
 pub use scene_level::{DEFAULT_MATERIAL_REASON, SCENE_LEVEL_ROWS};
 pub use scene_wide::{
     LOOP_CAMERA_ONLY, LOOP_CAMERA_ROWS, LOOP_GAP_ROW, NO_LOOP_CAMERA, NO_SCENE_LOOP, add_refused,
@@ -84,9 +84,9 @@ pub use terrain::TERRAIN_RESOLUTION;
 use terrain::TERRAIN_TABLES;
 use tree::TREE_TABLES;
 pub use water::{
-    DOMAIN_ROLE, MATTER_SKIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES,
+    DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES,
     SURFACE_DETAIL_OFFSET, WATER_FAMILY_REASON, WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WATER_ROWS,
-    WORLD_FOLLOWS, WaterFamily, WaterTemplate, carried, template_roles, water_family, water_look,
+    WORLD_FOLLOWS, WaterFamily, WaterTemplate, template_roles, water_family, water_look,
 };
 pub use water_source::{
     DRAIN_ROLE, FILL_ROLE, INFLOW_ROLE, WATER_SOURCE_ROWS, is_model as is_source_model, role_index,

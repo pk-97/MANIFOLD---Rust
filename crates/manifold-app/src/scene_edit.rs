@@ -7,7 +7,7 @@ use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_core::scene_doc::{
     CameraFields, CameraRig, FeatureSetting, ForceFields, ForceTargets, ForceType, Item,
-    ItemFields, ItemId, ItemKind, MaterialFields, MaterialType, SandFields, SceneDoc, Shape,
+    ItemFields, ItemId, ItemKind, MaterialFields, MaterialType, Matter, SandFields, SceneDoc, Shape,
     SourceRole, TextureFeeds, TextureSource, WaterFields, WaterSourceFields, param_id,
 };
 use manifold_core::scene_schema::{
@@ -259,6 +259,8 @@ pub(crate) fn add(
             );
         }
     }
+    // A Sand's Material, put on its matter's scanned set below.
+    let mut on_set = None;
     if entry.kind.holds_sources() {
         let fill = new_id();
         commands.push(Box::new(AddSceneItemCommand::new(
@@ -296,7 +298,16 @@ pub(crate) fn add(
             _ => None,
         };
         let material_name = matter.map_or(WATER_MATERIAL_NAME, |matter| matter.name());
-        let material = new_material(new_id(), unique_name(material_name, &names));
+        // The template's look, with what a Sand is made of over it; the
+        // features it uses show on the Material.
+        let look = matter.map_or_else(
+            || scene_schema::water_look(entry.kind),
+            scene_schema::sand_look,
+        );
+        let mut material = new_material(new_id(), unique_name(material_name, &names));
+        if let ItemFields::Material(fields) = &mut material.fields {
+            fields.features = look_features(&look, &[]);
+        }
         let material_id = material.id.clone();
         commands.push(Box::new(AddSceneItemCommand::with_subtree(
             layer.clone(),
@@ -320,16 +331,12 @@ pub(crate) fn add(
             id.clone(),
             fields,
         )));
-        // The template's look, with what a Sand is made of over it.
-        let look = matter.map_or_else(
-            || scene_schema::water_look(entry.kind),
-            scene_schema::sand_look,
-        );
         commands.extend(
             writable_look(look)
                 .into_iter()
                 .map(|(property, value)| write(layer, &material_id, &property, 0.0, value)),
         );
+        on_set = matter.map(|matter| (material_id, matter));
     }
     // A Material added inside a Water or Sand is that item's look.
     if entry.kind == ItemKind::Material
@@ -354,7 +361,76 @@ pub(crate) fn add(
             )));
         }
     }
-    Ok(batch(commands, &format!("Add {}", entry.label), Some(id)))
+    let edit = batch(commands, &format!("Add {}", entry.label), Some(id));
+    match on_set {
+        Some((material, matter)) => on_set_file(project, layer, &material, matter_file(matter), edit),
+        None => Ok(edit),
+    }
+}
+
+/// `held` with every feature `look` uses on, so the Material shows its
+/// controls: a feature is in use when the look sets the row the feature
+/// starts at (`feature_seeds`) above 0.
+fn look_features(look: &[(String, f32)], held: &[FeatureSetting]) -> Vec<FeatureSetting> {
+    let mut features = held.to_vec();
+    for feature in manifold_ui::param_surface::MATERIAL_FEATURES {
+        let row = feature_seeds(*feature)[0].0;
+        if !look.iter().any(|(property, value)| property == row && *value > 0.0) {
+            continue;
+        }
+        let core = core_feature(*feature);
+        match features.iter_mut().find(|setting| setting.feature == core) {
+            Some(setting) => setting.mode = FeatureSetting::ON,
+            None => features.push(FeatureSetting::on(core)),
+        }
+    }
+    features
+}
+
+/// The starter library's file of `matter`'s scanned set
+/// (`scene_schema::matter_set`), found by its folder's name. `None` for a
+/// matter with no set, or (logged) when the library lacks it.
+fn matter_file(matter: Matter) -> Option<String> {
+    let set = scene_schema::matter_set(matter)?;
+    let found = crate::file_dialogs::starter_library()
+        .iter()
+        .find(|(_, file)| file.parent().and_then(|dir| dir.file_name()) == Some(set.as_ref()));
+    if found.is_none() {
+        log::warn!("[scene] the starter material {set} is missing; {} starts plain", matter.name());
+    }
+    found.map(|(_, file)| file.to_string_lossy().into_owned())
+}
+
+/// `edit`, then `material` put on the material file `file` (a matter's
+/// scanned set, [`matter_file`]) as picking it does (`set_material_file`),
+/// one undo step. The file's facts are read here (a small text file and its
+/// pictures' sizes) onto a copy of the project `edit` has run on, so its
+/// rows start at the file's values; the layer reads them itself once the
+/// Material names the file. `edit` alone with no file.
+fn on_set_file(
+    project: &Project,
+    layer: &LayerId,
+    material: &ItemId,
+    file: Option<String>,
+    mut edit: SceneEdit,
+) -> Result<SceneEdit, String> {
+    let Some(file) = file else {
+        return Ok(edit);
+    };
+    let (facts, _) =
+        manifold_nodes_scene::node_graph::gltf_import::read_file_facts(std::path::Path::new(&file))?;
+    let mut probe = project.clone();
+    edit.command.execute(&mut probe);
+    crate::scene_models::attach(&mut probe, Some(layer), &file, &facts);
+    let textured = set_material_file(&probe, layer, material, &file)?;
+    let description = edit.command.description().to_owned();
+    Ok(SceneEdit {
+        command: Box::new(CompositeCommand::new(
+            vec![edit.command, textured.command],
+            description,
+        )),
+        select: edit.select,
+    })
 }
 
 /// What a new Water brings (Blender's Quick Liquid fills its domain the same
@@ -644,13 +720,17 @@ pub(crate) fn set_field(
             scene_schema::matter_starts(new.matter),
         ));
         let mut renamed = vec![(item.clone(), found.name.clone())];
+        let (old_look, new_look) = (
+            scene_schema::sand_look(old.matter),
+            scene_schema::sand_look(new.matter),
+        );
         if let Some(material) = &new.material {
             commands.extend(swap_writes(
                 project,
                 layer,
                 material,
-                &writable_look(scene_schema::sand_look(old.matter)),
-                &writable_look(scene_schema::sand_look(new.matter)),
+                &writable_look(old_look.clone()),
+                &writable_look(new_look.clone()),
             ));
             if let Some(found) = doc.find(material) {
                 renamed.push((material.clone(), found.name.clone()));
@@ -673,7 +753,55 @@ pub(crate) fn set_field(
                 fresh.clone(),
             )));
         }
-        return Ok(Some(batch(commands, "Set Matter", None)));
+        // The new look's features show on the material, and the old one's
+        // it no longer uses go.
+        let material = new.material.as_ref().and_then(|material| {
+            let ItemFields::Material(fields) = &doc.find(material)?.fields else {
+                return None;
+            };
+            let mut fields = fields.clone();
+            let (old_on, new_on) = (look_features(&old_look, &[]), look_features(&new_look, &[]));
+            fields.features = look_features(&new_look, &fields.features);
+            for setting in &mut fields.features {
+                let uses = |on: &[FeatureSetting]| on.iter().any(|o| o.feature == setting.feature);
+                if uses(&old_on) && !uses(&new_on) {
+                    setting.mode = FeatureSetting::REMOVED;
+                }
+            }
+            commands.push(Box::new(SetSceneItemFieldsCommand::new(
+                layer.clone(),
+                material.clone(),
+                ItemFields::Material(fields.clone()),
+            )));
+            Some((material.clone(), fields))
+        });
+        // A material still on the old matter's scanned set (or on none)
+        // moves to the new matter's; one on a file the performer picked
+        // keeps it.
+        let on_old_set = material.filter(|(_, fields)| match &fields.texture {
+            TextureSource::None => true,
+            TextureSource::Model { file, .. } => matter_file(old.matter).as_ref() == Some(file),
+            _ => false,
+        });
+        let Some((material, fields)) = on_old_set else {
+            return Ok(Some(batch(commands, "Set Matter", None)));
+        };
+        if scene_schema::matter_set(new.matter).is_none() {
+            if matches!(fields.texture, TextureSource::None) {
+                return Ok(Some(batch(commands, "Set Matter", None)));
+            }
+            commands.push(Box::new(SetSceneItemFieldsCommand::new(
+                layer.clone(),
+                material,
+                ItemFields::Material(MaterialFields {
+                    texture: TextureSource::None,
+                    ..fields
+                }),
+            )));
+            return Ok(Some(batch(commands, "Set Matter", None)));
+        }
+        let edit = batch(commands, "Set Matter", None);
+        return on_set_file(project, layer, &material, matter_file(new.matter), edit).map(Some);
     }
     // A layer fed into Emission shows at once: an emission the performer has
     // not touched starts as the Emission feature does, white at full strength.
@@ -1754,6 +1882,51 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// A new Sand's Material lands on its scanned set in the Add's one undo
+    /// step: the Add runs on a copy to start the file's rows, then again for
+    /// real with them. The fixture names no size or depth, so it tiles once
+    /// a metre and carves 2 cm.
+    #[test]
+    fn a_new_sand_starts_on_its_scanned_set() {
+        let (mut project, layer, _) = cube_scene();
+        let file = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/materials/Bricks090/Bricks090_2K-JPG.mtlx"
+        );
+        let mut added = add(&project, &layer, "matter.mud", None, &[]).unwrap();
+        let mut scratch = project.clone();
+        added.command.execute(&mut scratch);
+        let material = match &doc(&scratch, &layer)
+            .unwrap()
+            .find(added.select.as_ref().unwrap())
+            .unwrap()
+            .fields
+        {
+            ItemFields::Sand(sand) => sand.material.clone().unwrap(),
+            _ => panic!("a Sand"),
+        };
+        let mut edit =
+            on_set_file(&project, &layer, &material, Some(file.to_owned()), added).unwrap();
+        edit.command.execute(&mut project);
+        let row = |project: &Project, property| {
+            base(instance(project, &layer).unwrap(), &material, property).unwrap()
+        };
+        assert!(matches!(
+            &doc(&project, &layer).unwrap().find(&material).unwrap().fields,
+            ItemFields::Material(MaterialFields { texture: TextureSource::Model { file: named, .. }, .. })
+                if named == file
+        ));
+        assert_eq!(row(&project, "mapping"), 1.0, "box mapped");
+        assert_eq!(row(&project, "tile_size"), 1.0, "once a metre");
+        assert_eq!(row(&project, "depth"), 2.0, "carved 2 cm");
+        assert_eq!(row(&project, "roughness"), 1.0, "the picture carries the roughness");
+        assert_eq!(row(&project, "color_r"), 0.4, "mud darkens its picture");
+        assert_eq!(row(&project, "clearcoat"), 0.8, "under its film of water");
+
+        edit.command.undo(&mut project);
+        assert!(doc(&project, &layer).unwrap().find(&material).is_none());
     }
 
     /// A scene layer holding a new cube: the project, the layer, the cube.
