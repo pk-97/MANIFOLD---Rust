@@ -53,11 +53,11 @@ pub(crate) struct HdriSun {
 
 impl HdriSun {
     /// The sun as a Sun light shining from `toward`, its colour the
-    /// irradiance. Its region's radius rides in `outer_cone_angle` and its
-    /// disc's in `inner_cone_angle`, which a Sun has no other use for, so the
-    /// Environment can paint the region out of its lighting map and size the
-    /// followed Sun's shadows. No sun is a black Sun: a light slot keeps its
-    /// last value, so "none" has to be a value too.
+    /// irradiance and its `sun_radius` the disc's. The region's radius rides
+    /// in `outer_cone_angle`, which a Sun has no other use for, so the
+    /// Environment can paint the region out of its lighting map. No sun is a
+    /// black Sun: a light slot keeps its last value, so "none" has to be a
+    /// value too.
     pub(crate) fn light(found: Option<Self>) -> Light {
         let Some(sun) = found else {
             return Light {
@@ -74,7 +74,7 @@ impl HdriSun {
             dir: [-x, -y, -z],
             color: [r, g, b, 1.0],
             outer_cone_angle: sun.radius,
-            inner_cone_angle: sun.disc,
+            sun_radius: sun.disc,
             ..Light::default_sun()
         }
     }
@@ -91,7 +91,7 @@ impl HdriSun {
             toward: [-x, -y, -z],
             irradiance: [r, g, b],
             radius: light.outer_cone_angle,
-            disc: light.inner_cone_angle,
+            disc: light.sun_radius,
         })
     }
 }

@@ -30,7 +30,7 @@ use manifold_node_engine::content_revision::ContentVersion;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::light::{Light, LightMode};
+use manifold_node_engine::scene::light::{Light, LightMode, ShadowSoftness};
 
 use super::daylight::{self, Atmosphere};
 use crate::node_graph::hdri_sun::HdriSun;
@@ -176,7 +176,10 @@ fn sun_fill(found: Option<HdriSun>, height: u32) -> [f32; 4] {
 /// the sky shows the file's azimuth less the turn). Its colour is the sun's
 /// irradiance times the lighting `intensity` and the Sun's own colour over
 /// a new Sun's intensity, so a new white Sun gives the sun as captured. Its
-/// shadow settings and its framing (aim and distance) stay its own.
+/// shadows are the sun's own: Contact, sized by the measured disc, so they
+/// are sharp where things touch and soften with distance as in a photo
+/// taken under that sky. Its other shadow settings and its framing (aim and
+/// distance) stay its own.
 fn followed_sun(sun: Light, found: HdriSun, rotation: f32, intensity: f32) -> Light {
     let (sin, cos) = rotation.sin_cos();
     let [x, y, z] = found.toward;
@@ -195,6 +198,9 @@ fn followed_sun(sun: Light, found: HdriSun, rotation: f32, intensity: f32) -> Li
             b * sun.color[2] * scale,
             sun.color[3],
         ],
+        // A Sun's Contact shadows take their size from `sun_radius` alone.
+        shadow_softness: ShadowSoftness::Contact { light_size: 0.0 },
+        sun_radius: found.disc,
         ..sun
     }
 }
@@ -892,6 +898,11 @@ mod tests {
             assert_eq!(followed.aim, sun.aim);
             assert!(followed.cast_shadows);
             assert_eq!(followed.color, [60.0, 50.0, 40.0, 1.0]);
+            assert_eq!(followed.sun_radius, found.disc);
+            assert!(matches!(
+                followed.shadow_softness,
+                ShadowSoftness::Contact { .. }
+            ));
         }
     }
 
