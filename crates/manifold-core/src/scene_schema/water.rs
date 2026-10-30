@@ -27,7 +27,7 @@ use super::fields::{
 use super::{Exposure, PropertyRow, Reach, follows, perform, row, setup};
 use crate::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
 use crate::fluid_domain::MIN_DOMAIN_SIDE_METRES;
-use crate::scene_doc::{ItemFields, ItemKind, Quality, WaterDraw};
+use crate::scene_doc::{ItemFields, ItemKind, Matter, Quality, WaterDraw};
 
 /// The water family the scene compiler splices for each Water: the solver,
 /// its display and its looks, with no source and no host wiring.
@@ -64,6 +64,8 @@ pub struct WaterTemplate {
     pub draw: WaterDraw,
     /// GPU FLIP's Narrow Band variant; Sand registers only `false`.
     pub narrow_band: bool,
+    /// Sand only: the draw of a Matter that keeps its shape ([`carried`]).
+    pub carried: bool,
     pub family: fn() -> Arc<WaterFamily>,
 }
 inventory::collect!(WaterTemplate);
@@ -76,13 +78,28 @@ pub fn water_family(fields: &ItemFields) -> Option<Arc<WaterFamily>> {
         ItemFields::Sand(s) => (ItemKind::Sand, s.draw, false),
         _ => return None,
     };
+    let carried = carried(fields);
     inventory::iter::<WaterTemplate>
         .into_iter()
         .find(|template| {
-            template.kind == kind && template.draw == draw && template.narrow_band == narrow_band
+            template.kind == kind
+                && template.draw == draw
+                && template.narrow_band == narrow_band
+                && template.carried == carried
         })
         .map(|template| (template.family)())
 }
+
+/// A Sand of a Matter that keeps its shape (jelly, clay) drawn as a
+/// surface: its Fill's own mesh carried by its points (`node.matter_skin`)
+/// draws it, with no surface build.
+pub fn carried(fields: &ItemFields) -> bool {
+    matches!(fields, ItemFields::Sand(s)
+        if s.draw == WaterDraw::Surface && matches!(s.matter, Matter::Jelly | Matter::Clay))
+}
+
+/// The template node that carries a jelly's or clay's mesh.
+pub const MATTER_SKIN_ROLE: &str = "matter_skin";
 
 /// The template node a water's look is.
 pub const WATER_MATERIAL_ROLE: &str = "water_material";
@@ -196,8 +213,9 @@ fn bounded(fields: &ItemFields) -> bool {
     domain(fields).is_some_and(|(bounds, _)| bounds)
 }
 
+/// The item draws the surface build: a surface that is not carried.
 pub(super) fn surface(fields: &ItemFields) -> bool {
-    domain(fields).is_some_and(|(_, draw)| draw == WaterDraw::Surface)
+    domain(fields).is_some_and(|(_, draw)| draw == WaterDraw::Surface) && !carried(fields)
 }
 
 // The rows a Water and a Sand share: the box, its walls, the Cell Size, the

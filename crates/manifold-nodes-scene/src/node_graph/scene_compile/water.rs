@@ -25,11 +25,13 @@ use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
 use manifold_core::liquid_domain::MAX_MATTER_SLOTS;
-use manifold_core::scene_doc::{Item, ItemFields, ItemKind, Quality, SceneDoc, SourceShape};
+use manifold_core::scene_doc::{
+    Item, ItemFields, ItemKind, Quality, SceneDoc, SourceRole, SourceShape,
+};
 use manifold_core::scene_schema::{
-    DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SOLID, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET,
-    WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WORLD_FOLLOWS, WaterFamily, role_index, rows,
-    template_roles, water_family,
+    DOMAIN_ROLE, MATTER_SKIN_ROLE, PHYSICS_VIEW_SWITCHES, SOLID, SURFACE_DETAIL_NODES,
+    SURFACE_DETAIL_OFFSET, WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WORLD_FOLLOWS, WaterFamily,
+    role_index, rows, template_roles, water_family,
 };
 use manifold_core::scene_world_controls::WORLD_INPUTS;
 use manifold_foundation::ItemId;
@@ -159,10 +161,16 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
             }
             continue;
         }
-        let index = solvers.iter().map(|solver| solver.slots.len()).sum::<usize>();
+        let index = solvers
+            .iter()
+            .map(|solver| solver.slots.len())
+            .sum::<usize>();
         let slot = index % MAX_MATTER_SLOTS;
         let items = (sands.len() - (index - slot)).min(MAX_MATTER_SLOTS);
-        let solver = solvers.last().filter(|_| slot > 0).map(|solver| &solver.ids);
+        let solver = solvers
+            .last()
+            .filter(|_| slot > 0)
+            .map(|solver| &solver.ids);
         let place = MatterSlot {
             slot,
             items,
@@ -252,7 +260,11 @@ fn join_slots(b: &mut Builder<'_>, solver: &Solver, couples: bool) -> Option<u32
         }
         frame
     });
-    let materials: Vec<u32> = solver.slots.iter().filter_map(|(material, _)| *material).collect();
+    let materials: Vec<u32> = solver
+        .slots
+        .iter()
+        .filter_map(|(material, _)| *material)
+        .collect();
     if let (Some(&first), Some(&last)) = (materials.first(), materials.last()) {
         for (port, _) in MATERIAL_CHAIN {
             b.splice(first, port, last, port);
@@ -340,7 +352,10 @@ fn emit(
             b.adopt(owner, role, id);
         }
     }
-    let Some(domain) = solver.map_or_else(|| node(DOMAIN_ROLE), |solver| solver.get(DOMAIN_ROLE).copied()) else {
+    let Some(domain) = solver.map_or_else(
+        || node(DOMAIN_ROLE),
+        |solver| solver.get(DOMAIN_ROLE).copied(),
+    ) else {
         return ids;
     };
     let frame = group.and_then(|group| b.group_frames.get(group).copied());
@@ -361,6 +376,16 @@ fn emit(
                     value: place.slot as i32,
                 },
             );
+            // A carried Matter's skin reads its slot's row of the fill table.
+            if let Some(skin) = node(MATTER_SKIN_ROLE) {
+                b.set(
+                    skin,
+                    "slot",
+                    SerializedParamValue::Int {
+                        value: place.slot as i32,
+                    },
+                );
+            }
         }
     }
     if solver.is_none() {
@@ -405,8 +430,13 @@ fn emit(
             0
         }
     };
+    // A carried Matter's skin takes its first Fill's shape and pose, the one
+    // Initial Fill a Matter item seeds.
+    let mut skin = node(MATTER_SKIN_ROLE);
     for (port, source) in sources.into_iter().enumerate() {
-        emit_source(b, source, domain, first_port + port, frame);
+        let fill = matches!(&source.fields, ItemFields::WaterSource(fields) if fields.role == SourceRole::Fill);
+        let carries = if fill { skin.take() } else { None };
+        emit_source(b, source, domain, first_port + port, frame, carries);
     }
 
     // The water's look is its Material's, as for any object.
@@ -492,8 +522,16 @@ fn solver_setup(b: &mut Builder<'_>, item: &Item, domain: u32, frame: Option<u32
 /// One source: its Transform places a `node.fluid_role_source` (a unit box,
 /// or a ball one metre across) wired into the domain's `role_<port>`. A
 /// Model takes its Object's mesh and stands where the Object does, in the
-/// frame of the groups round it; with no Object picked it is off.
-fn emit_source(b: &mut Builder<'_>, item: &Item, domain: u32, port: usize, frame: Option<u32>) {
+/// frame of the groups round it; with no Object picked it is off. `skin`,
+/// a carried Matter's, takes the same pose and mesh.
+fn emit_source(
+    b: &mut Builder<'_>,
+    item: &Item,
+    domain: u32,
+    port: usize,
+    frame: Option<u32>,
+    skin: Option<u32>,
+) {
     let ItemFields::WaterSource(fields) = &item.fields else {
         return;
     };
@@ -510,12 +548,23 @@ fn emit_source(b: &mut Builder<'_>, item: &Item, domain: u32, port: usize, frame
             value: role_index(fields.role),
         },
     );
+    let place = |b: &mut Builder<'_>, from: u32| {
+        for to in std::iter::once(role).chain(skin) {
+            b.wire(from, "transform", to, "transform");
+        }
+    };
+    let shape = |b: &mut Builder<'_>, mesh: u32| {
+        b.wire(mesh, "source", role, "mesh_0");
+        if let Some(skin) = skin {
+            b.wire(mesh, "source", skin, "mesh");
+        }
+    };
     match fields.shape {
-        SourceShape::Box => b.wire(transform, "transform", role, "transform"),
+        SourceShape::Box => place(b, transform),
         SourceShape::Sphere => {
-            b.wire(transform, "transform", role, "transform");
+            place(b, transform);
             let sphere = b.add(owner, "sphere", "node.sphere_mesh");
-            b.wire(sphere, "source", role, "mesh_0");
+            shape(b, sphere);
         }
         SourceShape::Model => {
             let target = fields.model.as_ref().and_then(|model| b.doc.find(model));
@@ -528,8 +577,8 @@ fn emit_source(b: &mut Builder<'_>, item: &Item, domain: u32, port: usize, frame
             });
             match placed {
                 Some((frame, mesh)) => {
-                    b.wire(frame, "transform", role, "transform");
-                    b.wire(mesh, "source", role, "mesh_0");
+                    place(b, frame);
+                    shape(b, mesh);
                 }
                 None => {
                     b.wire(transform, "transform", role, "transform");
@@ -548,7 +597,15 @@ fn splice(b: &mut Builder<'_>, owner: &str, family: &WaterFamily) -> BTreeMap<St
     let mut ids = BTreeMap::new();
     let mut nodes = family.nodes.clone();
     let mut wires = family.wires.clone();
-    renumber(b, owner, &mut nodes, &mut wires, &mut ids, true, &BTreeMap::new());
+    renumber(
+        b,
+        owner,
+        &mut nodes,
+        &mut wires,
+        &mut ids,
+        true,
+        &BTreeMap::new(),
+    );
     for node in nodes {
         b.push_node(node);
     }

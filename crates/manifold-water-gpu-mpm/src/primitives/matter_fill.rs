@@ -217,9 +217,9 @@ impl Primitive for MatterFill {
         let fills = ctx.inputs.array("fills");
         let cells = grid.cells;
         let pool = pool.min(cells[1]);
-        let Some(fills) = fills.filter(|fills| {
-            fills.size >= (FILL_ROW_WORDS * MAX_MATTER_SLOTS * 4) as u64
-        }) else {
+        let Some(fills) =
+            fills.filter(|fills| fills.size >= (FILL_ROW_WORDS * MAX_MATTER_SLOTS * 4) as u64)
+        else {
             ctx.error("Matter Fill: the fill table holds fewer than one row a slot");
             return;
         };

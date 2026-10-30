@@ -632,16 +632,12 @@ pub const FORCE_STARTS: [(&str, &[(&str, f32)]); 3] = [
 
 /// Each Matter's surface: built at half the cell for edges a few
 /// centimetres sharp, and smoothed as the material is. Snow keeps its
-/// crumbs, clay its tool marks and mud its lumps; goo and jelly settle
-/// glassy smooth.
-pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 5] = [
+/// crumbs and mud its lumps; goo settles glassy smooth. Jelly and clay carry
+/// their fill's own mesh and build no surface.
+pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 3] = [
     (
         "matter.snow",
         &[("surface_detail", 1.0), ("surface_smoothness", 0.5)],
-    ),
-    (
-        "matter.clay",
-        &[("surface_detail", 1.0), ("surface_smoothness", 0.8)],
     ),
     (
         "matter.mud",
@@ -650,10 +646,6 @@ pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 5] = [
     (
         "matter.goo",
         &[("surface_detail", 1.0), ("surface_smoothness", 2.0)],
-    ),
-    (
-        "matter.jelly",
-        &[("surface_detail", 1.0), ("surface_smoothness", 1.5)],
     ),
 ];
 

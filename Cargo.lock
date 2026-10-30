@@ -3124,6 +3124,7 @@ dependencies = [
 name = "manifold-water-gpu-mpm"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "bytemuck",
  "inventory",
  "log",

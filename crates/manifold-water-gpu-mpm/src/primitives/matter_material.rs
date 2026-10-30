@@ -96,8 +96,8 @@ impl Primitive for MatterMaterialRow {
         let ranged = |ctx: &EffectNodeContext<'_, '_>, name, default, (lo, hi): (f32, f32)| {
             f64::from(ctx.scalar_or_param(name, default).clamp(lo, hi))
         };
-        let slot = (ctx.scalar_or_param("slot", 0.0).round().max(0.0) as usize)
-            .min(MAX_MATTER_SLOTS - 1);
+        let slot =
+            (ctx.scalar_or_param("slot", 0.0).round().max(0.0) as usize).min(MAX_MATTER_SLOTS - 1);
         let kind = match ctx.params.get("material") {
             Some(ParamValue::Enum(index)) => MatterKind::from_index(*index as usize),
             _ => None,
@@ -108,7 +108,12 @@ impl Primitive for MatterMaterialRow {
             kind,
             MatterDials {
                 stiffness: ranged(ctx, "stiffness", 1.0, (0.5, 3.0)),
-                friction_angle: ranged(ctx, "friction_angle", SAND_FRICTION_ANGLE, FRICTION_ANGLE_RANGE),
+                friction_angle: ranged(
+                    ctx,
+                    "friction_angle",
+                    SAND_FRICTION_ANGLE,
+                    FRICTION_ANGLE_RANGE,
+                ),
                 cohesion_kpa: ranged(ctx, "cohesion", 0.0, COHESION_KPA_RANGE),
                 hardening: ranged(ctx, "hardening", SNOW_HARDENING, HARDENING_RANGE),
                 yield_stress: ranged(ctx, "yield_stress", 1.0e4, YIELD_STRESS_RANGE),
@@ -162,7 +167,9 @@ impl Primitive for MatterMaterialRow {
             return;
         };
         match handed.filter(|handed| handed.size >= TABLE_BYTES) {
-            Some(handed) => gpu.native_enc.copy_buffer_to_buffer(handed, table, TABLE_BYTES),
+            Some(handed) => gpu
+                .native_enc
+                .copy_buffer_to_buffer(handed, table, TABLE_BYTES),
             None => gpu.native_enc.clear_buffer(table),
         }
         let upload = self.upload.as_ref().expect("row uploaded above");

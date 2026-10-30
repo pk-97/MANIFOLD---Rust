@@ -12,6 +12,7 @@ manifold-node-engine = { path = "../manifold-node-engine" }
 manifold-physics = { path = "../manifold-physics" }
 manifold-water-rigid = { path = "../manifold-water-rigid" }
 manifold-water-liquid = { path = "../manifold-water-liquid" }
+ahash = { workspace = true }
 bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 inventory = "0.3"
 log = { workspace = true }

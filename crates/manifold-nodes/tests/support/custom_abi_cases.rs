@@ -30,6 +30,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "matter_skin.rs",
+        rust_struct: "SkinParams",
+        shader: "shaders/matter_skin.wgsl",
+        shader_struct: "SkinParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "matter_to_grid.rs",
         rust_struct: "P2gParams",
         shader: "shaders/matter_to_grid.wgsl",

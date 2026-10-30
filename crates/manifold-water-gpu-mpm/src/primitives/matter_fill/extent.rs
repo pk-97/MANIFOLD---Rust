@@ -1,6 +1,6 @@
 //! Buffer extent rule owned by this node.
-use crate::matter::MatterPoint;
 use crate::matter::MAX_MATTER_SLOTS;
+use crate::matter::MatterPoint;
 use crate::primitives::matter_domain::FILL_ROW_WORDS;
 use crate::primitives::matter_fill::FillGrid;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
