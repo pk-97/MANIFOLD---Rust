@@ -59,7 +59,7 @@ pub fn test_device() -> TestDevice {
     let device = SHARED
         .get_or_init(|| {
             let device = crate::GpuDevice::new_queued("GPU tests");
-            crate::load_disk_shader_caches(&device);
+            load_disk_shader_caches(&device);
             Arc::new(device)
         })
         .clone();
@@ -85,3 +85,14 @@ pub fn read_bytes(buffer: &crate::GpuBuffer, len: usize) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
 }
 
+/// Reuse the app's shader disk caches without populating live pipeline
+/// caches. Each backend keeps its own files there: Metal a metallib archive
+/// and MSL, Vulkan a `VkPipelineCache` blob and SPIR-V.
+pub fn load_disk_shader_caches(device: &crate::GpuDevice) {
+    let cache = manifold_foundation::AppDirs::current()
+        .expect("a home directory")
+        .cache;
+    std::fs::create_dir_all(&cache).expect("shader cache directory");
+    device.load_pipeline_archive(&cache.join("pipeline_cache.metallib"));
+    device.load_msl_cache(&cache.join("msl_cache"));
+}

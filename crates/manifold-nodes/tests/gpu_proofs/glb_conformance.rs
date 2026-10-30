@@ -974,7 +974,7 @@ fn glb_conformance_sweep() {
     // Every graph and render remains fresh; only device pipelines are shared.
     let serial = manifold_gpu::testkit::test_device();
     let device = serial.arc();
-    manifold_gpu::load_disk_shader_caches(&device);
+    manifold_gpu::testkit::load_disk_shader_caches(&device);
 
     let mut failures: Vec<String> = Vec::new();
     let mut expect_pass_checked = 0usize;

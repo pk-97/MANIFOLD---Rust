@@ -264,6 +264,14 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
             SerializedParamValue::Float { value: 0.0 },
         );
     }
+    if terrain {
+        // node.terrain's vertices carry how much sky the land hides.
+        b.set(
+            object,
+            "sky_blocking",
+            SerializedParamValue::Bool { value: true },
+        );
+    }
     if let Some(rest) = rest {
         b.drawn.push(Drawn {
             object,

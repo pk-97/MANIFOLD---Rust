@@ -373,6 +373,7 @@ impl RenderScene {
                 render_mode.point_size,
             );
             uniforms.instance_inner = instance_inner;
+            uniforms.relief[1] = if object.sky_blocking { 1.0 } else { 0.0 };
             uniforms.appearance[3] = *env_rotation;
             uniforms.prev_instance_inner = prev_inner_n;
             if single_object.is_some() {

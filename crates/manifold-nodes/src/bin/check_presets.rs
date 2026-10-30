@@ -73,11 +73,7 @@ fn main() {
     let device = kinds
         .iter()
         .any(|kind| !matches!(kind, RequestedKind::SceneModifier))
-        .then(|| {
-            let device = GpuDevice::new_queued("check-presets");
-            manifold_gpu::load_disk_shader_caches(&device);
-            Arc::new(device)
-        });
+        .then(|| Arc::new(GpuDevice::new_queued("check-presets")));
     let scene_host = if kinds
         .iter()
         .any(|kind| matches!(kind, RequestedKind::SceneModifier))

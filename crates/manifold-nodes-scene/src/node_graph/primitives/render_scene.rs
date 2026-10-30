@@ -936,7 +936,9 @@ struct RenderSceneUniforms {
     /// Last frame's `instance_inner`, the velocity pair of `prev_model`.
     prev_instance_inner: [[f32; 4]; 4],
     /// x: metres the height picture carves a box-mapped surface, 0 for
-    /// none (parallax in render_scene.wgsl's `begin_surface`). yzw unused.
+    /// none (parallax in render_scene.wgsl's `begin_surface`). y: 1 when the
+    /// vertices carry how much sky the land hides (`SceneObject::sky_blocking`).
+    /// zw unused.
     relief: [f32; 4],
 }
 
@@ -3052,6 +3054,7 @@ impl RenderScene {
             visible: true,
             cast_shadows: true,
             closed: false,
+            sky_blocking: false,
             transform: manifold_node_engine::scene::transform::Transform::default(),
             parent_transform: None,
             material: inputs.material("material"),

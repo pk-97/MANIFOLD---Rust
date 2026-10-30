@@ -108,9 +108,7 @@ fn resource_for_output(
 
 fn main() {
     let registry = PrimitiveRegistry::with_builtin();
-    let device = GpuDevice::new_queued("freeze-profile");
-    manifold_gpu::load_disk_shader_caches(&device);
-    let device = std::sync::Arc::new(device);
+    let device = std::sync::Arc::new(GpuDevice::new_queued("freeze-profile"));
 
     // `attribute [names…]` → per-node GPU/CPU attribution via counter
     // sampling (fast path, skips the sweeps).

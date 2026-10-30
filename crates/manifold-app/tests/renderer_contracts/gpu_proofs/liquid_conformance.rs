@@ -403,7 +403,7 @@ struct LiquidRun {
 fn shared_device() -> Arc<GpuDevice> {
     static LOADED: std::sync::Once = std::sync::Once::new();
     let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
-    LOADED.call_once(|| manifold_gpu::load_disk_shader_caches(device));
+    LOADED.call_once(|| manifold_gpu::testkit::load_disk_shader_caches(device));
     Arc::clone(device)
 }
 
@@ -416,7 +416,7 @@ struct Clocked {
 impl Clocked {
     fn new() -> Self {
         let device = Arc::new(GpuDevice::new_queued("gpu_proofs"));
-        manifold_gpu::load_disk_shader_caches(&device);
+        manifold_gpu::testkit::load_disk_shader_caches(&device);
         let event = device.create_event();
         let (sender, retired) = RetireQueue::new();
         device.set_retirement(RetireMark::new(event.second_handle(), sender));

@@ -202,7 +202,9 @@ struct Uniforms {
     instance_inner: mat4x4<f32>,
     prev_instance_inner: mat4x4<f32>,
     // x: metres the height picture (the normal map's alpha) carves a
-    // surface, 0 for none (parallax in begin_surface). yzw unused.
+    // surface, 0 for none (parallax in begin_surface). y: 1 when the
+    // vertices carry how much sky the land hides (a Terrain), 0 when that
+    // slot is padding. zw unused.
     relief: vec4<f32>,
 };
 

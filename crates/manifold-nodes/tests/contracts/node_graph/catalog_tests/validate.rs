@@ -22,7 +22,7 @@ fn every_bundled_preset_validates_clean() {
     let device = serial.arc();
     #[cfg(not(feature = "gpu-proofs"))]
     let device = manifold_node_engine::gpu::context::test_gpu_device("validate tests");
-    manifold_gpu::load_disk_shader_caches(&device);
+    manifold_gpu::testkit::load_disk_shader_caches(&device);
 
     let mut total = 0usize;
     let mut failures: Vec<(std::path::PathBuf, ValidationReport)> = Vec::new();

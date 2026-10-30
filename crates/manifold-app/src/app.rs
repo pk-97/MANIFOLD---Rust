@@ -1414,8 +1414,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // threads use. Created before the renderers so they can build
             // pipelines, and before the bridges, which allocate on it.
             let native_device = Arc::new(gpu.device.sibling());
-            // Subsequent pipeline creation calls hit the disk caches.
-            manifold_gpu::load_disk_shader_caches(&native_device);
+            // Load pipeline binary archive — subsequent pipeline creation calls
+            // automatically use it for near-instant cache hits.
+            if let Some(dirs) = manifold_foundation::AppDirs::current() {
+                let cache_dir = dirs.cache;
+                std::fs::create_dir_all(&cache_dir).ok();
+                native_device.load_pipeline_archive(&cache_dir.join("pipeline_cache.metallib"));
+                native_device.load_msl_cache(&cache_dir.join("msl_cache"));
+            }
             log::info!("[GPU] Content thread: own queue on the UI's device (manifold-gpu)");
 
             // Bridge for the workspace preview (downscaled). The main output

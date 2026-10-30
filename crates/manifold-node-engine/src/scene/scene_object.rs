@@ -43,6 +43,10 @@ pub struct SceneObject {
     /// The mesh is closed and outward-wound, so an opaque draw may skip its
     /// back faces. Set by the scene compiler for built-in solids.
     pub closed: bool,
+    /// The vertices carry how much sky the land around hides, in the slot
+    /// after the normal (`node.terrain`), so shading darkens sky light by it.
+    /// Off, that slot is padding and never read.
+    pub sky_blocking: bool,
     /// Local TRS. Identity ([`Transform::default`]) when the `transform`
     /// input port is unwired.
     pub transform: Transform,

@@ -14,8 +14,11 @@ step upgrades a system that already exists; nothing here runs beside one.
   edges come from PCSS (`frame_setup.rs`).
 - Sky light: the environment is convolved to an irradiance map once per
   change (`prepasses.rs`) and multiplied by material AO, the parallax crevice
-  term and screen-space AO (`node.ssao_gtao`, reach about a metre). Nothing
-  stops sky light from reaching the floor of a valley or a forest.
+  term and screen-space AO (`node.ssao_gtao`, reach about a metre). A
+  Terrain's vertices carry how much sky the land around hides
+  (`terrain.wgsl` `sky_blocked`, eight ways out to 64 cells), which darkens
+  all its sky light (`relief.y` marks the draws that carry it). Nothing yet
+  stops sky light under a forest.
 - Environments: Softbox and Gradient skies, HDRI, Sea Horizon
   (`EnvironmentSource`, `scene_doc.rs`). No atmosphere model. New scenes
   start with the Sun at 6 against Softbox strips at 1.5 (04c399e23).
@@ -61,7 +64,8 @@ step upgrades a system that already exists; nothing here runs beside one.
   strength follow the sun's height on their own: blue noon, orange low sun,
   deep blue dusk. It feeds the existing irradiance prepass as an HDRI does,
   rebuilt only when the sun moves. Real units: lux and EV.
-- **Sky blocking and bounce.** `node.terrain`, when its land or the sun
+- **Sky blocking and bounce: blocking built.** Open: bounce, and copies
+  carrying the value at their root. `node.terrain`, when its land or the sun
   changes, marches its own height map from every cell in sixteen directions:
   how much sky the cell sees, and how lit the slopes that block the rest
   are. Both ride on its vertices. Shading folds the first into the existing

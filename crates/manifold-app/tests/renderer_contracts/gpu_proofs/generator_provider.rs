@@ -58,7 +58,7 @@ fn cold_device_with_shader_cache(label: &str) -> Arc<GpuDevice> {
     let device = Arc::new(GpuDevice::new_queued(label));
     // Disk hits must not hide a missing provider prewarm request.
     let before = compiles();
-    manifold_gpu::load_disk_shader_caches(&device);
+    manifold_gpu::testkit::load_disk_shader_caches(&device);
     assert_eq!(
         cache_counts(&device),
         (0, 0),

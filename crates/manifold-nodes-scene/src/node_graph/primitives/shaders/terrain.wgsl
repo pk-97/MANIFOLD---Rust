@@ -18,7 +18,8 @@
 // under them changes. `vertices_main` writes each cell as a vertex with its
 // normal, and in its second UV set where water runs (gully floors, and
 // channels the drops ran) and where soil settled, each 0 to 1, for Covers
-// and Copies On Surface to read (`cover_rule.wgsl`).
+// and Copies On Surface to read (`cover_rule.wgsl`), and how much of the sky
+// the land around hides (`sky_blocked`), which darkens its sky light.
 
 struct TerrainUniforms {
     // Cells along a side.
@@ -42,7 +43,10 @@ struct TerrainUniforms {
 
 struct MeshVertex {
     position: vec3<f32>,
+    _pad0: f32,
     normal: vec3<f32>,
+    // The share of the sky the land around hides (`sky_blocked`).
+    sky_blocked: f32,
     uv: vec2<f32>,
     uv1: vec2<f32>,
     tangent: vec4<f32>,
@@ -532,6 +536,42 @@ fn deposit_mark(j: u32) -> f32 {
     return clamp(soil / DEPOSIT_FULL, 0.0, 1.0);
 }
 
+// Sky blocking: from a vertex, SKY_DIRECTIONS ways along the grid, out to
+// the last of SKY_STEPS cells. Per way, the sky lost is sin² of how far the
+// highest point rises above the ground's own slope there, so a steady slope
+// loses nothing and a valley floor or the foot of a cliff loses a lot; the
+// vertex keeps the mean.
+const SKY_DIRECTIONS: u32 = 8u;
+const SKY_STEPS: array<i32, 12> = array<i32, 12>(1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64);
+
+fn sky_blocked(col: i32, row: i32, here: vec3<f32>, normal: vec3<f32>) -> f32 {
+    let ways = array<vec2<i32>, 8>(
+        vec2<i32>(1, 0), vec2<i32>(1, 1), vec2<i32>(0, 1), vec2<i32>(-1, 1),
+        vec2<i32>(-1, 0), vec2<i32>(-1, -1), vec2<i32>(0, -1), vec2<i32>(1, -1),
+    );
+    let last = i32(u.res) - 1;
+    var blocked = 0.0;
+    for (var d = 0u; d < SKY_DIRECTIONS; d++) {
+        let way = ways[d];
+        let flat = normalize(vec2<f32>(way));
+        // The ground's own rise along this way, as a sine.
+        let rise = -dot(normal.xz, flat) / max(normal.y, 1e-3);
+        let ground = rise / sqrt(1.0 + rise * rise);
+        var highest = ground;
+        for (var k = 0; k < 12; k++) {
+            let c = vec2<i32>(col, row) + way * SKY_STEPS[k];
+            if any(c < vec2<i32>(0)) || any(c > vec2<i32>(last)) {
+                break;
+            }
+            let to = vertex_position(c.x, c.y) - here;
+            highest = max(highest, to.y / length(to));
+        }
+        let above = sin(max(asin(highest) - asin(ground), 0.0));
+        blocked += above * above;
+    }
+    return blocked / f32(SKY_DIRECTIONS);
+}
+
 @compute @workgroup_size(256)
 fn vertices_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x;
@@ -550,9 +590,12 @@ fn vertices_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if len >= 1e-8 {
         normal = n / len;
     }
+    let here = vertex_position(col, row);
     vertices[i] = MeshVertex(
-        vertex_position(col, row),
+        here,
+        0.0,
         normal,
+        sky_blocked(col, row, here, normal),
         vec2<f32>(f32(col), f32(row)) / f32(u.res - 1u),
         vec2<f32>(max(drain[i], flow_mark(i)), deposit_mark(i)),
         vec4<f32>(0.0),

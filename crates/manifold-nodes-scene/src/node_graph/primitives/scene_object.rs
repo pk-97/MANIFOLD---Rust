@@ -252,6 +252,16 @@ manifold_node_engine::primitive! {
             range: None,
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("sky_blocking"),
+            label: "Sky Blocking",
+            // On for a Terrain, whose vertices carry how much sky the land
+            // around hides (`SceneObject::sky_blocking`).
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
         // A Smoke's or Fire's look (`node.gas_volume` wired to gas_state):
         // the renderer's volume pass reads these.
         // The smoke's colour (its scattering tint), red.
@@ -378,6 +388,7 @@ impl Primitive for SceneObjectNode {
         let visible = ctx.scalar_or_param("visible", 1.0) > 0.5;
         let cast_shadows = ctx.scalar_or_param("cast_shadows", 1.0) > 0.5;
         let closed = matches!(ctx.params.get("closed"), Some(ParamValue::Bool(true)));
+        let sky_blocking = matches!(ctx.params.get("sky_blocking"), Some(ParamValue::Bool(true)));
         let emission_strength = ctx.scalar_or_param("emission_strength", 1.0);
         let gain = ctx.scalar_or_param("gain", 1.0);
         let mut transform = ctx.inputs.transform("transform").unwrap_or_default();
@@ -450,6 +461,7 @@ impl Primitive for SceneObjectNode {
             visible: visible && parent_visible,
             cast_shadows,
             closed,
+            sky_blocking,
             transform,
             parent_transform,
             material,

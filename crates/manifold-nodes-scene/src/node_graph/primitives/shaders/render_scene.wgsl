@@ -36,7 +36,10 @@ struct Vertex {
     position: vec3<f32>,
     _pad0: f32,
     normal: vec3<f32>,
-    _pad1: f32,
+    // The share of the sky the land around hides, from node.terrain; read
+    // only for a draw whose `relief.y` says its vertices carry it, since
+    // other meshes leave this slot as padding.
+    sky_blocked: f32,
     uv: vec2<f32>,
     _pad2: vec2<f32>,
     tangent: vec4<f32>,
@@ -282,6 +285,8 @@ struct VsOut {
     @location(12) @interpolate(flat) box_axis_x: vec3<f32>,
     @location(13) @interpolate(flat) box_axis_y: vec3<f32>,
     @location(14) @interpolate(flat) box_axis_z: vec3<f32>,
+    // The share of the sky the land around hides (`Vertex.sky_blocked`).
+    @location(15) sky_blocked: f32,
 };
 
 // world = model · T_instance · instance_inner. Object space passes an
@@ -353,6 +358,7 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     let world = u.model * vec4<f32>(inst_pos, 1.0);
     out.world_pos = world.xyz;
     out.vertex_color = v.color;
+    out.sky_blocked = select(0.0, v.sky_blocked, u.relief.y > 0.5);
     out.instance_scale = abs(inst.pos_scale.w);
     out.clip_pos = u.view_proj * world;
     // EMIT_VELOCITY substitutes
@@ -438,6 +444,7 @@ struct VsOutPoints {
     @location(12) @interpolate(flat) box_axis_x: vec3<f32>,
     @location(13) @interpolate(flat) box_axis_y: vec3<f32>,
     @location(14) @interpolate(flat) box_axis_z: vec3<f32>,
+    @location(15) sky_blocked: f32,
 };
 
 // Points mode draws the SAME vertex buffers with point topology — every
@@ -466,6 +473,7 @@ fn vs_points(
         o.box_axis_x,
         o.box_axis_y,
         o.box_axis_z,
+        o.sky_blocked,
     );
 }
 
@@ -1822,8 +1830,9 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // Occlusion darkens the diffuse IBL term ONLY, never direct lighting or
     // specular IBL. Unwired = 1.0 (no darkening).
     // A parallax crevice shades every ambient term, its reflections too:
-    // the carved surface itself hides the sky from it.
-    let crevice = relief_crevice;
+    // the carved surface itself hides the sky from it, as the land round a
+    // Terrain's valleys does.
+    let crevice = relief_crevice * (1.0 - in.sky_blocked);
     let occlusion = resolve_occlusion(in.uv) * crevice;
     // Horizon occlusion (as Marmoset and Filament do it): a reflection a bump
     // tilts below the real surface sees the surface, not the sky, so it fades.

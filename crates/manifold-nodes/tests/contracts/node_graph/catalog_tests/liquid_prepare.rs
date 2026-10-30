@@ -30,7 +30,7 @@ fn liquid_prepare_pipelines_is_idempotent() {
             "liquid_prepare_pipelines_is_idempotent",
         );
         // Each preset must populate its own cold live cache.
-        manifold_gpu::load_disk_shader_caches(&device);
+        manifold_gpu::testkit::load_disk_shader_caches(&device);
         assert_eq!(cache_len(&device), (0, 0), "{file}: install starts cold");
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/presets")

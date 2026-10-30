@@ -1419,7 +1419,7 @@ fn prewarm_pipelines_populates_the_shared_render_cache() {
     let _serial = manifold_gpu::testkit::test_device();
     let device = manifold_node_engine::gpu::context::test_gpu_device("render scene prewarm");
     // Disk reuse must not pre-populate the live cache under test.
-    manifold_gpu::load_disk_shader_caches(&device);
+    manifold_gpu::testkit::load_disk_shader_caches(&device);
     assert_eq!(device.render_pipeline_cache_len(), 0, "prewarm starts cold");
     RenderScene::prewarm_pipelines(&device);
     let after = device.render_pipeline_cache_len();

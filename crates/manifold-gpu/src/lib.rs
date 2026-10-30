@@ -100,22 +100,6 @@ mod retire;
 pub use retire::{FrameClock, RetireMark, RetireQueue, RetireSender};
 mod texture_pool;
 pub use texture_pool::TexturePool;
-
-/// Load the app's shader disk caches into `device`, so shaders an earlier
-/// process compiled skip naga, spirv-opt and the driver compile. Every
-/// process that builds pipelines calls it right after making its device:
-/// the app, the headless tools and the GPU tests. Each backend keeps its own
-/// files there: Metal a metallib archive and MSL, Vulkan a
-/// `VkPipelineCache` blob and SPIR-V. No home directory, no caches.
-pub fn load_disk_shader_caches(device: &GpuDevice) {
-    let Some(dirs) = manifold_foundation::AppDirs::current() else {
-        return;
-    };
-    let cache = dirs.cache;
-    std::fs::create_dir_all(&cache).ok();
-    device.load_pipeline_archive(&cache.join("pipeline_cache.metallib"));
-    device.load_msl_cache(&cache.join("msl_cache"));
-}
 // Ray-tracing data types; each backend re-exports them from its `raytrace`.
 // Vulkan uses them once it traces rays (P7).
 #[cfg_attr(vulkan_backend, allow(dead_code))]
