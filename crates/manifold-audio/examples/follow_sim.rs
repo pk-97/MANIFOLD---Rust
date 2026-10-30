@@ -16,6 +16,7 @@ use manifold_audio::beats::{Heard, Listener, Lock, Tracker, Tuning, song_beats};
 
 /// Samples per push, as an audio callback would deliver them.
 const BLOCK: usize = 512;
+/// The window lengths heard.
 const WINDOWS_S: [f64; 4] = [6.0, 8.0, 10.0, 12.0];
 /// A predicted beat this close to a truth beat is a hit.
 const TOLERANCE_S: f64 = 0.07;
@@ -27,8 +28,8 @@ struct Song {
     name: String,
     beats: Vec<f64>,
     downbeats: Vec<f64>,
-    /// Per window length: hearings, one a second, and the CPU each took on average.
-    hearings: Vec<(Vec<(f64, Heard)>, f64)>,
+    /// Per entry of WINDOWS_S: hearings, one a second.
+    hearings: Vec<Vec<(f64, Heard)>>,
 }
 
 #[derive(Default, Clone)]
@@ -118,7 +119,7 @@ fn score(song: &Song, tuning: Tuning, mut timeline: Option<&mut String>) -> Scor
         .iter()
         .position(|w| *w == tuning.window_s)
         .expect("a cached window");
-    let hearings = &song.hearings[w].0;
+    let hearings = &song.hearings[w];
     let mut tracker = Tracker::new(tuning, BEATS_PER_BAR);
     let mut s = Score::default();
     let mut last: Option<Lock> = None;
@@ -214,9 +215,8 @@ fn score(song: &Song, tuning: Tuning, mut timeline: Option<&mut String>) -> Scor
     s
 }
 
-/// Hears `mono` once a second with a `window_s` listener, in parallel jobs that each start a window early. Returns
-/// the hearings by time and the mean CPU per hearing.
-fn hear_all(mono: &[f32], rate: u32, window_s: f64, threads: usize) -> (Vec<(f64, Heard)>, f64) {
+/// Hears `mono` once a second with a listener over `window_s`, in parallel jobs that each start a window early.
+fn hear_all(mono: &[f32], rate: u32, window_s: f64, threads: usize) -> Vec<(f64, Heard)> {
     let step = rate as usize;
     let count = mono.len() / step;
     let jobs: Vec<std::ops::Range<usize>> = (1..=count)
@@ -224,7 +224,7 @@ fn hear_all(mono: &[f32], rate: u32, window_s: f64, threads: usize) -> (Vec<(f64
         .map(|k| k..(k + JOB).min(count + 1))
         .collect();
     let next = AtomicUsize::new(0);
-    let mut out: Vec<(f64, Heard, f64)> = std::thread::scope(|scope| {
+    let mut out: Vec<(f64, Heard)> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..threads)
             .map(|_| {
                 let (jobs, next) = (&jobs, &next);
@@ -241,11 +241,9 @@ fn hear_all(mono: &[f32], rate: u32, window_s: f64, threads: usize) -> (Vec<(f64
                                 listener.push(&mono[fed..end]);
                                 fed = end;
                             }
-                            let started = Instant::now();
                             let mut heard = listener.hear();
-                            let cpu = started.elapsed().as_secs_f64();
                             heard.start_s += s0 as f64 / f64::from(rate);
-                            out.push((fed as f64 / f64::from(rate), heard, cpu));
+                            out.push((fed as f64 / f64::from(rate), heard));
                         }
                     }
                     out
@@ -258,8 +256,51 @@ fn hear_all(mono: &[f32], rate: u32, window_s: f64, threads: usize) -> (Vec<(f64
             .collect()
     });
     out.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let cpu = out.iter().map(|o| o.2).sum::<f64>() / out.len().max(1) as f64;
-    (out.into_iter().map(|(t, h, _)| (t, h)).collect(), cpu)
+    out
+}
+
+/// Seconds of CPU the whole process has used, every thread counted.
+fn process_cpu_s() -> f64 {
+    #[repr(C)]
+    struct Timespec {
+        sec: i64,
+        nsec: i64,
+    }
+    unsafe extern "C" {
+        fn clock_gettime(clock: u32, out: *mut Timespec) -> i32;
+    }
+    #[cfg(target_os = "macos")]
+    const PROCESS_CPU: u32 = 12;
+    #[cfg(not(target_os = "macos"))]
+    const PROCESS_CPU: u32 = 2;
+    let mut t = Timespec { sec: 0, nsec: 0 };
+    // SAFETY: `t` is a valid timespec for the call to fill.
+    unsafe { clock_gettime(PROCESS_CPU, &mut t) };
+    t.sec as f64 + t.nsec as f64 * 1e-9
+}
+
+/// Seconds of CPU one hearing takes, every thread the maths uses counted, for each entry of WINDOWS_S: the median
+/// of five over the middle of `mono`, with nothing else running.
+fn cost(mono: &[f32], rate: u32) -> Vec<f64> {
+    WINDOWS_S
+        .iter()
+        .map(|&window_s| {
+            let mut listener = Listener::new(rate, window_s);
+            let from = mono.len() / 2;
+            listener.push(
+                &mono[from..(from + ((window_s + 1.0) * f64::from(rate)) as usize).min(mono.len())],
+            );
+            let mut times: Vec<f64> = (0..5)
+                .map(|_| {
+                    let started = process_cpu_s();
+                    std::hint::black_box(listener.hear());
+                    process_cpu_s() - started
+                })
+                .collect();
+            times.sort_by(f64::total_cmp);
+            times[2]
+        })
+        .collect()
 }
 
 fn put_f64s(buf: &mut Vec<u8>, xs: &[f64]) {
@@ -295,19 +336,47 @@ impl Reader<'_> {
     }
 }
 
-/// The song's truth and hearings, from the cache when there.
+fn decode(path: &str) -> Option<(Vec<f32>, u32)> {
+    match manifold_playback::audio_decoder::decode_audio_to_pcm(path) {
+        Ok(a) => Some((a.mono(), a.sample_rate)),
+        Err(e) => {
+            println!("{path}: {e}");
+            None
+        }
+    }
+}
+
+/// The song's truth and hearings, each from the cache when there.
 fn load(path: &str, cache: &std::path::Path, threads: usize) -> Option<Song> {
     let name = path.rsplit('/').next().unwrap_or(path).to_owned();
-    let file = cache.join(format!("{name}.hearings"));
-    if let Ok(bytes) = std::fs::read(&file) {
-        let mut r = Reader(&bytes);
-        let beats = r.f64s();
-        let downbeats = r.f64s();
-        let hearings = WINDOWS_S
-            .iter()
-            .map(|_| {
-                let cpu = f64::from_le_bytes(r.bytes());
-                let list = (0..r.len())
+    // Decoded only when something is missing from the cache.
+    let mut audio: Option<(Vec<f32>, u32)> = None;
+    let truth_file = cache.join(format!("{name}.truth"));
+    let (beats, downbeats) = match std::fs::read(&truth_file) {
+        Ok(bytes) => {
+            let mut r = Reader(&bytes);
+            (r.f64s(), r.f64s())
+        }
+        Err(_) => {
+            if audio.is_none() {
+                audio = Some(decode(path)?);
+            }
+            let (mono, rate) = audio.as_ref().expect("decoded above");
+            let truth = song_beats(mono, *rate);
+            let mut buf = Vec::new();
+            put_f64s(&mut buf, &truth.0);
+            put_f64s(&mut buf, &truth.1);
+            std::fs::write(&truth_file, buf).expect("the cache folder is writable");
+            truth
+        }
+    };
+    let mut hearings = Vec::with_capacity(WINDOWS_S.len());
+    for window_s in WINDOWS_S {
+        let file = cache.join(format!("{name}.w{window_s}.hearings"));
+        if let Ok(bytes) = std::fs::read(&file) {
+            let mut r = Reader(&bytes);
+            hearings.push(
+                (0..r.len())
                     .map(|_| {
                         let now = f64::from_le_bytes(r.bytes());
                         let start_s = f64::from_le_bytes(r.bytes());
@@ -321,46 +390,31 @@ fn load(path: &str, cache: &std::path::Path, threads: usize) -> Option<Song> {
                             },
                         )
                     })
-                    .collect();
-                (list, cpu)
-            })
-            .collect();
-        return Some(Song {
-            name,
-            beats,
-            downbeats,
-            hearings,
-        });
-    }
-    let audio = match manifold_playback::audio_decoder::decode_audio_to_pcm(path) {
-        Ok(a) => a,
-        Err(e) => {
-            println!("{name}: {e}");
-            return None;
+                    .collect(),
+            );
+            continue;
         }
-    };
-    let (mono, rate) = (audio.mono(), audio.sample_rate);
-    let started = Instant::now();
-    let (beats, downbeats) = song_beats(&mono, rate);
-    let hearings: Vec<_> = WINDOWS_S
-        .iter()
-        .map(|w| hear_all(&mono, rate, *w, threads))
-        .collect();
-    eprintln!("{name}: heard in {:.0} s", started.elapsed().as_secs_f64());
-    let mut buf = Vec::new();
-    put_f64s(&mut buf, &beats);
-    put_f64s(&mut buf, &downbeats);
-    for (list, cpu) in &hearings {
-        buf.extend(cpu.to_le_bytes());
+        if audio.is_none() {
+            audio = Some(decode(path)?);
+        }
+        let (mono, rate) = audio.as_ref().expect("decoded above");
+        let started = Instant::now();
+        let list = hear_all(mono, *rate, window_s, threads);
+        eprintln!(
+            "{name}: {window_s} s window heard in {:.0} s",
+            started.elapsed().as_secs_f64()
+        );
+        let mut buf = Vec::new();
         buf.extend((list.len() as u64).to_le_bytes());
-        for (now, h) in list {
+        for (now, h) in &list {
             buf.extend(now.to_le_bytes());
             buf.extend(h.start_s.to_le_bytes());
             put_f32s(&mut buf, &h.beat);
             put_f32s(&mut buf, &h.downbeat);
         }
+        std::fs::write(&file, buf).expect("the cache folder is writable");
+        hearings.push(list);
     }
-    std::fs::write(&file, buf).expect("the cache folder is writable");
     Some(Song {
         name,
         beats,
@@ -375,13 +429,28 @@ fn main() {
     std::fs::create_dir_all(&cache).expect("the cache folder can be made");
     let threads =
         std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(4).max(1));
-    let songs: Vec<Song> = args.filter_map(|p| load(&p, &cache, threads)).collect();
-
-    println!("CPU per hearing (measured with {threads} running at once):");
-    for (w, window_s) in WINDOWS_S.iter().enumerate() {
-        let cpu = songs.iter().map(|s| s.hearings[w].1).sum::<f64>() / songs.len().max(1) as f64;
-        println!("  {window_s:4.0} s window  {:4.0} ms", cpu * 1000.0);
+    let paths: Vec<String> = args.collect();
+    let songs: Vec<Song> = paths
+        .iter()
+        .filter_map(|p| load(p, &cache, threads))
+        .collect();
+    let costs = paths
+        .first()
+        .and_then(|p| decode(p))
+        .map(|(mono, rate)| cost(&mono, rate));
+    if let Some(costs) = &costs {
+        println!("CPU per hearing, every thread counted:");
+        for (window_s, c) in WINDOWS_S.iter().zip(costs) {
+            println!("  {window_s:2.0} s window  {:5.0} ms", c * 1000.0);
+        }
     }
+    let cost_of = |t: &Tuning| {
+        let i = WINDOWS_S
+            .iter()
+            .position(|w| *w == t.window_s)
+            .expect("a heard window");
+        costs.as_ref().map_or(f64::NAN, |c| c[i] / t.hear_every_s)
+    };
 
     let mut tunings = Vec::new();
     for window_s in WINDOWS_S {
@@ -390,8 +459,8 @@ fn main() {
                 continue;
             }
             for min_beats in [6, 8] {
-                for bar_votes in [1, 3, 5, 8] {
-                    for tempo_votes in [1, 3, 4, 6, 8] {
+                for bar_votes in [3, 5] {
+                    for tempo_votes in [4, 6, 8] {
                         for hear_every_s in [1.0, 2.0] {
                             tunings.push(Tuning {
                                 window_s,
@@ -431,26 +500,37 @@ fn main() {
     results.sort_by(|a, b| b.1.f1().total_cmp(&a.1.f1()));
     let label = |t: &Tuning| {
         format!(
-            "window {:2.0} fit {} min {} bar votes {} tempo votes {} every {} s",
-            t.window_s, t.fit_s, t.min_beats, t.bar_votes, t.tempo_votes, t.hear_every_s
+            "window {:2.0} fit {:2} bar votes {} tempo votes {} every {} s  CPU {:4.1}%",
+            t.window_s,
+            t.fit_s,
+            t.bar_votes,
+            t.tempo_votes,
+            t.hear_every_s,
+            cost_of(t) * 100.0
         )
     };
     let all: String = results
         .iter()
-        .map(|(t, s)| format!("{:<58} {}\n", label(t), s.line()))
+        .map(|(t, s)| format!("{:<78} {}\n", label(t), s.line()))
         .collect();
     std::fs::write(cache.join("sweep.txt"), all).expect("the cache folder is writable");
     println!(
-        "\nBest of {} tunings over {} songs (all in sweep.txt):",
+        "Best of {} tunings over {} songs (all in sweep.txt), CPU as a share of one core:",
         results.len(),
         songs.len()
     );
-    for (t, s) in results.iter().take(40) {
-        println!("  {:<58} {}", label(t), s.line());
+    for (t, s) in results.iter().take(20) {
+        println!("  {:<78} {}", label(t), s.line());
     }
+    println!("Best per window and rate:");
     for window_s in WINDOWS_S {
-        if let Some((t, s)) = results.iter().find(|r| r.0.window_s == window_s) {
-            println!("best at {window_s:2.0} s: {:<58} {}", label(t), s.line());
+        for every in [1.0, 2.0] {
+            if let Some((t, s)) = results
+                .iter()
+                .find(|r| (r.0.window_s, r.0.hear_every_s) == (window_s, every))
+            {
+                println!("  {:<78} {}", label(t), s.line());
+            }
         }
     }
 

@@ -12,10 +12,10 @@ manifold-spectral = { path = "../manifold-spectral", default-features = false }
 log = { workspace = true }
 cpal = "0.18"
 rustfft = "6"
-# Beat This! matrix products, half-precision weights and GELU.
+# CPU network matrix products off macOS (Accelerate runs them there; both compile everywhere), and Beat This!'s
+# half-precision weights.
 matrixmultiply = "0.3"
 half = "2"
-libm = "0.2"
 # Lock-free SPSC rings between the content thread and the detector workers.
 ringbuf = "0.4"
 

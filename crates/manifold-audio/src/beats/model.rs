@@ -7,6 +7,7 @@
 //! time reads contiguous sequences, and attention across frequency runs on the (frame, band, channel) transpose.
 
 use super::mel::BANDS;
+use crate::linalg::{Mat, MatMut, gemm};
 use crate::trained::container::{Container, ContainerError, Data};
 
 const HEAD_DIM: usize = 32;
@@ -19,50 +20,19 @@ const BN_EPS: f32 = 1e-5;
 /// Feed-forward rows processed at once, which bounds the hidden buffer.
 const FF_TILE: usize = 4096;
 
-/// c = a·b + beta·c, each operand given with its (row stride, column stride).
-#[allow(clippy::too_many_arguments)]
-fn gemm(
-    m: usize,
-    k: usize,
-    n: usize,
-    a: &[f32],
-    sa: (usize, usize),
-    b: &[f32],
-    sb: (usize, usize),
-    beta: f32,
-    c: &mut [f32],
-    sc: (usize, usize),
-) {
-    if m == 0 || n == 0 {
-        return;
-    }
-    let last = |rows: usize, cols: usize, s: (usize, usize)| (rows - 1) * s.0 + (cols - 1) * s.1;
-    assert!(k == 0 || (last(m, k, sa) < a.len() && last(k, n, sb) < b.len()));
-    assert!(last(m, n, sc) < c.len());
-    // SAFETY: the asserts keep every strided element inside its slice, and `c` is a unique borrow, so it aliases
-    // neither input.
-    unsafe {
-        matrixmultiply::sgemm(
-            m,
-            k,
-            n,
-            1.0,
-            a.as_ptr(),
-            sa.0 as isize,
-            sa.1 as isize,
-            b.as_ptr(),
-            sb.0 as isize,
-            sb.1 as isize,
-            beta,
-            c.as_mut_ptr(),
-            sc.0 as isize,
-            sc.1 as isize,
-        );
-    }
+fn gelu(x: f32) -> f32 {
+    0.5 * x * (1.0 + erf(x * std::f32::consts::FRAC_1_SQRT_2))
 }
 
-fn gelu(x: f32) -> f32 {
-    0.5 * x * (1.0 + libm::erff(x * std::f32::consts::FRAC_1_SQRT_2))
+/// erf by Abramowitz and Stegun 7.1.26, within 1.5e-7 of the true value: branch-free, so the compiler vectorises
+/// it. The GELUs call it tens of millions of times a hearing.
+fn erf(x: f32) -> f32 {
+    let a = x.abs();
+    let t = 1.0 / (1.0 + 0.327_591_1 * a);
+    let poly = t
+        * (0.254_829_6
+            + t * (-0.284_496_74 + t * (1.421_413_8 + t * (-1.453_152_1 + t * 1.061_405_4))));
+    (1.0 - poly * exp(-a * a)).copysign(x)
 }
 
 /// e^x for x <= 0 in a branch-free form the compiler vectorises: 2^n by exponent bits times a degree-6 polynomial
@@ -130,16 +100,10 @@ impl Linear {
 
     fn apply(&self, x: &[f32], rows: usize, y: &mut [f32]) {
         gemm(
-            rows,
-            self.inp,
-            self.out,
-            x,
-            (self.inp, 1),
-            &self.w,
-            (1, self.inp),
+            Mat::rows(x, rows, self.inp, self.inp),
+            Mat::cols(&self.w, self.inp, self.out, self.inp),
             0.0,
-            y,
-            (self.out, 1),
+            MatMut::rows(y, rows, self.out, self.out),
         );
         if let Some(b) = &self.b {
             for row in y[..rows * self.out].chunks_exact_mut(self.out) {
@@ -246,16 +210,10 @@ impl Attention {
             for head in 0..h {
                 let col = head * HEAD_DIM;
                 gemm(
-                    n,
-                    HEAD_DIM,
-                    n,
-                    &seq[col..],
-                    (3 * d, 1),
-                    &seq[d + col..],
-                    (1, 3 * d),
+                    Mat::rows(&seq[col..], n, HEAD_DIM, 3 * d),
+                    Mat::cols(&seq[d + col..], HEAD_DIM, n, 3 * d),
                     0.0,
-                    &mut scores,
-                    (n, 1),
+                    MatMut::rows(&mut scores, n, n, n),
                 );
                 for row in scores.chunks_exact_mut(n) {
                     let max = row.iter().fold(f32::NEG_INFINITY, |m, &v| m.max(v)) * scale;
@@ -266,16 +224,10 @@ impl Attention {
                 }
                 let out = &mut att[row0 * d + col..];
                 gemm(
-                    n,
-                    n,
-                    HEAD_DIM,
-                    &scores,
-                    (n, 1),
-                    &seq[2 * d + col..],
-                    (3 * d, 1),
+                    Mat::rows(&scores, n, n, n),
+                    Mat::rows(&seq[2 * d + col..], n, HEAD_DIM, 3 * d),
                     0.0,
-                    out,
-                    (d, 1),
+                    MatMut::rows(out, n, HEAD_DIM, d),
                 );
                 for i in 0..n {
                     let g = sigmoid(gates[(row0 + i) * h + head]);
@@ -411,7 +363,12 @@ impl Conv {
                     let w = &self.w[(f * 3 + kt) * cin * cout..][..cin * cout];
                     let a = &x[(fi * frames + from) * cin..];
                     let c = &mut out[(fo * frames + to) * cout..];
-                    gemm(m, cin, cout, a, (cin, 1), w, (cout, 1), 1.0, c, (cout, 1));
+                    gemm(
+                        Mat::rows(a, m, cin, cin),
+                        Mat::rows(w, cin, cout, cout),
+                        1.0,
+                        MatMut::rows(c, m, cout, cout),
+                    );
                 }
             }
         }

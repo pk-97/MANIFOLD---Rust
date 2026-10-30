@@ -38,8 +38,9 @@ pub struct Tuning {
 
 impl Tuning {
     /// The best steady tuning on four recordings (three songs and a 21 minute live set) in `examples/follow_sim`:
-    /// about three quarters of predicted beats within 70 ms, five tempo jumps in 33 minutes. A shorter window
-    /// costs less CPU but hears more stray tempos.
+    /// about three quarters of predicted beats within 70 ms, five tempo jumps in 33 minutes, about 15% of one core.
+    /// A shorter window costs less but hears more stray tempos; Beat This!'s small checkpoint was less accurate
+    /// than this at the same cost.
     pub const LIVE: Self = Self {
         window_s: 12.0,
         fit_s: 8.0,
@@ -116,7 +117,7 @@ impl Listener {
         self.mel.drain(..excess);
     }
 
-    /// The network over the newest window; about 60 ms of CPU per second of window, so call it from a worker
+    /// The network over the newest window; about 12 ms of CPU per second of window, so call it from a worker
     /// thread.
     pub fn hear(&self) -> Heard {
         let frames = self.mel.len() / BANDS;
@@ -197,7 +198,7 @@ impl Tracker {
     }
 }
 
-/// Seconds of audio the worker may fall behind by; a hearing takes most of a second of CPU.
+/// Seconds of audio the worker may fall behind by, many hearings' worth.
 const SAMPLE_RING_S: u32 = 8;
 
 /// A listener and a tracker with the live tuning on their own thread, fed through a lock-free sample ring and

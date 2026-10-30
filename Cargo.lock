@@ -2655,7 +2655,6 @@ dependencies = [
  "cpal",
  "half",
  "image",
- "libm",
  "log",
  "manifold-core",
  "manifold-playback",
