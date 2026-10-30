@@ -99,20 +99,23 @@ seconds turns it streaky.
 
 ## Render (inside render_scene, after the water and its mist)
 
-The packed fields (on the fine grid) are unpacked into 3D textures (state
-with mips), and a light volume at the air's scale or coarser holds the
-optical depth toward the sun and straight up, marched through the state's
-mip one light cell across. One
+The packed fields (on the fine grid) are unpacked into 3D textures, with a
+copy of the state at half size (each texel the mean of its eight, written by
+the same pass). A light volume at the air's scale or coarser holds the
+optical depth toward the sun and straight up, marched through the half-size
+copy about one light cell a step, and the flames' glow. One
 draw per gas over the box's screen rectangle marches from the box entry to
 the nearer of the box exit and the opaque depth, jittered per pixel.
 
 - Sun: multiple scattering as Wrenninge's octave sum (a = b = c = ½),
   dual Henyey-Greenstein phase, normalised so a deep white medium is as
-  bright as a white Lambert surface. High and up read the sun's shadow map.
+  bright as a white Lambert surface. High and up read the sun's shadow map,
+  the cascade that holds each sample.
 - Sky: the irradiance map above and below, dimmed by the optical depth up.
-- Flames: `flame · blackbody(T)` in the scene's light units; glow on the
-  smoke from the flame field's mip 4, read as a cubic B-spline so its
-  sixteen-cell texels never show.
+- Flames: `flame · blackbody(T)` in the scene's light units. Glow on the
+  smoke: the flames' mean over sixteen-cell blocks (`cs_gas_glow`, only
+  when Glow is above 0), read as a cubic B-spline so the blocks never show,
+  baked into the light volume so the march reads it for free.
 - Detail (off by default): advected noise below the cells, two phases.
   At High the simulation has its own detail; Detail costs about 1.5 ms.
 
@@ -132,18 +135,19 @@ centre, the flame colour, its power following the flames.
 | scatter octaves | 2 | 3 | 4 | 4 |
 | scene shadows in smoke | off | off | on | on |
 
-Cost on an M4 Max at 1080p, whole frame less the same scene without the
-gas (2.0 ms), World Cell Size 0.0625 m, Fire box 1.5 × 3 × 1.5 m, Smoke 2 × 4 × 2 m:
+Cost on an M4 Max at 1080p, GPU ms a frame for Fire (1.5 × 3 × 1.5 m) and
+Smoke (2 × 4 × 2 m) together, World Cell Size 0.0625 m, a close shot with
+the gas over most of the frame:
 
-| | Low | Medium | High | Extra High |
-|---|---|---|---|---|
-| Fire cells | 12 × 24 × 12 | 24 × 48 × 24 | 48 × 96 × 48 | 96 × 192 × 96 |
-| Fire, ms | 0.5 | 0.9 | 3.2 | 20 |
-| Smoke cells | 16 × 32 × 16 | 32 × 64 × 32 | 64 × 128 × 64 | 128 × 256 × 128 |
-| Smoke, ms | 0.4 | 1.0 | 4.9 | 42 |
+| | Medium | High |
+|---|---|---|
+| simulation, both items | 7.8 | 11.6 |
+| unpack, glow and light | 0.1 | 1.0 |
+| march | 2.1 | 5.2 |
 
-Low and Medium are bound by dispatch count (about 60 small dispatches),
-not cells. High is the live default; Extra High is for renders.
+A wide shot of the same at High marches in 2.7 ms. The simulation is about
+240 small dispatches a frame for the two items, so Medium costs most of what
+High does. High is the live default; Extra High is for renders.
 
 ## Not built
 

@@ -13,13 +13,14 @@
 // an isotropic medium in a uniform sky shows the map's value as it stands.
 
 @group(0) @binding(80) var<uniform> gas: GasUniforms;
-// Density, temperature, fuel and flame per cell, with a mip chain.
+// Density, temperature, fuel and flame per cell.
 @group(0) @binding(81) var gas_state: texture_3d<f32>;
 // Velocity in metres per second (xyz).
 @group(0) @binding(82) var gas_velocity: texture_3d<f32>;
-// Linear, clamped to the box, mipmapped.
+// Linear, clamped to the box.
 @group(0) @binding(83) var gas_sampler: sampler;
-// x: optical depth toward the sun to the box's far face, y: straight up.
+// x: optical depth toward the sun to the box's far face, y: straight up,
+// z: the flames blurred, for the glow (0 when off).
 @group(0) @binding(84) var gas_light: texture_3d<f32>;
 // Planck radiator colours: rgb at luminance 1, w luminance relative to 1500 K.
 @group(0) @binding(85) var<storage, read> blackbody_table: array<vec4<f32>>;
@@ -81,8 +82,6 @@ const AMBIENT_SKY_DIMMING: f32 = 0.5;
 const AMBIENT_GROUND_DIMMING: f32 = 0.25;
 // The flame's colour temperature on the smoke, as a share of the hottest.
 const GLOW_KELVIN_SHARE: f32 = 0.85;
-// The flame field's mip the glow reads: sixteen cells across.
-const GLOW_MIP: f32 = 4.0;
 
 fn gas_unproject(ndc: vec2<f32>, raw_depth: f32) -> vec3<f32> {
     let w = gas.inv_view_proj * vec4<f32>(ndc, raw_depth, 1.0);
@@ -133,49 +132,6 @@ fn vs_gas(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
 // per pixel, with no state and no texture read.
 fn interleaved_gradient_noise(p: vec2<f32>) -> f32 {
     return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
-}
-
-// A cubic B-spline read of `tex` at mip `level`, from eight trilinear taps
-// (Sigg and Hadwiger 2005), for the glow's coarse mip: trilinear there shows
-// its sixteen-cell blocks, since its slope jumps at every texel wall.
-fn sample_smooth(tex: texture_3d<f32>, uvw: vec3<f32>, level: f32) -> vec4<f32> {
-    let size = vec3<f32>(textureDimensions(tex, i32(level)));
-    let coord = uvw * size - 0.5;
-    let index = floor(coord);
-    let f = coord - index;
-    let f2 = f * f;
-    let f3 = f2 * f;
-    let rest = 1.0 - f;
-    let w0 = rest * rest * rest / 6.0;
-    let w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
-    let w3 = f3 / 6.0;
-    let g0 = w0 + w1;
-    let g1 = 1.0 - g0;
-    // Each pair of B-spline weights becomes one linear tap between the
-    // pair's texel centres.
-    let lo = (index - 0.5 + w1 / g0) / size;
-    let hi = (index + 1.5 + w3 / g1) / size;
-    let a = mix(
-        textureSampleLevel(tex, gas_sampler, vec3<f32>(lo.x, lo.y, lo.z), level),
-        textureSampleLevel(tex, gas_sampler, vec3<f32>(hi.x, lo.y, lo.z), level),
-        g1.x,
-    );
-    let b = mix(
-        textureSampleLevel(tex, gas_sampler, vec3<f32>(lo.x, hi.y, lo.z), level),
-        textureSampleLevel(tex, gas_sampler, vec3<f32>(hi.x, hi.y, lo.z), level),
-        g1.x,
-    );
-    let c = mix(
-        textureSampleLevel(tex, gas_sampler, vec3<f32>(lo.x, lo.y, hi.z), level),
-        textureSampleLevel(tex, gas_sampler, vec3<f32>(hi.x, lo.y, hi.z), level),
-        g1.x,
-    );
-    let d = mix(
-        textureSampleLevel(tex, gas_sampler, vec3<f32>(lo.x, hi.y, hi.z), level),
-        textureSampleLevel(tex, gas_sampler, vec3<f32>(hi.x, hi.y, hi.z), level),
-        g1.x,
-    );
-    return mix(mix(a, b, g1.y), mix(c, d, g1.y), g1.z);
 }
 
 fn henyey_greenstein(cos_theta: f32, g: f32) -> f32 {
@@ -255,7 +211,8 @@ fn scene_sun_visibility(p: vec3<f32>) -> f32 {
     if gas.sun_dir.w < 0.0 {
         return 1.0;
     }
-    let slot = i32(gas.sun_dir.w + 0.5);
+    // The sun's cascade that holds `p`.
+    let slot = caster_face(i32(gas.sun_dir.w + 0.5), p);
     // Texel 0 marks a caster with no shadow-map layer.
     if casters[slot].shadow.z <= 0.0 {
         return 1.0;
@@ -381,7 +338,7 @@ fn fs_gas(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         var added = vec3<f32>(0.0);
 
         if sigma_t > 1e-4 {
-            let optical = textureSampleLevel(gas_light, gas_sampler, uvw, 0.0).xy;
+            let optical = textureSampleLevel(gas_light, gas_sampler, uvw, 0.0).xyz;
             var incoming = vec3<f32>(0.0);
             if has_sun {
                 var visibility = 1.0;
@@ -402,9 +359,7 @@ fn fs_gas(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
                 sky * exp(-AMBIENT_SKY_DIMMING * optical.y)
                 + ground * exp(-AMBIENT_GROUND_DIMMING * optical.y)
             );
-            if glow > 0.0 {
-                incoming += glow_color * sample_smooth(gas_state, uvw, GLOW_MIP).w;
-            }
+            incoming += glow_color * optical.z;
             added += scatter_color * incoming * (1.0 - step_transmittance);
         }
 

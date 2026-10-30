@@ -26,7 +26,7 @@ pub(super) static GAS_VOLUME_WGSL: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
-/// The compute passes: unpack, light volume and noise fill.
+/// The compute passes: unpack, glow, light volume and noise fill.
 const GAS_LIGHT_WGSL: &str = include_str!("../shaders/gas_light.wgsl");
 
 /// The constants `gas_volume.wgsl` reads that this file owns, so the shader
@@ -57,6 +57,10 @@ const OWN_BINDINGS: usize = 10;
 
 /// Threads along each side of a compute workgroup (`@workgroup_size(4, 4, 4)`).
 const GROUP_SIDE: u32 = 4;
+
+/// Gas cells along each side of a glow texel: the flames' light on the
+/// smoke round them is that blurred.
+const GLOW_SIDE: u32 = 16;
 
 /// What a quality level costs and buys.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -233,9 +237,16 @@ struct GasLightUniforms {
     box_min: [f32; 4],
     /// xyz box max corner, w 1 when a sun lights the gas.
     box_max: [f32; 4],
-    /// xyz unit direction toward the sun, w the state mip one light cell
-    /// across: finer texels add reads, not light.
+    /// xyz unit direction toward the sun, w 1 when the flames glow.
     sun: [f32; 4],
+}
+
+/// `GasGlowUniforms` in `gas_light.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct GasGlowUniforms {
+    /// xyz glow texels, w half-size texels per glow texel along each axis.
+    dims: [u32; 4],
 }
 
 /// `GasUnpackUniforms` in `gas_light.wgsl`.
@@ -363,7 +374,7 @@ fn light_uniforms(
             direction[0],
             direction[1],
             direction[2],
-            preset.light_divisor.ilog2() as f32,
+            f32::from(u8::from(volume.look.glow > 0.0)),
         ],
     }
 }
@@ -410,13 +421,14 @@ pub(super) struct GasView {
 
 struct Pipelines {
     unpack: GpuComputePipeline,
+    glow: GpuComputePipeline,
     light: GpuComputePipeline,
     noise: GpuComputePipeline,
 }
 
 /// What every gas shares, made when the first one draws.
 struct Shared {
-    /// Linear, clamped, mipmapped: the fields and the light volume.
+    /// Linear, clamped: the fields and the light volume.
     linear: GpuSampler,
     /// Linear, repeating: the detail noise.
     repeat: GpuSampler,
@@ -425,11 +437,14 @@ struct Shared {
     noise: GpuTexture,
 }
 
-/// A gas's fields as textures: the state with its mip chain, and the velocity.
+/// A gas's fields as textures: the state, the velocity, the state at half
+/// size (its light marches that) and the flames in `GLOW_SIDE` blocks.
 struct Fields {
     dims: [u32; 3],
     state: GpuTexture,
     velocity: GpuTexture,
+    half: GpuTexture,
+    glow: GpuTexture,
 }
 
 struct LightVolume {
@@ -459,33 +474,16 @@ pub(super) struct GasPass {
     order: Vec<(f32, usize)>,
 }
 
-/// Mip levels of a 3D texture: a chain down to one texel.
-fn mip_levels(dims: [u32; 3]) -> u32 {
-    1 + dims[0].max(dims[1]).max(dims[2]).max(1).ilog2()
-}
-
-/// Bytes of a 3D texture of `dims` with `levels` mips of `bytes_per_texel`.
-fn texture_bytes(dims: [u32; 3], levels: u32, bytes_per_texel: u32) -> u64 {
-    (0..levels)
-        .map(|level| {
-            dims.iter()
-                .map(|&n| u64::from((n >> level).max(1)))
-                .product::<u64>()
-        })
-        .sum::<u64>()
-        * u64::from(bytes_per_texel)
-}
-
-/// A 3D texture of `dims`, admitted against the device's memory first.
+/// A 3D texture of `dims`, read and written by compute, admitted against the
+/// device's memory first.
 fn create_volume(
     device: &GpuDevice,
     dims: [u32; 3],
-    levels: u32,
     format: GpuTextureFormat,
-    usage: GpuTextureUsage,
     label: &str,
 ) -> Result<GpuTexture, String> {
-    let bytes = texture_bytes(dims, levels, format.bytes_per_pixel());
+    let bytes =
+        dims.iter().map(|&n| u64::from(n)).product::<u64>() * u64::from(format.bytes_per_pixel());
     admit_candidate_bytes(device.modifier_memory_snapshot(), bytes)
         .map_err(|error| format!("{label}: {error}"))?;
     device.try_create_texture(&GpuTextureDesc {
@@ -494,9 +492,9 @@ fn create_volume(
         depth: dims[2],
         format,
         dimension: GpuTextureDimension::D3,
-        usage,
+        usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
         label,
-        mip_levels: levels,
+        mip_levels: 1,
     })
 }
 
@@ -540,6 +538,7 @@ impl GasPass {
             };
             self.compute = Some(Pipelines {
                 unpack: make("cs_gas_unpack", "node.render_scene gas unpack"),
+                glow: make("cs_gas_glow", "node.render_scene gas glow"),
                 light: make("cs_gas_light", "node.render_scene gas light"),
                 noise: make("cs_gas_noise", "node.render_scene gas noise"),
             });
@@ -575,9 +574,7 @@ impl GasPass {
         let noise = create_volume(
             device,
             [side; 3],
-            1,
             GpuTextureFormat::R8Unorm,
-            GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
             "gas detail noise",
         )?;
         let bytes = detail_noise_volume();
@@ -605,10 +602,7 @@ impl GasPass {
         );
 
         self.shared = Some(Shared {
-            linear: device.create_sampler(&GpuSamplerDesc {
-                mip_filter: GpuFilterMode::Linear,
-                ..GpuSamplerDesc::default()
-            }),
+            linear: device.create_sampler(&GpuSamplerDesc::default()),
             repeat: device.create_sampler(&GpuSamplerDesc {
                 address_mode_u: GpuAddressMode::Repeat,
                 address_mode_v: GpuAddressMode::Repeat,
@@ -621,8 +615,9 @@ impl GasPass {
         Ok(())
     }
 
-    /// Unpacks gas `index`'s fields, builds their mips and marches the light
-    /// volume, remaking a texture only when its size changed.
+    /// Unpacks gas `index`'s fields, blurs its flames when they glow and
+    /// marches the light volume, remaking a texture only when its size
+    /// changed.
     fn prepare(
         &mut self,
         device: &GpuDevice,
@@ -640,28 +635,26 @@ impl GasPass {
         let slot = &mut self.slots[index];
         let dims = gas.volume.dims;
 
+        let half_dims = dims.map(|n| n.div_ceil(2));
+        let glow_dims = dims.map(|n| n.div_ceil(GLOW_SIDE));
         if slot.fields.as_ref().is_none_or(|f| f.dims != dims) {
             // The old textures stay until the new ones are admitted.
-            let state = create_volume(
+            let state = create_volume(device, dims, GpuTextureFormat::Rgba16Float, "gas state")?;
+            let velocity =
+                create_volume(device, dims, GpuTextureFormat::Rgba16Float, "gas velocity")?;
+            let half = create_volume(
                 device,
-                dims,
-                mip_levels(dims),
+                half_dims,
                 GpuTextureFormat::Rgba16Float,
-                GpuTextureUsage::RENDER_TARGET_FULL,
-                "gas state",
+                "gas state at half size",
             )?;
-            let velocity = create_volume(
-                device,
-                dims,
-                1,
-                GpuTextureFormat::Rgba16Float,
-                GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
-                "gas velocity",
-            )?;
+            let glow = create_volume(device, glow_dims, GpuTextureFormat::R16Float, "gas glow")?;
             slot.fields = Some(Fields {
                 dims,
                 state,
                 velocity,
+                half,
+                glow,
             });
         }
         let fields = slot.fields.as_ref().expect("made above");
@@ -671,9 +664,7 @@ impl GasPass {
             let texture = create_volume(
                 device,
                 light_cells,
-                1,
                 GpuTextureFormat::Rgba16Float,
-                GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
                 "gas light volume",
             )?;
             slot.light = Some(LightVolume {
@@ -711,13 +702,45 @@ impl GasPass {
                     binding: 8,
                     texture: &fields.velocity,
                 },
+                GpuBinding::Texture {
+                    binding: 14,
+                    texture: &fields.half,
+                },
             ],
-            groups(dims),
+            groups(half_dims),
             "node.render_scene gas unpack",
         );
-        enc.generate_mipmaps(&fields.state);
 
         let uniforms = light_uniforms(&gas.volume, preset, light_cells, sun);
+        if uniforms.sun[3] > 0.5 {
+            let glow = GasGlowUniforms {
+                dims: [glow_dims[0], glow_dims[1], glow_dims[2], GLOW_SIDE / 2],
+            };
+            enc.dispatch_compute(
+                &pipelines.glow,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 11,
+                        data: bytemuck::bytes_of(&glow),
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: &fields.half,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: &shared.linear,
+                    },
+                    GpuBinding::Texture {
+                        binding: 12,
+                        texture: &fields.glow,
+                    },
+                ],
+                groups(glow_dims),
+                "node.render_scene gas glow",
+            );
+        }
+
         enc.dispatch_compute(
             &pipelines.light,
             &[
@@ -727,7 +750,7 @@ impl GasPass {
                 },
                 GpuBinding::Texture {
                     binding: 1,
-                    texture: &fields.state,
+                    texture: &fields.half,
                 },
                 GpuBinding::Sampler {
                     binding: 2,
@@ -736,6 +759,10 @@ impl GasPass {
                 GpuBinding::Texture {
                     binding: 3,
                     texture: &light.texture,
+                },
+                GpuBinding::Texture {
+                    binding: 13,
+                    texture: &fields.glow,
                 },
             ],
             groups(light_cells),
@@ -929,7 +956,12 @@ mod tests {
     fn the_compute_shader_validates_with_its_entry_points() {
         let module = validate_module(GAS_LIGHT_WGSL, "gas light shader");
         let names = entry_points(&module);
-        for entry in ["cs_gas_unpack", "cs_gas_light", "cs_gas_noise"] {
+        for entry in [
+            "cs_gas_unpack",
+            "cs_gas_glow",
+            "cs_gas_light",
+            "cs_gas_noise",
+        ] {
             assert!(names.contains(&entry), "{entry} missing from {names:?}");
         }
     }
@@ -958,6 +990,8 @@ mod tests {
         assert_eq!(shader_struct_size(&compute, "GasLightUniforms"), 64);
         assert_eq!(std::mem::size_of::<GasUnpackUniforms>(), 16);
         assert_eq!(shader_struct_size(&compute, "GasUnpackUniforms"), 16);
+        assert_eq!(std::mem::size_of::<GasGlowUniforms>(), 16);
+        assert_eq!(shader_struct_size(&compute, "GasGlowUniforms"), 16);
     }
 
     #[test]
@@ -1076,16 +1110,11 @@ mod tests {
         assert_eq!(lit.dims, [12, 24, 8, 64]);
         assert_eq!(lit.box_min[3], 3.0);
         assert_eq!(lit.box_max[3], 0.0);
-        // The light marches the state's mip one light cell across.
-        assert_eq!(lit.sun[3], 2.0);
-    }
-
-    #[test]
-    fn mip_chains_reach_one_texel_and_count_their_bytes() {
-        assert_eq!(mip_levels([48, 96, 32]), 7);
-        assert_eq!(mip_levels([1, 1, 1]), 1);
-        // 4x2x2 down to 1x1x1: 16 + 2 + 1 texels.
-        assert_eq!(texture_bytes([4, 2, 2], 3, 8), (16 + 2 + 1) * 8);
+        // The sample's flames glow; without glow the light pass skips them.
+        assert_eq!(lit.sun[3], 1.0);
+        let mut dark = volume;
+        dark.look.glow = 0.0;
+        assert_eq!(light_uniforms(&dark, &medium, [1; 3], None).sun[3], 0.0);
     }
 
     #[test]
