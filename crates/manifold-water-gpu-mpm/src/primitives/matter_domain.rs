@@ -1930,10 +1930,13 @@ impl MatterDomain {
             floor,
             RADIUS_SCALE * v0.cbrt(),
         );
+        // A body that has fallen wholly below the kill height is past every
+        // grain, so it no longer stretches the scene.
         let placed = self
             .bodies
             .body_boxes()
             .map(|(_, placed)| placed)
+            .filter(|placed| placed[1][1] >= kill)
             .chain(
                 fills
                     .iter()
