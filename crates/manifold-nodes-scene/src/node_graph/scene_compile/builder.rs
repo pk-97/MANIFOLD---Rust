@@ -437,6 +437,15 @@ impl<'d> Builder<'d> {
 
     /// Put a pass after `from`'s `port`: every wire that read that port now
     /// reads `to`'s `to_port`. Wire the pass's own input from `from` after.
+    /// The nodes `from`'s `port` feeds through their `to_port`.
+    pub(crate) fn fed(&self, from: u32, port: &str, to_port: &str) -> Vec<u32> {
+        self.wires
+            .iter()
+            .filter(|w| w.from_node == from && w.from_port == port && w.to_port == to_port)
+            .map(|w| w.to_node)
+            .collect()
+    }
+
     pub(crate) fn splice(&mut self, from: u32, port: &str, to: u32, to_port: &str) {
         for wire in &mut self.wires {
             if wire.from_node == from && wire.from_port == port {

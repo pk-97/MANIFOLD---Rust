@@ -563,9 +563,20 @@ pub fn param_value_text<'a>(
         whole_numbers,
         is_angle,
         unit.map_or("", |unit| unit.suffix()),
-        2,
+        decimals(val, unit),
     );
     buf.as_str()
+}
+
+/// Places a value shows: two, or three for a length under 10 cm, so a grain
+/// a few millimetres across reads "0.005 m" rather than "0.00 m".
+fn decimals(val: f32, unit: Option<manifold_foundation::scene_surface::Unit>) -> usize {
+    let small = val != 0.0 && val.abs() < 0.1;
+    if small && unit == Some(manifold_foundation::scene_surface::Unit::Metres) {
+        3
+    } else {
+        2
+    }
 }
 
 /// `val` with `decimals` places and the unit text `suffix`.
@@ -660,7 +671,7 @@ pub fn param_value_text_fit<'a>(
         unit.map_or("", |unit| unit.short_suffix()),
         "",
     ] {
-        write_value(buf, val, whole_numbers, is_angle, suffix, 2);
+        write_value(buf, val, whole_numbers, is_angle, suffix, decimals(val, unit));
         if fits(buf.as_str()) {
             return buf.as_str();
         }

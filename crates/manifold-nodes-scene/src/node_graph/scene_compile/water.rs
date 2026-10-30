@@ -30,7 +30,7 @@ use manifold_core::scene_doc::{
 };
 use manifold_core::scene_schema::{
     DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SOLID, SURFACE_DETAIL_NODES,
-    SURFACE_DETAIL_OFFSET, WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WORLD_FOLLOWS, WaterFamily,
+    SURFACE_DETAIL_OFFSET, WATER_MATERIAL_ROLE, WORLD_FOLLOWS, WaterFamily,
     role_index, rows, template_roles, water_family,
 };
 use manifold_core::scene_world_controls::WORLD_INPUTS;
@@ -537,14 +537,19 @@ fn emit(
         emit_source(b, source, domain, first_port + port, frame, water);
     }
 
-    // The water's look is its Material's, as for any object.
+    // The water's look is its Material's, as for any object, maps included
+    // on every object drawing with it (a Sand's grains as well as its
+    // surface).
     if b.doc.effective_material(&item.id).is_some()
-        && let (Some(look), Some(water)) = (node(WATER_MATERIAL_ROLE), node(WATER_OBJECT_ROLE))
+        && let Some(look) = node(WATER_MATERIAL_ROLE)
     {
         let (surface, maps) = surface_for(b, &item.id);
+        let drawn = b.fed(look, "out", "material");
         b.splice(look, "out", surface, "out");
         for (source, port) in maps {
-            b.wire(source, "out", water, port);
+            for &object in &drawn {
+                b.wire(source, "out", object, port);
+            }
         }
     }
 
