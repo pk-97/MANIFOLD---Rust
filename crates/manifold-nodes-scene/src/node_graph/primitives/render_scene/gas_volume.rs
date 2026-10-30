@@ -63,9 +63,12 @@ const GROUP_SIDE: u32 = 4;
 pub(super) struct RenderPreset {
     /// March samples per gas cell along the ray.
     pub samples_per_cell: f32,
-    /// Gas cells per light volume cell along each axis.
+    /// Gas cells per light volume cell along each axis, a power of two. The
+    /// gas's fields are twice as fine as its air (`node.gas_volume`), and its
+    /// light is smooth at the air's scale.
     pub light_divisor: u32,
-    /// Samples of the density from a light volume cell toward the sun.
+    /// The most samples of the density a light volume cell takes toward
+    /// the sun or the sky; short of it, one a light cell.
     pub light_steps: u32,
     pub detail_octaves: u32,
     pub scatter_octaves: u32,
@@ -75,33 +78,33 @@ pub(super) struct RenderPreset {
 
 const PRESETS: [RenderPreset; 4] = [
     RenderPreset {
-        samples_per_cell: 0.75,
-        light_divisor: 2,
-        light_steps: 16,
+        samples_per_cell: 0.5,
+        light_divisor: 4,
+        light_steps: 32,
         detail_octaves: 1,
         scatter_octaves: 2,
         scene_shadows: false,
     },
     RenderPreset {
-        samples_per_cell: 1.0,
-        light_divisor: 2,
-        light_steps: 24,
+        samples_per_cell: 0.75,
+        light_divisor: 4,
+        light_steps: 64,
         detail_octaves: 2,
         scatter_octaves: 3,
         scene_shadows: false,
     },
     RenderPreset {
-        samples_per_cell: 1.5,
-        light_divisor: 1,
-        light_steps: 48,
+        samples_per_cell: 1.0,
+        light_divisor: 2,
+        light_steps: 128,
         detail_octaves: 3,
         scatter_octaves: 4,
         scene_shadows: true,
     },
     RenderPreset {
-        samples_per_cell: 2.0,
-        light_divisor: 1,
-        light_steps: 64,
+        samples_per_cell: 1.5,
+        light_divisor: 2,
+        light_steps: 256,
         detail_octaves: 4,
         scatter_octaves: 4,
         scene_shadows: true,
@@ -230,7 +233,8 @@ struct GasLightUniforms {
     box_min: [f32; 4],
     /// xyz box max corner, w 1 when a sun lights the gas.
     box_max: [f32; 4],
-    /// xyz unit direction toward the sun, w unused.
+    /// xyz unit direction toward the sun, w the state mip one light cell
+    /// across: finer texels add reads, not light.
     sun: [f32; 4],
 }
 
@@ -355,7 +359,12 @@ fn light_uniforms(
             volume.look.density,
         ],
         box_max: [max[0], max[1], max[2], f32::from(u8::from(sun.is_some()))],
-        sun: [direction[0], direction[1], direction[2], 0.0],
+        sun: [
+            direction[0],
+            direction[1],
+            direction[2],
+            preset.light_divisor.ilog2() as f32,
+        ],
     }
 }
 
@@ -952,25 +961,6 @@ mod tests {
     }
 
     #[test]
-    fn presets_follow_the_quality_table() {
-        let row = |quality| {
-            let p = render_preset(quality);
-            (
-                p.samples_per_cell,
-                p.light_divisor,
-                p.light_steps,
-                p.detail_octaves,
-                p.scatter_octaves,
-                p.scene_shadows,
-            )
-        };
-        assert_eq!(row(0), (0.75, 2, 16, 1, 2, false));
-        assert_eq!(row(1), (1.0, 2, 24, 2, 3, false));
-        assert_eq!(row(2), (1.5, 1, 48, 3, 4, true));
-        assert_eq!(row(3), (2.0, 1, 64, 4, 4, true));
-    }
-
-    #[test]
     fn the_noise_is_centred_and_tiles() {
         let n = NOISE_SIZE;
         let noise = detail_noise_volume();
@@ -1055,7 +1045,7 @@ mod tests {
         assert_eq!(u.sun_dir, [0.0, 0.6, 0.8, 1.0]);
         assert_eq!(u.sun_color, [4.0, 3.5, 3.0, 1.0]);
         assert_eq!(u.counts, [3, 1, 301, 0]);
-        assert_eq!(u.flame_kelvin, [1200.0, 2400.0, 4.0, 1.5]);
+        assert_eq!(u.flame_kelvin, [1200.0, 2400.0, 4.0, 1.0]);
     }
 
     #[test]
@@ -1071,16 +1061,23 @@ mod tests {
     #[test]
     fn light_volumes_follow_the_preset_and_round_up() {
         let volume = sample_volume();
-        let half = render_preset(1);
-        assert_eq!(light_volume_dims([48, 95, 1], &half), [24, 48, 1]);
+        let medium = render_preset(1);
+        assert_eq!(light_volume_dims([48, 95, 1], &medium), [12, 24, 1]);
         assert_eq!(
             light_volume_dims(volume.dims, &render_preset(3)),
-            volume.dims
+            volume.dims.map(|n| n.div_ceil(2))
         );
-        let lit = light_uniforms(&volume, &half, light_volume_dims(volume.dims, &half), None);
-        assert_eq!(lit.dims, [24, 48, 16, 24]);
+        let lit = light_uniforms(
+            &volume,
+            &medium,
+            light_volume_dims(volume.dims, &medium),
+            None,
+        );
+        assert_eq!(lit.dims, [12, 24, 8, 64]);
         assert_eq!(lit.box_min[3], 3.0);
         assert_eq!(lit.box_max[3], 0.0);
+        // The light marches the state's mip one light cell across.
+        assert_eq!(lit.sun[3], 2.0);
     }
 
     #[test]

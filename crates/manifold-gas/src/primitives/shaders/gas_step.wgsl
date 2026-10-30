@@ -11,16 +11,19 @@
 // at z - 1/2 of cell (x, y, z), so divergence, pressure and projection share
 // one compact stencil and no cell-to-cell zigzag hides from the solve. The
 // floor (y = 0) is a wall, the sides and the top are open. Velocity is metres
-// per second, state is x density (soot), y temperature (0 ambient, 1 a hot
-// flame), z fuel and w flame. A cell inside one of the scene's solids holds
-// no gas, its faces move with the solid, and the pressure solve treats it as
-// a wall. Water and sand are solids too: a cell at least half full of them
-// moves with their mean velocity there (cs_matter, cs_solids).
+// per second. The state is x density (soot), y temperature (0 ambient, 1 a
+// hot flame), z fuel and w flame, and it lives on a grid FINE times finer
+// than the air along each axis (see "The fine state"); the air reads it
+// averaged back onto its own cells (`state_a`). A cell inside one of the
+// scene's solids holds no gas, its faces move with the solid, and the
+// pressure solve treats it as a wall. Water and sand are solids too: a cell
+// at least half full of them moves with their mean velocity there
+// (cs_matter, cs_solids).
 //
-// Roles rotate: the host names three velocity and three state buffers and
-// binds them as vel_in/state_in (last frame's result), vel_a/state_a and
-// vel_b/state_b. Advection reads the first and writes the others; after it,
-// the step's working fields R are bound at vel_a/state_a for every later
+// Roles rotate: the host names three velocity and three fine state buffers
+// and binds them as vel_in/fine_in (last frame's result), vel_a/fine_a and
+// vel_b/fine_b. Advection reads the first and writes the others; after it,
+// the step's working fields R are bound at vel_a/fine_a for every later
 // kernel.
 
 struct Params {
@@ -75,20 +78,22 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> vel_in: array<vec4<f32>>;
-@group(0) @binding(2) var<storage, read> state_in: array<vec4<f32>>;
+// Fine state, two words a fine cell (see "The fine state").
+@group(0) @binding(2) var<storage, read> fine_in: array<u32>;
 @group(0) @binding(3) var<storage, read_write> vel_a: array<vec4<f32>>;
+// The fine state averaged onto each air cell this tick (cs_restrict).
 @group(0) @binding(4) var<storage, read_write> state_a: array<vec4<f32>>;
 @group(0) @binding(5) var<storage, read_write> vel_b: array<vec4<f32>>;
-@group(0) @binding(6) var<storage, read_write> state_b: array<vec4<f32>>;
+@group(0) @binding(6) var<storage, read_write> fine_a: array<u32>;
 @group(0) @binding(7) var<storage, read_write> curl: array<vec4<f32>>;
 @group(0) @binding(8) var<storage, read_write> pressure: array<f32>;
 // With solids, a cell's divergence carries in its three lowest bits how many
 // of its six neighbours are not solid (cs_divergence): 0 for a cell the
 // pressure solve leaves alone. It costs the divergence a millionth of itself.
 @group(0) @binding(9) var<storage, read_write> divergence: array<f32>;
-// Two words per cell: density and temperature, then fuel and flame, each pair
-// packed as two halves. The velocity's pairs are (u, v) then (w, 0).
-@group(0) @binding(10) var<storage, read_write> state_out: array<u32>;
+@group(0) @binding(10) var<storage, read_write> fine_b: array<u32>;
+// The air's velocity at each fine cell's centre, published: two words, halves
+// (u, v) then (w, 0).
 @group(0) @binding(11) var<storage, read_write> velocity_out: array<u32>;
 @group(0) @binding(12) var<storage, read_write> light_sums: array<atomic<u32>>;
 @group(0) @binding(13) var<storage, read> blackbody: array<vec4<f32>>;
@@ -206,64 +211,80 @@ fn cell_centre(c: vec3<u32>) -> vec3<f32> {
     return params.origin + (vec3<f32>(c) + vec3<f32>(0.5)) * params.h;
 }
 
-// ---- Trilinear taps -------------------------------------------------------
+// ---- The fine state ------------------------------------------------------
+//
+// Fine cell f is element f.x + fx (f.y + fy f.z) of each fine field, two
+// words: halves (density, temperature) then (fuel, flame). Its centre is
+// origin + (f + 1/2) h / FINE. The air's velocity carries the fine state and
+// burning happens at its scale, so the flow stretches smoke into sheets and
+// flames into fronts thinner than an air cell, which the coarse grid alone
+// can only show as blocks. Only the air's flow and pressure, the costly part,
+// stay coarse.
+
+fn fine_dims() -> vec3<u32> {
+    return params.dims * FINE;
+}
+
+fn inside_fine(f: vec3<u32>) -> bool {
+    return all(f < fine_dims());
+}
+
+fn fine_index(f: vec3<u32>) -> u32 {
+    let n = fine_dims();
+    return f.x + n.x * (f.y + n.y * f.z);
+}
+
+// Fine cell coordinates (centres at integers) as air cell coordinates.
+fn fine_to_cells(g: vec3<f32>) -> vec3<f32> {
+    return (g + vec3<f32>(0.5)) / f32(FINE) - vec3<f32>(0.5);
+}
+
+fn fine_in_at(i: u32) -> vec4<f32> {
+    return vec4<f32>(unpack2x16float(fine_in[2u * i]), unpack2x16float(fine_in[2u * i + 1u]));
+}
+
+fn fine_a_at(i: u32) -> vec4<f32> {
+    return vec4<f32>(unpack2x16float(fine_a[2u * i]), unpack2x16float(fine_a[2u * i + 1u]));
+}
+
+fn fine_b_at(i: u32) -> vec4<f32> {
+    return vec4<f32>(unpack2x16float(fine_b[2u * i]), unpack2x16float(fine_b[2u * i + 1u]));
+}
+
+fn store_fine_a(i: u32, s: vec4<f32>) {
+    fine_a[2u * i] = pack_half(s.x, s.y);
+    fine_a[2u * i + 1u] = pack_half(s.z, s.w);
+}
+
+fn store_fine_b(i: u32, s: vec4<f32>) {
+    fine_b[2u * i] = pack_half(s.x, s.y);
+    fine_b[2u * i + 1u] = pack_half(s.z, s.w);
+}
 
 struct Taps {
     index: array<u32, 8>,
     weight: array<f32, 8>,
 }
 
-// The eight cells around grid coordinate `g` (cell units, centres at integers,
+// The eight fine cells around fine grid coordinate `g` (centres at integers,
 // clamped to the box) and their weights.
-fn taps(g: vec3<f32>) -> Taps {
-    let top = vec3<f32>(params.dims) - vec3<f32>(1.0);
-    let q = clamp(g, vec3<f32>(0.0), top);
+fn fine_taps(g: vec3<f32>) -> Taps {
+    let n = fine_dims();
+    let q = clamp(g, vec3<f32>(0.0), vec3<f32>(n - vec3<u32>(1u)));
     let base = floor(q);
     let f = q - base;
     let lo = vec3<u32>(base);
-    let hi = min(lo + vec3<u32>(1u), params.dims - vec3<u32>(1u));
+    let hi = min(lo + vec3<u32>(1u), n - vec3<u32>(1u));
     var t: Taps;
     for (var k = 0u; k < 8u; k++) {
         let hx = (k & 1u) != 0u;
         let hy = (k & 2u) != 0u;
         let hz = (k & 4u) != 0u;
         let c = vec3<u32>(select(lo.x, hi.x, hx), select(lo.y, hi.y, hy), select(lo.z, hi.z, hz));
-        t.index[k] = cell_index(c);
+        t.index[k] = fine_index(c);
         t.weight[k] = select(1.0 - f.x, f.x, hx) * select(1.0 - f.y, f.y, hy) * select(1.0 - f.z, f.z, hz);
     }
     return t;
-}
-
-
-struct Range {
-    lo: vec4<f32>,
-    hi: vec4<f32>,
-}
-
-fn blend_state_in(t: Taps) -> vec4<f32> {
-    var sum = vec4<f32>(0.0);
-    for (var k = 0u; k < 8u; k++) {
-        sum += t.weight[k] * state_in[t.index[k]];
-    }
-    return sum;
-}
-
-fn blend_state_a(t: Taps) -> vec4<f32> {
-    var sum = vec4<f32>(0.0);
-    for (var k = 0u; k < 8u; k++) {
-        sum += t.weight[k] * state_a[t.index[k]];
-    }
-    return sum;
-}
-
-fn range_state_in(t: Taps) -> Range {
-    var r = Range(state_in[t.index[0]], state_in[t.index[0]]);
-    for (var k = 1u; k < 8u; k++) {
-        let s = state_in[t.index[k]];
-        r.lo = min(r.lo, s);
-        r.hi = max(r.hi, s);
-    }
-    return r;
 }
 
 // ---- Noise ----------------------------------------------------------------
@@ -448,6 +469,48 @@ fn centre_velocity_a(c: vec3<u32>) -> vec3<f32> {
     ));
 }
 
+// The velocity `curl` holds at cell centres (cs_centres_in, cs_centres_a)
+// at grid point `g` (cell units, centres at integers, clamped to the box):
+// eight reads, where each component from its own faces would take 24.
+fn centres_at(g: vec3<f32>) -> vec3<f32> {
+    let top = vec3<f32>(params.dims) - vec3<f32>(1.0);
+    let q = clamp(g, vec3<f32>(0.0), top);
+    let base = floor(q);
+    let f = q - base;
+    let lo = vec3<u32>(base);
+    let hi = min(lo + vec3<u32>(1u), params.dims - vec3<u32>(1u));
+    var sum = vec3<f32>(0.0);
+    for (var k = 0u; k < 8u; k++) {
+        let hx = (k & 1u) != 0u;
+        let hy = (k & 2u) != 0u;
+        let hz = (k & 4u) != 0u;
+        let c = vec3<u32>(select(lo.x, hi.x, hx), select(lo.y, hi.y, hy), select(lo.z, hi.z, hz));
+        let w = select(1.0 - f.x, f.x, hx) * select(1.0 - f.y, f.y, hy) * select(1.0 - f.z, f.z, hz);
+        sum += w * curl[cell_index(c)].xyz;
+    }
+    return sum;
+}
+
+// Last frame's velocity and the scene's wind at each cell centre, into
+// `curl` (free until cs_restrict) for the fine state's advection.
+@compute @workgroup_size(4, 4, 4)
+fn cs_centres_in(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !inside(gid) {
+        return;
+    }
+    curl[cell_index(gid)] = vec4<f32>(centre_velocity_in(gid) + wind_near(gid), 0.0);
+}
+
+// The step's velocity at each cell centre, into `curl` (free once
+// cs_confine has run) for the published velocity.
+@compute @workgroup_size(4, 4, 4)
+fn cs_centres_a(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !inside(gid) {
+        return;
+    }
+    curl[cell_index(gid)] = vec4<f32>(centre_velocity_a(gid), 0.0);
+}
+
 // ---- Solids -------------------------------------------------------------------
 
 // Cell `i`'s solid: its velocity (xyz) and kind (w, 0 for air).
@@ -568,8 +631,8 @@ fn kick_at(corners: Corners) -> vec3<f32> {
 
 // ---- Advection ------------------------------------------------------------
 //
-// These kernels run over the face nodes: a node inside the box also advects
-// its cell's state.
+// These kernels run over the face nodes and carry the air; the fine state
+// follows in its own kernels below.
 
 // Semi-Lagrangian: each cell and face takes the fields from where its air
 // came from. The scene's wind is the air moving: everything is carried by it
@@ -581,10 +644,6 @@ fn cs_advect(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let wind = wind_near(gid);
-    if inside(gid) {
-        let back = vec3<f32>(gid) - params.dt * (centre_velocity_in(gid) + wind) / params.h;
-        state_a[cell_index(gid)] = blend_state_in(taps(back));
-    }
     var v = vec4<f32>(0.0);
     for (var axis = 0u; axis < 3u; axis++) {
         if has_face(gid, axis) {
@@ -605,10 +664,6 @@ fn cs_advect_back(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let wind = wind_near(gid);
-    if inside(gid) {
-        let ahead = vec3<f32>(gid) + params.dt * (centre_velocity_in(gid) + wind) / params.h;
-        state_b[cell_index(gid)] = blend_state_a(taps(ahead));
-    }
     var v = vec4<f32>(0.0);
     for (var axis = 0u; axis < 3u; axis++) {
         if has_face(gid, axis) {
@@ -620,22 +675,15 @@ fn cs_advect_back(@builtin(global_invocation_id) gid: vec3<u32>) {
     vel_b[face_index(gid)] = v;
 }
 
-// The error-corrected fields, each held between the extremes of the eight
-// values the air came from. A thread reads only its own vel_b/state_b, so it
-// writes the result in place.
+// The error-corrected velocity, each component held between the extremes of
+// the eight values the air came from. A thread reads only its own vel_b, so
+// it writes the result in place.
 @compute @workgroup_size(4, 4, 4)
 fn cs_maccormack(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !in_faces(gid) {
         return;
     }
     let wind = wind_near(gid);
-    if inside(gid) {
-        let i = cell_index(gid);
-        let back = vec3<f32>(gid) - params.dt * (centre_velocity_in(gid) + wind) / params.h;
-        let rs = range_state_in(taps(back));
-        let s = state_a[i] + 0.5 * (state_in[i] - state_b[i]);
-        state_b[i] = clamp(s, rs.lo, rs.hi);
-    }
     let f = face_index(gid);
     var v = vec4<f32>(0.0);
     for (var axis = 0u; axis < 3u; axis++) {
@@ -658,6 +706,64 @@ fn cs_maccormack(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
     vel_b[f] = v;
+}
+
+// ---- Fine state advection ------------------------------------------------------
+//
+// MacCormack, as the air's, over the fine cells: each takes the state from
+// where its air came from, carried by last frame's air and the scene's wind.
+
+// Fine grid point `gid` carried back (`sign` -1) or ahead (+1) one step by
+// the air and wind cs_centres_in laid out.
+fn fine_carried(gid: vec3<u32>, sign: f32) -> vec3<f32> {
+    let g = vec3<f32>(gid);
+    return g + sign * params.dt * f32(FINE) * centres_at(fine_to_cells(g)) / params.h;
+}
+
+@compute @workgroup_size(4, 4, 4)
+fn cs_fine_advect(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !inside_fine(gid) {
+        return;
+    }
+    let t = fine_taps(fine_carried(gid, -1.0));
+    var sum = vec4<f32>(0.0);
+    for (var k = 0u; k < 8u; k++) {
+        sum += t.weight[k] * fine_in_at(t.index[k]);
+    }
+    store_fine_a(fine_index(gid), sum);
+}
+
+@compute @workgroup_size(4, 4, 4)
+fn cs_fine_advect_back(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !inside_fine(gid) {
+        return;
+    }
+    let t = fine_taps(fine_carried(gid, 1.0));
+    var sum = vec4<f32>(0.0);
+    for (var k = 0u; k < 8u; k++) {
+        sum += t.weight[k] * fine_a_at(t.index[k]);
+    }
+    store_fine_b(fine_index(gid), sum);
+}
+
+// The error-corrected state, held between the extremes of the eight values
+// the air came from; in place, as the air's.
+@compute @workgroup_size(4, 4, 4)
+fn cs_fine_maccormack(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !inside_fine(gid) {
+        return;
+    }
+    let i = fine_index(gid);
+    let t = fine_taps(fine_carried(gid, -1.0));
+    var lo = fine_in_at(t.index[0]);
+    var hi = lo;
+    for (var k = 1u; k < 8u; k++) {
+        let value = fine_in_at(t.index[k]);
+        lo = min(lo, value);
+        hi = max(hi, value);
+    }
+    let corrected = fine_a_at(i) + 0.5 * (fine_in_at(i) - fine_b_at(i));
+    store_fine_b(i, clamp(corrected, lo, hi));
 }
 
 // ---- Solids (each tick, before advection) -------------------------------------
@@ -837,11 +943,10 @@ fn source_weight(pos: vec3<f32>) -> f32 {
     return falloff * breakup;
 }
 
-// How deep cell `c` sits in the sponge band, 0 outside it to 1 at the
-// outermost cells, squared so it starts gently.
-fn sponge(c: vec3<u32>) -> f32 {
+// How deep grid point `g` (cell units) sits in the sponge band, 0 outside
+// it to 1 at the outermost cells, squared so it starts gently.
+fn sponge(g: vec3<f32>) -> f32 {
     let last = vec3<f32>(params.dims) - vec3<f32>(1.0);
-    let g = vec3<f32>(c);
     let to_face = vec3<f32>(min(g.x, last.x - g.x), last.y - g.y, min(g.z, last.z - g.z));
     let band = max(vec3<f32>(2.0), SPONGE_SHARE * vec3<f32>(params.dims));
     let depth = saturate(vec3<f32>(1.0) - to_face / band);
@@ -849,23 +954,22 @@ fn sponge(c: vec3<u32>) -> f32 {
     return deepest * deepest;
 }
 
-// Each cell's emission, burning, decay and sponge. The turbulence's push for
-// this step goes to `curl` (free until cs_curl) for cs_forces to spread onto
-// the faces.
+// Each fine cell's emission, burning, decay and sponge, on the working fine
+// state.
 @compute @workgroup_size(4, 4, 4)
-fn cs_sources(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !inside(gid) {
+fn cs_fine_sources(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !inside_fine(gid) {
         return;
     }
-    let i = cell_index(gid);
+    let i = fine_index(gid);
     // No gas inside a solid.
-    if is_solid(i) {
-        state_a[i] = vec4<f32>(0.0);
-        curl[i] = vec4<f32>(0.0);
+    if is_solid(cell_index(gid / FINE)) {
+        store_fine_a(i, vec4<f32>(0.0));
         return;
     }
-    let pos = cell_centre(gid);
-    var s = state_a[i];
+    let g = vec3<f32>(gid);
+    let pos = params.origin + (g + vec3<f32>(0.5)) * (params.h / f32(FINE));
+    var s = fine_a_at(i);
 
     let w = source_weight(pos);
     if params.kind == 0u {
@@ -887,32 +991,55 @@ fn cs_sources(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     s.w = flame;
 
+    s.x *= exp(-params.dissipation * params.dt);
+    s.y *= exp(-params.cooling * params.dt);
+    s.z *= exp(-FUEL_DECAY * params.dt);
+
+    // What reaches the sides or the top leaves through the sponge band.
+    s *= exp(-SPONGE_RATE * sponge(fine_to_cells(g)) * params.dt);
+    let n = fine_dims();
+    let to_face = min(min(gid.x, n.x - 1u - gid.x), min(gid.z, n.z - 1u - gid.z));
+    if min(to_face, n.y - 1u - gid.y) == 0u {
+        s = vec4<f32>(0.0);
+    }
+
+    s = max(s, vec4<f32>(0.0));
+    s.y = min(s.y, MAX_TEMPERATURE);
+    store_fine_a(i, s);
+}
+
+// Each air cell's gas, the mean of its fine cells, for buoyancy, the flames'
+// expansion and their light. The turbulence's push for this step goes to
+// `curl` (free until cs_curl) for cs_forces to spread onto the faces.
+@compute @workgroup_size(4, 4, 4)
+fn cs_restrict(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !inside(gid) {
+        return;
+    }
+    let i = cell_index(gid);
+    let first = gid * FINE;
+    var s = vec4<f32>(0.0);
+    for (var z = 0u; z < FINE; z++) {
+        for (var y = 0u; y < FINE; y++) {
+            for (var x = 0u; x < FINE; x++) {
+                s += fine_a_at(fine_index(first + vec3<u32>(x, y, z)));
+            }
+        }
+    }
+    s /= f32(FINE * FINE * FINE);
+    state_a[i] = s;
+
     // Noise stirs only where there is gas.
     var push = vec3<f32>(0.0);
     if params.turbulence > 0.0 {
         let gas = saturate(s.x + s.y + s.z);
         if gas > 0.0 {
             let scale = max(4.0 * params.h, TURBULENCE_SOURCE_SHARE * params.source_size);
-            let q = pos / scale + vec3<f32>(0.0, -0.5 * params.time, 0.0);
+            let q = cell_centre(gid) / scale + vec3<f32>(0.0, -0.5 * params.time, 0.0);
             push = params.turbulence * gas * curl_noise(q);
         }
     }
     curl[i] = vec4<f32>(push, 0.0);
-
-    s.x *= exp(-params.dissipation * params.dt);
-    s.y *= exp(-params.cooling * params.dt);
-    s.z *= exp(-FUEL_DECAY * params.dt);
-
-    // What reaches the sides or the top leaves through the sponge band.
-    s *= exp(-SPONGE_RATE * sponge(gid) * params.dt);
-    let to_face = min(min(gid.x, params.dims.x - 1u - gid.x), min(gid.z, params.dims.z - 1u - gid.z));
-    if min(to_face, params.dims.y - 1u - gid.y) == 0u {
-        s = vec4<f32>(0.0);
-    }
-
-    s = max(s, vec4<f32>(0.0));
-    s.y = min(s.y, MAX_TEMPERATURE);
-    state_a[i] = s;
 }
 
 // The cell below node `c` along `axis` and the cell above it, each clamped
@@ -1211,38 +1338,35 @@ fn cs_project(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 // ---- Solid fill (on R, with solids) --------------------------------------------
 
-// Each solid cell takes the mean gas of its open neighbours, so the next
-// advection reads the face's own gas at a face, not the solid's zero (which
-// left a clear layer against every face and striped it). Only solid cells
-// are written and only open ones read, so the pass is race free; the
+// Each fine cell in a solid takes the mean gas of its open neighbours, so the
+// next advection reads the face's own gas at a face, not the solid's zero
+// (which left a clear layer against every face and striped it). Only solid
+// cells are written and only open ones read, so the pass is race free; the
 // renderer stops at the solid's surface, so the fill never shows.
 @compute @workgroup_size(4, 4, 4)
 fn cs_fill_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !inside(gid) {
-        return;
-    }
-    let i = cell_index(gid);
-    if !is_solid(i) {
+    if !inside_fine(gid) || !is_solid(cell_index(gid / FINE)) {
         return;
     }
     let c = vec3<i32>(gid);
+    let n = vec3<i32>(fine_dims());
     var sum = vec4<f32>(0.0);
     var count = 0.0;
     for (var axis = 0u; axis < 3u; axis++) {
         for (var side = -1; side <= 1; side += 2) {
-            var n = c;
-            n[axis] += side;
-            if any(n < vec3<i32>(0)) || any(n >= vec3<i32>(params.dims)) {
+            var q = c;
+            q[axis] += side;
+            if any(q < vec3<i32>(0)) || any(q >= n) {
                 continue;
             }
-            let j = cell_index(vec3<u32>(n));
-            if !is_solid(j) {
-                sum += state_a[j];
+            let neighbour = vec3<u32>(q);
+            if !is_solid(cell_index(neighbour / FINE)) {
+                sum += fine_a_at(fine_index(neighbour));
                 count += 1.0;
             }
         }
     }
-    state_a[i] = sum / max(count, 1.0);
+    store_fine_a(fine_index(gid), sum / max(count, 1.0));
 }
 
 // ---- Publishing (on R) --------------------------------------------------------
@@ -1277,7 +1401,7 @@ fn cs_clear_sums() {
     }
 }
 
-// Writes the packed fields, and adds the flames' light to light_sums:
+// Adds the flames' light to light_sums, from each air cell's mean:
 // word 0 the emission e = flame * luminance * h^3, words 1 to 3 e times the
 // cell centre relative to the box origin, word 4 e times the temperature.
 // Each workgroup reduces its cells, then adds once.
@@ -1290,13 +1414,7 @@ fn cs_publish(
     var moment = vec3<f32>(0.0);
     var heat = 0.0;
     if inside(gid) {
-        let i = cell_index(gid);
-        let v = centre_velocity_a(gid);
-        let s = state_a[i];
-        state_out[2u * i] = pack_half(s.x, s.y);
-        state_out[2u * i + 1u] = pack_half(s.z, s.w);
-        velocity_out[2u * i] = pack_half(v.x, v.y);
-        velocity_out[2u * i + 1u] = pack_half(v.z, 0.0);
+        let s = state_a[cell_index(gid)];
         if s.w > 0.0 {
             let kelvin = mix(FLAME_KELVIN_COOL, FLAME_KELVIN_HOT, s.y);
             power = s.w * blackbody_luminance(kelvin) * params.h * params.h * params.h;
@@ -1329,11 +1447,24 @@ fn cs_publish(
     }
 }
 
+// The air's velocity at each fine cell's centre (from cs_centres_a),
+// published beside the fine state so both share one layout.
+@compute @workgroup_size(4, 4, 4)
+fn cs_publish_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !inside_fine(gid) {
+        return;
+    }
+    let i = fine_index(gid);
+    let v = centres_at(fine_to_cells(vec3<f32>(gid)));
+    velocity_out[2u * i] = pack_half(v.x, v.y);
+    velocity_out[2u * i + 1u] = pack_half(v.z, 0.0);
+}
+
 // ---- Reset --------------------------------------------------------------------
 
-// Zero every field, over the face nodes. vel_in/state_in are read-only here,
-// so the host runs this twice with the roles rotated until each of the three
-// buffers has been vel_a or vel_b.
+// Zero every air field, over the face nodes. vel_in is read-only here, so the
+// host runs this twice with the roles rotated until each of the three
+// buffers has been vel_a or vel_b. The host clears the fine fields itself.
 @compute @workgroup_size(4, 4, 4)
 fn cs_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !in_faces(gid) {
@@ -1346,7 +1477,6 @@ fn cs_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let i = cell_index(gid);
     state_a[i] = vec4<f32>(0.0);
-    state_b[i] = vec4<f32>(0.0);
     curl[i] = vec4<f32>(0.0);
     pressure[i] = 0.0;
     divergence[i] = 0.0;

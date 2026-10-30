@@ -23,8 +23,8 @@ use manifold_gpu::{BufferUse, GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevi
 use manifold_node_engine::exec::effect_node::SimStep;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
-use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::{Primitive, PrimitiveSpec};
 use manifold_node_engine::scene::blackbody::{
     BLACKBODY_ENTRIES, BLACKBODY_MAX_KELVIN, BLACKBODY_MIN_KELVIN, blackbody_table,
@@ -86,9 +86,16 @@ fn shader_constants(solids: bool) -> String {
          const BLACKBODY_MAX_KELVIN: f32 = {BLACKBODY_MAX_KELVIN:?};\n\
          const LIGHT_FIXED_SCALE: f32 = {LIGHT_FIXED_SCALE:?};\n\
          const LIGHT_WORDS: u32 = {LIGHT_WORDS}u;\n\
+         const FINE: u32 = {FINE}u;\n\
          const SOLIDS: bool = {solids};\n"
     )
 }
+
+/// Fine state cells per air cell along each axis. Smoke, heat, fuel and
+/// flame live on the fine grid, carried by the air and burning there, so the
+/// flow draws them sharper than the air's cells; only the flow and its
+/// pressure, the costly part, stay coarse.
+const FINE: u32 = 2;
 
 /// The kernels without solids, then with them.
 static SHADERS: LazyLock<[String; 2]> = LazyLock::new(|| {
@@ -135,12 +142,22 @@ impl GasGeometry {
         self.dims.iter().map(|&d| u64::from(d) + 1).product()
     }
 
-    /// The scalar outputs this geometry fixes, by name.
+    /// The fine state grid's cells along each axis.
+    fn fine_dims(&self) -> [u32; 3] {
+        self.dims.map(|d| d * FINE)
+    }
+
+    fn fine_cells(&self) -> u64 {
+        self.cells() * u64::from(FINE.pow(3))
+    }
+
+    /// The scalar outputs this geometry fixes, by name: the published
+    /// fields' grid, which is the fine one.
     fn outputs(&self) -> [(&'static str, f32); 7] {
         let [x, y, z] = self.origin;
-        let [nx, ny, nz] = self.dims;
+        let [nx, ny, nz] = self.fine_dims();
         [
-            ("cell_size", self.cell),
+            ("cell_size", self.cell / FINE as f32),
             ("origin_x", x),
             ("origin_y", y),
             ("origin_z", z),
@@ -451,14 +468,15 @@ impl GasUniforms {
 /// Bytes of each kind of buffer for a box of cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct GasBytes {
-    /// A vec4 per cell: a state buffer (three of them) and the curl.
+    /// A vec4 per cell: the averaged state and the curl.
     vec4: u64,
     /// A vec4 per face node: a velocity buffer (three of them).
     faces: u64,
     /// An f32 per cell: pressure and divergence.
     scalar: u64,
-    /// Two words per cell: the published state and velocity.
-    packed: u64,
+    /// Two words per fine cell: a fine state buffer (three of them) and the
+    /// published velocity.
+    fine: u64,
 }
 
 impl GasBytes {
@@ -468,18 +486,18 @@ impl GasBytes {
             vec4: cells * 16,
             faces: geometry.face_nodes() * 16,
             scalar: cells * 4,
-            packed: cells * 8,
+            fine: geometry.fine_cells() * 8,
         }
     }
 
-    /// Everything the node holds: the rotating fields, the curl, pressure and
-    /// divergence, both published arrays, the light ring and the blackbody
-    /// table.
+    /// Everything the node holds: the rotating fields, the averaged state,
+    /// the curl, pressure and divergence, the published velocity, the light
+    /// ring and the blackbody table.
     fn total(&self) -> u64 {
-        4 * self.vec4
+        2 * self.vec4
             + 3 * self.faces
             + 2 * self.scalar
-            + 2 * self.packed
+            + 4 * self.fine
             + RING as u64 * LIGHT_BYTES
             + BLACKBODY_BYTES
     }
@@ -497,13 +515,15 @@ fn refusal(geometry: &GasGeometry, bytes: u64, error: impl Display) -> String {
 pub struct GasBuffers {
     dims: [u32; 3],
     /// Last frame's result, a step's scratch, and the other: roles rotate.
+    /// The fine state's result is also the published state.
     velocity: [GpuBuffer; RING],
-    state: [GpuBuffer; RING],
+    fine: [GpuBuffer; RING],
+    /// The fine state averaged onto the air's cells.
+    state: GpuBuffer,
     curl: GpuBuffer,
     /// Kept across frames: the solve starts from the last frame's pressure.
     pressure: GpuBuffer,
     divergence: GpuBuffer,
-    state_out: GpuBuffer,
     velocity_out: GpuBuffer,
     lights: [GpuBuffer; RING],
     blackbody: GpuBuffer,
@@ -546,16 +566,16 @@ impl GasBuffers {
                 make(bytes.faces, BufferUse::Gpu)?,
                 make(bytes.faces, BufferUse::Gpu)?,
             ],
-            state: [
-                make(bytes.vec4, BufferUse::Gpu)?,
-                make(bytes.vec4, BufferUse::Gpu)?,
-                make(bytes.vec4, BufferUse::Gpu)?,
+            fine: [
+                make(bytes.fine, BufferUse::Gpu)?,
+                make(bytes.fine, BufferUse::Gpu)?,
+                make(bytes.fine, BufferUse::Gpu)?,
             ],
+            state: make(bytes.vec4, BufferUse::Gpu)?,
             curl: make(bytes.vec4, BufferUse::Gpu)?,
             pressure: make(bytes.scalar, BufferUse::Gpu)?,
             divergence: make(bytes.scalar, BufferUse::Gpu)?,
-            state_out: make(bytes.packed, BufferUse::Gpu)?,
-            velocity_out: make(bytes.packed, BufferUse::Gpu)?,
+            velocity_out: make(bytes.fine, BufferUse::Gpu)?,
             lights: [
                 make(LIGHT_BYTES, BufferUse::Readback)?,
                 make(LIGHT_BYTES, BufferUse::Readback)?,
@@ -632,7 +652,13 @@ pub struct Pipelines {
     advect: GpuComputePipeline,
     advect_back: GpuComputePipeline,
     maccormack: GpuComputePipeline,
-    sources: GpuComputePipeline,
+    centres_in: GpuComputePipeline,
+    centres_a: GpuComputePipeline,
+    fine_advect: GpuComputePipeline,
+    fine_advect_back: GpuComputePipeline,
+    fine_maccormack: GpuComputePipeline,
+    fine_sources: GpuComputePipeline,
+    restrict: GpuComputePipeline,
     forces: GpuComputePipeline,
     curl: GpuComputePipeline,
     confine: GpuComputePipeline,
@@ -642,6 +668,7 @@ pub struct Pipelines {
     project: GpuComputePipeline,
     clear_sums: GpuComputePipeline,
     publish: GpuComputePipeline,
+    publish_velocity: GpuComputePipeline,
     clear: GpuComputePipeline,
     /// The kernels that write the solid field, built with the solids only.
     solids_static: Option<GpuComputePipeline>,
@@ -658,7 +685,13 @@ impl Pipelines {
             advect: make("cs_advect"),
             advect_back: make("cs_advect_back"),
             maccormack: make("cs_maccormack"),
-            sources: make("cs_sources"),
+            centres_in: make("cs_centres_in"),
+            centres_a: make("cs_centres_a"),
+            fine_advect: make("cs_fine_advect"),
+            fine_advect_back: make("cs_fine_advect_back"),
+            fine_maccormack: make("cs_fine_maccormack"),
+            fine_sources: make("cs_fine_sources"),
+            restrict: make("cs_restrict"),
             forces: make("cs_forces"),
             curl: make("cs_curl"),
             confine: make("cs_confine"),
@@ -668,6 +701,7 @@ impl Pipelines {
             project: make("cs_project"),
             clear_sums: make("cs_clear_sums"),
             publish: make("cs_publish"),
+            publish_velocity: make("cs_publish_velocity"),
             clear: make("cs_clear"),
             solids_static: solids.then(|| make("cs_solids_static")),
             solids: solids.then(|| make("cs_solids")),
@@ -677,8 +711,8 @@ impl Pipelines {
     }
 }
 
-/// Which of the three velocity and state buffers play which role in a
-/// dispatch (`vel_in`/`state_in`, `vel_a`/`state_a`, `vel_b`/`state_b`).
+/// Which of the three velocity and fine state buffers play which role in a
+/// dispatch (`vel_in`/`fine_in`, `vel_a`/`fine_a`, `vel_b`/`fine_b`).
 #[derive(Clone, Copy)]
 struct Roles {
     input: usize,
@@ -717,15 +751,15 @@ fn binding_list<'a>(
             data: uniforms,
         },
         bind(1, &buffers.velocity[roles.input]),
-        bind(2, &buffers.state[roles.input]),
+        bind(2, &buffers.fine[roles.input]),
         bind(3, &buffers.velocity[roles.a]),
-        bind(4, &buffers.state[roles.a]),
+        bind(4, &buffers.state),
         bind(5, &buffers.velocity[roles.b]),
-        bind(6, &buffers.state[roles.b]),
+        bind(6, &buffers.fine[roles.a]),
         bind(7, &buffers.curl),
         bind(8, &buffers.pressure),
         bind(9, &buffers.divergence),
-        bind(10, &buffers.state_out),
+        bind(10, &buffers.fine[roles.b]),
         bind(11, &buffers.velocity_out),
         bind(12, light),
         bind(13, &buffers.blackbody),
@@ -1260,9 +1294,8 @@ impl GasVolume {
         // written only when they or the box change; the moving solids, a
         // lattice each, and the water and sand every tick. With none, the
         // rows stay as they are.
-        let static_hash = with_solids.then(|| {
-            static_hash(first_solids.map(|_| &self.bodies), geometry)
-        });
+        let static_hash =
+            with_solids.then(|| static_hash(first_solids.map(|_| &self.bodies), geometry));
         let rewrite_static = static_hash.is_some() && stored.static_written != static_hash;
         let bodies_move =
             first_solids.is_some() && self.bodies.shapes().iter().any(|s| s.tree != 1);
@@ -1306,6 +1339,7 @@ impl GasVolume {
         // Cell kernels cover the cells; face kernels the one-larger face nodes.
         let groups = geometry.dims.map(|d| d.div_ceil(GROUP_EDGE));
         let face_groups = geometry.dims.map(|d| (d + 1).div_ceil(GROUP_EDGE));
+        let fine_groups = geometry.fine_dims().map(|d| d.div_ceil(GROUP_EDGE));
         let light = &buffers.lights[write_slot];
         let enc = &mut *gpu.native_enc;
         let still = Step {
@@ -1316,6 +1350,10 @@ impl GasVolume {
         };
 
         if clear {
+            for fine in &buffers.fine {
+                enc.clear_buffer(fine);
+            }
+            enc.clear_buffer(&buffers.velocity_out);
             let uniforms = GasUniforms::new(geometry, settings, 0.0, lattice, still, &matter);
             // vel_in and state_in are read-only, so two dispatches with the
             // roles rotated reach all three buffers.
@@ -1339,8 +1377,14 @@ impl GasVolume {
         }
 
         let mut last = self.current;
-        let mut uniforms =
-            GasUniforms::new(geometry, settings, self.sim_time as f32, lattice, still, &matter);
+        let mut uniforms = GasUniforms::new(
+            geometry,
+            settings,
+            self.sim_time as f32,
+            lattice,
+            still,
+            &matter,
+        );
         if rewrite_static {
             enc.clear_buffer(&buffers.source_floor);
             let bindings = binding_list(
@@ -1388,8 +1432,14 @@ impl GasVolume {
             );
         }
         for &step in self.steps.iter().filter(|step| step.dt > 0.0) {
-            uniforms =
-                GasUniforms::new(geometry, settings, self.sim_time as f32, lattice, step, &matter);
+            uniforms = GasUniforms::new(
+                geometry,
+                settings,
+                self.sim_time as f32,
+                lattice,
+                step,
+                &matter,
+            );
             let uniform_bytes = bytemuck::bytes_of(&uniforms);
             let (a, b) = ((last + 1) % RING, (last + 2) % RING);
             let advection = binding_list(
@@ -1433,6 +1483,26 @@ impl GasVolume {
                 face_groups,
                 "node.gas_volume.maccormack",
             );
+            pass(
+                enc,
+                &pipelines.centres_in,
+                &advection,
+                groups,
+                "node.gas_volume.centres_in",
+            );
+            for (pipeline, label) in [
+                (&pipelines.fine_advect, "node.gas_volume.fine_advect"),
+                (
+                    &pipelines.fine_advect_back,
+                    "node.gas_volume.fine_advect_back",
+                ),
+                (
+                    &pipelines.fine_maccormack,
+                    "node.gas_volume.fine_maccormack",
+                ),
+            ] {
+                pass(enc, pipeline, &advection, fine_groups, label);
+            }
             let working = binding_list(
                 uniform_bytes,
                 buffers,
@@ -1444,7 +1514,18 @@ impl GasVolume {
             // Swirl at 0 confines nothing: its two passes don't run.
             let swirl = settings.vorticity > 0.0;
             for (pipeline, grid, label, runs) in [
-                (&pipelines.sources, groups, "node.gas_volume.sources", true),
+                (
+                    &pipelines.fine_sources,
+                    fine_groups,
+                    "node.gas_volume.fine_sources",
+                    true,
+                ),
+                (
+                    &pipelines.restrict,
+                    groups,
+                    "node.gas_volume.restrict",
+                    true,
+                ),
                 (
                     &pipelines.forces,
                     face_groups,
@@ -1493,7 +1574,13 @@ impl GasVolume {
                 "node.gas_volume.project",
             );
             if let Some(fill) = &pipelines.fill_solids {
-                pass(enc, fill, &working, groups, "node.gas_volume.fill_solids");
+                pass(
+                    enc,
+                    fill,
+                    &working,
+                    fine_groups,
+                    "node.gas_volume.fill_solids",
+                );
             }
             last = b;
             self.sim_time += f64::from(step.dt);
@@ -1522,6 +1609,20 @@ impl GasVolume {
             groups,
             "node.gas_volume.publish",
         );
+        pass(
+            enc,
+            &pipelines.centres_a,
+            &working,
+            groups,
+            "node.gas_volume.centres_a",
+        );
+        pass(
+            enc,
+            &pipelines.publish_velocity,
+            &working,
+            fine_groups,
+            "node.gas_volume.publish_velocity",
+        );
 
         self.current = last;
         self.light_slots[write_slot] = Some(LightSlot {
@@ -1543,7 +1644,14 @@ impl GasVolume {
         let restarted = self.plan_ticks(ctx, geometry, settings)?;
         let offline = ctx.sim_step.offline();
         let matter = Matter::read(ctx);
-        self.advance(ctx.gpu_encoder(), geometry, settings, restarted, offline, matter)?;
+        self.advance(
+            ctx.gpu_encoder(),
+            geometry,
+            settings,
+            restarted,
+            offline,
+            matter,
+        )?;
         // A hit is applied once its tick's lattice is on the GPU.
         self.hits.commit_frame();
         Ok(())
@@ -1641,7 +1749,7 @@ impl Primitive for GasVolume {
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
         let buffers = self.buffers.as_ref()?;
         match port {
-            "state" => Some(&buffers.state_out),
+            "state" => Some(&buffers.fine[self.current]),
             "velocity" => Some(&buffers.velocity_out),
             _ => None,
         }
@@ -1722,7 +1830,13 @@ mod tests {
                 "cs_advect",
                 "cs_advect_back",
                 "cs_maccormack",
-                "cs_sources",
+                "cs_centres_in",
+                "cs_centres_a",
+                "cs_fine_advect",
+                "cs_fine_advect_back",
+                "cs_fine_maccormack",
+                "cs_fine_sources",
+                "cs_restrict",
                 "cs_forces",
                 "cs_curl",
                 "cs_confine",
@@ -1732,6 +1846,7 @@ mod tests {
                 "cs_project",
                 "cs_clear_sums",
                 "cs_publish",
+                "cs_publish_velocity",
                 "cs_clear",
                 "cs_solids_static",
                 "cs_solids",
@@ -1977,10 +2092,10 @@ mod tests {
         let bytes = GasBytes::of(&geometry);
         assert_eq!(bytes.vec4, 16_000);
         assert_eq!(bytes.faces, 11 * 11 * 11 * 16);
-        assert_eq!(bytes.packed, 8_000);
+        assert_eq!(bytes.fine, 8_000 * 8);
         assert_eq!(
             bytes.total(),
-            4 * 16_000 + 3 * 21_296 + 2 * 4_000 + 2 * 8_000 + 3 * 32 + 256 * 16
+            2 * 16_000 + 3 * 21_296 + 2 * 4_000 + 4 * 64_000 + 3 * 32 + 256 * 16
         );
     }
 }

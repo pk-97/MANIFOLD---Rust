@@ -18,10 +18,11 @@ fn gas_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.publish(name, value);
     }
     // `run` owns every buffer: the fields, the published state and velocity
-    // (provided arrays), the light ring and the blackbody table.
+    // (provided arrays, on the fine grid), the light ring and the blackbody
+    // table.
     let bytes = GasBytes::of(&geometry);
-    x.provide("state", bytes.packed);
-    x.provide("velocity", bytes.packed);
+    x.provide("state", bytes.fine);
+    x.provide("velocity", bytes.fine);
     x.hold(bytes.total());
     // Water or sand wired: their field and the solid field, four and two
     // words a cell.

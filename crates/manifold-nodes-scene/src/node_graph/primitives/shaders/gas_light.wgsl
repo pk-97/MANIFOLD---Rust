@@ -42,10 +42,10 @@ fn cs_gas_unpack(@builtin(global_invocation_id) gid: vec3<u32>) {
 // ---- cs_gas_light ----------------------------------------------------------
 
 struct GasLightUniforms {
-    dims: vec4<u32>,     // xyz light volume cells, w steps toward the sun
+    dims: vec4<u32>,     // xyz light volume cells, w the most steps a ray takes
     box_min: vec4<f32>,  // xyz box min corner, w extinction per metre at density 1
     box_max: vec4<f32>,  // xyz box max corner, w 1 when a sun lights the gas
-    sun: vec4<f32>,      // xyz unit direction toward the sun, w unused
+    sun: vec4<f32>,      // xyz unit direction toward the sun, w the state mip one cell across
 };
 
 @group(0) @binding(0) var<uniform> light: GasLightUniforms;
@@ -62,16 +62,21 @@ fn box_exit(p: vec3<f32>, dir: vec3<f32>) -> f32 {
 }
 
 // The extinction integral from `p` along `dir` to the box's far face, in
-// `steps` equal midpoint samples of the density.
-fn optical_depth(p: vec3<f32>, dir: vec3<f32>, steps: u32) -> f32 {
+// equal midpoint samples about one light cell apart, at most `most`. Fewer
+// samples than cells along the ray land on different smoke from one cell to
+// the next and stripe the light.
+fn optical_depth(p: vec3<f32>, dir: vec3<f32>, most: u32) -> f32 {
     let reach = box_exit(p, dir);
-    let ds = reach / f32(steps);
     let size = light.box_max.xyz - light.box_min.xyz;
+    let cell = size / vec3<f32>(light.dims.xyz);
+    let step_length = min(cell.x, min(cell.y, cell.z));
+    let steps = clamp(u32(ceil(reach / step_length)), 1u, most);
+    let ds = reach / f32(steps);
     var sum = 0.0;
     for (var i = 0u; i < steps; i++) {
         let q = p + dir * ((f32(i) + 0.5) * ds);
         let uvw = (q - light.box_min.xyz) / size;
-        sum += textureSampleLevel(state, state_sampler, uvw, 0.0).x;
+        sum += textureSampleLevel(state, state_sampler, uvw, light.sun.w).x;
     }
     return sum * ds * light.box_min.w;
 }
@@ -82,11 +87,11 @@ fn cs_gas_light(@builtin(global_invocation_id) gid: vec3<u32>) {
     if any(gid >= dims) { return; }
     let size = light.box_max.xyz - light.box_min.xyz;
     let p = light.box_min.xyz + (vec3<f32>(gid) + 0.5) / vec3<f32>(dims) * size;
-    let steps = max(light.dims.w, 1u);
-    let tau_up = optical_depth(p, vec3<f32>(0.0, 1.0, 0.0), max(steps / 2u, 1u));
+    let most = max(light.dims.w, 1u);
+    let tau_up = optical_depth(p, vec3<f32>(0.0, 1.0, 0.0), most);
     var tau_sun = tau_up;
     if light.box_max.w > 0.5 {
-        tau_sun = optical_depth(p, light.sun.xyz, steps);
+        tau_sun = optical_depth(p, light.sun.xyz, most);
     }
     textureStore(light_out, vec3<i32>(gid), vec4<f32>(tau_sun, tau_up, 0.0, 0.0));
 }

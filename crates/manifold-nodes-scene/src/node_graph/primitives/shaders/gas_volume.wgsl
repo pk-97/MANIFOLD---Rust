@@ -28,7 +28,9 @@
 // toward the sun: on the solid's own surface the depth test flickers between
 // lit and shadowed and stripes the gas (shadow acne), and the shadow map's
 // depth bias is sized for surfaces, not for a point in the air beside one.
-const SHADOW_LIFT_CELLS: f32 = 2.0;
+// The gas's cells are half its air's (node.gas_volume), so this is two air
+// cells.
+const SHADOW_LIFT_CELLS: f32 = 4.0;
 // Tileable gradient noise, one octave, 0 to 1.
 @group(0) @binding(87) var detail_noise_tex: texture_3d<f32>;
 @group(0) @binding(88) var detail_sampler: sampler;
@@ -48,7 +50,7 @@ struct GasUniforms {
 
 // Safety cap so a broken box cannot hang the GPU; the step stretches past it
 // to still cover the whole span.
-const GAS_MAX_STEPS: u32 = 512u;
+const GAS_MAX_STEPS: u32 = 1024u;
 // The march stops once less than this share of the light gets through.
 const GAS_STOP_TRANSMITTANCE: f32 = 0.004;
 // Corners at or nearer than this clip w are at the camera plane, where the
@@ -79,8 +81,8 @@ const AMBIENT_SKY_DIMMING: f32 = 0.5;
 const AMBIENT_GROUND_DIMMING: f32 = 0.25;
 // The flame's colour temperature on the smoke, as a share of the hottest.
 const GLOW_KELVIN_SHARE: f32 = 0.85;
-// The flame field's mip the glow reads: eight cells across.
-const GLOW_MIP: f32 = 3.0;
+// The flame field's mip the glow reads: sixteen cells across.
+const GLOW_MIP: f32 = 4.0;
 
 fn gas_unproject(ndc: vec2<f32>, raw_depth: f32) -> vec3<f32> {
     let w = gas.inv_view_proj * vec4<f32>(ndc, raw_depth, 1.0);
@@ -131,6 +133,49 @@ fn vs_gas(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
 // per pixel, with no state and no texture read.
 fn interleaved_gradient_noise(p: vec2<f32>) -> f32 {
     return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+// A cubic B-spline read of `tex` at mip `level`, from eight trilinear taps
+// (Sigg and Hadwiger 2005), for the glow's coarse mip: trilinear there shows
+// its sixteen-cell blocks, since its slope jumps at every texel wall.
+fn sample_smooth(tex: texture_3d<f32>, uvw: vec3<f32>, level: f32) -> vec4<f32> {
+    let size = vec3<f32>(textureDimensions(tex, i32(level)));
+    let coord = uvw * size - 0.5;
+    let index = floor(coord);
+    let f = coord - index;
+    let f2 = f * f;
+    let f3 = f2 * f;
+    let rest = 1.0 - f;
+    let w0 = rest * rest * rest / 6.0;
+    let w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+    let w3 = f3 / 6.0;
+    let g0 = w0 + w1;
+    let g1 = 1.0 - g0;
+    // Each pair of B-spline weights becomes one linear tap between the
+    // pair's texel centres.
+    let lo = (index - 0.5 + w1 / g0) / size;
+    let hi = (index + 1.5 + w3 / g1) / size;
+    let a = mix(
+        textureSampleLevel(tex, gas_sampler, vec3<f32>(lo.x, lo.y, lo.z), level),
+        textureSampleLevel(tex, gas_sampler, vec3<f32>(hi.x, lo.y, lo.z), level),
+        g1.x,
+    );
+    let b = mix(
+        textureSampleLevel(tex, gas_sampler, vec3<f32>(lo.x, hi.y, lo.z), level),
+        textureSampleLevel(tex, gas_sampler, vec3<f32>(hi.x, hi.y, lo.z), level),
+        g1.x,
+    );
+    let c = mix(
+        textureSampleLevel(tex, gas_sampler, vec3<f32>(lo.x, lo.y, hi.z), level),
+        textureSampleLevel(tex, gas_sampler, vec3<f32>(hi.x, lo.y, hi.z), level),
+        g1.x,
+    );
+    let d = mix(
+        textureSampleLevel(tex, gas_sampler, vec3<f32>(lo.x, hi.y, hi.z), level),
+        textureSampleLevel(tex, gas_sampler, vec3<f32>(hi.x, hi.y, hi.z), level),
+        g1.x,
+    );
+    return mix(mix(a, b, g1.y), mix(c, d, g1.y), g1.z);
 }
 
 fn henyey_greenstein(cos_theta: f32, g: f32) -> f32 {
@@ -322,11 +367,13 @@ fn fs_gas(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
             continue;
         }
 
+        var flame_gain = 1.0;
         if detail > 0.0 {
             let flow = textureSampleLevel(gas_velocity, gas_sampler, uvw, 0.0).xyz;
             let swing = detail * DETAIL_DENSITY_SWING * (2.0 * detail_at(p, flow) - 1.0);
             density *= clamp(1.0 + swing, 0.0, 2.0);
-            flame *= clamp(1.0 + DETAIL_FLAME_SHARE * swing, 0.0, 2.0);
+            flame_gain = clamp(1.0 + DETAIL_FLAME_SHARE * swing, 0.0, 2.0);
+            flame *= flame_gain;
         }
 
         let sigma_t = density * density_per_metre;
@@ -356,14 +403,20 @@ fn fs_gas(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
                 + ground * exp(-AMBIENT_GROUND_DIMMING * optical.y)
             );
             if glow > 0.0 {
-                incoming += glow_color * textureSampleLevel(gas_state, gas_sampler, uvw, GLOW_MIP).w;
+                incoming += glow_color * sample_smooth(gas_state, uvw, GLOW_MIP).w;
             }
             added += scatter_color * incoming * (1.0 - step_transmittance);
         }
 
+        // Flames are thin and bright: their light is the mean of this sample
+        // and one half a step on, since at one sample a step their fronts
+        // alias into a crosshatch of the per-pixel jitter.
         if flame > 1e-4 {
+            let on = textureSampleLevel(gas_state, gas_sampler, uvw + dir * (0.5 * ds) / box_size, 0.0);
             let kelvin = mix(gas.flame_kelvin.x, gas.flame_kelvin.y, saturate(cell_state.y));
-            added += blackbody(kelvin) * (flame_brightness * flame * ds);
+            let kelvin_on = mix(gas.flame_kelvin.x, gas.flame_kelvin.y, saturate(on.y));
+            let light = blackbody(kelvin) * flame + blackbody(kelvin_on) * (on.w * flame_gain);
+            added += light * (0.5 * flame_brightness * ds);
         }
 
         let contribution = transmittance * added;

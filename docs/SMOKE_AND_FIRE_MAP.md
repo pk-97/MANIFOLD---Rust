@@ -25,12 +25,21 @@ Medium 1, High ½, Extra High ¼). The item's Transform is the box; the
 source sits at its floor centre. The floor is a wall, the sides and top are
 open.
 
-State (density, temperature, fuel, flame) is one vec4 per cell. Velocity is
-staggered (a MAC grid): node (x, y, z), one more than the cells along each
-axis, holds u, v and w on the cell's low x, y and z faces. Divergence,
-pressure and projection share one compact stencil, so no cell-to-cell
-zigzag hides from the solve. Three velocity and three state buffers rotate
-roles each frame.
+The air is the costly part and stays on these cells. Velocity is staggered
+(a MAC grid): node (x, y, z), one more than the cells along each axis, holds
+u, v and w on the cell's low x, y and z faces. Divergence, pressure and
+projection share one compact stencil, so no cell-to-cell zigzag hides from
+the solve.
+
+The state (density, temperature, fuel, flame) lives on a fine grid, `FINE`
+(2) cells per air cell along each axis, two packed halves per fine cell. The
+air carries it and burning happens at its scale, so the flow stretches smoke
+into sheets and flames into fronts thinner than an air cell; drawn from the
+air's cells alone they showed as blocks and soft blobs. Each tick the fine
+state is averaged back onto the air's cells (`cs_restrict`) for buoyancy,
+the flames' expansion and the fire light. Three velocity and three fine
+state buffers rotate roles each frame; the fine result is the published
+state, and the air's velocity is published on the fine grid beside it.
 
 ## Step (once a tick of the World's clock, as water and sand step)
 
@@ -56,17 +65,19 @@ World Speed and Reset reach it as they reach water.
    velocity, so smoke rolls over water and a splash or a sand slide shoves
    it. The kernels are built twice, with and without solids: smoke with no
    solid, water or sand runs none of their code.
-1. Advect velocity and state: MacCormack with the min/max clamp. Air that
+1. Advect the air, then the fine state on its own grid by the same air
+   (`cs_fine_*`): MacCormack with the min/max clamp. Air that
    comes in through an open face arrives still, so no wind at a face can
    feed itself (with the edge's own velocity, a crosswind grew over seconds
    and laid the fire flat). A scene wind is the air itself moving: every
    point is carried by the wind on top of the gas's own velocity, so a
    plume keeps its rise and bends over (a drag toward the wind held the
    rise back and laid the smoke flat).
-2. Sources (per cell): emit density or fuel in a noisy squashed ellipsoid;
-   burn where hot (fuel to heat and soot, flame); decay; a sponge band over
-   15% of the box next to the sides and top fades the gas at up to 30 per
-   second, so it thins out before a face and the box never shows.
+2. Sources (per fine cell, `cs_fine_sources`): emit density or fuel in a
+   noisy squashed ellipsoid; burn where hot (fuel to heat and soot, flame);
+   decay; a sponge band over 15% of the box next to the sides and top fades
+   the gas at up to 30 per second, so it thins out before a face and the box
+   never shows. Then the fine state is averaged onto the air's cells.
 3. Forces (per face): buoyancy along −gravity from the two cells' mean
    temperature and density, the curl-noise push (Turbulence, at half the
    source's size), the scene's pushes (Radial, Vortex, Uniform) and a
@@ -88,8 +99,10 @@ seconds turns it streaky.
 
 ## Render (inside render_scene, after the water and its mist)
 
-The packed fields are unpacked into 3D textures (state with mips), and a
-light volume holds the optical depth toward the sun and straight up. One
+The packed fields (on the fine grid) are unpacked into 3D textures (state
+with mips), and a light volume at the air's scale or coarser holds the
+optical depth toward the sun and straight up, marched through the state's
+mip one light cell across. One
 draw per gas over the box's screen rectangle marches from the box entry to
 the nearer of the box exit and the opaque depth, jittered per pixel.
 
@@ -98,7 +111,8 @@ the nearer of the box exit and the opaque depth, jittered per pixel.
   bright as a white Lambert surface. High and up read the sun's shadow map.
 - Sky: the irradiance map above and below, dimmed by the optical depth up.
 - Flames: `flame · blackbody(T)` in the scene's light units; glow on the
-  smoke from the flame field's mip 3.
+  smoke from the flame field's mip 4, read as a cubic B-spline so its
+  sixteen-cell texels never show.
 - Detail (off by default): advected noise below the cells, two phases.
   At High the simulation has its own detail; Detail costs about 1.5 ms.
 
@@ -109,10 +123,11 @@ centre, the flame colour, its power following the flames.
 
 | | Low | Medium | High | Extra High |
 |---|---|---|---|---|
-| cell | 2× World | 1× | ½× | ¼× |
+| air cell | 2× World | 1× | ½× | ¼× |
+| fine state cell | 1× World | ½× | ¼× | ⅛× |
 | pressure sweep pairs | 20 | 30 | 50 | 80 |
-| march samples per cell | 0.75 | 1 | 1.5 | 2 |
-| light volume | ½ res, 16 steps | ½ res, 24 | full, 48 | full, 64 |
+| march samples per fine cell | 0.5 | 0.75 | 1 | 1.5 |
+| light volume, per fine cells; steps one a light cell, at most | ¼ res, 32 | ¼ res, 64 | ½, 128 | ½, 256 |
 | detail octaves (if on) | 1 | 2 | 3 | 4 |
 | scatter octaves | 2 | 3 | 4 | 4 |
 | scene shadows in smoke | off | off | on | on |

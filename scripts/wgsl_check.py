@@ -199,6 +199,11 @@ STACKS = {
     "scene_daylight": (False, [SCENE / "daylight.wgsl", SCENE / "bake_daylight.wgsl"]),
     "scene_wet_pass": (False, [WET_CONSTS, WET_LAYOUT, SCENE / "wet_pass.wgsl"]),
     "scene_foam_pass": (False, [SCENE / "water_field_common.wgsl", SCENE / "foam_pass.wgsl"]),
+    "scene_gas": (False, [SCENE / "scene_shading.wgsl",
+                          "const BLACKBODY_MIN_KELVIN: f32 = 1000.0;\nconst BLACKBODY_MAX_KELVIN: f32 = 4000.0;\n"
+                          "const BLACKBODY_ENTRIES: u32 = 64u;\nconst NOISE_LATTICE_CELLS: f32 = 32.0;\n",
+                          SCENE / "gas_volume.wgsl"]),
+    "scene_gas_compute": (False, [SCENE / "gas_light.wgsl"]),
 }
 
 
