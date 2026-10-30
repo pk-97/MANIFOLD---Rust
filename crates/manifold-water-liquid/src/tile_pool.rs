@@ -119,6 +119,40 @@ pub fn shrunk_pool(pool: u32, held: u32, floor: u32) -> Option<u32> {
     Some(fitted_pool(held).max(floor)).filter(|&shrunk| shrunk < pool)
 }
 
+/// Bytes a pool that follows its liquid may grow to: the D4 live budget
+/// (docs/GPU_FLIP_END_GAME_DESIGN.md), 1.5 GiB.
+pub const POOL_BUDGET_BYTES: u64 = 3 << 29;
+
+/// Tiles a pool of `budget` bytes holds when a tile costs `tile_bytes`, at
+/// most the `wanted` tiles.
+pub fn pool_capacity(wanted: u64, tile_bytes: u64, budget: u64) -> u32 {
+    wanted.min(budget / tile_bytes) as u32
+}
+
+/// The pool a tick runs on and whether it is fitted yet, from the domain's
+/// pool `start`, the most it may grow to `ceiling`, the last tick's pool and
+/// fit (`None` before the first tick) and its table's late read (held tiles,
+/// short). The first tick runs on the domain's pool, so a fill in the box
+/// fits; the first read that holds liquid fits the pool to it, and from then
+/// on it only grows, so a restart's fill finds the room the first one had.
+/// Never past the ceiling.
+pub fn next_pool(
+    start: u32,
+    ceiling: u32,
+    last: Option<(u32, bool)>,
+    read: Option<(u32, bool)>,
+) -> (u32, bool) {
+    let (pool, fitted) = match (last, read) {
+        (None, _) => (start, false),
+        (Some((pool, true)), Some((held, short))) => {
+            (grown_pool(pool, held, short).unwrap_or(pool), true)
+        }
+        (Some((_, false)), Some((held, _))) if held > 0 => (fitted_pool(held), true),
+        (Some(last), _) => last,
+    };
+    (pool.min(ceiling), fitted)
+}
+
 /// Bytes the pooled faces and the world-tile table must hold for a pool of
 /// `pool_tiles` slots.
 pub fn pooled_bytes(pool_tiles: u32) -> (u64, u64) {
@@ -149,6 +183,60 @@ mod tests {
             Some(MAX_POOL_TILES)
         );
         assert_eq!(grown_pool(MAX_POOL_TILES, MAX_POOL_TILES, true), None);
+    }
+
+    /// The first tick runs on the ceiling; the first read holding water fits
+    /// the pool to twice it, a read with none keeps the pool; after the fit the
+    /// pool only grows, past two thirds or short, and never past the ceiling.
+    #[test]
+    fn the_pool_fits_the_water_then_only_grows() {
+        assert_eq!(next_pool(2744, 2744, None, None), (2744, false));
+        assert_eq!(
+            next_pool(2744, 2744, Some((2744, false)), Some((0, false))),
+            (2744, false)
+        );
+        assert_eq!(
+            next_pool(2744, 2744, Some((2744, false)), Some((640, false))),
+            (1280, true)
+        );
+        // A tank whose fill holds most of the ceiling stays at the ceiling.
+        assert_eq!(
+            next_pool(2744, 2744, Some((2744, false)), Some((2000, false))),
+            (2744, true)
+        );
+        assert_eq!(
+            next_pool(2744, 2744, Some((1280, true)), Some((853, false))),
+            (1280, true)
+        );
+        assert_eq!(
+            next_pool(2744, 2744, Some((1280, true)), Some((854, false))),
+            (1792, true)
+        );
+        // Water drains: the fitted pool keeps its room for the next fill.
+        assert_eq!(
+            next_pool(2744, 2744, Some((1792, true)), Some((10, false))),
+            (1792, true)
+        );
+        assert_eq!(
+            next_pool(2744, 2744, Some((1792, true)), None),
+            (1792, true)
+        );
+        assert_eq!(
+            next_pool(2744, 2744, Some((1792, true)), Some((10, true))),
+            (2744, true)
+        );
+        // A box made smaller takes the pool down with it.
+        assert_eq!(
+            next_pool(1024, 1024, Some((1792, true)), Some((300, false))),
+            (1024, true)
+        );
+        // With nothing bounding the water the first tick runs on the domain's
+        // pool and the pool grows past it as the water spreads.
+        assert_eq!(next_pool(2744, 5000, None, None), (2744, false));
+        assert_eq!(
+            next_pool(2744, 5000, Some((2744, true)), Some((2600, true))),
+            (5000, true)
+        );
     }
 
     #[test]

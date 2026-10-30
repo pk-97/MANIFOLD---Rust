@@ -267,16 +267,13 @@ impl Primitive for MatterStaticSolid {
                 binding: 0,
                 data: bytemuck::bytes_of(&uniforms),
             }];
-            bindings.extend(
-                buffers
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, buffer)| GpuBinding::Buffer {
-                        binding: i as u32 + 1,
-                        buffer,
-                        offset: 0,
-                    }),
-            );
+            bindings.extend(buffers.into_iter().enumerate().map(|(i, buffer)| {
+                GpuBinding::Buffer {
+                    binding: i as u32 + 1,
+                    buffer,
+                    offset: 0,
+                }
+            }));
             gpu.native_enc.dispatch_compute_indirect(
                 pipeline,
                 &bindings,

@@ -1,5 +1,6 @@
 use super::*;
 use manifold_water_liquid::bounds::ALL_FACES;
+use manifold_water_liquid::tile_pool::{POOL_BUDGET_BYTES, pool_capacity};
 use manifold_water_liquid::tile_storage::TILE_CELLS;
 
 /// A live tick encodes the substeps the retired speed asks for at the CFL,
@@ -22,60 +23,6 @@ fn live_steps_follow_the_retired_speed() {
     // A coarser cell or a shorter interval asks for fewer.
     assert_eq!(live_steps(Some(40.0), 1.0 / 120.0, 0.0625, 1), 2);
     assert_eq!(live_steps(Some(40.0), 1.0 / 60.0, 0.125, 1), 2);
-}
-
-/// The first tick runs on the ceiling; the first read holding water fits
-/// the pool to twice it, a read with none keeps the pool; after the fit the
-/// pool only grows, past two thirds or short, and never past the ceiling.
-#[test]
-fn the_pool_fits_the_water_then_only_grows() {
-    assert_eq!(next_pool(2744, 2744, None, None), (2744, false));
-    assert_eq!(
-        next_pool(2744, 2744, Some((2744, false)), Some((0, false))),
-        (2744, false)
-    );
-    assert_eq!(
-        next_pool(2744, 2744, Some((2744, false)), Some((640, false))),
-        (1280, true)
-    );
-    // A tank whose fill holds most of the ceiling stays at the ceiling.
-    assert_eq!(
-        next_pool(2744, 2744, Some((2744, false)), Some((2000, false))),
-        (2744, true)
-    );
-    assert_eq!(
-        next_pool(2744, 2744, Some((1280, true)), Some((853, false))),
-        (1280, true)
-    );
-    assert_eq!(
-        next_pool(2744, 2744, Some((1280, true)), Some((854, false))),
-        (1792, true)
-    );
-    // Water drains: the fitted pool keeps its room for the next fill.
-    assert_eq!(
-        next_pool(2744, 2744, Some((1792, true)), Some((10, false))),
-        (1792, true)
-    );
-    assert_eq!(
-        next_pool(2744, 2744, Some((1792, true)), None),
-        (1792, true)
-    );
-    assert_eq!(
-        next_pool(2744, 2744, Some((1792, true)), Some((10, true))),
-        (2744, true)
-    );
-    // A box made smaller takes the pool down with it.
-    assert_eq!(
-        next_pool(1024, 1024, Some((1792, true)), Some((300, false))),
-        (1024, true)
-    );
-    // With nothing bounding the water the first tick runs on the domain's
-    // pool and the pool grows past it as the water spreads.
-    assert_eq!(next_pool(2744, 5000, None, None), (2744, false));
-    assert_eq!(
-        next_pool(2744, 5000, Some((2744, true)), Some((2600, true))),
-        (5000, true)
-    );
 }
 
 /// A Wall or an Open face keeps the pool to the domain's; with neither the

@@ -1,6 +1,7 @@
 //! `node.matter_stats` — once per tick, reduce a matter domain's points and
-//! grid to 17 words: non-finite and clamp counts, live count, speed, J
-//! range, volume, fixed-point headroom, mass, momentum and energy
+//! grid to 18 words: non-finite and clamp counts, live count, speed, J
+//! range, volume, fixed-point headroom, mass, momentum, energy, points the
+//! pool ran short of and its held tiles
 //!A fixed reduction tree keeps the
 //! sums deterministic. Exempt from the codegen mandate as a barriered
 //! reduction (ADDING_PRIMITIVES.md exclusion 1): the generated per-element
@@ -27,8 +28,8 @@ static SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
 });
 /// Elements one workgroup folds: 256 threads × 8.
 const BLOCK: u32 = 256 * 8;
-/// Bytes of one partial record.
-const PARTIAL_BYTES: u64 = 64;
+/// Bytes of one partial record: 17 words.
+const PARTIAL_BYTES: u64 = 68;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -82,7 +83,7 @@ impl StatsPipelines {
 manifold_node_engine::primitive! {
     name: MatterStats,
     type_id: "node.matter_stats",
-    purpose: "Once per tick (when tick_end is 1), reduce a matter domain's points and grid to 17 statistics words: non-finite count, clamped nodes, live points, max speed, J range, volume, largest accumulator magnitude, mass, momentum, and kinetic, potential and elastic energy, plus the tick index and the points removed for want of a pool tile. Sums run in a fixed order, so they are deterministic.",
+    purpose: "Once per tick (when tick_end is 1), reduce a matter domain's points and grid to 18 statistics words: non-finite count, clamped nodes, live points, max speed, J range, volume, largest accumulator magnitude, mass, momentum, and kinetic, potential and elastic energy, plus the tick index and the points removed for want of a pool tile. Sums run in a fixed order, so they are deterministic.",
     inputs: {
         points: Array(MatterPoint) required,
         grid: Array(MatterGridNode) required,
@@ -194,7 +195,9 @@ impl Primitive for MatterStats {
             return;
         };
         if stats.size < u64::from(STATS_WORDS) * 4 {
-            ctx.error("Matter stats: the stats array holds fewer than 17 words");
+            ctx.error(format!(
+                "Matter stats: the stats array holds fewer than {STATS_WORDS} words"
+            ));
             return;
         }
         if grid.size < grid_bytes(pool_tiles)
@@ -313,7 +316,7 @@ mod tests {
     fn matter_stats_params_match_the_shader_struct() {
         assert_eq!(std::mem::size_of::<StatsParams>(), 64);
         assert!(SHADER.contains("struct StatsParams"));
-        assert_eq!(STATS_WORDS, 17);
+        assert_eq!(STATS_WORDS, 18);
     }
 }
 

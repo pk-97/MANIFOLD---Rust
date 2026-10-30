@@ -320,8 +320,10 @@ impl Primitive for LiquidFill {
         let regions = ctx.inputs.array("regions");
         // Without all five collider arrays no body is read.
         let body_count = match colliders {
-            (Some(bodies), Some(_), Some(_), Some(_), Some(_)) => body_count
-                .min((bodies.size / std::mem::size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32),
+            (Some(bodies), Some(_), Some(_), Some(_), Some(_)) => body_count.min(
+                (bodies.size / std::mem::size_of::<LiquidBody>() as u64).min(i32::MAX as u64)
+                    as i32,
+            ),
             _ => 0,
         };
         // A shaped fill's region row, read from the regions beside the

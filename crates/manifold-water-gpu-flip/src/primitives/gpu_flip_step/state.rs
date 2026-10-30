@@ -3,6 +3,7 @@
 
 use super::*;
 use manifold_gpu::BufferUse;
+use manifold_water_liquid::tile_pool::next_pool;
 use manifold_water_liquid::tile_storage::pool_len;
 use manifold_water_liquid::world_tiles::LIQUID_POINTS;
 
@@ -38,7 +39,7 @@ impl StepState {
 
     /// The pool this tick runs on, starting at the domain's pool `start`
     /// and growing up to `ceiling`, from the last tick's and its table's late
-    /// read (`tiles.rs` next_pool). A growth the World's budget refuses keeps
+    /// read (`tile_pool::next_pool`). A growth the World's budget refuses keeps
     /// the last pool, which refuses births and removes water that leaves it;
     /// the refusal comes back for the card.
     pub(super) fn next_pool(

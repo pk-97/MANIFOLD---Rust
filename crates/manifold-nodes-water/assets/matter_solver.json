@@ -982,31 +982,31 @@
       "toPort": "step_dt"
     },
     {
-      "fromNode": 1,
+      "fromNode": 3,
       "fromPort": "pool_tiles",
       "toNode": 5,
       "toPort": "pool_tiles"
     },
     {
-      "fromNode": 1,
+      "fromNode": 3,
       "fromPort": "pool_tiles",
       "toNode": 6,
       "toPort": "pool_tiles"
     },
     {
-      "fromNode": 1,
+      "fromNode": 3,
       "fromPort": "pool_tiles",
       "toNode": 15,
       "toPort": "pool_tiles"
     },
     {
-      "fromNode": 1,
+      "fromNode": 3,
       "fromPort": "pool_tiles",
       "toNode": 7,
       "toPort": "pool_tiles"
     },
     {
-      "fromNode": 1,
+      "fromNode": 3,
       "fromPort": "pool_tiles",
       "toNode": 8,
       "toPort": "pool_tiles"
@@ -1426,7 +1426,7 @@
       "toPort": "cell_size"
     },
     {
-      "fromNode": 1,
+      "fromNode": 3,
       "fromPort": "pool_tiles",
       "toNode": 18,
       "toPort": "pool_tiles"
@@ -1472,6 +1472,12 @@
       "fromPort": "hardening",
       "toNode": 7,
       "toPort": "hardening"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "pool_ceiling",
+      "toNode": 3,
+      "toPort": "pool_ceiling"
     }
   ]
 }

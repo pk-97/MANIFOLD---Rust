@@ -10,6 +10,8 @@ use manifold_node_engine::channel_names::well_known;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
 use manifold_node_engine::scene::world_tiles::{TILE, pool_len};
 use manifold_physics::clock::TICK;
+use manifold_water_liquid::tile_pool::{MAX_POOL_TILES, POOL_BUDGET_BYTES, pool_capacity};
+use manifold_water_liquid::tile_storage::TILE_CELLS;
 use manifold_water_liquid::world_tiles::{Reach, run_tiles};
 
 pub mod coupling;
@@ -153,13 +155,13 @@ pub const ACCUM_WORDS_PER_NODE: u32 = 4;
 pub const REACTION_WORDS: u32 = 16;
 
 /// Words of the per-tick stats array `node.matter_stats` writes (D14).
-pub const STATS_WORDS: u32 = 17;
+pub const STATS_WORDS: u32 = 18;
 
 /// One tick's statistics, decoded from the stats array (floats stored as
 /// bits): non-finite count, clamped nodes, live points, max speed, J range,
 /// volume Σ V0·J, max accumulator magnitude, mass, momentum, kinetic,
-/// potential and elastic energy, tick index, and the points removed because
-/// their tile got no slot in the pool.
+/// potential and elastic energy, tick index, the points removed because
+/// their tile got no slot in the pool, and the pool's held tiles.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MatterTickStats {
     pub nonfinite: u32,
@@ -179,6 +181,9 @@ pub struct MatterTickStats {
     /// Points `node.grid_to_matter` removed because their tile had no slot
     /// (the pool ran short), since the epoch began.
     pub tile_removed: u32,
+    /// Tiles the pool held at the tick's end: what `node.matter_state`
+    /// grows the pool by.
+    pub held_tiles: u32,
 }
 
 impl MatterTickStats {
@@ -200,6 +205,7 @@ impl MatterTickStats {
             elastic: f(14),
             tick: w[15],
             tile_removed: w[16],
+            held_tiles: w[17],
         }
     }
 
@@ -672,13 +678,33 @@ pub fn field_min(layout: &FluidDomainLayout) -> [f32; 3] {
 pub fn matter_pool_tiles(nodes: [u32; 3]) -> Result<u32, String> {
     let ring = u64::from(MATTER_REACH.ring_max);
     let wanted: u64 = nodes.iter().map(|&n| run_tiles(n) + 2 * ring).product();
-    let most = u64::from(manifold_water_liquid::tile_pool::MAX_POOL_TILES);
+    let most = u64::from(MAX_POOL_TILES);
     if wanted > most {
         return Err(format!(
             "Matter: the box needs {wanted} tiles of grid; a World holds at most {most}. Raise Cell Size or shrink the box."
         ));
     }
     Ok(wanted.max(1) as u32)
+}
+
+/// The fewest tiles Matter's pool holds with Bounds off: a pile spreads past
+/// its fill's tiles, and each growth rebuilds the static meshes' cache on
+/// every held tile, so the pool starts with room for most spreads (about
+/// 33 MB of grid, accumulator and cache).
+pub const MATTER_POOL_FLOOR_TILES: u32 = 1024;
+
+/// The most tiles Matter's pool may grow to with Bounds off, where nothing
+/// bounds where the material goes: what the pool budget buys at the grid,
+/// accumulator and static-solid cache each node holds.
+pub fn matter_pool_ceiling() -> u32 {
+    let node_bytes = std::mem::size_of::<MatterGridNode>() as u64
+        + u64::from(ACCUM_WORDS_PER_NODE) * 4
+        + std::mem::size_of::<manifold_node_engine::mesh::Vec4Vertex>() as u64;
+    pool_capacity(
+        u64::from(MAX_POOL_TILES),
+        u64::from(TILE_CELLS) * node_bytes,
+        POOL_BUDGET_BYTES,
+    )
 }
 
 /// The `pool_tiles` an atom over Matter's pooled grid reads, at least one,

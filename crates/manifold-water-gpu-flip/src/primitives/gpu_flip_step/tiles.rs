@@ -4,7 +4,7 @@
 
 use super::*;
 use manifold_node_engine::scene::world_tiles::tile_of_cell;
-use manifold_water_liquid::tile_pool::{fitted_pool, grown_pool};
+use manifold_water_liquid::tile_pool::{POOL_BUDGET_BYTES, pool_capacity};
 use manifold_water_liquid::tile_storage::{TILE, TILE_CELLS};
 use manifold_water_liquid::world_tiles::{
     Allocation, PointCount, Reach, TileClip, allocated_args_offset, fresh_args_offset,
@@ -35,10 +35,6 @@ pub(super) fn step_reach() -> Reach {
     }
 }
 
-/// Bytes the pool budget covers for the fine lattice: the D4 live budget
-/// (docs/GPU_FLIP_END_GAME_DESIGN.md), 1.5 GiB.
-pub(crate) const POOL_BUDGET_BYTES: u64 = 3 << 29;
-
 /// Bytes per fine cell of every pooled field: the step's own (the lattice's
 /// cell arrays and face grids), the solver's vectors and rows, the
 /// sheeting's arrays, the sheet distance's two fields and Narrow Band's
@@ -49,12 +45,6 @@ pub(crate) fn pooled_bytes_per_cell() -> u64 {
         + crate::primitives::gpu_flip_sheeting::POOLED_BYTES_PER_CELL
         + crate::primitives::gpu_flip_sheet_distance::POOLED_BYTES_PER_CELL
         + super::narrow_band::pooled_bytes_per_cell()
-}
-
-/// Tiles a pool of `budget` bytes holds when a tile costs `tile_bytes`, at
-/// most the `wanted` tiles.
-pub(crate) fn pool_capacity(wanted: u64, tile_bytes: u64, budget: u64) -> u32 {
-    wanted.min(budget / tile_bytes) as u32
 }
 
 /// Cells past the Bounds box water reaches along an axis, both sides
@@ -105,31 +95,6 @@ pub(crate) fn growth_ceiling(domain_pool: u32, walls: u32, open: u32) -> u32 {
         POOL_BUDGET_BYTES,
     );
     domain_pool.max(budget)
-}
-
-/// The pool a tick runs on and whether it is fitted yet, from the domain's
-/// pool `start`, the [`growth_ceiling`], the last tick's pool and fit
-/// (`None` before the first tick) and its table's late read (held tiles,
-/// short). The first tick runs on the domain's pool, so a fill in the box
-/// fits; the first read that holds water fits the pool to it, and from then
-/// on it only grows, so a restart's fill finds the room the first one had.
-/// Never past the ceiling. The passes launch over the whole pool, so a pool
-/// that follows the water costs what the water does.
-pub(super) fn next_pool(
-    start: u32,
-    ceiling: u32,
-    last: Option<(u32, bool)>,
-    read: Option<(u32, bool)>,
-) -> (u32, bool) {
-    let (pool, fitted) = match (last, read) {
-        (None, _) => (start, false),
-        (Some((pool, true)), Some((held, short))) => {
-            (grown_pool(pool, held, short).unwrap_or(pool), true)
-        }
-        (Some((_, false)), Some((held, _))) if held > 0 => (fitted_pool(held), true),
-        (Some(last), _) => last,
-    };
-    (pool.min(ceiling), fitted)
 }
 
 /// Bytes of the world tiles of a pool of `pool_tiles`: the table, its

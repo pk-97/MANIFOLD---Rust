@@ -25,8 +25,8 @@ use crate::matter::{
     COHESION_SOFTENING, FRICTION_ANGLE_RANGE, MATTER_KINDS, MAX_SUBSTEPS, MatterDials, MatterKind,
     MatterMaterial, RADIUS_SCALE, REACTION_WORDS, SAND_DENSITY, SAND_FRICTION_ANGLE,
     SNOW_HARDENING, damping_fitting_cap, field_min, free_fall_speed, matter_nodes,
-    matter_pool_tiles, momentum_unit, stiffness_fitting_cap, substeps_for_interval,
-    substeps_per_tick,
+    matter_pool_ceiling, matter_pool_tiles, momentum_unit, stiffness_fitting_cap,
+    substeps_for_interval, substeps_per_tick,
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::fluid_domain::{
@@ -104,7 +104,7 @@ pub(crate) struct MatterGeometry {
 
 impl MatterGeometry {
     /// The scalar outputs fixed by this frame's geometry, by name.
-    pub(crate) fn outputs(&self) -> [(&'static str, f32); 20] {
+    pub(crate) fn outputs(&self) -> [(&'static str, f32); 21] {
         let MatterGeometry {
             layout,
             pool_cells,
@@ -131,6 +131,16 @@ impl MatterGeometry {
             ("field_min_y", field[1]),
             ("field_min_z", field[2]),
             ("pool_tiles", pool_tiles as f32),
+            // Bounds holds the material in the box the pool covers; without
+            // it the pool grows as far as the budget buys.
+            (
+                "pool_ceiling",
+                if setup.bounds {
+                    pool_tiles
+                } else {
+                    matter_pool_ceiling().max(pool_tiles)
+                } as f32,
+            ),
             ("pool_cells", pool_cells as f32),
             ("column_x0", column[0][0] as f32),
             ("column_x1", column[0][1] as f32),
@@ -339,6 +349,7 @@ manifold_node_engine::primitive! {
         density: ScalarF32,
         limited_by_substeps: ScalarF32,
         pool_tiles: ScalarF32,
+        pool_ceiling: ScalarF32,
         open_faces: ScalarF32,
         kill_height: ScalarF32,
         bounds_lo_x: ScalarF32, bounds_lo_y: ScalarF32, bounds_lo_z: ScalarF32,
@@ -599,7 +610,7 @@ const YIELD_STRESS_RANGE: (f32, f32) = (0.0, 5.0e4);
 const VISCOSITY_RANGE: (f32, f32) = (0.0, 1.0e4);
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 79] = [
+const OUTPUTS: [&str; 80] = [
     "fill_min_x",
     "fill_min_y",
     "fill_min_z",
@@ -679,6 +690,7 @@ const OUTPUTS: [&str; 79] = [
     "moved_hi_x",
     "moved_hi_y",
     "moved_hi_z",
+    "pool_ceiling",
 ];
 const TICKS: usize = 22;
 const EPOCH: usize = 24;
@@ -1174,7 +1186,9 @@ fn static_change(
     let mut unbounded = false;
     if last.len() == now.len() {
         for ((_, old), (_, new)) in last.iter().zip(&now) {
-            if old.position_inv_mass[..3] == new.position_inv_mass[..3] && old.rotation == new.rotation {
+            if old.position_inv_mass[..3] == new.position_inv_mass[..3]
+                && old.rotation == new.rotation
+            {
                 continue;
             }
             match (bodies.world_box(old), bodies.world_box(new)) {

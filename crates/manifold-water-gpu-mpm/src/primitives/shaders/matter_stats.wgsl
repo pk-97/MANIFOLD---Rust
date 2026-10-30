@@ -5,7 +5,7 @@
 //                 workgroup-memory tree;
 //   grid_main   — the same over grid nodes;
 //   finish_main — one workgroup folds the partials in a fixed order and
-//                 writes the 17 stats words.
+//                 writes the 18 stats words.
 // Every sum runs in a fixed order, so stats are deterministic. Non-finite
 // values are found with an exponent-bits test: fast math may fold isfinite().
 // Composed after matter_material.wgsl: each point's elastic energy comes from
@@ -48,6 +48,8 @@ struct Partial {
     potential: f32,
     elastic: f32,
     tile_removed: u32,
+    // Held pool slots: node.matter_state grows the pool by them.
+    held: u32,
 }
 
 struct StatsParams {
@@ -115,6 +117,7 @@ fn empty() -> Partial {
     p.potential = 0.0;
     p.elastic = 0.0;
     p.tile_removed = 0u;
+    p.held = 0u;
     return p;
 }
 
@@ -136,6 +139,7 @@ fn combine(a: Partial, b: Partial) -> Partial {
     p.potential = a.potential + b.potential;
     p.elastic = a.elastic + b.elastic;
     p.tile_removed = a.tile_removed + b.tile_removed;
+    p.held = a.held + b.held;
     return p;
 }
 
@@ -189,6 +193,8 @@ fn node_partial(i: u32) -> Partial {
     if ts_slot_entry(i >> 9u) == WT_NONE {
         return p;
     }
+    // A held slot counts once, at its first node.
+    p.held = u32((i & 511u) == 0u);
     let node = grid[i];
     if !(finite3(node.velocity_mass.xyz) && finite(node.velocity_mass.w)) {
         p.nonfinite = 1u;
@@ -283,5 +289,6 @@ fn finish_main(@builtin(local_invocation_id) lid: vec3<u32>) {
         stats[14] = bitcast<u32>(s.elastic);
         stats[15] = params.tick_index;
         stats[16] = s.tile_removed;
+        stats[17] = s.held;
     }
 }

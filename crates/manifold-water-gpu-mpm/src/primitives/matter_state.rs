@@ -9,8 +9,8 @@ use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use crate::matter::{
-    MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS, grid_accum_bytes,
-    grid_bytes, substep_duration, water_lift,
+    MATTER_POOL_FLOOR_TILES, MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS,
+    STATS_WORDS, grid_accum_bytes, grid_bytes, substep_duration, water_lift,
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::liquid_domain::{SAND_WATER_DRAG, WATER_PUSH_INPUT};
@@ -22,6 +22,7 @@ use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::wet_map::DRY_SECONDS;
 use manifold_water_liquid::WATER_DENSITY;
+use manifold_water_liquid::tile_pool::next_pool;
 use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 
 /// `reaction_in` closes the reaction chain (node.matter_body_reaction, then
@@ -99,7 +100,10 @@ manifold_node_engine::primitive! {
         stats_in: Array(u32) required,
         reaction_in: Array(i32) required,
         count: ScalarF32 optional,
+        // The domain's pool, and the most the pool may grow to as the
+        // material spreads (the domain's pool while Bounds holds it).
         pool_tiles: ScalarF32 optional,
+        pool_ceiling: ScalarF32 optional,
         ticks: ScalarF32 optional,
     interval_duration: ScalarF32 optional,
     simulation_time: ScalarF32 optional, target_time: ScalarF32 optional,
@@ -121,6 +125,8 @@ manifold_node_engine::primitive! {
         reaction: Array(i32),
         grid_accum: Array(i32),
         grid: Array(MatterGridNode),
+        // The pool the region runs on this frame.
+        pool_tiles: ScalarF32,
         step_dt: ScalarF32,
         step_index: ScalarF32,
         substep_in_tick: ScalarF32,
@@ -132,7 +138,7 @@ manifold_node_engine::primitive! {
     },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; pool_tiles, ticks, substeps_per_tick and epoch from node.matter_domain. The region body (zero_array → matter_move_bodies → matter_to_grid → matter_grid_update → matter_body_reaction → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in, stats_in and reaction_in (node.matter_body_reaction's reaction_out). out and stats escape to node.matter_frame; reaction is the last substep's reaction words, which nothing needs to read. water_push (from node.water_on_sand, a state-capture wire) with density, material_rule and gravity (node.matter_domain's) let a water lift and drag the points once a frame. Only live points (id ≠ 0) move.",
+    composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; pool_tiles, pool_ceiling, ticks, substeps_per_tick and epoch from node.matter_domain. The pool grows from the domain's toward pool_ceiling ahead of the tiles the last read tick held (stats word 17); every region atom reads this node's pool_tiles output. The region body (zero_array → matter_move_bodies → matter_to_grid → matter_grid_update → matter_body_reaction → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in, stats_in and reaction_in (node.matter_body_reaction's reaction_out). out and stats escape to node.matter_frame; reaction is the last substep's reaction words, which nothing needs to read. water_push (from node.water_on_sand, a state-capture wire) with density, material_rule and gravity (node.matter_domain's) let a water lift and drag the points once a frame. Only live points (id ≠ 0) move.",
     examples: ["SandColumn", "SandBoxDrop"],
     picker: { label: "Matter State", category: Atom },
     summary: "Keeps the liquid's particles between frames and runs its simulation steps.",
@@ -160,6 +166,11 @@ manifold_node_engine::primitive! {
         submitted_cap: bool = false,
         completed_cap: bool = false,
         last_stats: Option<MatterTickStats> = None,
+        // The pool the last frame ran on and whether it is fitted to the
+        // material yet (`tile_pool::next_pool`).
+        pool: Option<(u32, bool)> = None,
+        // A growth the World's memory refused, warned once until one fits.
+        growth_refused: bool = false,
         remove_nonfinite: Option<GpuComputePipeline> = None,
         water_drag: Option<GpuComputePipeline> = None,
     },
@@ -295,7 +306,8 @@ impl Primitive for MatterState {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let whole = |v: f32| v.round().max(0.0) as u32;
         let count = whole(ctx.scalar_or_param("count", 0.0));
-        let pool_tiles = whole(ctx.scalar_or_param("pool_tiles", 1.0)).max(1);
+        let start = whole(ctx.scalar_or_param("pool_tiles", 1.0)).max(1);
+        let ceiling = whole(ctx.scalar_or_param("pool_ceiling", start as f32)).max(start);
         let live_mode = !ctx.sim_step.offline();
         self.submitted_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));
         let target = f64::from(ctx.scalar_or_param("target_time", self.submitted_time as f32));
@@ -322,9 +334,39 @@ impl Primitive for MatterState {
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
 
+        // The pool follows the material: it grows ahead of the tiles the last
+        // read tick held, up to the ceiling. A growth the World's memory
+        // cannot take keeps the last pool, whose short tiles remove what
+        // leaves them.
+        let device = gpu.device;
+        let read = self.last_stats.map(|stats| (stats.held_tiles, false));
+        let (mut pool_tiles, fitted) = next_pool(start, ceiling, self.pool, read);
+        // Unbounded (the ceiling past the domain's pool), never under the floor.
+        if ceiling > start {
+            pool_tiles = pool_tiles.max(MATTER_POOL_FLOOR_TILES.min(ceiling));
+        }
+        if let Some((last, _)) = self.pool
+            && pool_tiles > last
+        {
+            let bytes = grid_accum_bytes(pool_tiles) + grid_bytes(pool_tiles);
+            if let Err(error) = manifold_node_engine::load::expand::admit_world_bytes(
+                device.modifier_memory_snapshot(),
+                bytes,
+            ) {
+                if !self.growth_refused {
+                    log::warn!(
+                        "Matter: the material stays on {last} tiles, what leaves them is removed: {error}"
+                    );
+                }
+                self.growth_refused = true;
+                pool_tiles = last;
+            } else {
+                self.growth_refused = false;
+            }
+        }
+        self.pool = Some((pool_tiles, fitted));
         // The grid arrays follow the tile pool the region's atoms dispatch
         // over; a pool the device cannot hold stops the solver before any tick.
-        let device = gpu.device;
         let mut refused = None;
         for (buffer, bytes) in [
             (&mut self.grid_accum, grid_accum_bytes(pool_tiles)),
@@ -473,6 +515,8 @@ impl Primitive for MatterState {
         let live = self.last_stats.map_or(count, |s| s.live);
         ctx.outputs
             .set_scalar("live_count", ParamValue::Float(live as f32));
+        ctx.outputs
+            .set_scalar("pool_tiles", ParamValue::Float(pool_tiles as f32));
         ctx.outputs.set_scalar(
             "fault",
             ParamValue::Float(if self.faulted { 1.0 } else { 0.0 }),
