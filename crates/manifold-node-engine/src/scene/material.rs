@@ -365,7 +365,8 @@ pub struct Material {
 
 /// Where a covering Material lies over the one it covers: on ground between
 /// two slopes and two world heights, each edge softened and broken up by
-/// noise, the whole scaled by Amount. Box mapped at its own Tile Size, with
+/// noise, kept to where water ran or soil settled as far as Water and Soil
+/// ask, the whole scaled by Amount. Box mapped at its own Tile Size, with
 /// the edge following the two materials' height pictures.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CoverRule {
@@ -386,6 +387,11 @@ pub struct CoverRule {
     /// in metres.
     pub breakup: f32,
     pub breakup_size: f32,
+    /// How far the cover keeps to where a Terrain's rain ran and where it
+    /// laid soil, 0 to 1: 0 lies anywhere, 1 only there. Read from the
+    /// surface's second UV set, which a Terrain fills.
+    pub water: f32,
+    pub soil: f32,
 }
 
 impl Default for CoverRule {
@@ -401,23 +407,26 @@ impl Default for CoverRule {
             height_softness: 10.0,
             breakup: 0.0,
             breakup_size: 20.0,
+            water: 0.0,
+            soil: 0.0,
         }
     }
 }
 
 impl CoverRule {
     /// The rule as `CoverRule` in `cover_rule.wgsl` reads it: the slopes and
-    /// their softness in radians, the heights and their softness in metres,
-    /// then Breakup and 1 / Breakup Size. Amount is the caller's.
+    /// their softness in radians then Water, the heights and their softness
+    /// in metres then Soil, then Breakup and 1 / Breakup Size. Amount is the
+    /// caller's.
     pub fn packed(&self) -> [[f32; 4]; 3] {
         [
             [
                 self.steeper_than.to_radians(),
                 self.flatter_than.to_radians(),
                 self.slope_softness.to_radians().max(1e-3),
-                0.0,
+                self.water,
             ],
-            [self.above, self.below, self.height_softness.max(1e-3), 0.0],
+            [self.above, self.below, self.height_softness.max(1e-3), self.soil],
             [self.breakup, 1.0 / self.breakup_size.max(0.1), 0.0, 0.0],
         ]
     }

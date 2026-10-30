@@ -274,7 +274,7 @@ Per-frame fluid-sim primitives. Pair upstream with seed + downstream with scatte
 | Orbit Camera | `node.camera_orbit` | Orbit-style perspective `Camera` from five port-shadowed scalars (orbit/tilt/distance/fov_y/look_y); also emits `pos_x/y/z` for PBR shading. One wire replaces N per-renderer camera params |
 | Light | `node.light` | Single Sun / Point light → `Light` wire consumed by shading atoms + shadow-aware mesh renderers; all params port-shadowed (one node per light) |
 | Generate Grid Mesh | `node.generate_grid_mesh` | NxM grid of `MeshVertex` in XZ plane — heightmap-displaced surfaces |
-| Terrain | `node.terrain` | square grid of `MeshVertex` lifted by ridged value noise and carved by GPU raindrop erosion that runs only while the land settles, with finite-difference normals; drawn indexed with `node.grid_indices` for the Terrain shape |
+| Terrain | `node.terrain` | square grid of `MeshVertex`: value-noise ranges with branching gullies cut down their slopes, carved by GPU raindrop erosion that runs only while the land settles, with finite-difference normals and, in the second UV set, where water ran and soil settled (Covers' and Copies' Water and Soil); drawn indexed with `node.grid_indices` for the Terrain shape |
 | Grid Indices | `node.grid_indices` | u32 triangle indices of a cols × rows row-major grid in `node.make_triangles`' corner order, written once per size, so a grid draws indexed |
 | Generate Cube Mesh | `node.generate_cube_mesh` | Unit cube as 36 `MeshVertex` triangle-list |
 | Polytope Vertices | `node.polytope_vertices` | One of the five Platonic solids as `Array<MeshVertex>`, baked to magnitude 0.25 (curated-enum GPU dispatch) |

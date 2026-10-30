@@ -1094,9 +1094,10 @@ fn begin_covers(box_pos: vec3<f32>, box_normal: vec3<f32>, ax: vec3<f32>, ay: ve
 }
 
 // How much of cover `c` lies at world point `p` on ground whose geometric
-// normal points `up` of the way to world up: 0 to Amount.
-fn cover_lies(c: MaterialCover, p: vec3<f32>, up: f32) -> f32 {
-    return cover_rule_holds(c.rule, p, up) * c.maps.w;
+// normal points `up` of the way to world up, with water and soil `marks`:
+// 0 to Amount.
+fn cover_lies(c: MaterialCover, p: vec3<f32>, up: f32, marks: vec2<f32>) -> f32 {
+    return cover_rule_holds(c.rule, p, up, marks) * c.maps.w;
 }
 
 struct CoverRead {
@@ -1198,13 +1199,14 @@ struct Covered {
 };
 
 // The surface under its covers at world point `p` with geometric normal
-// `geometric`, view `v`: albedo, shading normal and (roughness, metallic).
-// Sets the bump variance and height of what shows.
-fn cover_surface(p: vec3<f32>, geometric: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>, n: vec3<f32>, mr: vec2<f32>) -> Covered {
+// `geometric`, water and soil `marks` (the second UV set), view `v`:
+// albedo, shading normal and (roughness, metallic). Sets the bump variance
+// and height of what shows.
+fn cover_surface(p: vec3<f32>, geometric: vec3<f32>, marks: vec2<f32>, v: vec3<f32>, albedo: vec3<f32>, n: vec3<f32>, mr: vec2<f32>) -> Covered {
     var out = Covered(albedo, n, mr);
     let world_n = normalize(geometric);
     let c1 = material_covers.covers[0];
-    let t1 = cover_lies(c1, p, world_n.y);
+    let t1 = cover_lies(c1, p, world_n.y, marks);
     if t1 > 0.0 {
         let read = cover_read(c1, cover1_base_color_map, cover1_normal_map, cover1_mr_map, world_n);
         let w = cover_share(surface_height, read.height, t1);
@@ -1215,7 +1217,7 @@ fn cover_surface(p: vec3<f32>, geometric: vec3<f32>, v: vec3<f32>, albedo: vec3<
         surface_height = mix(surface_height, read.height, w);
     }
     let c2 = material_covers.covers[1];
-    let t2 = cover_lies(c2, p, world_n.y);
+    let t2 = cover_lies(c2, p, world_n.y, marks);
     if t2 > 0.0 {
         let read = cover_read(c2, cover2_base_color_map, cover2_normal_map, cover2_mr_map, world_n);
         let w = cover_share(surface_height, read.height, t2);
@@ -1707,7 +1709,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     var N = facing_normal(resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent), in.world_normal, V);
     var mr = resolve_mr(in.uv);
     if covers_on() {
-        let covered = cover_surface(in.world_pos, in.world_normal, V, albedo.rgb, N, mr);
+        let covered = cover_surface(in.world_pos, in.world_normal, in.uv.zw, V, albedo.rgb, N, mr);
         albedo = vec4<f32>(covered.albedo, albedo.a);
         N = covered.normal;
         mr = covered.mr;

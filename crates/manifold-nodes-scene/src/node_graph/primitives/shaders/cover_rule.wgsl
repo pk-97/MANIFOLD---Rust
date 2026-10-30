@@ -1,14 +1,15 @@
 // Where a cover rule holds (`CoverRule` in material.rs, packed by
 // `CoverRule::packed`): on ground between two slopes and two heights, each
 // edge softened by its Softness and pushed about by Breakup noise up to
-// three Softnesses. A Material's Covers read it per pixel
+// three Softnesses, and kept to where water ran or soil settled as far as
+// Water and Soil ask. A Material's Covers read it per pixel
 // (`render_scene.wgsl`); Copies on a surface read it per copy
 // (`scatter_on_mesh.wgsl`).
 
 struct CoverRule {
-    // x steeper than, y flatter than, z their softness, in radians.
+    // x steeper than, y flatter than, z their softness, in radians; w Water.
     slope: vec4<f32>,
-    // x above, y below, z their softness, in metres.
+    // x above, y below, z their softness, in metres; w Soil.
     height: vec4<f32>,
     // x Breakup, y 1 / Breakup Size.
     breakup: vec4<f32>,
@@ -43,8 +44,9 @@ fn cover_rule_noise(p: vec2<f32>) -> f32 {
 }
 
 // How much `rule` holds at point `p` on ground whose normal points `up` of
-// the way to straight up: 0 to 1.
-fn cover_rule_holds(rule: CoverRule, p: vec3<f32>, up: f32) -> f32 {
+// the way to straight up, where `marks` says how much water ran and soil
+// settled there (a Terrain's second UV set): 0 to 1.
+fn cover_rule_holds(rule: CoverRule, p: vec3<f32>, up: f32, marks: vec2<f32>) -> f32 {
     let push = 3.0 * rule.breakup.x * cover_rule_noise(p.xz * rule.breakup.y);
     let angle = acos(clamp(up, -1.0, 1.0)) + push * rule.slope.z;
     let steeper = select(smoothstep(rule.slope.x - rule.slope.z, rule.slope.x + rule.slope.z, angle), 1.0, rule.slope.x <= 0.0);
@@ -52,5 +54,7 @@ fn cover_rule_holds(rule: CoverRule, p: vec3<f32>, up: f32) -> f32 {
     let y = p.y + push * rule.height.z;
     let above = smoothstep(rule.height.x - rule.height.z, rule.height.x + rule.height.z, y);
     let below = 1.0 - smoothstep(rule.height.y - rule.height.z, rule.height.y + rule.height.z, y);
-    return steeper * flatter * above * below;
+    let wet = mix(1.0, marks.x, rule.slope.w);
+    let laid = mix(1.0, marks.y, rule.height.w);
+    return steeper * flatter * above * below * wet * laid;
 }

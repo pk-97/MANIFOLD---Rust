@@ -1,6 +1,7 @@
 //! `node.terrain` — a square height map across `size` metres in the XZ
-//! plane: noise, then carved by simulated rain (`shaders/terrain.wgsl`),
-//! published as a grid of `MeshVertex` items.
+//! plane: a smooth body of noise with gullies cut down its slopes, then
+//! carved by simulated rain (`shaders/terrain.wgsl`), published as a grid of
+//! `MeshVertex` items.
 //!
 //! The rain runs only while the land settles. A new seed or resolution
 //! starts it from bare noise; a change of size, feature size or roughness
@@ -9,7 +10,8 @@
 //! raising it rains the rest, lowering it scales the carving down. Height
 //! scales the finished land without rain. Once settled the node costs
 //! nothing and its vertices hold. Each vertex carries its normal, from its
-//! neighbours across the grid.
+//! neighbours across the grid, and in its second UV set where water runs
+//! (gully floors and the rain's channels) and where its soil settled.
 
 use std::borrow::Cow;
 
@@ -48,7 +50,8 @@ struct TerrainUniforms {
     roughness: f32,
     keep: f32,
     repose: f32,
-    pad: [u32; 2],
+    rain: f32,
+    pad: u32,
 }
 
 /// What the noise under the carving depends on.
@@ -61,6 +64,7 @@ struct Shape {
 }
 
 struct Pipelines {
+    body: GpuComputePipeline,
     base: GpuComputePipeline,
     fade: GpuComputePipeline,
     erode: GpuComputePipeline,
@@ -73,6 +77,7 @@ impl Pipelines {
     fn build(device: &GpuDevice) -> Self {
         let make = |entry: &str| device.create_compute_pipeline(SHADER, entry, "node.terrain");
         Self {
+            body: make("body_main"),
             base: make("base_main"),
             fade: make("fade_main"),
             erode: make("erode_main"),
@@ -89,6 +94,8 @@ struct TerrainBuffers {
     erosion: GpuBuffer,
     vertices: GpuBuffer,
     snapshot: GpuBuffer,
+    flow: GpuBuffer,
+    drain: GpuBuffer,
 }
 
 impl TerrainBuffers {
@@ -101,6 +108,8 @@ impl TerrainBuffers {
             vertices: device
                 .try_create_buffer(cells * size_of::<MeshVertex>() as u64, BufferUse::Gpu)?,
             snapshot: device.try_create_buffer(cells * 4, BufferUse::Gpu)?,
+            flow: device.try_create_buffer(cells * 4, BufferUse::Gpu)?,
+            drain: device.try_create_buffer(cells * 4, BufferUse::Gpu)?,
         })
     }
 }
@@ -133,7 +142,7 @@ fn carving_after(old: Option<Shape>, new: Shape, done: f64) -> (f32, f64) {
 manifold_node_engine::primitive! {
     name: Terrain,
     type_id: "node.terrain",
-    purpose: "Emit a resolution × resolution grid of MeshVertex items across size metres in the XZ plane: value-noise ridges and hills, carved by simulated raindrops that wear channels down slopes and lay soil where they slow. The rain runs over a few frames whenever the land changes and costs nothing once settled. Pair with node.make_triangles (src_cols = src_rows = resolution) for drawable triangles with normals.",
+    purpose: "Emit a resolution × resolution grid of MeshVertex items across size metres in the XZ plane: value-noise hills and massifs with branching gullies cut down their slopes, carved by simulated raindrops that wear channels down slopes and lay soil where they slow. The rain runs over a few frames whenever the land changes and costs nothing once settled. Pair with node.make_triangles (src_cols = src_rows = resolution) for drawable triangles with normals.",
     inputs: {},
     outputs: {
         vertices: Array(MeshVertex),
@@ -321,7 +330,8 @@ impl Primitive for Terrain {
             roughness: shape.roughness,
             keep,
             repose: REPOSE * spacing / height.max(1e-3),
-            pad: [0; 2],
+            rain: ((done + f64::from(droplets)) / f64::from(res * res)) as f32,
+            pad: 0,
         };
         let dispatch = |enc: &mut manifold_gpu::GpuEncoder,
                         pipeline: &GpuComputePipeline,
@@ -337,12 +347,15 @@ impl Primitive for Terrain {
                 buffer(2, &buffers.erosion),
                 buffer(3, &buffers.vertices),
                 buffer(4, &buffers.snapshot),
+                buffer(5, &buffers.flow),
+                buffer(6, &buffers.drain),
             ];
             enc.dispatch_compute(pipeline, &bindings, groups, label);
         };
         let cells = [(res * res).div_ceil(THREADS), 1, 1];
         let enc = &mut *gpu.native_enc;
         if reshaped {
+            dispatch(enc, &pipelines.body, &uniforms, cells, "node.terrain body");
             dispatch(enc, &pipelines.base, &uniforms, cells, "node.terrain base");
         }
         if keep < 1.0 {

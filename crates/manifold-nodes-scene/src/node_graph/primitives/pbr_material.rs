@@ -1248,8 +1248,10 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("subsurface_feature_mode"), label: "Subsurface Feature", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &["Follow Values", "Off", "On", "Removed"] },
         cover_param(0, 0), cover_param(0, 1), cover_param(0, 2), cover_param(0, 3), cover_param(0, 4),
         cover_param(0, 5), cover_param(0, 6), cover_param(0, 7), cover_param(0, 8),
+        cover_param(0, 9), cover_param(0, 10),
         cover_param(1, 0), cover_param(1, 1), cover_param(1, 2), cover_param(1, 3), cover_param(1, 4),
         cover_param(1, 5), cover_param(1, 6), cover_param(1, 7), cover_param(1, 8),
+        cover_param(1, 9), cover_param(1, 10),
     ],
     depth_rule: Terminal,
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input. The renderer ALSO requires a wired `light` AND an `envmap` Texture2D (typically `node.bake_environment`). `metallic = 0` = dielectric (plastic, wood, fabric), `metallic = 1` = pure metal (chrome, gold). `roughness` is clamped to a 0.01 floor at construction (zero is a numerical landmine in GGX). Optional textures: `normal_map`, `base_color_map`, `roughness_map`, `metallic_map`. The PBR shader writes in linear space; the renderer's tone-map runs internally so no downstream `node.reinhard_tone_map` is needed.",
@@ -1271,7 +1273,7 @@ type CoverParam = (&'static str, &'static str, f32, f32, f32);
 /// Each Cover's params in `CoverRule` order, Cover 1 then Cover 2. Cover 1
 /// starts as rock on steep ground, Cover 2 as snow on the gentle ground up
 /// high.
-const COVER_PARAMS: [[CoverParam; 9]; 2] = [
+const COVER_PARAMS: [[CoverParam; 11]; 2] = [
     [
         ("cover1_amount", "Cover 1 Amount", 1.0, 0.0, 1.0),
         ("cover1_steeper_than", "Cover 1 Steeper Than (°)", 35.0, 0.0, 90.0),
@@ -1282,6 +1284,8 @@ const COVER_PARAMS: [[CoverParam; 9]; 2] = [
         ("cover1_height_softness", "Cover 1 Height Softness (m)", 20.0, 0.0, 1000.0),
         ("cover1_breakup", "Cover 1 Breakup", 0.5, 0.0, 1.0),
         ("cover1_breakup_size", "Cover 1 Breakup Size (m)", 30.0, 0.1, 1000.0),
+        ("cover1_water", "Cover 1 Water", 0.0, 0.0, 1.0),
+        ("cover1_soil", "Cover 1 Soil", 0.0, 0.0, 1.0),
     ],
     [
         ("cover2_amount", "Cover 2 Amount", 1.0, 0.0, 1.0),
@@ -1293,6 +1297,8 @@ const COVER_PARAMS: [[CoverParam; 9]; 2] = [
         ("cover2_height_softness", "Cover 2 Height Softness (m)", 20.0, 0.0, 1000.0),
         ("cover2_breakup", "Cover 2 Breakup", 0.5, 0.0, 1.0),
         ("cover2_breakup_size", "Cover 2 Breakup Size (m)", 30.0, 0.1, 1000.0),
+        ("cover2_water", "Cover 2 Water", 0.0, 0.0, 1.0),
+        ("cover2_soil", "Cover 2 Soil", 0.0, 0.0, 1.0),
     ],
 ];
 
@@ -1324,6 +1330,8 @@ fn cover_rule(ctx: &EffectNodeContext<'_, '_>, slot: usize) -> CoverRule {
         height_softness: value(6),
         breakup: value(7),
         breakup_size: value(8),
+        water: value(9),
+        soil: value(10),
     }
 }
 

@@ -62,7 +62,7 @@ struct MeshVertex {
     normal: vec3<f32>,
     _pad1: f32,
     uv: vec2<f32>,
-    _pad2: vec2<f32>,
+    uv1: vec2<f32>,
     tangent: vec4<f32>,
     color: vec4<f32>,
 };
@@ -242,9 +242,10 @@ fn place_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     // Grow only where the rule holds, kept with its chance across a soft
-    // edge.
+    // edge. A Terrain's second UV set says where water ran and soil settled.
     let rule = CoverRule(params.rule_slope, params.rule_height, params.rule_breakup);
-    if hash_float(wang_hash(h4 ^ 0x9e3779b9u)) >= cover_rule_holds(rule, surface_pos, n.y) {
+    let marks = c0.uv1 * bary_u + c1.uv1 * bary_v + c2.uv1 * bary_w;
+    if hash_float(wang_hash(h4 ^ 0x9e3779b9u)) >= cover_rule_holds(rule, surface_pos, n.y, marks) {
         park_zero(i);
         return;
     }

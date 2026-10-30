@@ -64,7 +64,7 @@ const fn internal(property: &'static str, param: &'static str, why: &'static str
     card(property, param, Exposure::Internal(why))
 }
 
-pub static COPIES_ROWS: [PropertyRow; 40] = [
+pub static COPIES_ROWS: [PropertyRow; 42] = [
     card("count", "copy_count", perform(CardBand::Scene, 0))
         .default(START_COUNT)
         .tip(crate::copies_body::MAX_COPIES_REASON),
@@ -126,6 +126,10 @@ pub static COPIES_ROWS: [PropertyRow; 40] = [
     surface("surface_breakup_size", "breakup_size", setup())
         .name("Breakup Size")
         .unit(Unit::Metres),
+    // Where a Terrain's rain ran and laid soil: 0 grows anywhere, 1 only
+    // there.
+    surface("surface_water", "water", setup()).name("Water"),
+    surface("surface_soil", "soil", setup()).name("Soil"),
     surface(
         "surface_count",
         "count",

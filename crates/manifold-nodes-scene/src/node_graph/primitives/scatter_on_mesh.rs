@@ -65,7 +65,7 @@ struct ScatterOnMeshUniforms {
 /// label, default, low, high. The defaults hold everywhere.
 type GrowParam = (&'static str, &'static str, f32, f32, f32);
 
-const GROW_PARAMS: [GrowParam; 8] = [
+const GROW_PARAMS: [GrowParam; 10] = [
     ("steeper_than", "Steeper Than (°)", 0.0, 0.0, 90.0),
     ("flatter_than", "Flatter Than (°)", 90.0, 0.0, 90.0),
     ("slope_softness", "Slope Softness (°)", 5.0, 0.0, 45.0),
@@ -74,6 +74,8 @@ const GROW_PARAMS: [GrowParam; 8] = [
     ("height_softness", "Height Softness (m)", 20.0, 0.0, 1000.0),
     ("breakup", "Breakup", 0.0, 0.0, 1.0),
     ("breakup_size", "Breakup Size (m)", 30.0, 0.1, 1000.0),
+    ("water", "Water", 0.0, 0.0, 1.0),
+    ("soil", "Soil", 0.0, 0.0, 1.0),
 ];
 
 const fn grow_param(k: usize) -> ParamDef {
@@ -104,6 +106,8 @@ fn grow_rule(ctx: &EffectNodeContext<'_, '_>) -> CoverRule {
         height_softness: value(5),
         breakup: value(6),
         breakup_size: value(7),
+        water: value(8),
+        soil: value(9),
     }
 }
 
@@ -213,6 +217,8 @@ manifold_node_engine::primitive! {
         grow_param(5),
         grow_param(6),
         grow_param(7),
+        grow_param(8),
+        grow_param(9),
     ],
     depth_rule: Terminal,
     composition_notes: "count/seed/scale_min/scale_max are port-shadows-param — wire an LFO or envelope into count to sweep flower density live, or into seed to re-roll the placement (a re-roll is a hard cut, not an animatable morph — the whole field re-samples). align_to_normal is NOT port-shadowed (a structural on/off choice, not a performance scalar): off gives every instance a random upright yaw (local +Y stays world-up); on additionally tilts +Y onto the sampled triangle's flat face normal, so instances lie flush against sloped or curved surfaces. `max_capacity` (static, never bind it to a card) declares the output's allocation ceiling; `count` sweeps live beneath it and slots beyond count park at zero scale. Set max_capacity to the count card's max so the fader's whole range is real; when max_capacity is 0/absent the buffer sizes from count at build time (legacy single-param behavior). Triangles are read as flat [v0,v1,v2] triples (standard triangle-list layout); a trailing partial triangle (vertex_count % 3 != 0) is ignored.",
