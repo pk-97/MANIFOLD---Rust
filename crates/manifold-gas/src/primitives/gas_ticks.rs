@@ -110,17 +110,20 @@ impl Primitive for GasTicks {
             self.pending = 0;
             return;
         }
-        let device = ctx.gpu_encoder().device;
+        let gpu = ctx.gpu_encoder();
         if self
             .published
             .as_ref()
             .is_none_or(|[state, _]| state.size != bytes)
         {
-            // Unwritten until the step's first publish, which a fresh box's
-            // first tick makes.
-            self.published = Some(std::array::from_fn(|_| {
-                device.create_buffer(bytes, BufferUse::Gpu)
-            }));
+            // Empty until the step's first publish: a frame with no tick
+            // draws no gas.
+            let fields: [GpuBuffer; 2] =
+                std::array::from_fn(|_| gpu.device.create_buffer(bytes, BufferUse::Gpu));
+            for field in &fields {
+                gpu.native_enc.clear_buffer(field);
+            }
+            self.published = Some(fields);
         }
     }
 }

@@ -480,7 +480,7 @@ fn outside(g: vec3<f32>) -> bool {
     return g.x < -0.5 || g.z < -0.5 || g.x > last.x || g.y > last.y || g.z > last.z;
 }
 
-// Last frame's velocity at the face normal to `axis` at node `c`: its own
+// Last tick's velocity at the face normal to `axis` at node `c`: its own
 // component exactly, each other one the mean of the four faces round it (a
 // cell outside the box stands in with the one inside).
 fn face_velocity_in(c: vec3<u32>, axis: u32) -> vec3<f32> {
@@ -542,7 +542,7 @@ fn centres_at(g: vec3<f32>) -> vec3<f32> {
     return sum;
 }
 
-// Last frame's velocity and the scene's wind at each cell centre, into
+// Last tick's velocity and the scene's wind at each cell centre, into
 // `curl` (free until cs_restrict) for the fine state's advection.
 @compute @workgroup_size(4, 4, 4)
 fn cs_centres_in(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -762,7 +762,7 @@ fn cs_maccormack(@builtin(global_invocation_id) gid: vec3<u32>) {
 // ---- Fine state advection ------------------------------------------------------
 //
 // MacCormack, as the air's, over the fine cells: each takes the state from
-// where its air came from, carried by last frame's air and the scene's wind.
+// where its air came from, carried by last tick's air and the scene's wind.
 
 // Fine grid point `gid` carried back (`sign` -1) or ahead (+1) one step by
 // the air and wind cs_centres_in laid out.

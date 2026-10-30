@@ -112,6 +112,14 @@ W6 landed before the table, as a solid every solver already reads:
 - **Water, Matter, smoke.** The coupling builds `PreparedFluidGeometry::ground` (`water-liquid/src/fluid_role.rs`): its tree is `MeshBvh::height_field`, one root with radius -1 holding the grid, three heights to a vec4. `cb_phi` (`collider_bvh.wgsl`) answers it with `cb_height_phi`: the bilinear ground's distance, solid below, nothing past the grid's edge. Every solver reads solids through `cb_phi`, so all of them collide with it.
 - **Limits.** Terrain takes Collider, never Body. A Terrain moved live gets a lattice, as any moving collider; at Terrain sizes that lattice is large.
 
+## What is left of the goal
+
+Every solver now runs one clock and one loop, each tick in order (Matter, water, gas, then the bodies settle), and no solver reads another a frame late. Water and Matter share one key set. Three pieces keep the table from being the World's only grid:
+
+- **One solid layer.** Each solver still lays the scene's solids at its own cells: the water caches static corners per held slot (`static_corners`, laid for fresh slots), the Matter reads the trees and the height field at its nodes (`matter_tree.wgsl`), the gas lays a dense solid field. The table form is a solid layer beside the material layers: a slot for every key any material holds, static corners laid once per fresh slot from `cb_phi` (Colliders and the Terrain's height field), the moving bodies still sampled from their lattices each tick. The water's static corners and the Matter's node solids then read it through the shared entry, and the gas samples it at its cells. Needs a union pool (the sum of both pools, as H is) and a pass after both builds; a different Quality reads it through the parents level.
+- **Sand through the Matter's slots.** The water rasterises the grains onto its own cells every substep (`sand_corners` from `grain_view`), and the gas onto its cells every tick. Through the shared entry the Matter's grid would serve both: its points to grid adds each grain's bulk and solid volume on the tick's last substep, and the water and gas read the node at the same entry. Two more accumulated channels once a tick against one grain scatter per water substep; step 5 measures which is cheaper.
+- **The gas on the table.** The gas is a dense box snapped to the World's cells, stepped in the World's loop. Held in World tiles it would share keys with the water and Matter and read them through the shared entry instead of hashing at each cell; every kernel's neighbour reads would go through the tile rows, which a dense box does not pay for.
+
 ## Risks
 
 - W2 changes the executor's region contract: replay caches and the async lane are per region today (`substep_region.rs:150-200`); a co-iterated group must keep both or the frame gets slower.

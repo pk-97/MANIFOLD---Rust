@@ -267,6 +267,9 @@ manifold_node_engine::primitive! {
         // a hit lands on the same step at any frame rate, as water does.
         clock: SimulationClock = SimulationClock::default(),
         schedule: Vec<GasTick> = Vec::new(),
+        // The clock restarted on a frame that ran no tick: the next frame
+        // with ticks clears the fields.
+        restart_owed: bool = false,
         restarted: bool = false,
         // The scene's forces laid at each tick's start on a lattice over the
         // box, the hits landing on the frame's ticks, and their GPU copies.
@@ -346,6 +349,7 @@ impl GasDomain {
             }
             Followed::Frame(frame) => frame,
         };
+        self.restart_owed |= frame.restarted;
         // Hits follow the clock before anything else can fail, so a refused
         // frame never leaves them a frame behind it.
         self.hits.observe_frame(ctx.played(), &frame)?;
@@ -390,7 +394,9 @@ impl GasDomain {
                 ],
             });
         }
-        self.restarted = frame.restarted;
+        if frame.ticks > 0 {
+            self.restarted = std::mem::take(&mut self.restart_owed);
+        }
         Ok(solids.is_some())
     }
 
