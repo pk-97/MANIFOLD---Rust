@@ -109,12 +109,7 @@ pub(crate) fn measure(width: usize, height: usize, rgba16: &[u8]) -> Option<Hdri
 
 /// The sun measured around `centre`, and its light: excess luminance summed
 /// over solid angle.
-fn around(
-    width: usize,
-    height: usize,
-    rgba16: &[u8],
-    centre: [f64; 3],
-) -> Option<(HdriSun, f64)> {
+fn around(width: usize, height: usize, rgba16: &[u8], centre: [f64; 3]) -> Option<(HdriSun, f64)> {
     // Every texel within the ring's outer edge, by latitude band first.
     let pi = std::f64::consts::PI;
     let lat = centre[1].clamp(-1.0, 1.0).asin();
