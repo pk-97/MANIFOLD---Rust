@@ -97,6 +97,15 @@ Mandelbulbs, Mandelboxes and other fractals rendered live and morphing on the be
 ### Gems with rainbow fire
 Diamonds and crystals that throw rainbow sparkle as light bends and splits inside them, as part of the material upgrade. Inspired by [diamond-webgl](https://github.com/piellardj/diamond-webgl) by Jérémie Piellard (GPL-3.0), so build it from the optics, not the code. Already built: glTF's dispersion value loads, but nothing draws it yet.
 
+### Occlusion culling for geometry-heavy scenes
+Skips geometry hidden behind other geometry: a depth pyramid from last frame's visible patches, then a second pass that re-tests the rest against this frame's, so nothing drops on a cut. It slots into the patch cull (`SCENE_GEOMETRY_MAP.md`). On the Mac the measured landscapes are pixel-bound, so it pays only for a scene that profiles as vertex-bound.
+
+### Terrain tiles by distance
+Draws the terrain as a quadtree of fixed-size tiles at a resolution set by screen error, neighbours at most one level apart with edges snapped so no cracks open, read from the terrain's height map. It replaces the single 512² grid when terrains grow past what one grid covers, or a profile shows terrain vertex work.
+
+### Cluster ray tracing on NVIDIA
+With the Vulkan ray tracing port on the 5080: per-cluster acceleration structures (`VK_NV_cluster_acceleration_structure`, RTX Mega Geometry) and a partitioned top level, so huge scanned and changing scenes trace without rebuilding whole meshes.
+
 ## Simulation
 
 ### Snow, goo and lava on Matter

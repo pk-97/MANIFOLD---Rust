@@ -29,7 +29,7 @@ step upgrades a system that already exists; nothing here runs beside one.
 - Terrain: value-noise ridges on a 512² grid, worn by raindrops
   (`terrain.wgsl`). Covers pick materials by slope, height and noise
   (`cover_rule.wgsl`). The main pass on a covered terrain is fragment-bound
-  (SCENE_GEOMETRY_SCALE_DESIGN.md findings).
+  (SCENE_GEOMETRY_MAP.md).
 - Plants: `node.tree` grows bark and crossed leaf cards, with a Cone row
   for conifers, crown-bent normals and crown shade in its vertex colour,
   a box for culling, and four detail levels (one card a leaf, cards per
@@ -41,18 +41,15 @@ step upgrades a system that already exists; nothing here runs beside one.
   swims. Copies of a tree vary in shade (`copy_shade`, a hash of each
   copy's place). Anything with Sway bends in the scene's first Wind
   (`wind_bend` in `render_scene.wgsl`, shadows and motion vectors too).
-- Cost (50k spruces, 1080p, stills profile): cut-out cards are shaded at
-  every layer, since `discard` defeats hidden-surface removal; the Lumen
-  session is adding a depth pass for cut-out draws. The terrain's Depth
-  (parallax) pipeline costs about 20 of its 34 ms; far patches move to the
-  plain pipeline (Lumen session).
+- Cost (50k spruces, 1080p, stills profile): cut-out cards write depth
+  first and shade once, and far parallax patches draw on the plain pipeline
+  (SCENE_GEOMETRY_MAP.md). The forest is still about 100 ms of pixel work.
 
 ## Ownership
 
-- `SCENE_GEOMETRY_SCALE_DESIGN.md` (the Lumen session) keeps patches,
-  culling, mesh detail levels and terrain tiles by distance (its P6). This
-  plan feeds those: trees publish `lods`, the land shape publishes the height
-  map the tiles read.
+- `SCENE_GEOMETRY_MAP.md` maps patches, culling and mesh detail levels;
+  terrain tiles by distance wait in `IDEAS.md`. This plan feeds those: trees
+  publish `lods`, the land shape publishes the height map the tiles read.
 
 ## Phase 1: Light
 
