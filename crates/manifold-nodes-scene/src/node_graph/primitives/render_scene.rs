@@ -1050,13 +1050,12 @@ pub struct RenderScene {
     /// E2b: transmissive layer colour compares against its nearest-surface
     /// depth while keeping depth writes disabled.
     transmission_depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
-    /// Memoryless 4x-MSAA color + depth targets for the scene pass, sized
-    /// to the render target. Both resolve on-chip; only `msaa_color`
-    /// resolves out to the single-sample output. `msaa_real` records which
-    /// storage flavor is allocated (`true` = private-storage pair for
-    /// Points-active frames — see `ensure_msaa_targets`'s D8 note); the
-    /// flavor flips with the mode so the memoryless pair comes back the
-    /// frame a scene leaves Points.
+    /// 4x-MSAA color + depth targets for the scene pass, sized to the
+    /// render target. Both resolve on-chip; only `msaa_color` resolves out
+    /// to the single-sample output. `msaa_real` records the storage flavor
+    /// of these and the aux targets: memoryless, or real storage for a
+    /// frame of points or of more triangles than the tiler holds (see
+    /// `ensure_msaa_targets`).
     msaa_color: Option<manifold_gpu::GpuTexture>,
     depth_texture: Option<manifold_gpu::GpuTexture>,
     msaa_real: bool,

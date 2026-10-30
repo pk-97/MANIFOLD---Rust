@@ -82,13 +82,21 @@ impl RenderScene {
                     },
                 ));
             }
-            // SCENE_RENDER_MODE_DESIGN.md D8: a Points-active frame draws
-            // point primitives, which the memoryless-attachment pass budget
-            // can't carry — swap the MSAA pair for real storage (see
-            // `ensure_msaa_targets`). `points_active` is also the pass-level
-            // aux gate below.
+            // A memoryless pass can't spill its tiles, so a frame of point
+            // primitives (SCENE_RENDER_MODE_DESIGN.md D8) or of more
+            // triangles than the tiler holds draws into real storage instead
+            // (see `ensure_msaa_targets`). A GPU fault ends the session, so
+            // this is decided before drawing, from the most the pass can
+            // submit; it falls back to memoryless only well under the budget,
+            // so a Count dragged across it doesn't reallocate every frame.
             let points_active = draws.iter().any(|d| d.points);
-            self.ensure_msaa_targets(gpu.device, width, height, points_active);
+            let triangles: u64 = draws
+                .iter()
+                .map(|d| u64::from(d.vertex_count / 3) * u64::from(d.instance_count.max(1)))
+                .sum();
+            let heavy = triangles > TILE_TRIANGLE_BUDGET
+                || (self.msaa_real && triangles > TILE_TRIANGLE_BUDGET / 2);
+            self.ensure_msaa_targets(gpu.device, width, height, points_active || heavy);
             if depth_wired || wants_shafts_now || self.gizmo_depth_wanted {
                 self.ensure_depth_resolve_scratch(gpu.device, width, height);
             }
@@ -362,69 +370,58 @@ impl RenderScene {
 
     /// Ensure the MSAA color + depth targets match the render target size.
     /// Both are `MSAA_SAMPLES`x multisample; the color resolves out at pass
-    /// end. Two storage flavors:
+    /// end. Two storage flavors, for these and every aux target:
     ///
-    /// - the default `memoryless` pair — tile-resident, never leaves the
-    ///   GPU (the hot path, unchanged since the Metal migration);
-    /// - a `real` (private-storage) pair, allocated when `points_active` —
-    ///   SCENE_RENDER_MODE_DESIGN.md D8. Apple's tiling parameter buffer
-    ///   caps the TOTAL point primitives in a memoryless-attachment pass at
-    ///   a few thousand (measured 2026-09-16 on Apple Silicon: 2048 points
-    ///   across two draws pass, 4096 fail with
-    ///   `kIOGPUCommandBufferCallbackErrorOutOfMemoryForParameterBuffer`,
-    ///   at any point size; ~32k-triangle draws are unaffected), so a dense
-    ///   scene drawn as points would fault the memoryless pass. Real
-    ///   attachments carry the same draw without the budget. Cost while
-    ///   Points is on: MSAA color+depth traffic transits real memory — the
-    ///   audit-mode tax, accepted; flipping back to any triangle mode
-    ///   recreates the memoryless pair on the next frame.
+    /// - memoryless — tile-resident, never leaves the GPU (the hot path);
+    /// - `real` (private storage). A memoryless pass must fit its whole
+    ///   frame's geometry in Apple's tiling parameter buffer, since it has
+    ///   nowhere to spill tiles; past it the command buffer fails with
+    ///   `kIOGPUCommandBufferCallbackErrorOutOfMemoryForParameterBuffer`.
+    ///   Points hit that at a few thousand primitives (2048 pass, 4096
+    ///   fail, at any point size), triangles in the hundreds of millions
+    ///   (8000 copies of a 35k-triangle tree). Real attachments spill
+    ///   instead. They cost their memory; their cleared, unstored tiles
+    ///   move no data unless the tiler spills.
+    ///
+    /// A flavor change drops the aux targets, so the `ensure_*` calls that
+    /// follow rebuild them in the same flavor.
     pub(super) fn ensure_msaa_targets(
         &mut self,
         device: &manifold_gpu::GpuDevice,
         width: u32,
         height: u32,
-        points_active: bool,
+        real: bool,
     ) {
         if self.depth_width == width
             && self.depth_height == height
             && self.depth_texture.is_some()
             && self.msaa_color.is_some()
-            && self.msaa_real == points_active
+            && self.msaa_real == real
         {
             return;
         }
-        self.msaa_real = points_active;
-        if points_active {
-            self.msaa_color = Some(device.create_texture_msaa(
-                width,
-                height,
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                MSAA_SAMPLES,
-                "node.render_scene msaa color (points)",
-            ));
-            self.depth_texture = Some(device.create_texture_msaa(
-                width,
-                height,
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                MSAA_SAMPLES,
-                "node.render_scene msaa depth (points)",
-            ));
-        } else {
-            self.msaa_color = Some(device.create_texture_msaa_memoryless(
-                width,
-                height,
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
-                MSAA_SAMPLES,
-                "node.render_scene msaa color",
-            ));
-            self.depth_texture = Some(device.create_texture_msaa_memoryless(
-                width,
-                height,
-                manifold_gpu::GpuTextureFormat::Depth32Float,
-                MSAA_SAMPLES,
-                "node.render_scene msaa depth",
-            ));
+        if self.msaa_real != real {
+            self.velocity_msaa = None;
+            self.ao_mask_msaa = None;
+            self.denoise_normals_msaa = None;
         }
+        self.msaa_real = real;
+        self.msaa_color = Some(msaa_target(
+            device,
+            real,
+            width,
+            height,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            "node.render_scene msaa color",
+        ));
+        self.depth_texture = Some(msaa_target(
+            device,
+            real,
+            width,
+            height,
+            manifold_gpu::GpuTextureFormat::Depth32Float,
+            "node.render_scene msaa depth",
+        ));
         self.depth_width = width;
         self.depth_height = height;
     }
@@ -455,7 +452,7 @@ impl RenderScene {
         }));
     }
 
-    /// Ensure the memoryless MSAA `Rg16Float` velocity aux-MRT target
+    /// Ensure the MSAA `Rg16Float` velocity aux-MRT target
     /// matches the render target size. Called
     /// ONLY when `evaluate` finds `velocity` wired this frame (lazy
     /// rule) — an unwired scene never calls this, so it costs nothing.
@@ -471,18 +468,19 @@ impl RenderScene {
         {
             return;
         }
-        self.velocity_msaa = Some(device.create_texture_msaa_memoryless(
+        self.velocity_msaa = Some(msaa_target(
+            device,
+            self.msaa_real,
             width,
             height,
             manifold_gpu::GpuTextureFormat::Rg16Float,
-            MSAA_SAMPLES,
             "node.render_scene msaa velocity",
         ));
         self.velocity_width = width;
         self.velocity_height = height;
     }
 
-    /// Ensure the memoryless MSAA `R8Unorm` ao_mask aux-MRT target matches
+    /// Ensure the MSAA `R8Unorm` ao_mask aux-MRT target matches
     /// the render target size (RAYTRACING_DESIGN.md section 12 AM1). Called
     /// ONLY when `evaluate` finds `ao_mask` wired this frame (the same D1
     /// lazy rule as velocity) — an unwired scene never calls this.
@@ -498,11 +496,12 @@ impl RenderScene {
         {
             return;
         }
-        self.ao_mask_msaa = Some(device.create_texture_msaa_memoryless(
+        self.ao_mask_msaa = Some(msaa_target(
+            device,
+            self.msaa_real,
             width,
             height,
             manifold_gpu::GpuTextureFormat::R8Unorm,
-            MSAA_SAMPLES,
             "node.render_scene msaa ao_mask",
         ));
         self.ao_mask_width = width;
@@ -510,7 +509,7 @@ impl RenderScene {
     }
 
     /// RAYTRACING_DESIGN.md section 17.5 DN-E (DN4): ensure the four
-    /// memoryless MSAA aux-MRT targets for the denoiser G-buffer feeds
+    /// MSAA aux-MRT targets for the denoiser G-buffer feeds
     /// match the render target size. Called ONLY when `evaluate` finds
     /// `rt_denoise_feed` on (same D1 lazy rule as velocity/ao_mask) — an
     /// unwired/off scene never calls this, so it costs nothing.
@@ -526,40 +525,45 @@ impl RenderScene {
         {
             return;
         }
-        self.denoise_normals_msaa = Some(device.create_texture_msaa_memoryless(
+        self.denoise_normals_msaa = Some(msaa_target(
+            device,
+            self.msaa_real,
             width,
             height,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
-            MSAA_SAMPLES,
             "node.render_scene msaa denoise normals",
         ));
-        self.denoise_roughness_msaa = Some(device.create_texture_msaa_memoryless(
+        self.denoise_roughness_msaa = Some(msaa_target(
+            device,
+            self.msaa_real,
             width,
             height,
             manifold_gpu::GpuTextureFormat::R16Float,
-            MSAA_SAMPLES,
             "node.render_scene msaa denoise roughness",
         ));
-        self.denoise_diffuse_albedo_msaa = Some(device.create_texture_msaa_memoryless(
+        self.denoise_diffuse_albedo_msaa = Some(msaa_target(
+            device,
+            self.msaa_real,
             width,
             height,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
-            MSAA_SAMPLES,
             "node.render_scene msaa denoise diffuse_albedo",
         ));
-        self.denoise_specular_albedo_msaa = Some(device.create_texture_msaa_memoryless(
+        self.denoise_specular_albedo_msaa = Some(msaa_target(
+            device,
+            self.msaa_real,
             width,
             height,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
-            MSAA_SAMPLES,
             "node.render_scene msaa denoise specular_albedo",
         ));
         // DN-L (section 17.7): reactive mask — R16Float like roughness.
-        self.denoise_reactive_msaa = Some(device.create_texture_msaa_memoryless(
+        self.denoise_reactive_msaa = Some(msaa_target(
+            device,
+            self.msaa_real,
             width,
             height,
             manifold_gpu::GpuTextureFormat::R16Float,
-            MSAA_SAMPLES,
             "node.render_scene msaa denoise reactive_mask",
         ));
         self.denoise_normals_width = width;
@@ -1957,5 +1961,28 @@ impl RenderScene {
                 "node.render_scene ibl brdf lut",
             ));
         }
+    }
+}
+
+/// Most triangles one frame's scene pass may submit into memoryless
+/// targets; past it the targets are real storage (`ensure_msaa_targets`).
+/// Far under the hundreds of millions that faulted, and over what a
+/// normal scene draws, so only a heavy scene pays the targets' memory.
+const TILE_TRIANGLE_BUDGET: u64 = 16_000_000;
+
+/// One of the scene pass's MSAA targets, in tile memory only or in real
+/// storage.
+fn msaa_target(
+    device: &manifold_gpu::GpuDevice,
+    real: bool,
+    width: u32,
+    height: u32,
+    format: manifold_gpu::GpuTextureFormat,
+    label: &str,
+) -> manifold_gpu::GpuTexture {
+    if real {
+        device.create_texture_msaa(width, height, format, MSAA_SAMPLES, label)
+    } else {
+        device.create_texture_msaa_memoryless(width, height, format, MSAA_SAMPLES, label)
     }
 }
