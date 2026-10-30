@@ -19,6 +19,7 @@
 
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use manifold_gpu::{BufferUse, GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
@@ -238,23 +239,25 @@ manifold_node_engine::primitive! {
         raining: bool = true,
         // The settled land's heights as a collider, once read back; whether
         // the land changed since the last readback; the readback in flight
-        // (its frame stamp, points per side and size) and its buffer.
+        // (set once its command buffer completes; points per side and size)
+        // and its buffer.
         ground: Option<MeshSource> = None,
         ground_stale: bool = true,
-        ground_pending: Option<(u64, u32, f32)> = None,
+        ground_pending: Option<(Arc<AtomicBool>, u32, f32)> = None,
         ground_readback: Option<GpuBuffer> = None,
     },
 }
 
 impl Terrain {
-    /// Publish a readback whose frame retired.
-    fn take_ground(&mut self, clock: Option<&manifold_gpu::FrameClock>) {
-        let Some((stamp, points, size)) = self.ground_pending else {
+    /// Publish a readback whose command buffer completed.
+    fn take_ground(&mut self) {
+        let Some((done, points, size)) = &self.ground_pending else {
             return;
         };
-        if !clock.is_none_or(|c| c.is_complete(stamp)) {
+        if !done.load(Ordering::Acquire) {
             return;
         }
+        let (points, size) = (*points, *size);
         self.ground_pending = None;
         let Some(readback) = &self.ground_readback else {
             return;
@@ -311,8 +314,14 @@ impl Terrain {
         );
         gpu.native_enc
             .copy_buffer_to_buffer(&buffers.snapshot, readback, bytes);
-        let stamp = gpu.device.frame_clock().map_or(0, |c| c.stamp());
-        self.ground_pending = Some((stamp, uniforms.res, uniforms.size));
+        // Done when its command buffer completes, whichever loop committed it
+        // (live frames, or the load's warm-up, which runs outside the frame
+        // clock).
+        let done = Arc::new(AtomicBool::new(false));
+        let signal = Arc::clone(&done);
+        gpu.native_enc
+            .add_completed_handler(move || signal.store(true, Ordering::Release));
+        self.ground_pending = Some((done, uniforms.res, uniforms.size));
         self.ground_stale = false;
         Ok(())
     }
@@ -403,12 +412,24 @@ impl Primitive for Terrain {
         let changed = reshaped || keep < 1.0 || droplets > 0;
         self.raining = done + f64::from(droplets) < budget;
         let drawn = (height, ctx.rebuild_epoch);
+        // The land itself changes (not just a rewrite of the same vertices
+        // for a new epoch): the collider's heights need reading again.
+        let relaid = changed
+            || self
+                .drawn
+                .is_none_or(|(drawn_height, _)| drawn_height != height);
         let collides = ctx.outputs.slot("source").is_some();
         if collides {
-            self.take_ground(ctx.gpu_encoder().device.frame_clock().as_ref());
+            self.take_ground();
             if let Some(ground) = &self.ground {
                 ctx.outputs.set_mesh_source("source", ground.clone());
             }
+        }
+        // Until its first ground lands a Collider waits for it, as for a
+        // loading mesh, so the World never starts without the ground. A later
+        // change keeps the last ground until the new one lands.
+        if collides && self.ground.is_none() {
+            ctx.mark_outputs_pending();
         }
         // Settled and drawn at this Height: the vertices hold, so the shadow
         // cache and ray-tracing structure keep. A state-carrying rebuild
@@ -424,7 +445,10 @@ impl Primitive for Terrain {
                     ctx.error(format!("Terrain: no room to read its ground back: {error}"));
                 }
             }
-            ctx.mark_outputs_unchanged();
+            // A pending frame is never an unchanged one.
+            if !(collides && self.ground.is_none()) {
+                ctx.mark_outputs_unchanged();
+            }
             return;
         }
         let (Some(pipelines), Some(buffers)) = (self.pipelines.as_ref(), self.buffers.as_ref())
@@ -522,10 +546,11 @@ impl Primitive for Terrain {
         self.done = done + f64::from(droplets);
         self.spawned = self.spawned.wrapping_add(droplets);
         self.drawn = Some(drawn);
-        self.ground_stale = true;
+        self.ground_stale |= relaid;
         // The collider follows the land once it settles.
         if collides
             && !self.raining
+            && self.ground_stale
             && let Err(error) = self.read_ground(gpu, &uniforms)
         {
             ctx.error(format!("Terrain: no room to read its ground back: {error}"));

@@ -352,16 +352,17 @@ fn slot_needs_rebuild(installed: bool, old: Option<&RigidBody>, new: Option<&Rig
 }
 
 /// Whether two bodies can share one installed native body: the same
-/// enabled state and the same solid form. A new shape or scale within a form
-/// is swapped in place ([`reshaped`]).
+/// enabled state and the same solid, or the same solid form. A new shape or
+/// scale within a form is swapped in place ([`reshaped`]); a height field has
+/// no form to swap within, so only the same ground keeps its body.
 fn same_native_body(left: Option<&RigidBody>, right: Option<&RigidBody>) -> bool {
     match (left, right) {
         (None, None) => true,
         (Some(left), Some(right)) => {
             left.enabled == right.enabled
-                && match (left.collider.as_deref(), right.collider.as_deref()) {
+                && match (left.collider.as_ref(), right.collider.as_ref()) {
                     (None, None) => true,
-                    (Some(left), Some(right)) => left.same_form(right),
+                    (Some(left), Some(right)) => Arc::ptr_eq(left, right) || left.same_form(right),
                     _ => false,
                 }
         }

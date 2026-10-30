@@ -669,14 +669,14 @@ impl PhysicsWorld {
                             "a height field only supports a fixed body",
                         ));
                     }
-                    let [px, py, pz] = solid.placed(config.position, config.rotation);
+                    let [ox, oy, oz] = solid.placement(config.rotation);
                     unsafe {
                         ffi::manifold_box3d_height_field_body_create(
                             self.native,
                             *field,
-                            px,
-                            py,
-                            pz,
+                            px + ox,
+                            py + oy,
+                            pz + oz,
                             qx,
                             qy,
                             qz,
@@ -977,7 +977,8 @@ impl PhysicsWorld {
                 "triangle meshes only support fixed bodies",
             ));
         }
-        let [px, py, pz] = geometry.placed(config.position, config.rotation);
+        let offset = geometry.placement(config.rotation);
+        let [px, py, pz] = std::array::from_fn(|i| config.position[i] + offset[i]);
         let native = self.native_body(handle)?;
         let _lock = native_lock();
         let result = unsafe {
@@ -1614,17 +1615,25 @@ impl PhysicsWorld {
     }
 
     pub fn pose(&self, handle: BodyHandle) -> Result<BodyPose, PhysicsError> {
-        let native = self.native_body(handle)?;
+        let record = self.body_record(handle)?;
         let mut position = [0.0; 3];
         let mut rotation = [0.0; 4];
         let _lock = native_lock();
         let result = unsafe {
-            ffi::manifold_box3d_body_pose(native, position.as_mut_ptr(), rotation.as_mut_ptr())
+            ffi::manifold_box3d_body_pose(
+                record.native,
+                position.as_mut_ptr(),
+                rotation.as_mut_ptr(),
+            )
         };
         if result != 0 {
             return Err(PhysicsError::NativeFailure);
         }
-        Ok(BodyPose { position, rotation })
+        let offset = record.geometry.placement(rotation);
+        Ok(BodyPose {
+            position: std::array::from_fn(|i| position[i] - offset[i]),
+            rotation,
+        })
     }
 
     fn native_body(&self, handle: BodyHandle) -> Result<u64, PhysicsError> {

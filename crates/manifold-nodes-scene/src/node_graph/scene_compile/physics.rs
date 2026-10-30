@@ -107,25 +107,6 @@ pub(crate) fn object(
     }
 }
 
-/// A Terrain's Collider: its ground (`node.terrain`'s `source`) as a fixed
-/// body. The Terrain draws where it is, never at the body's pose: Box3D
-/// places a height field's body at the grid's corner.
-pub(crate) fn ground(
-    b: &mut Builder<'_>,
-    item: &Item,
-    frame: Option<&Frame>,
-    terrain: u32,
-    transform: u32,
-) {
-    if let PhysicsPart::Solo(setting) = b.physics.part(item) {
-        if let Some(parent) = frame.and_then(|frame| frame.transform) {
-            b.wire(parent, "transform", transform, "parent");
-        }
-        let body = add_body(b, item, setting, transform);
-        b.wire(terrain, "source", body, "source");
-    }
-}
-
 /// A group drawn as one combined mesh (Combine Meshes on) is one part: of
 /// its own body, or of the group body it sits in.
 pub(crate) fn combined(b: &mut Builder<'_>, group: &Item, mesh: u32, transform: u32) {

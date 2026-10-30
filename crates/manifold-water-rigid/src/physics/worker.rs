@@ -499,6 +499,41 @@ mod tests {
     }
 
     #[test]
+    fn worker_steps_on_over_the_same_height_field_ground() {
+        use manifold_physics::collision_shape::{HeightField, Solid};
+        use std::sync::Arc;
+        let mut inputs = scene();
+        inputs.bodies[1] = Some(RigidBody {
+            kind: 0,
+            collider: Some(Arc::new(Solid::HeightField(HeightField {
+                points: [5, 4],
+                spacing: 0.5,
+                origin: [-1.0, -0.5, -0.75],
+                heights: (0..20)
+                    .map(|i| (i % 5) as f32 * 0.1 - (i / 5) as f32 * 0.05)
+                    .collect(),
+            }))),
+            ..RigidBody::default()
+        });
+        let mut simulation = RigidSimulation::with_worker_epoch(3).unwrap();
+        simulation
+            .advance_worker(&inputs, Seconds::ZERO, 0, &mut Uncoupled)
+            .unwrap();
+        let plan = FramePlan::new(Seconds::ZERO, Seconds(0.25), 15).value;
+        for ordinal in 0..15 {
+            simulation
+                .advance_worker_interval(
+                    &inputs,
+                    plan.interval(ordinal).unwrap(),
+                    &[],
+                    &mut Uncoupled,
+                )
+                .expect("the same ground steps on within its epoch");
+        }
+        assert!((simulation.physics_time - 0.25).abs() < 1e-12);
+    }
+
+    #[test]
     fn worker_intervals_follow_shared_frame_plan_without_debt() {
         for intervals in [20, 24, 30, 60] {
             let mut simulation = RigidSimulation::with_worker_epoch(intervals).unwrap();

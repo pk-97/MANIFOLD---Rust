@@ -188,10 +188,11 @@ impl CookedSolid {
         }))
     }
 
-    /// Where Box3D places a body authored at `position` and `rotation`: a
-    /// height field's grid starts at its body's origin, so that body sits at
-    /// the grid's first point; every other body where authored.
-    pub(crate) fn placed(&self, position: [f32; 3], rotation: [f32; 4]) -> [f32; 3] {
+    /// How far from its authored position Box3D places a body at
+    /// `rotation`: a height field's grid starts at its body's origin, so that
+    /// body sits at the grid's first point; every other body where authored.
+    /// Poses go in and come out authored ([`crate::PhysicsWorld::pose`]).
+    pub(crate) fn placement(&self, rotation: [f32; 4]) -> [f32; 3] {
         match &self.form {
             CookedForm::HeightField { origin, .. } => {
                 let [x, y, z, w] = rotation;
@@ -204,9 +205,9 @@ impl CookedSolid {
                 };
                 let t = cross([x, y, z], *origin).map(|c| 2.0 * c);
                 let u = cross([x, y, z], t);
-                std::array::from_fn(|i| position[i] + origin[i] + w * t[i] + u[i])
+                std::array::from_fn(|i| origin[i] + w * t[i] + u[i])
             }
-            _ => position,
+            _ => [0.0; 3],
         }
     }
 
