@@ -48,6 +48,7 @@ Workers: `haiku` (the `lane` agent) for mechanical edits, deletions, moves and w
 - Tests check real behaviour or math on small inputs and finish in under 2 seconds. No source scanners, line-count ratchets, long soaks or `#[ignore]`.
 - `docs/` holds maps of the current code, guides, and designs for work in progress. Delete a design doc when its work ships. Unbuilt ideas go in `docs/IDEAS.md` as a short paragraph each. No audit, report or log files.
 - Beads (`bd`) hold epics and real bugs or features only.
+- Don't migrate old projects. A format change makes the new format the only one: no load migration rungs, no compatibility shims. Keep `OLDEST_LOADABLE_PROJECT_VERSION` recent; older files are refused. Upgrade one old project by hand, once, only when Peter has a specific reason to need that project.
 
 ## Docs (read when your task touches them)
 GPU: `docs/MANIFOLD_GPU_ARCHITECTURE.md`. Generators and effects: `docs/DECOMPOSING_GENERATORS.md`. Nodes: `docs/NODE_CATALOG.md`. Fusion and freeze: `docs/FREEZE_COMPILER_MAP.md`. Transport, sync, MIDI, OSC: `docs/CORE_ENGINE_MAP.md`. Index: `docs/README.md`.
