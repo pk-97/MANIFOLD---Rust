@@ -54,6 +54,10 @@ pub(crate) fn emit(b: &mut Builder<'_>) {
     if *ambient_occlusion {
         emit_ambient_occlusion(b, owner);
     }
+    // With nothing to simulate the World's physics rows drive no node; they
+    // stay on its card so their values outlive the last physics item.
+    b.keep_rows(&item, "physics", "node.physics_world");
+    b.keep_rows(&item, "cell_size", "node.value");
     b.rows(&item);
     follow_strength(b, owner);
     if let Some(world) = world {
@@ -246,6 +250,38 @@ mod tests {
         assert_eq!(
             render.params.get("upscale_quality"),
             Some(&SerializedParamValue::Enum { value: 1 })
+        );
+    }
+
+    /// With no physics item the World's Cell Size drives nothing, yet stays
+    /// on its card, so the value set there outlives the last Water, Sand,
+    /// gas or body.
+    #[test]
+    fn world_keeps_its_physics_rows_with_nothing_to_simulate() {
+        use manifold_core::scene_doc::ItemKind;
+
+        let mut doc = SceneDoc::base();
+        doc.items.retain(|item| {
+            matches!(
+                item.kind(),
+                ItemKind::World | ItemKind::Camera | ItemKind::Light
+            )
+        });
+        let def = compile(&doc).unwrap();
+        assert!(
+            !def.nodes
+                .iter()
+                .any(|node| node.type_id == "node.physics_world")
+        );
+        let metadata = def.preset_metadata.as_ref().unwrap();
+        let id = "world.cell_size";
+        assert!(
+            metadata.params.iter().any(|spec| spec.id == id),
+            "the Cell Size is on the card"
+        );
+        assert!(
+            !metadata.bindings.iter().any(|binding| binding.id == id),
+            "the Cell Size drives nothing"
         );
     }
 

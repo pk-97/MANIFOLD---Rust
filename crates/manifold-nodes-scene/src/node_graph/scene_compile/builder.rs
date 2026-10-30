@@ -571,6 +571,37 @@ impl<'d> Builder<'d> {
         }
     }
 
+    /// Declare `item`'s card rows that reach its `role` node as params that
+    /// drive nothing, as a node of `type_id` would take them, while that
+    /// node is not emitted: the card keeps their values until it is.
+    pub(crate) fn keep_rows(&mut self, item: &Item, role: &'static str, type_id: &str) {
+        if self.id(item.id.as_str(), role).is_some() {
+            return;
+        }
+        for row in scene_schema::applicable(&item.fields) {
+            let Exposure::Card(facts) = row.exposure else {
+                continue;
+            };
+            if row.reach != Reach::Own(role) {
+                continue;
+            }
+            let Some(meta) = self.param_meta(type_id, row.param) else {
+                continue;
+            };
+            let default = row.default.unwrap_or_else(|| number(&meta.default_value));
+            let mut spec = card_spec(
+                param_id(&item.id, row.property),
+                row.name.unwrap_or(&meta.label),
+                &meta,
+                default,
+                row.section,
+                &facts,
+            );
+            spec.material_role = meta.material_role;
+            self.declare(spec, &meta, &[], row.param);
+        }
+    }
+
     /// The clock nodes of every part inside `item`.
     fn clocks_below(&self, item: &Item) -> Vec<u32> {
         let mut inside = Vec::new();
