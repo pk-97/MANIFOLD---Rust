@@ -587,6 +587,25 @@ fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, searc
 // sentinel (`render_scene.rs`'s caster-table build). Points outside the
 // caster's frustum read as lit (no shadow data there) rather than
 // clamped-dark.
+// The caster slot whose shadow view holds `world_pos`: `slot` itself,
+// except for a point light's cube (`ShadowCaster::CUBE`), whose +X face sits
+// at `slot` and its -X, +Y, -Y, +Z, -Z faces at the next five; the face is
+// the largest axis from the light. Copied in `shaft_march.wgsl`.
+fn caster_face(slot: i32, world_pos: vec3<f32>) -> i32 {
+    if casters[slot].color.w != 2.0 {
+        return slot;
+    }
+    let d = world_pos - casters[slot].source.xyz;
+    let a = abs(d);
+    if a.x >= a.y && a.x >= a.z {
+        return slot + select(1, 0, d.x >= 0.0);
+    }
+    if a.y >= a.z {
+        return slot + select(3, 2, d.y >= 0.0);
+    }
+    return slot + select(5, 4, d.z >= 0.0);
+}
+
 fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
     if slot_f < 0.0 {
         return 1.0;
@@ -612,7 +631,7 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
         }
         return textureLoad(rt_shadow_mask, vec2<i32>(frag_xy), i32(ch / 4u), 0)[ch % 4u];
     }
-    let slot = i32(slot_f + 0.5);
+    let slot = caster_face(i32(slot_f + 0.5), world_pos);
     let vp = casters[slot].view_proj;
     let params = casters[slot].shadow;
     let bias = params.x;

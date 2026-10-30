@@ -18,9 +18,9 @@
 //!   shadow ortho frustum (the shadow pass needs a camera origin); the
 //!   actual lighting direction is `normalize(aim - pos)`. `range` is the
 //!   ortho half-extent (default 30.0).
-//! - **Point** — omnidirectional source at `pos`. `aim - pos` gives the
-//!   shadow camera's forward direction (single-cubemap-face approximation
-//!   for v1; full cubemap shadows are a v2 ask).
+//! - **Point** — omnidirectional source at `pos`. A casting point light
+//!   shadows through six cube faces ([`Light::cube_faces`]), one shadow
+//!   view each.
 //! - **Spot** — point source with a finite cone from `pos` along `dir`.
 //!
 //! Colour is stored premultiplied with intensity (rgb × intensity) so the
@@ -395,11 +395,11 @@ impl Light {
     ///   `[d - range, d + range]` where `d = |pos - aim|`; X/Y span
     ///   `±range`. This is the tight fit for a `range`-sized scene sitting
     ///   around `aim`.
-    /// - **Point** → single-face 90° perspective from `pos` toward `aim`
-    ///   (the v1 approximation; full cubemap shadows are v2). `far` must
-    ///   comfortably exceed `range` because attenuation is only 50% at
-    ///   `d = range` — lit geometry extends well past it, so `far = 4·range`
-    ///   (≈6% attenuation) keeps casters inside the frustum.
+    /// - **Point** → one cube face: a perspective from `pos` toward `aim`,
+    ///   a little wider than 90° so a filter near the face's edge stays on
+    ///   its map. `far` must comfortably exceed `range` because attenuation
+    ///   is only 50% at `d = range` — lit geometry extends well past it, so
+    ///   `far = 4·range` (≈6% attenuation) keeps casters inside the frustum.
     pub fn shadow_proj(&self) -> [[f32; 4]; 4] {
         match self.mode {
             LightMode::Sun => {
@@ -426,7 +426,13 @@ impl Light {
                     LightMode::Spot => {
                         (self.outer_cone_angle * 2.0).clamp(0.01, std::f32::consts::PI - 0.0001)
                     }
-                    _ => std::f32::consts::FRAC_PI_2,
+                    // A face spans tan 1 each side, plus CUBE_EDGE_TEXELS of
+                    // its own `shadow_resolution` texels: 90° lands at NDC
+                    // 1 - 2·CUBE_EDGE_TEXELS/side.
+                    _ => {
+                        let side = self.shadow_resolution.max(256) as f32;
+                        2.0 * (1.0 / (1.0 - 2.0 * CUBE_EDGE_TEXELS / side)).atan()
+                    }
                 };
                 perspective_rh(fov, 1.0, near, far)
             }
@@ -441,7 +447,32 @@ impl Light {
     pub fn shadow_view_proj(&self) -> [[f32; 4]; 4] {
         mat4_mul(self.shadow_proj(), self.shadow_view())
     }
+
+    /// A point light's six shadow views, one per cube face, in the order
+    /// `caster_face` in `scene_shading.wgsl` picks them: +X, -X, +Y, -Y, +Z,
+    /// -Z. Each is this light aimed down its axis at the same distance, so
+    /// the face's range matches the light's.
+    pub fn cube_faces(&self) -> [Light; 6] {
+        let distance = dist3(self.pos, self.aim).max(1e-3);
+        [
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ]
+        .map(|axis: [f32; 3]| Light {
+            aim: std::array::from_fn(|k| self.pos[k] + axis[k] * distance),
+            dir: axis,
+            ..*self
+        })
+    }
 }
+
+/// Texels each cube face reaches past 90° on every side, so a filter at the
+/// face's edge reads its own map, not the lit outside.
+const CUBE_EDGE_TEXELS: f32 = 8.0;
 
 fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
@@ -541,6 +572,57 @@ mod tests {
         // And it points back toward the light (opposite of fwd).
         let expected = [-l.dir[0], -l.dir[1], -l.dir[2]];
         assert!(approx_vec3(l_at_a, expected, 1e-5));
+    }
+
+    /// The face `caster_face` picks (largest axis from the light) holds
+    /// every direction, corners included, inside its map with the edge
+    /// margin to spare, and in front of its near plane.
+    #[test]
+    fn cube_faces_hold_every_direction_with_an_edge_margin() {
+        let pos = [1.5, -2.0, 0.25];
+        let l = Light::point(
+            pos,
+            [4.0, 1.0, -3.0],
+            [1.0, 1.0, 1.0],
+            1.0,
+            6.0,
+            true,
+            ShadowSoftness::Soft,
+            0.003,
+            512,
+        );
+        let faces = l.cube_faces();
+        let edge = 1.0 - 2.0 * CUBE_EDGE_TEXELS / 512.0;
+        let dirs = [
+            [1.0, 0.2, -0.3],
+            [-1.0, 0.99, 0.99],
+            [0.1, 1.0, -0.4],
+            [0.3, -1.0, 0.98],
+            [0.0, 0.0, 1.0],
+            [-0.7, 0.5, -1.0],
+            [1.0, 1.0, 1.0],
+        ];
+        for d in dirs {
+            let a = d.map(f32::abs);
+            let face = if a[0] >= a[1] && a[0] >= a[2] {
+                usize::from(d[0] < 0.0)
+            } else if a[1] >= a[2] {
+                2 + usize::from(d[1] < 0.0)
+            } else {
+                4 + usize::from(d[2] < 0.0)
+            };
+            let p = std::array::from_fn::<f32, 3, _>(|k| pos[k] + d[k] * 3.0);
+            let m = faces[face].shadow_view_proj();
+            let clip: [f32; 4] =
+                std::array::from_fn(|r| (0..3).map(|c| m[c][r] * p[c]).sum::<f32>() + m[3][r]);
+            assert!(clip[3] > 0.0, "{d:?} behind face {face}");
+            let ndc = [clip[0] / clip[3], clip[1] / clip[3], clip[2] / clip[3]];
+            assert!(
+                ndc[0].abs() <= edge && ndc[1].abs() <= edge,
+                "{d:?} at {ndc:?} on face {face} reaches the edge margin"
+            );
+            assert!((0.0..=1.0).contains(&ndc[2]), "{d:?} depth {}", ndc[2]);
+        }
     }
 
     #[test]

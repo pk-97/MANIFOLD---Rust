@@ -42,9 +42,10 @@ gpu_record! {
     /// One shadow-casting light, read by both renderers. The raster reads
     /// `view_proj` and `shadow` to sample its shadow map; the ray tracer reads
     /// `source` and `color` to trace its shadow rays. One table of these, one
-    /// entry per shadow-casting light in light order, sits after the light
-    /// table in the same per-frame buffer. Entry `i` is caster slot `i`: its
-    /// shadow-map layer, and channel `i % 4` of shadow-visibility layer `i / 4`.
+    /// entry per shadow view in light order (a point light's six cube faces
+    /// are six), sits after the light table in the same per-frame buffer.
+    /// Entry `i` is caster slot `i`: its shadow-map layer, and channel `i % 4`
+    /// of shadow-visibility layer `i / 4`.
     ShadowCaster {
         /// The light's view-projection for its shadow map (column-major).
         view_proj: mat4,
@@ -55,12 +56,24 @@ gpu_record! {
         /// light's position. `w`: a sun's cone half-angle in radians, or a
         /// point light's diameter (0 = hard shadow).
         source: vec4,
-        /// `rgb`: colour times intensity. `w`: 0 for a sun, 1 for a point or spot.
+        /// `rgb`: colour times intensity. `w`: the kind, [`Self::SUN`],
+        /// [`Self::POSITIONAL`], [`Self::CUBE`] or [`Self::CUBE_FACE`].
         color: vec4,
     }
 }
 
 impl ShadowCaster {
+    /// A sun: `source` is its direction.
+    pub const SUN: f32 = 0.0;
+    /// A point or spot light with one shadow view: `source` is its position.
+    pub const POSITIONAL: f32 = 1.0;
+    /// A point light's cube: this slot is its +X face and the next five its
+    /// -X, +Y, -Y, +Z and -Z faces. Traced like [`Self::POSITIONAL`].
+    pub const CUBE: f32 = 2.0;
+    /// One of a cube's five later faces: a shadow view only, black, so the
+    /// tracer shadows the light once, from its first slot.
+    pub const CUBE_FACE: f32 = 3.0;
+
     /// A ray-traced caster with no shadow map, for tracer-only callers.
     /// `kind` 0 is a sun, 1 a point light.
     pub fn traced(dir_or_pos: [f32; 3], cone_or_size: f32, color: [f32; 3], kind: u32) -> Self {
@@ -73,7 +86,7 @@ impl ShadowCaster {
 
     /// True for a sun caster.
     pub fn is_sun(&self) -> bool {
-        self.color[3] == 0.0
+        self.color[3] == Self::SUN
     }
 }
 

@@ -11,7 +11,7 @@ A scene of any size, and a hero shot up close, holds frame rate without anyone d
 
 ## What exists (read 2026-10-30)
 
-- Every mesh draws whole, one draw per object per pass: each shadow light (at most 4), the opaque depth snapshot, Pass A, Pass B for blended draws, subsurface, caustics (`render_scene/pass2_draw.rs`, `render_scene/prepasses.rs`).
+- Every mesh draws whole, one draw per object per pass: each shadow view (one per light, six for a point light), the opaque depth snapshot, Pass A, Pass B for blended draws, subsurface, caustics (`render_scene/pass2_draw.rs`, `render_scene/prepasses.rs`).
 - Culling is per object on the CPU, against the frustum only (`render_scene/frustum.rs`, `frame_setup.rs` `in_view`). Instanced arrays of 1024+ opaque copies get a GPU frustum cull for camera passes only; shadow passes draw every copy (`shaders/cull_instances.wgsl`).
 - No detail levels, patches, occlusion culling or mesh shaders anywhere. Decimation is a manual `gltf-transform` step.
 - The draw path already takes indexed meshes: `node.scene_object`'s optional `indices: Array(u32)` reaches every pass, the selection mask, previous positions and the acceleration structure (`frame_setup.rs` around `indices_content`).

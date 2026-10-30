@@ -397,11 +397,9 @@ use focused tests per the scope rule.
    the assembler. No scene-document format, no second authoring model.
 2. Import-shaped from day one (D1); glTF import itself is a later phase + own design.
 3. **[AMENDED 2026-07-10 (F2)]** Object count = `OBJECT_SLIDER_MAX` (shipped 64); light
-   count is owned by UNBOUNDED_LIGHTS, not this doc. Shadows are capped separately: the
-   first `MAX_SHADOW_CASTING_LIGHTS = 4` `cast_shadows` lights (slot order) get shadow
-   maps; the rest still illuminate. That caster cap `K` — not the object/light sliders —
-   is the bounded-cost guarantee. All three are constants, not architecture. (The original
-   "8 objects, 4 lights; any light may cast" is dead — see D4.)
+   count is owned by UNBOUNDED_LIGHTS, not this doc. Every `cast_shadows` light gets
+   shadow maps, with no cap: one layer each, six for a point light (one per cube face,
+   `docs/LIGHT_TRANSPORT_DESIGN.md`).
 4. Fog/atmosphere is v1, as a port type (D5). Huge scenes are v2.
 5. Gizmos are v1 and are `EditingService` param edits; wired params lock (D8).
 6. Viewport = promoted graph-editor preview; show state/output stay isolated (D7/D9).
@@ -423,7 +421,6 @@ use focused tests per the scope rule.
   geometry to occlude each other (its Deferred #6), and Peter approved the design.
 - **Volumetric light shafts** — post-v1 atmosphere upgrade (real volumetrics, not
   depth fog).
-- **Spot lights / cubemap point shadows** — LightMode extension, v2.
 - **Hierarchy panel / in-viewport mesh editing** — Blender territory; MANIFOLD is the
   stage, not the modeler. Revisit only with strong user pull.
 

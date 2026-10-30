@@ -1040,10 +1040,13 @@ impl RenderScene {
 
         // One light interpretation for surfaces and shafts: position/direction
         // plus mode, premultiplied colour plus caster slot, and range. Every
-        // light with `cast_shadows` gets the next caster slot.
+        // light with `cast_shadows` gets the next caster slot, and a point
+        // light the five after it too, one per cube face. The caster table
+        // both renderers read has one entry per slot.
         let mut light_data: Vec<[f32; 4]> = Vec::with_capacity(lights_n * LIGHT_VEC4_STRIDE);
         let mut light_count: u32 = 0;
         let mut casters: Vec<manifold_node_engine::scene::light::Light> = Vec::new();
+        let mut shadow_casters: Vec<manifold_gpu::ShadowCaster> = Vec::new();
         // Every wired light (Sun AND
         // Point) contributes to the march — 3-vec4-per-light packing,
         // matching `shaft_march.wgsl`'s `shaft_lights` binding(2) layout
@@ -1066,7 +1069,15 @@ impl RenderScene {
                 self.rendered_lights.push(l.pos);
                 let slot: f32 = if l.cast_shadows {
                     let s = casters.len() as f32;
-                    casters.push(l);
+                    if l.mode == manifold_node_engine::scene::light::LightMode::Point {
+                        for (face, view) in l.cube_faces().into_iter().enumerate() {
+                            shadow_casters.push(shadow_caster_entry(&view, Some(face)));
+                            casters.push(view);
+                        }
+                    } else {
+                        shadow_casters.push(shadow_caster_entry(&l, None));
+                        casters.push(l);
+                    }
                     s
                 } else {
                     -1.0
@@ -1115,10 +1126,6 @@ impl RenderScene {
         // `shaft_light_count` (still 0 at THIS point) never accounts for,
         // desyncing the shader's `li * LIGHT_STRIDE` indexing from the
         // real appended entries).
-
-        // The caster table both renderers read, one entry per caster slot.
-        let shadow_casters: Vec<manifold_gpu::ShadowCaster> =
-            casters.iter().map(shadow_caster_entry).collect();
 
         let dims_tex = ctx.outputs.texture_2d("color")?;
         let width = dims_tex.width;
@@ -1542,11 +1549,14 @@ impl RenderScene {
     }
 }
 
-/// One light's entry in the shared caster table: its shadow-map projection
-/// and filter for the raster, its ray source and colour for the ray tracer.
+/// One shadow view's entry in the shared caster table: its shadow-map
+/// projection and filter for the raster, its ray source and colour for the
+/// ray tracer. `face` is the cube face of a point light's view.
 fn shadow_caster_entry(
     l: &manifold_node_engine::scene::light::Light,
+    face: Option<usize>,
 ) -> manifold_gpu::ShadowCaster {
+    use manifold_gpu::ShadowCaster;
     use manifold_node_engine::scene::light::{LightMode, ShadowSoftness};
     let light_size = match l.shadow_softness {
         ShadowSoftness::Contact { light_size } => light_size,
@@ -1558,9 +1568,13 @@ fn shadow_caster_entry(
     let khw = l.shadow_softness.kernel_half_width() as f32;
     let texel = 1.0 / shadow_map_resolution(l.shadow_resolution) as f32;
     // A dark light keeps its slot, but its traced fields stay neutral so its
-    // movement cannot disturb RT history; the tracer skips its rays.
-    let (source, kind) = if l.color[..3].iter().all(|&channel| channel == 0.0) {
-        ([0.0, 1.0, 0.0, 0.0], 0.0)
+    // movement cannot disturb RT history; the tracer skips its rays. So do a
+    // cube's later faces: the tracer shadows the light once, from its first.
+    let dark = l.color[..3].iter().all(|&channel| channel == 0.0);
+    let (source, kind) = if face.is_some_and(|face| face > 0) {
+        ([0.0, 1.0, 0.0, 0.0], ShadowCaster::CUBE_FACE)
+    } else if dark {
+        ([0.0, 1.0, 0.0, 0.0], ShadowCaster::SUN)
     } else {
         match l.mode {
             LightMode::Sun => (
@@ -1570,15 +1584,27 @@ fn shadow_caster_entry(
                     -l.dir[2],
                     sun_cone_half_angle(l.shadow_softness),
                 ],
-                0.0,
+                ShadowCaster::SUN,
             ),
-            LightMode::Point | LightMode::Spot => ([l.pos[0], l.pos[1], l.pos[2], light_size], 1.0),
+            LightMode::Point | LightMode::Spot => (
+                [l.pos[0], l.pos[1], l.pos[2], light_size],
+                if face.is_some() {
+                    ShadowCaster::CUBE
+                } else {
+                    ShadowCaster::POSITIONAL
+                },
+            ),
         }
     };
-    manifold_gpu::ShadowCaster {
+    let rgb = if kind == ShadowCaster::CUBE_FACE {
+        [0.0; 3]
+    } else {
+        [l.color[0], l.color[1], l.color[2]]
+    };
+    ShadowCaster {
         view_proj: l.shadow_view_proj(),
         shadow: [l.shadow_bias, khw, texel, light_size],
         source,
-        color: [l.color[0], l.color[1], l.color[2], kind],
+        color: [rgb[0], rgb[1], rgb[2], kind],
     }
 }

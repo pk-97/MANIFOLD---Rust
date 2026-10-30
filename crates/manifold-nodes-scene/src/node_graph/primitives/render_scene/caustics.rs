@@ -90,7 +90,7 @@ pub(super) struct Sun<'a> {
 pub(super) fn sun_slot(casters: &[ShadowCaster]) -> Option<usize> {
     casters
         .iter()
-        .position(|c| c.color[3] == 0.0 && c.color[..3].iter().any(|&channel| channel > 0.0))
+        .position(|c| c.is_sun() && c.color[..3].iter().any(|&channel| channel > 0.0))
 }
 
 /// One clear surface this frame: its mesh, how it draws, and what it does to
