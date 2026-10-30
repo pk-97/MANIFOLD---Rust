@@ -16,9 +16,9 @@ const MATTER_ELASTIC: u32 = 3u;
 // is plastic (Stomakhin et al. 2013, Table 2).
 const MM_SNOW_COMPRESS: f32 = 2.5e-2;
 const MM_SNOW_STRETCH: f32 = 7.5e-3;
-// The hardening factor's bounds, as implementations of the paper hold it, so
-// a fully packed or fully loosened point stays stable at the substeps the
-// domain budgets (five times the stiffness at most).
+// The hardening factor's bounds, as implementations of the paper hold it
+// (matter.rs SNOW_HARDENING_MAX); `matter_capped` lowers the top to what the
+// substep has room for.
 const MM_SNOW_HARDENING_MIN: f32 = 0.1;
 const MM_SNOW_HARDENING_MAX: f32 = 5.0;
 
@@ -51,6 +51,26 @@ struct MatterMaterial {
     // carries (`matter_wet_cohesion`). The water's bridges form again as the
     // grains move, so flow never softens it.
     wet: f32,
+    // Snow: the most packing may stiffen it on this substep.
+    hardening_max: f32,
+}
+
+// Rows of the material table (node.matter_material).
+const MATTER_SLOTS: u32 = 8u;
+
+// One slot's row of the material table (matter.rs `MatterMaterial::row`):
+// μ, λ, α, β₀ | q_s, rule, yield strain, relax time | ξ, density, water
+// lift, water drag rate | wall friction and three spare.
+struct MatterRow {
+    a: vec4<f32>,
+    b: vec4<f32>,
+    c: vec4<f32>,
+    d: vec4<f32>,
+}
+
+// The table row a point reads: the slot its fill wrote in affine_z.w.
+fn matter_slot(w: f32) -> u32 {
+    return min(u32(max(w, 0.0) + 0.5), MATTER_SLOTS - 1u);
 }
 
 // Damp sand's cohesion, about what holds a sandcastle wall (Pa): water held
@@ -289,7 +309,7 @@ fn matter_snow_update(svd: MatterSvd, plastic: MatterPlastic, m: MatterMaterial)
     let trial_log = matter_log_stretch(svd.sigma);
     let kept_log = log(sigma);
     state.strain = plastic.strain + (trial_log.x + trial_log.y + trial_log.z) - (kept_log.x + kept_log.y + kept_log.z);
-    let h = clamp(exp(m.hardening * (1.0 - exp(state.strain))), MM_SNOW_HARDENING_MIN, MM_SNOW_HARDENING_MAX);
+    let h = clamp(exp(m.hardening * (1.0 - exp(state.strain))), MM_SNOW_HARDENING_MIN, m.hardening_max);
     let j = sigma.x * sigma.y * sigma.z;
     let tau = 2.0 * m.mu * h * (sigma - vec3<f32>(1.0)) * sigma + vec3<f32>(m.lambda * h * (j - 1.0) * j);
     return MatterUpdate(mm_compose(svd, sigma), mm_symmetric(svd.u, tau), state, j);
@@ -324,4 +344,33 @@ fn matter_update(f: mat3x3<f32>, grad_v: mat3x3<f32>, dt: f32, plastic: MatterPl
         tau = tau + (j * m.relax_time * m.mu) * (grad_v + transpose(grad_v));
     }
     return MatterUpdate(mm_compose(svd, stretch), tau, state, j);
+}
+
+// The material a point of row `r` runs on a substep of `dt` (MATTER_SAND_DESIGN.md
+// section 7): its stiffness held to the share the step has room for, as
+// matter.rs `stiffness_room` (the step carries a wave across `wave_reach`
+// metres less `speed_estimate`) — snow's hardening held under it, other
+// materials' μ and λ scaled down only past it — and its Kelvin-Voigt damping
+// at most ρ dx² / (12 dt). `wetness` and `under` are the point's.
+fn matter_capped(r: MatterRow, dx: f32, dt: f32, wave_reach: f32, speed_estimate: f32, wetness: f32, under: f32) -> MatterMaterial {
+    let kind = u32(r.b.y + 0.5);
+    let density = r.c.y;
+    let step = max(dt, MM_EPSILON);
+    let carried = max(wave_reach / step - speed_estimate, 0.0);
+    let room = carried * carried * density / max(r.a.y + 2.0 * r.a.x, MM_EPSILON);
+    var scale = 1.0;
+    var hardening_max = MM_SNOW_HARDENING_MAX;
+    if kind == MATTER_SNOW {
+        hardening_max = clamp(room, MM_SNOW_HARDENING_MIN, MM_SNOW_HARDENING_MAX);
+    } else {
+        scale = min(room, 1.0);
+    }
+    let mu = r.a.x * scale;
+    let lambda = r.a.y * scale;
+    var relax = r.b.w;
+    if kind == MATTER_ELASTIC {
+        relax = min(relax, density * dx * dx / (12.0 * step * max(mu, MM_EPSILON)));
+    }
+    let wet = select(0.0, matter_wet_cohesion(wetness, under, r.a.z, lambda, mu), kind == MATTER_GRANULAR);
+    return MatterMaterial(mu, lambda, r.a.z, r.a.w, r.b.x, kind, r.b.z, relax, r.c.x, wet, hardening_max);
 }

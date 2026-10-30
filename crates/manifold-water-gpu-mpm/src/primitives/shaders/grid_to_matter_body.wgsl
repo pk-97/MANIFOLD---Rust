@@ -17,7 +17,9 @@ fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 // C over dt, the return map keeps it inside the yield cone, and the record
 // takes the new F, J = det F, its plastic state (volume correction in
 // affine_x.w, plastic strain in f_x.w) and the Kirchhoff stress P2G spreads.
-// The material index in affine_z.w is kept. Node p sits at world p·h, pooled by world tile (READ_SIDE).
+// The material is the point's row of `materials`, the slot in affine_z.w (kept),
+// held to the stiffness the substep has room for (`matter_capped`). Node p sits
+// at world p·h, pooled by world tile (READ_SIDE).
 // A point whose own cell (the one holding it) has no stored tile is removed
 // (id 0, velocity 0, volume ratio 0, which node.matter_stats counts as a short
 // pool). After the move, a point beyond an Open face of the bounds box or below
@@ -38,7 +40,7 @@ fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 // reaction.
 //
 // Reaction (D30): the momentum a point loses there, m·v_n·n with
-// m = V0·density, goes to a dynamic body (inv_mass > 0) as the same four
+// m = V0 times its row's density, goes to a dynamic body (inv_mass > 0) as the same four
 // terms node.matter_body_reaction adds per node, into the same 16 words of
 // `reaction_out` (atomic; `reaction` aliases it and is never read). Only
 // when dynamic_count > 0, which run() clears without a covering slot.
@@ -87,14 +89,8 @@ fn body(
     e_points: Element,
     cell_size: f32,
     step_dt: f32,
-    mu: f32,
-    lambda: f32,
-    alpha: f32,
-    cohesion: f32,
-    softening: f32,
     active_count: i32,
     body_count: i32,
-    density: f32,
     momentum_unit: f32,
     tick_index: i32,
     substep_in_tick: i32,
@@ -109,10 +105,8 @@ fn body(
     bounds_hi_y: f32,
     bounds_hi_z: f32,
     kill_height: f32,
-    material_rule: i32,
-    yield_strain: f32,
-    relax_time: f32,
-    hardening: f32,
+    wave_reach: f32,
+    speed_estimate: f32,
 ) -> Element {
     matter_pool_tiles = u32(pool_tiles);
     var p = e_points;
@@ -167,7 +161,14 @@ fn body(
     let c2 = k * b2;
     p.velocity = v_pic;
     p.position = p.position + step_dt * v_pic;
-    let mass = p.affine_y.w * density;
+    let row_at = matter_slot(p.affine_z.w) * 16u;
+    let row = MatterRow(
+        vec4<f32>(buf_materials[row_at], buf_materials[row_at + 1u], buf_materials[row_at + 2u], buf_materials[row_at + 3u]),
+        vec4<f32>(buf_materials[row_at + 4u], buf_materials[row_at + 5u], buf_materials[row_at + 6u], buf_materials[row_at + 7u]),
+        vec4<f32>(buf_materials[row_at + 8u], buf_materials[row_at + 9u], buf_materials[row_at + 10u], buf_materials[row_at + 11u]),
+        vec4<f32>(buf_materials[row_at + 12u], buf_materials[row_at + 13u], buf_materials[row_at + 14u], buf_materials[row_at + 15u]),
+    );
+    let mass = p.affine_y.w * row.c.y;
     let counts = 16777216.0 / momentum_unit;
     let weight = f32(substep_in_tick) / f32(max(substeps_per_tick, 1));
     // Salted apart from node.matter_body_reaction's node keys, which share
@@ -264,10 +265,7 @@ fn body(
         transpose(mat3x3<f32>(c0, c1, c2)),
         step_dt,
         MatterPlastic(p.affine_x.w, p.f_x.w),
-        MatterMaterial(
-            mu, lambda, alpha, cohesion, softening, u32(material_rule), yield_strain, relax_time, hardening,
-            select(0.0, matter_wet_cohesion(p.f_y.w, p.f_z.w, alpha, lambda, mu), u32(material_rule) == MATTER_GRANULAR),
-        ),
+        matter_capped(row, cell_size, step_dt, wave_reach, speed_estimate, p.f_y.w, p.f_z.w),
     );
     let f_rows = transpose(up.f);
     p.volume_ratio = up.j;

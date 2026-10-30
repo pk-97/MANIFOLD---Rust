@@ -10,10 +10,10 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use crate::matter::{
     MATTER_POOL_FLOOR_TILES, MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS,
-    STATS_WORDS, grid_accum_bytes, grid_bytes, substep_duration, water_lift,
+    STATS_WORDS, grid_accum_bytes, grid_bytes, substep_duration,
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-use manifold_core::liquid_domain::{SAND_WATER_DRAG, WATER_PUSH_INPUT};
+use manifold_core::liquid_domain::WATER_PUSH_INPUT;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::exec::substeps::{
     SubstepBoundaryPorts, SubstepInterval, SubstepResultPorts,
@@ -21,7 +21,6 @@ use manifold_node_engine::exec::substeps::{
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::wet_map::DRY_SECONDS;
-use manifold_water_liquid::WATER_DENSITY;
 use manifold_water_liquid::tile_pool::next_pool;
 use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 
@@ -30,7 +29,13 @@ use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 /// substep; the words themselves live in the domain's reaction slot, which
 /// the domain reads back.
 const REMOVE_NONFINITE_SHADER: &str = include_str!("shaders/matter_remove_nonfinite.wgsl");
-const WATER_DRAG_SHADER: &str = include_str!("shaders/matter_water_drag.wgsl");
+static WATER_DRAG_SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "{}\n{}",
+        super::matter_common::MATTER_MATERIAL,
+        include_str!("shaders/matter_water_drag.wgsl")
+    )
+});
 
 const RESULTS: &[SubstepResultPorts] = &[
     SubstepResultPorts {
@@ -70,11 +75,11 @@ pub const MATTER_STATE_PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct WaterDragParams {
     count: u32,
-    rate: f32,
     dt: f32,
     dry: f32,
+    _pad0: u32,
     gravity: [f32; 3],
-    lift: f32,
+    _pad1: u32,
 }
 
 /// Stats readbacks in flight: the GPU writes a slot at the end of a frame's
@@ -112,11 +117,10 @@ manifold_node_engine::primitive! {
         substeps_per_tick: ScalarF32 optional,
         epoch: ScalarF32 optional,
         // Last frame's water at each point (node.water_on_sand), a
-        // state-capture wire, and the domain's density, rule and gravity
-        // it pushes and lifts against.
+        // state-capture wire, the material table whose rows say how much
+        // the water lifts and drags each point, and the domain's gravity.
         water_push: Array(f32) optional,
-        density: ScalarF32 optional,
-        material_rule: ScalarF32 optional,
+        materials: Array(f32) optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
     },
     outputs: {
@@ -135,10 +139,14 @@ manifold_node_engine::primitive! {
         tick_index: ScalarF32,
         live_count: ScalarF32,
         fault: ScalarF32,
+        // The most a snow point's packing asked to stiffen it on the last
+        // read tick (stats word 18), 0 with no snow: node.matter_domain
+        // sizes the substeps to it.
+        hardened: ScalarF32,
     },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; pool_tiles, pool_ceiling, ticks, substeps_per_tick and epoch from node.matter_domain. The pool grows from the domain's toward pool_ceiling ahead of the tiles the last read tick held (stats word 17); every region atom reads this node's pool_tiles output. The region body (zero_array → matter_move_bodies → matter_to_grid → matter_grid_update → matter_body_reaction → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in, stats_in and reaction_in (node.matter_body_reaction's reaction_out). out and stats escape to node.matter_frame; reaction is the last substep's reaction words, which nothing needs to read. water_push (from node.water_on_sand, a state-capture wire) with density, material_rule and gravity (node.matter_domain's) let a water lift and drag the points once a frame. Only live points (id ≠ 0) move.",
+    composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; pool_tiles, pool_ceiling, ticks, substeps_per_tick and epoch from node.matter_domain. The pool grows from the domain's toward pool_ceiling ahead of the tiles the last read tick held (stats word 17); every region atom reads this node's pool_tiles output. The region body (zero_array → matter_move_bodies → matter_to_grid → matter_grid_update → matter_body_reaction → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in, stats_in and reaction_in (node.matter_body_reaction's reaction_out). out and stats escape to node.matter_frame; reaction is the last substep's reaction words, which nothing needs to read. water_push (from node.water_on_sand, a state-capture wire) with materials (node.matter_material's table: each row's lift and drag rate) and gravity (node.matter_domain's) let a water lift and drag the points once a frame. hardened feeds node.matter_domain's hardened, a state-capture wire. Only live points (id ≠ 0) move.",
     examples: ["SandColumn", "SandBoxDrop"],
     picker: { label: "Matter State", category: Atom },
     summary: "Keeps the liquid's particles between frames and runs its simulation steps.",
@@ -253,7 +261,7 @@ impl Primitive for MatterState {
         }
         if self.water_drag.is_none() {
             self.water_drag = Some(device.create_compute_pipeline(
-                WATER_DRAG_SHADER,
+                WATER_DRAG_SHADER.as_str(),
                 "water_drag",
                 "node.matter_state.water_drag",
             ));
@@ -321,14 +329,9 @@ impl Primitive for MatterState {
         let epoch = whole(ctx.scalar_or_param("epoch", 0.0));
         let seed = ctx.inputs.array("seed");
         let water_push = ctx.inputs.array(WATER_PUSH_INPUT);
-        let density = ctx.scalar_or_param("density", 1600.0);
+        let materials = ctx.inputs.array("materials");
         let gravity = [("gravity_x", 0.0), ("gravity", -9.81), ("gravity_z", 0.0)]
             .map(|(name, default)| ctx.scalar_or_param(name, default));
-        let lift = water_lift(
-            ctx.scalar_or_param("material_rule", 0.0).round() as i32,
-            density,
-            WATER_DENSITY,
-        );
         let out = ctx.outputs.array("out");
         let stats = ctx.outputs.array("stats");
         let gpu = ctx.gpu_encoder();
@@ -454,18 +457,18 @@ impl Primitive for MatterState {
         // The water drags the sand once a frame, over the frame's simulated
         // time, before the region moves it.
         let seconds = ticks as f32 * interval_duration;
-        if let (Some(push), Some(out), Some(pipeline)) = (water_push, out, self.water_drag.as_ref())
+        if let (Some(push), Some(materials), Some(out), Some(pipeline)) =
+            (water_push, materials, out, self.water_drag.as_ref())
             && count > 0
             && seconds > 0.0
-            && density > 0.0
         {
             let params = WaterDragParams {
                 count,
-                rate: SAND_WATER_DRAG * WATER_DENSITY / density,
                 dt: seconds,
                 dry: DRY_SECONDS,
+                _pad0: 0,
                 gravity,
-                lift,
+                _pad1: 0,
             };
             gpu.native_enc.dispatch_compute(
                 pipeline,
@@ -482,6 +485,11 @@ impl Primitive for MatterState {
                     GpuBinding::Buffer {
                         binding: 2,
                         buffer: push,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: materials,
                         offset: 0,
                     },
                 ],
@@ -517,6 +525,9 @@ impl Primitive for MatterState {
             .set_scalar("live_count", ParamValue::Float(live as f32));
         ctx.outputs
             .set_scalar("pool_tiles", ParamValue::Float(pool_tiles as f32));
+        let hardened = self.last_stats.map_or(0.0, |s| s.max_hardening);
+        ctx.outputs
+            .set_scalar("hardened", ParamValue::Float(hardened));
         ctx.outputs.set_scalar(
             "fault",
             ParamValue::Float(if self.faulted { 1.0 } else { 0.0 }),

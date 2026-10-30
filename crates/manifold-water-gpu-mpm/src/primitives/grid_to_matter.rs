@@ -22,14 +22,8 @@ use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, Li
 struct ToMatterUniforms {
     cell_size: f32,
     step_dt: f32,
-    mu: f32,
-    lambda: f32,
-    alpha: f32,
-    cohesion: f32,
-    softening: f32,
     active_count: i32,
     body_count: i32,
-    density: f32,
     momentum_unit: f32,
     tick_index: i32,
     substep_in_tick: i32,
@@ -44,10 +38,8 @@ struct ToMatterUniforms {
     bounds_hi_y: f32,
     bounds_hi_z: f32,
     kill_height: f32,
-    material_rule: i32,
-    yield_strain: f32,
-    relax_time: f32,
-    hardening: f32,
+    wave_reach: f32,
+    speed_estimate: f32,
     dispatch_count: u32,
     _pad0: u32,
     _pad1: u32,
@@ -67,16 +59,13 @@ manifold_node_engine::primitive! {
         atlas: Array(u32) optional,
         reaction: Array(i32) optional,
         tiles: Array(u32) required,
+        // The material table (node.matter_material): each point reads the
+        // row its affine_z.w names.
+        materials: Array(f32) required,
         cell_size: ScalarF32 optional,
         step_dt: ScalarF32 optional,
-        mu: ScalarF32 optional,
-        lambda: ScalarF32 optional,
-        alpha: ScalarF32 optional,
-        cohesion: ScalarF32 optional,
-        softening: ScalarF32 optional,
         active_count: ScalarF32 optional,
         body_count: ScalarF32 optional,
-        density: ScalarF32 optional,
         momentum_unit: ScalarF32 optional,
         tick_index: ScalarF32 optional,
         substep_in_tick: ScalarF32 optional,
@@ -87,10 +76,8 @@ manifold_node_engine::primitive! {
         bounds_lo_x: ScalarF32 optional, bounds_lo_y: ScalarF32 optional, bounds_lo_z: ScalarF32 optional,
         bounds_hi_x: ScalarF32 optional, bounds_hi_y: ScalarF32 optional, bounds_hi_z: ScalarF32 optional,
         kill_height: ScalarF32 optional,
-        material_rule: ScalarF32 optional,
-        yield_strain: ScalarF32 optional,
-        relax_time: ScalarF32 optional,
-        hardening: ScalarF32 optional,
+        wave_reach: ScalarF32 optional,
+        speed_estimate: ScalarF32 optional,
     },
     outputs: {
         points_out: Array(MatterPoint),
@@ -99,14 +86,8 @@ manifold_node_engine::primitive! {
     params: [
         ParamDef { name: Cow::Borrowed("cell_size"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(0.0625), range: Some((1.0e-4, 100.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("step_dt"), label: "Substep (s)", ty: ParamType::Float, default: ParamValue::Float(4.9e-4), range: Some((0.0, 1.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("mu"), label: "Shear Modulus (Pa)", ty: ParamType::Float, default: ParamValue::Float(1.36e5), range: Some((0.0, 1.0e9)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("lambda"), label: "Lamé λ (Pa)", ty: ParamType::Float, default: ParamValue::Float(2.04e5), range: Some((0.0, 1.0e9)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("alpha"), label: "Friction α", ty: ParamType::Float, default: ParamValue::Float(0.386), range: Some((0.0, 2.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("cohesion"), label: "Cohesion Strain", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("softening"), label: "Cohesion Softening", ty: ParamType::Float, default: ParamValue::Float(0.05), range: Some((1.0e-6, 10.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("active_count"), label: "Active Count", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_000_000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 64.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("density"), label: "Density (kg/m³)", ty: ParamType::Float, default: ParamValue::Float(1600.0), range: Some((1.0, 1.0e5)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("momentum_unit"), label: "Momentum Unit (m/s)", ty: ParamType::Float, default: ParamValue::Float(128.0), range: Some((1.0e-3, 1.0e9)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("tick_index"), label: "Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("substep_in_tick"), label: "Substep in Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
@@ -121,10 +102,8 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("bounds_hi_y"), label: "Bounds Max Y", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("bounds_hi_z"), label: "Bounds Max Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("kill_height"), label: "Kill Height", ty: ParamType::Float, default: ParamValue::Float(f32::MIN), range: Some((f32::MIN, f32::MAX)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("material_rule"), label: "Material Rule", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 3.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("yield_strain"), label: "Yield Strain", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 10.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("relax_time"), label: "Relax Time (s)", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 100.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("hardening"), label: "Hardening", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 100.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("wave_reach"), label: "Wave Reach (m)", ty: ParamType::Float, default: ParamValue::Float(0.0625 / 3.0), range: Some((0.0, 100.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("speed_estimate"), label: "Speed Estimate (m/s)", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0e4)), enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "Removal is a short pool (the point's cell has no stored tile), an Open face of the bounds box or the kill height. Wire tiles from the same step as grid. Region body of the Live Matter group, after node.matter_grid_update and node.matter_body_reaction. points/points_out alias the node.matter_state point buffer (updated in place); grid is read as a gather. Positions always advect with the gathered velocity. bodies comes from node.matter_move_bodies (the substep-end pose node.matter_grid_update also reads); shapes, atlas and body_count from node.matter_domain. With bodies unwired no collider is read. reaction/reaction_out alias the domain's reaction words after node.matter_body_reaction (wire its reaction_out here, and this reaction_out into node.matter_state's reaction_in); density, momentum_unit, substeps_per_tick and dynamic_count come from node.matter_domain, tick_index and substep_in_tick from node.matter_state. Without a reaction slot covering every body, or with dynamic_count 0, no reaction is written.",
@@ -141,7 +120,7 @@ manifold_node_engine::primitive! {
     fusion_kind: Boundary,
     boundary_reason: Blocked,
     wgsl_body: include_str!("shaders/grid_to_matter_body.wgsl"),
-    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     wgsl_includes: [READ_SIDE, LIQUID_POSE, LIQUID_COLLIDER, MATTER_BOUNDS, MATTER_MATERIAL],
     atomic_outputs: ["reaction_out"],
 }
@@ -193,34 +172,9 @@ impl Primitive for GridToMatter {
             .round()
             .clamp(0.0, 63.0) as i32;
         let kill_height = ctx.scalar_or_param("kill_height", f32::MIN);
-        let material_rule = ctx.scalar_or_param("material_rule", 0.0).round() as i32;
-        let [yield_strain, relax_time, hardening] =
-            ["yield_strain", "relax_time", "hardening"].map(|name| ctx.scalar_or_param(name, 0.0));
-        let physical = (0..=3).contains(&material_rule)
-            && [yield_strain, relax_time, hardening]
-                .iter()
-                .all(|v| v.is_finite() && *v >= 0.0);
-        if !physical {
-            ctx.error(format!(
-                "Grid to Matter: the material rule {material_rule} (yield strain {yield_strain}, relax time {relax_time} s, hardening {hardening}) is not physical; wire node.matter_domain's"
-            ));
-            return;
-        }
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
-        let [mu, lambda, alpha, cohesion, softening] = [
-            ("mu", 1.36e5),
-            ("lambda", 2.04e5),
-            ("alpha", 0.386),
-            ("cohesion", 0.0),
-            ("softening", 0.05),
-        ]
-        .map(|(name, default)| ctx.scalar_or_param(name, default));
-        if !(mu > 0.0 && lambda > 0.0 && alpha >= 0.0 && cohesion >= 0.0 && softening > 0.0) {
-            ctx.error(format!(
-                "Grid to Matter: the material (μ {mu}, λ {lambda}, α {alpha}, cohesion {cohesion}, softening {softening}) is not physical; wire node.matter_domain's"
-            ));
-            return;
-        }
+        let wave_reach = ctx.scalar_or_param("wave_reach", cell_size / 3.0);
+        let speed_estimate = ctx.scalar_or_param("speed_estimate", 0.0);
         let requested = ctx.scalar_or_param("active_count", 0.0).round().max(0.0) as u32;
         let body_count = ctx
             .scalar_or_param("body_count", 0.0)
@@ -229,7 +183,6 @@ impl Primitive for GridToMatter {
         let int = |ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32| {
             ctx.scalar_or_param(name, default).round().max(0.0) as i32
         };
-        let density = ctx.scalar_or_param("density", 1600.0);
         let momentum_unit = ctx.scalar_or_param("momentum_unit", 128.0);
         let tick_index = int(ctx, "tick_index", 0.0);
         let substep_in_tick = int(ctx, "substep_in_tick", 0.0);
@@ -240,6 +193,7 @@ impl Primitive for GridToMatter {
         let points = ctx.inputs.array("points");
         let grid = ctx.inputs.array("grid");
         let tiles = ctx.inputs.array("tiles");
+        let materials = ctx.inputs.array("materials");
         let static_solid = ctx.inputs.array("static_solid");
         let colliders = (
             ctx.inputs.array("bodies"),
@@ -254,8 +208,8 @@ impl Primitive for GridToMatter {
             ));
         }
         let gpu = ctx.gpu_encoder();
-        let (Some(points), Some(grid), Some(static_solid), Some(tiles)) =
-            (points, grid, static_solid, tiles)
+        let (Some(points), Some(grid), Some(static_solid), Some(tiles), Some(materials)) =
+            (points, grid, static_solid, tiles, materials)
         else {
             return;
         };
@@ -290,14 +244,8 @@ impl Primitive for GridToMatter {
         let uniforms = ToMatterUniforms {
             cell_size,
             step_dt,
-            mu,
-            lambda,
-            alpha,
-            cohesion,
-            softening,
             active_count: active as i32,
             body_count,
-            density,
             momentum_unit,
             tick_index,
             substep_in_tick,
@@ -312,10 +260,8 @@ impl Primitive for GridToMatter {
             bounds_hi_y: bounds_hi[1],
             bounds_hi_z: bounds_hi[2],
             kill_height,
-            material_rule,
-            yield_strain,
-            relax_time,
-            hardening,
+            wave_reach,
+            speed_estimate,
             dispatch_count: active,
             _pad0: 0,
             _pad1: 0,
@@ -370,11 +316,16 @@ impl Primitive for GridToMatter {
                 },
                 GpuBinding::Buffer {
                     binding: 9,
-                    buffer: points,
+                    buffer: materials,
                     offset: 0,
                 },
                 GpuBinding::Buffer {
                     binding: 10,
+                    buffer: points,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 11,
                     buffer: reaction,
                     offset: 0,
                 },

@@ -155,13 +155,14 @@ pub const ACCUM_WORDS_PER_NODE: u32 = 4;
 pub const REACTION_WORDS: u32 = 16;
 
 /// Words of the per-tick stats array `node.matter_stats` writes (D14).
-pub const STATS_WORDS: u32 = 18;
+pub const STATS_WORDS: u32 = 19;
 
 /// One tick's statistics, decoded from the stats array (floats stored as
 /// bits): non-finite count, clamped nodes, live points, max speed, J range,
 /// volume Σ V0·J, max accumulator magnitude, mass, momentum, kinetic,
 /// potential and elastic energy, tick index, the points removed because
-/// their tile got no slot in the pool, and the pool's held tiles.
+/// their tile got no slot in the pool, the pool's held tiles and the most
+/// any snow point's packing asks to stiffen it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MatterTickStats {
     pub nonfinite: u32,
@@ -184,6 +185,10 @@ pub struct MatterTickStats {
     /// Tiles the pool held at the tick's end: what `node.matter_state`
     /// grows the pool by.
     pub held_tiles: u32,
+    /// The largest hardening factor exp(ξ(1 − Jp)) a snow point's packing
+    /// asks for, held to [0.1, SNOW_HARDENING_MAX]; 0 with no snow.
+    /// `node.matter_domain` sizes the next substeps to it.
+    pub max_hardening: f32,
 }
 
 impl MatterTickStats {
@@ -206,6 +211,7 @@ impl MatterTickStats {
             tick: w[15],
             tile_removed: w[16],
             held_tiles: w[17],
+            max_hardening: f(18),
         }
     }
 
@@ -363,9 +369,6 @@ const SNOW_POISSON: f64 = 0.2;
 const SNOW_REFERENCE_DENSITY: f64 = 400.0;
 /// The Hardening a new Snow starts at, ξ.
 pub const SNOW_HARDENING: f32 = 10.0;
-/// matter_material.wgsl's MM_SNOW_HARDENING_MAX: the most packing stiffens
-/// snow, which the substeps budget for.
-const SNOW_HARDENING_MAX: f64 = 5.0;
 /// Jelly: a gelatin dessert's Young's modulus, about 20 kPa, nearly
 /// incompressible (ν = 0.45). A metre-tall block sags under its own weight,
 /// as real jelly that size would. Its wobble dies away by a Kelvin-Voigt
@@ -539,26 +542,73 @@ impl MatterMaterial {
         }
     }
 
-    /// The longest substep an elastic material's damping stays stable at, s:
-    /// explicit Kelvin-Voigt diffuses momentum at η/ρ, so a substep spreads
-    /// it at most a twelfth of a cell squared ([`damping_fitting_cap`]).
-    /// None without damping.
-    pub fn viscous_limit(&self, density: f64, dx: f64) -> Option<f64> {
+    /// How fast its Kelvin-Voigt damping spreads momentum, η/ρ m²/s, None
+    /// without damping ([`viscous_limit`]).
+    pub fn damping_diffusivity(&self, density: f64) -> Option<f64> {
         let viscosity = self.relax_time * self.mu;
-        (self.rule == MatterRule::Elastic && viscosity > 0.0)
-            .then(|| density * dx * dx / (12.0 * viscosity))
+        (self.rule == MatterRule::Elastic && viscosity > 0.0).then(|| viscosity / density)
     }
 
-    /// The fastest pressure wave, √((λ + 2μ)/ρ) m/s, at the most packing
-    /// stiffens snow.
+    /// The fastest pressure wave as built, √((λ + 2μ)/ρ) m/s: snow's packing
+    /// stiffens it up to [`SNOW_HARDENING_MAX`] times past this.
     pub fn wave_speed(&self, density: f64) -> f64 {
-        let hardened = if self.rule == MatterRule::Snow {
-            SNOW_HARDENING_MAX
-        } else {
-            1.0
-        };
-        ((self.lambda + 2.0 * self.mu) * hardened / density).sqrt()
+        ((self.lambda + 2.0 * self.mu) / density).sqrt()
     }
+
+    /// Its row of the material table (`node.matter_material`, read per point
+    /// by matter_material.wgsl's `MatterRow`): μ, λ, α, β₀ | q_s, rule, yield
+    /// strain, relax time | ξ, density, water lift, water drag rate | wall
+    /// friction and three spare.
+    pub fn row(&self, density: f32) -> [f32; MATERIAL_ROW_FLOATS] {
+        let rule = self.rule as i32;
+        [
+            self.mu as f32,
+            self.lambda as f32,
+            self.alpha as f32,
+            self.cohesion as f32,
+            COHESION_SOFTENING,
+            rule as f32,
+            self.yield_strain as f32,
+            self.relax_time as f32,
+            self.hardening as f32,
+            density,
+            water_lift(rule, density, manifold_water_liquid::WATER_DENSITY),
+            manifold_core::liquid_domain::SAND_WATER_DRAG * manifold_water_liquid::WATER_DENSITY
+                / density,
+            self.wall_friction() as f32,
+            0.0,
+            0.0,
+            0.0,
+        ]
+    }
+}
+
+/// Most Matter items one scene's solver holds: its material table's rows.
+pub const MAX_MATTER_SLOTS: usize = 8;
+
+/// Floats in one material table row ([`MatterMaterial::row`]).
+pub const MATERIAL_ROW_FLOATS: usize = 16;
+
+/// The most packing stiffens snow: matter_material.wgsl's
+/// `MM_SNOW_HARDENING_MAX`.
+pub const SNOW_HARDENING_MAX: f64 = 5.0;
+
+/// The longest substep a damping that spreads momentum at `diffusivity`
+/// (η/ρ, m²/s) stays stable at, s: explicit Kelvin-Voigt spreads it at most
+/// a twelfth of a cell squared a substep.
+pub fn viscous_limit(diffusivity: f64, dx: f64) -> f64 {
+    dx * dx / (12.0 * diffusivity)
+}
+
+/// The share of its stiffness a material whose waves run at `wave` m/s keeps
+/// on a substep of `step_dt`: the step carries a wave across `wave_reach`
+/// metres (the acoustic CFL times the cell) less the material's own
+/// `speed_estimate`, and the stiffness goes as the wave speed squared. Past 1
+/// it keeps all of it. matter_material.wgsl's `matter_capped` takes each
+/// point's from the same terms.
+pub fn stiffness_room(wave_reach: f64, step_dt: f64, speed_estimate: f64, wave: f64) -> f64 {
+    let carried = (wave_reach / step_dt - speed_estimate).max(0.0);
+    (carried / wave).powi(2)
 }
 
 /// Acoustic CFL (taichi_elements' default dt at L = 1 gives c·dt/dx = 0.33).
@@ -618,8 +668,8 @@ pub fn free_fall_speed(height_m: f64) -> f64 {
 }
 
 /// Substeps per 1/60 s tick (D4): the acoustic CFL limit plus optional
-/// body-coupling and viscous limits (seconds). Uncapped; the caller fits the
-/// dials to [`MAX_SUBSTEPS`] with [`stiffness_fitting_cap`].
+/// body-coupling and viscous limits (seconds). Uncapped; past
+/// [`MAX_SUBSTEPS`] each point keeps the [`stiffness_room`] the step leaves.
 pub fn substeps_per_tick(
     dx: f32,
     wave_speed: f32,
@@ -634,22 +684,6 @@ pub fn substeps_per_tick(
         .map(f64::from)
         .fold(acoustic, f64::min);
     ((TICK / dt) - 1e-9).ceil().max(1.0) as u32
-}
-
-/// The largest Stiffness whose substep count fits [`MAX_SUBSTEPS`] (D4:
-/// limited, never silently). `unit_wave_speed` is the wave speed at
-/// Stiffness 1.
-pub fn stiffness_fitting_cap(dx: f64, unit_wave_speed: f64, v_est: f64) -> f64 {
-    let max_wave = ACOUSTIC_CFL * dx * f64::from(MAX_SUBSTEPS) / TICK - v_est;
-    // A hair inside the cap, so f32 rounding of the wave speed downstream
-    // cannot tip the count to one past it.
-    (max_wave / unit_wave_speed * (1.0 - 1e-5)).max(0.0)
-}
-
-/// The largest damping viscosity, Pa·s, whose [`MatterMaterial::viscous_limit`]
-/// fits [`MAX_SUBSTEPS`] (D4: limited, never silently).
-pub fn damping_fitting_cap(density: f64, dx: f64) -> f64 {
-    density * dx * dx * f64::from(MAX_SUBSTEPS) / (12.0 * TICK) * (1.0 - 1e-5)
 }
 
 /// Nodes of a lattice with `nodes` per axis, in u64 so no byte size wraps.
@@ -826,10 +860,11 @@ mod tests {
         assert_eq!([n(0.0625), n(0.125), n(0.25)], [21, 11, 6]);
     }
 
-    /// Jelly damped at the most the cap holds runs at the substep cap, never
-    /// past it, at any cell size and density; undamped jelly has no limit.
+    /// Jelly's damping held to the most a substep carries (matter_material.wgsl
+    /// `matter_capped`: η/ρ at most dx²/(12 dt)) runs at that substep, at any
+    /// cell size and density; undamped jelly has no limit.
     #[test]
-    fn jelly_damping_at_its_cap_fits_the_substeps() {
+    fn jelly_damping_held_to_the_step_fits_it() {
         let dials = |viscosity| MatterDials {
             stiffness: 1.0,
             friction_angle: 0.0,
@@ -840,14 +875,16 @@ mod tests {
             density: 1050.0,
         };
         for (dx, density) in [(0.02, 1050.0), (0.05, 900.0), (0.15, 1300.0)] {
-            let cap = damping_fitting_cap(density, dx);
-            let jelly = MatterMaterial::of(MatterKind::Jelly, dials(cap));
-            let limit = jelly.viscous_limit(density, dx).expect("damped") as f32;
+            let dt = TICK / f64::from(MAX_SUBSTEPS);
+            let held = density * dx * dx / (12.0 * dt);
+            let jelly = MatterMaterial::of(MatterKind::Jelly, dials(held));
+            let diffusivity = jelly.damping_diffusivity(density).expect("damped");
+            let limit = viscous_limit(diffusivity, dx) as f32;
             let n = substeps_per_tick(dx as f32, 0.0, 0.0, None, Some(limit));
-            assert_eq!(n, MAX_SUBSTEPS, "dx {dx}");
+            assert!(n <= MAX_SUBSTEPS, "dx {dx}: {n}");
         }
         let still = MatterMaterial::of(MatterKind::Jelly, dials(0.0));
-        assert_eq!(still.viscous_limit(1050.0, 0.05), None);
+        assert_eq!(still.damping_diffusivity(1050.0), None);
     }
 
     /// One kPa of Cohesion holds the same shear strength whatever the
@@ -867,29 +904,43 @@ mod tests {
         assert!((wave(2.0) / wave(1.0) - 2.0).abs() < 1e-12);
     }
 
+    /// At the count the CFL rule asks for, every point keeps all of its
+    /// stiffness; past the substep cap it keeps the share whose wave fits the
+    /// cap, packed snow included.
     #[test]
-    fn matter_dials_limited_to_substep_cap() {
-        // Resolution 256 in a 4 m domain: Stiffness 3 needs more than 128.
-        let dx = 4.0f64 / 256.0;
+    fn the_step_leaves_room_for_the_stiffness_it_was_chosen_for() {
         let v = free_fall_speed(4.0);
-        let unit = MatterMaterial::sand(1.0, 35.0, 0.0).wave_speed(f64::from(SAND_DENSITY));
-        let requested = 3.0;
-        let n_requested =
-            substeps_per_tick(dx as f32, (unit * requested) as f32, v as f32, None, None);
-        assert!(n_requested > MAX_SUBSTEPS, "{n_requested}");
-        let fitted = stiffness_fitting_cap(dx, unit, v);
-        assert!(fitted < requested);
-        let n_fitted = substeps_per_tick(dx as f32, (unit * fitted) as f32, v as f32, None, None);
-        assert!(n_fitted <= MAX_SUBSTEPS, "{n_fitted}");
-        // The largest fitting value: slightly stiffer needs one more substep.
-        let n_above = substeps_per_tick(
-            dx as f32,
-            (unit * fitted * 1.001) as f32,
-            v as f32,
-            None,
-            None,
-        );
-        assert!(n_above > MAX_SUBSTEPS, "{n_above}");
+        let sand = MatterMaterial::sand(1.0, 35.0, 0.0).wave_speed(f64::from(SAND_DENSITY));
+        let snow = MatterMaterial::of(
+            MatterKind::Snow,
+            MatterDials {
+                stiffness: 1.0,
+                friction_angle: 0.0,
+                cohesion_kpa: 0.0,
+                hardening: 10.0,
+                yield_stress: 0.0,
+                viscosity: 0.0,
+                density: 400.0,
+            },
+        )
+        .wave_speed(400.0)
+            * SNOW_HARDENING_MAX.sqrt();
+        for dx in [0.0625, 0.03, 4.0 / 256.0, 0.004] {
+            let reach = ACOUSTIC_CFL * dx;
+            for (wave, stiffness) in [(sand, 1.0), (sand, 3.0), (snow, 1.0)] {
+                let wave = wave * stiffness;
+                let n = substeps_per_tick(dx as f32, wave as f32, v as f32, None, None);
+                let room = stiffness_room(reach, TICK / f64::from(n.min(MAX_SUBSTEPS)), v, wave);
+                if n <= MAX_SUBSTEPS {
+                    assert!(room >= 1.0 - 1e-5, "dx {dx} wave {wave}: {room}");
+                } else {
+                    assert!(room < 1.0, "dx {dx} wave {wave}: {room}");
+                    let kept = wave * room.sqrt() * (1.0 - 1e-6);
+                    let fits = substeps_per_tick(dx as f32, kept as f32, v as f32, None, None);
+                    assert!(fits <= MAX_SUBSTEPS, "dx {dx} wave {wave}: {fits}");
+                }
+            }
+        }
     }
 
     #[test]

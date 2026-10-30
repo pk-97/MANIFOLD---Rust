@@ -26,14 +26,6 @@
         "points_per_cell": {
           "type": "Enum",
           "value": 0
-        },
-        "stiffness": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "cohesion": {
-          "type": "Float",
-          "value": 0.0
         }
       }
     },
@@ -96,6 +88,22 @@
       "typeId": "node.matter_static_solid",
       "handle": "Static Solid",
       "nodeId": "matter_static_solid"
+    },
+    {
+      "id": 19,
+      "typeId": "node.matter_material",
+      "handle": "Material",
+      "nodeId": "material",
+      "params": {
+        "stiffness": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "cohesion": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
     }
   ],
   "wires": [
@@ -308,30 +316,6 @@
       "fromPort": "epoch",
       "toNode": 9,
       "toPort": "epoch"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "lambda",
-      "toNode": 8,
-      "toPort": "lambda"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "density",
-      "toNode": 5,
-      "toPort": "density"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "density",
-      "toNode": 8,
-      "toPort": "density"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "cohesion",
-      "toNode": 7,
-      "toPort": "cohesion"
     },
     {
       "fromNode": 2,
@@ -728,12 +712,6 @@
       "fromPort": "reaction_out",
       "toNode": 3,
       "toPort": "reaction_in"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "density",
-      "toNode": 7,
-      "toPort": "density"
     },
     {
       "fromNode": 1,
@@ -1271,36 +1249,6 @@
     },
     {
       "fromNode": 1,
-      "fromPort": "mu",
-      "toNode": 8,
-      "toPort": "mu"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "mu",
-      "toNode": 7,
-      "toPort": "mu"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "lambda",
-      "toNode": 7,
-      "toPort": "lambda"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "alpha",
-      "toNode": 7,
-      "toPort": "alpha"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "softening",
-      "toNode": 7,
-      "toPort": "softening"
-    },
-    {
-      "fromNode": 1,
       "fromPort": "wall_friction",
       "toNode": 6,
       "toPort": "wall_friction"
@@ -1451,33 +1399,81 @@
     },
     {
       "fromNode": 1,
-      "fromPort": "material_rule",
-      "toNode": 7,
-      "toPort": "material_rule"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "yield_strain",
-      "toNode": 7,
-      "toPort": "yield_strain"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "relax_time",
-      "toNode": 7,
-      "toPort": "relax_time"
-    },
-    {
-      "fromNode": 1,
-      "fromPort": "hardening",
-      "toNode": 7,
-      "toPort": "hardening"
-    },
-    {
-      "fromNode": 1,
       "fromPort": "pool_ceiling",
       "toNode": 3,
       "toPort": "pool_ceiling"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "materials",
+      "toNode": 3,
+      "toPort": "materials"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "materials",
+      "toNode": 5,
+      "toPort": "materials"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "materials",
+      "toNode": 7,
+      "toPort": "materials"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "materials",
+      "toNode": 8,
+      "toPort": "materials"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "wave",
+      "toNode": 1,
+      "toPort": "wave"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "snow_wave",
+      "toNode": 1,
+      "toPort": "snow_wave"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "diffusivity",
+      "toNode": 1,
+      "toPort": "diffusivity"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "density",
+      "toNode": 1,
+      "toPort": "density"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "wall_friction",
+      "toNode": 1,
+      "toPort": "wall_friction"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "wave_reach",
+      "toNode": 7,
+      "toPort": "wave_reach"
+    },
+    {
+      "fromNode": 1,
+      "fromPort": "speed_estimate",
+      "toNode": 7,
+      "toPort": "speed_estimate"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "hardened",
+      "toNode": 1,
+      "toPort": "hardened"
     }
   ]
 }

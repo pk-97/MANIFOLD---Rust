@@ -21,6 +21,10 @@ use crate::scene_doc::{ItemFields, Matter, WaterDraw};
 
 use ControlGroup::{Simulation, Surface};
 
+/// The Sand template's `node.matter_material`, whose dials are what it is
+/// made of.
+const MATERIAL: Reach = Reach::Own("material");
+
 /// The Sand draws as grains.
 fn grains(fields: &ItemFields) -> bool {
     matches!(fields, ItemFields::Sand(s) if s.draw == WaterDraw::Particles)
@@ -48,9 +52,9 @@ fn jelly(fields: &ItemFields) -> bool {
     made_of(fields, Matter::Jelly)
 }
 
-/// Each material's Density row: one domain param, its own starting value.
+/// Each material's Density row: one material param, its own starting value.
 const fn density(property: &'static str, default: f32, tip: &'static str) -> PropertyRow {
-    row(property, DOMAIN, Simulation, setup())
+    row(property, MATERIAL, Simulation, setup())
         .param("density")
         .name("Density")
         .unit(Unit::KilogramsPerCubicMetre)
@@ -61,7 +65,7 @@ const fn density(property: &'static str, default: f32, tip: &'static str) -> Pro
 /// Clay's, mud's and goo's Firmness: the shear yield stress, below which it
 /// holds its shape.
 const fn firmness(property: &'static str, default: f32, range: (f32, f32)) -> PropertyRow {
-    row(property, DOMAIN, Simulation, perform(CardBand::Scene, 3))
+    row(property, MATERIAL, Simulation, perform(CardBand::Scene, 3))
         .param("yield_stress")
         .name("Firmness")
         .unit(Unit::Pascals)
@@ -74,7 +78,7 @@ const fn firmness(property: &'static str, default: f32, range: (f32, f32)) -> Pr
 
 /// Clay's, mud's and goo's Thickness: the plastic viscosity once it flows.
 const fn thickness(property: &'static str, default: f32, range: (f32, f32)) -> PropertyRow {
-    row(property, DOMAIN, Simulation, perform(CardBand::Scene, 4))
+    row(property, MATERIAL, Simulation, perform(CardBand::Scene, 4))
         .param("viscosity")
         .name("Thickness")
         .unit(Unit::PascalSeconds)
@@ -103,21 +107,21 @@ pub static SAND_ROWS: [PropertyRow; 49] = [
     CELL_SIZE_ROW,
     DOMAIN_SIZE,
     FILL_HEIGHT,
-    row("stiffness", DOMAIN, Simulation, perform(CardBand::Scene, 2))
+    row("stiffness", MATERIAL, Simulation, perform(CardBand::Scene, 2))
         .name("Stiffness")
         .tip("How stiff it is. Higher is firmer, wobbles faster and costs more steps a frame"),
-    row("friction_angle", DOMAIN, Simulation, perform(CardBand::Scene, 3))
+    row("friction_angle", MATERIAL, Simulation, perform(CardBand::Scene, 3))
         .name("Friction Angle")
         .unit(Unit::Degrees)
         .tip("How steep a pile holds. Sand flows below it and stops at it")
         .when(sand),
-    row("cohesion", DOMAIN, Simulation, perform(CardBand::Scene, 4))
+    row("cohesion", MATERIAL, Simulation, perform(CardBand::Scene, 4))
         .name("Cohesion")
         .unit(Unit::Kilopascals)
         .tip("0 is dry sand. Higher holds a cliff, about half a metre per kPa; drop it live to bring the cliff down")
         .when(sand),
     density("density", 1600.0, "How heavy the sand is, which sets how bodies sink into it").when(sand),
-    row("hardening", DOMAIN, Simulation, perform(CardBand::Scene, 3))
+    row("hardening", MATERIAL, Simulation, perform(CardBand::Scene, 3))
         .name("Hardening")
         .tip("How much stiffer snow gets as it packs. Around 10 packs into firm clumps that break off; 0 stays loose powder")
         .default(10.0)
@@ -134,7 +138,7 @@ pub static SAND_ROWS: [PropertyRow; 49] = [
     thickness("goo_thickness", 2000.0, (1.0, 1.0e4)).when(goo),
     density("goo_density", 1400.0, "How heavy the goo is, which sets how fast it pours").when(goo),
     density("jelly_density", 1050.0, "How heavy the jelly is, which sets how far it sags and how long it wobbles").when(jelly),
-    row("jelly_damping", DOMAIN, Simulation, perform(CardBand::Scene, 3))
+    row("jelly_damping", MATERIAL, Simulation, perform(CardBand::Scene, 3))
         .param("viscosity")
         .name("Damping")
         .unit(Unit::PascalSeconds)

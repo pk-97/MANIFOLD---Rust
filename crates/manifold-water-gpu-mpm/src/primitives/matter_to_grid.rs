@@ -34,7 +34,8 @@ use manifold_water_liquid::world_tiles::{
 // The kernel after the table's read side it indexes its nodes through.
 static SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
-        "{READ_SIDE}\n{}",
+        "{READ_SIDE}\n{}\n{}",
+        super::matter_common::MATTER_MATERIAL,
         include_str!("shaders/matter_to_grid.wgsl")
     )
 });
@@ -58,13 +59,12 @@ pub(crate) struct P2gParams {
     pub(crate) cell_size: f32,
     pub(crate) active_count: u32,
     pub(crate) step_dt: f32,
-    pub(crate) density: f32,
     pub(crate) tick_index: u32,
     pub(crate) substep_in_tick: u32,
     pub(crate) momentum_unit: f32,
     pub(crate) pool_tiles: u32,
     pub(crate) table_entries: u32,
-    pub(crate) _pad: [u32; 3],
+    pub(crate) _pad: [u32; 4],
 }
 
 manifold_node_engine::primitive! {
@@ -74,10 +74,12 @@ manifold_node_engine::primitive! {
     inputs: {
         points: Array(MatterPoint) required,
         accum: Array(i32) required,
+        // The material table (node.matter_material): a point's mass is its
+        // rest volume times its row's density.
+        materials: Array(f32) required,
         cell_size: ScalarF32 optional,
         pool_tiles: ScalarF32 optional,
         step_dt: ScalarF32 optional,
-        density: ScalarF32 optional,
         active_count: ScalarF32 optional,
         tick_index: ScalarF32 optional,
         substep_in_tick: ScalarF32 optional,
@@ -100,7 +102,6 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("cell_size"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(0.0625), range: Some((1.0e-4, 100.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("pool_tiles"), label: "Pool Tiles", ty: ParamType::Int, default: ParamValue::Float(1.0), range: Some((1.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("step_dt"), label: "Substep (s)", ty: ParamType::Float, default: ParamValue::Float(4.9e-4), range: Some((0.0, 1.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("density"), label: "Density (kg/m³)", ty: ParamType::Float, default: ParamValue::Float(1600.0), range: Some((1.0, 1.0e5)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("active_count"), label: "Active Count", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_000_000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("tick_index"), label: "Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("substep_in_tick"), label: "Substep in Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
@@ -197,7 +198,6 @@ impl Primitive for MatterToGrid {
             |name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as u32;
         let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
         let step_dt = ctx.scalar_or_param("step_dt", 4.9e-4);
-        let density = ctx.scalar_or_param("density", 1600.0);
         let requested = count("active_count", 0.0);
         let tick_index = count("tick_index", 0.0);
         let substep_in_tick = count("substep_in_tick", 0.0);
@@ -205,6 +205,7 @@ impl Primitive for MatterToGrid {
         // In place on the accumulator input; the GPU is touched on every path.
         let points = ctx.inputs.array("points");
         let accum = ctx.inputs.array("accum");
+        let materials = ctx.inputs.array("materials");
         let fresh = self.tiles.as_ref().is_none_or(|t| t.pool_tiles() != pool);
         let active = points.map_or(0, |p| active_elements::<MatterPoint>(p.size, requested));
         // A table that has never been built (no ranges yet) builds on whatever
@@ -221,7 +222,7 @@ impl Primitive for MatterToGrid {
             .kernel
             .as_ref()
             .expect("matter to grid kernel built by prepare_pipelines at install");
-        let (Some(points), Some(accum)) = (points, accum) else {
+        let (Some(points), Some(accum), Some(materials)) = (points, accum, materials) else {
             return;
         };
         if !(cell_size.is_finite() && cell_size > 0.0) {
@@ -338,13 +339,12 @@ impl Primitive for MatterToGrid {
             cell_size,
             active_count: active,
             step_dt,
-            density,
             tick_index,
             substep_in_tick,
             momentum_unit,
             pool_tiles: pool,
             table_entries: table_entries(pool),
-            _pad: [0; 3],
+            _pad: [0; 4],
         };
         let bindings = [
             GpuBinding::Bytes {
@@ -381,6 +381,11 @@ impl Primitive for MatterToGrid {
                 buffer: &tiles.lists().by_rank,
                 offset: 0,
             },
+            GpuBinding::Buffer {
+                binding: 7,
+                buffer: materials,
+                offset: 0,
+            },
         ];
         gpu.native_enc.dispatch_compute_indirect(
             kernel,
@@ -410,13 +415,12 @@ fn encode_clear(
         cell_size: 0.0,
         active_count: 0,
         step_dt: 0.0,
-        density: 0.0,
         tick_index: 0,
         substep_in_tick: 0,
         momentum_unit: 0.0,
         pool_tiles: pool,
         table_entries: table_entries(pool),
-        _pad: [0; 3],
+        _pad: [0; 4],
     };
     enc.dispatch_compute_indirect(
         clear,

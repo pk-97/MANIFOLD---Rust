@@ -1,8 +1,10 @@
 // node.matter_state — the water lifts and drags the sand: each live point
-// under water loses `lift` of its gravity for its share under water
-// (`water_lift`), then moves toward the water's velocity there, at the rate the water is slowed
-// by the sand (`SAND_WATER_DRAG` at a full cell) times water's density over
-// the sand's, so the push is equal and opposite. Exact over the frame's
+// under water loses its row's lift share of its gravity for its share under
+// water (`water_lift`), then moves toward the water's velocity there, at its
+// row's drag rate: the rate the water is slowed by the sand
+// (`SAND_WATER_DRAG` at a full cell) times water's density over the sand's,
+// so the push is equal and opposite. The rows are node.matter_material's
+// table, one per slot (affine_z.w), lift and rate at floats 10 and 11. Exact over the frame's
 // simulated time (exponential), so no rate overshoots. The point also keeps
 // how wet it is (f_y.w: soaked to its share under water, drying by
 // exp(-t / dry) after) and its share under water now (f_z.w), which make
@@ -27,21 +29,21 @@ struct MatterPoint {
 
 struct Params {
     count: u32,
-    // Per second at a point wholly under water.
-    rate: f32,
     // Simulated seconds this frame.
     dt: f32,
     // Seconds wet sand takes to dry to 1/e, the wet look's.
     dry: f32,
-    // The domain's gravity, m/s², and the share of it water takes off a
-    // point wholly under water.
+    _pad0: u32,
+    // The domain's gravity, m/s².
     gravity: vec3<f32>,
-    lift: f32,
+    _pad1: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read_write> points: array<MatterPoint>;
 @group(0) @binding(2) var<storage, read> push: array<vec4<f32>>;
+// Composed after matter_material.wgsl for `matter_slot`.
+@group(0) @binding(3) var<storage, read> materials: array<f32>;
 
 @compute @workgroup_size(256)
 fn water_drag(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -56,8 +58,11 @@ fn water_drag(@builtin(global_invocation_id) gid: vec3<u32>) {
     points[i].f_y.w = max(under, points[i].f_y.w * exp(-params.dt / params.dry));
     points[i].f_z.w = under;
     if under > 0.0 {
-        let lifted = points[i].velocity - params.gravity * (params.lift * under * params.dt);
-        let keep = exp(-params.rate * under * params.dt);
+        let row = matter_slot(points[i].affine_z.w) * 16u;
+        let lift = materials[row + 10u];
+        let rate = materials[row + 11u];
+        let lifted = points[i].velocity - params.gravity * (lift * under * params.dt);
+        let keep = exp(-rate * under * params.dt);
         points[i].velocity = water.xyz + (lifted - water.xyz) * keep;
     }
 }

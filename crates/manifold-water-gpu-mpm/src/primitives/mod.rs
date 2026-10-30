@@ -6,6 +6,7 @@ pub(crate) mod matter_fill;
 mod matter_frame;
 mod matter_grains;
 mod matter_grid_update;
+mod matter_material;
 manifold_core::testkit_visible! { pub(crate) mod matter_move_bodies; }
 mod matter_state;
 mod matter_static_solid;

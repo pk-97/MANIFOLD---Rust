@@ -22,11 +22,10 @@ use manifold_physics::force_lattice::ForceLattice;
 
 use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::matter::{
-    COHESION_SOFTENING, FRICTION_ANGLE_RANGE, MATTER_KINDS, MAX_SUBSTEPS, MatterDials, MatterKind,
-    MatterMaterial, RADIUS_SCALE, REACTION_WORDS, SAND_DENSITY, SAND_FRICTION_ANGLE,
-    SNOW_HARDENING, damping_fitting_cap, field_min, free_fall_speed, matter_nodes,
-    matter_pool_ceiling, matter_pool_tiles, momentum_unit, stiffness_fitting_cap,
-    substeps_for_interval, substeps_per_tick,
+    ACOUSTIC_CFL, MAX_SUBSTEPS, MatterMaterial, RADIUS_SCALE, REACTION_WORDS, SAND_DENSITY,
+    SAND_FRICTION_ANGLE, SNOW_HARDENING_MAX, field_min, free_fall_speed, matter_nodes,
+    matter_pool_ceiling, matter_pool_tiles, momentum_unit, stiffness_room, substeps_for_interval,
+    substeps_per_tick, viscous_limit,
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::fluid_domain::{
@@ -313,10 +312,17 @@ manifold_node_engine::primitive! {
         air_drag: ScalarF32 optional,
         air_resistance: ScalarF32 optional,
         reset: ScalarF32 optional,
-        stiffness: ScalarF32 optional,
-        friction_angle: ScalarF32 optional,
-        cohesion: ScalarF32 optional,
+        // The material chain's folds (node.matter_material): the fastest
+        // pressure wave as built, snow's, the fastest damping diffusivity, the
+        // heaviest density and the walls' friction.
+        wave: ScalarF32 optional,
+        snow_wave: ScalarF32 optional,
+        diffusivity: ScalarF32 optional,
         density: ScalarF32 optional,
+        wall_friction: ScalarF32 optional,
+        // The most snow hardening the last read tick held
+        // (node.matter_state's `hardened`, a state-capture wire).
+        hardened: ScalarF32 optional,
         acceleration_field: VectorField optional,
     },
     outputs: {
@@ -340,13 +346,12 @@ manifold_node_engine::primitive! {
     target_time: ScalarF32, step_cap_hit: ScalarF32,
         display_time: ScalarF32,
         dropped_seconds: ScalarF32,
-        mu: ScalarF32,
-        lambda: ScalarF32,
-        alpha: ScalarF32,
-        cohesion: ScalarF32,
-        softening: ScalarF32,
+        // The distance a substep may carry a wave (the acoustic CFL times the
+        // cell) and the speed estimate it is shared with: each point keeps the
+        // stiffness the step has room for (`stiffness_room`).
+        wave_reach: ScalarF32,
+        speed_estimate: ScalarF32,
         wall_friction: ScalarF32,
-        density: ScalarF32,
         limited_by_substeps: ScalarF32,
         pool_tiles: ScalarF32,
         pool_ceiling: ScalarF32,
@@ -368,7 +373,6 @@ manifold_node_engine::primitive! {
         force_lattices: ScalarF32,
         impulse_tick: ScalarF32,
         fill_region: ScalarF32,
-        material_rule: ScalarF32, yield_strain: ScalarF32, relax_time: ScalarF32, hardening: ScalarF32,
         bodies: Array(LiquidBody), regions: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
         collider_nodes: Array(Vec4Vertex), collider_triangles: Array(Vec4Vertex),
         reaction: Array(i32),
@@ -393,14 +397,6 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("air_drag"), label: "Air Drag", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("points_per_cell"), label: "Particles per Cell", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["8", "27"] },
-        ParamDef { name: Cow::Borrowed("stiffness"), label: "Stiffness", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.5, 3.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("friction_angle"), label: "Friction Angle", ty: ParamType::Float, default: ParamValue::Float(SAND_FRICTION_ANGLE), range: Some(FRICTION_ANGLE_RANGE), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("cohesion"), label: "Cohesion (kPa)", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some(COHESION_KPA_RANGE), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("density"), label: "Density (kg/m³)", ty: ParamType::Float, default: ParamValue::Float(SAND_DENSITY), range: Some(DENSITY_RANGE), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("material"), label: "Material", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 5.0)), enum_values: &MATTER_KINDS },
-        ParamDef { name: Cow::Borrowed("hardening"), label: "Hardening", ty: ParamType::Float, default: ParamValue::Float(SNOW_HARDENING), range: Some(HARDENING_RANGE), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("yield_stress"), label: "Yield Stress (Pa)", ty: ParamType::Float, default: ParamValue::Float(1.0e4), range: Some(YIELD_STRESS_RANGE), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("viscosity"), label: "Viscosity (Pa·s)", ty: ParamType::Float, default: ParamValue::Float(20.0), range: Some(VISCOSITY_RANGE), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("roles"), label: "Sources", ty: ParamType::Int, default: ParamValue::Float(manifold_water_liquid::DEFAULT_ROLE_PORTS as f32), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
@@ -424,7 +420,6 @@ manifold_node_engine::primitive! {
         // The fill's pool height and Initial Fill range in that box's cells.
         fill_cells: (u32, [[u32; 2]; 3]) = (0, [[0; 2]; 3]),
         limited: bool = false,
-        damping_limited: bool = false,
         published: Option<[f32; OUTPUTS.len()]> = None,
         // A shaped fill's role is a region row, so the fill reads its shape.
         bodies: LiquidBodies = LiquidBodies::with_regions(),
@@ -596,21 +591,8 @@ impl Coupling {
     }
 }
 
-/// The Cohesion dial's range, kPa: 0 is dry sand, 20 holds a cliff about
-/// ten metres tall.
-const COHESION_KPA_RANGE: (f32, f32) = (0.0, 20.0);
-/// The Density dial's range, kg/m³: snow and powder up to wet heavy soil.
-const DENSITY_RANGE: (f32, f32) = (100.0, 3000.0);
-/// Snow's Hardening ξ: 0 never stiffens as it packs; Stomakhin et al. 2013
-/// ran 5 to 10.
-const HARDENING_RANGE: (f32, f32) = (0.0, 20.0);
-/// The shear Yield Stress, Pa: a runny goo up to a firm clay.
-const YIELD_STRESS_RANGE: (f32, f32) = (0.0, 5.0e4);
-/// The plastic Viscosity, Pa·s: water-thin up to tar.
-const VISCOSITY_RANGE: (f32, f32) = (0.0, 1.0e4);
-
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 80] = [
+const OUTPUTS: [&str; 72] = [
     "fill_min_x",
     "fill_min_y",
     "fill_min_z",
@@ -639,13 +621,9 @@ const OUTPUTS: [&str; 80] = [
     "simulation_time",
     "display_time",
     "dropped_seconds",
-    "mu",
-    "lambda",
-    "alpha",
-    "cohesion",
-    "softening",
+    "wave_reach",
+    "speed_estimate",
     "wall_friction",
-    "density",
     "limited_by_substeps",
     "momentum_unit",
     "body_count",
@@ -679,10 +657,6 @@ const OUTPUTS: [&str; 80] = [
     "wall_velocity_hi_z",
     "fill_region",
     "static_key",
-    "material_rule",
-    "yield_strain",
-    "relax_time",
-    "hardening",
     "moved_key",
     "moved_lo_x",
     "moved_lo_y",
@@ -694,7 +668,7 @@ const OUTPUTS: [&str; 80] = [
 ];
 const TICKS: usize = 22;
 const EPOCH: usize = 24;
-const IMPULSE_TICK: usize = 46;
+const IMPULSE_TICK: usize = 42;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
 const _: () = assert!(matches!(OUTPUTS[EPOCH].as_bytes(), b"epoch"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
@@ -709,6 +683,12 @@ impl Primitive for MatterDomain {
 
     fn live_inputs(&self) -> Option<&[manifold_node_engine::ports::NodeInput]> {
         self.role_ports.inputs()
+    }
+
+    // The snow packing is last frame's: node.matter_state reads it back from
+    // the ticks this domain schedules.
+    fn state_capture_input_ports(&self) -> &[&str] {
+        &["hardened"]
     }
 
     /// A liquid follows the Physics World: its gravity and its clock.
@@ -1288,13 +1268,12 @@ impl MatterDomain {
             "gravity_x",
             "gravity",
             "gravity_z",
-            "stiffness",
-            "friction_angle",
-            "cohesion",
+            "wave",
+            "snow_wave",
+            "diffusivity",
             "density",
-            "hardening",
-            "yield_stress",
-            "viscosity",
+            "wall_friction",
+            "hardened",
         ]
         .map(|name| ctx.scalar_or_param(name, 0.0));
         if !speed.is_finite()
@@ -1302,7 +1281,7 @@ impl MatterDomain {
             || live.iter().any(|v| !v.is_finite())
         {
             return Err(
-                "Matter: Speed must be between 0 and 4, and gravity and the dials must be finite"
+                "Matter: Speed must be between 0 and 4, and gravity and the materials must be finite"
                     .into(),
             );
         }
@@ -1324,9 +1303,9 @@ impl MatterDomain {
         let (wall_faces, open_faces) = face_masks(setup.bounds, closed_faces(ctx.params));
         self.coupled.walls = geometry.domain_walls(wall_faces);
         self.coupled.capacity = MAX_LIQUID_BODIES;
-        let density = ctx
-            .scalar_or_param("density", SAND_DENSITY)
-            .clamp(DENSITY_RANGE.0, DENSITY_RANGE.1);
+        // The heaviest material the chain holds: the bodies' coupling law
+        // takes it.
+        let density = ctx.scalar_or_param("density", SAND_DENSITY).max(1.0);
         if self.coupled.mode && !self.observe_rigid(ctx.played(), speed, density)? {
             return Ok(None);
         }
@@ -1472,90 +1451,50 @@ impl MatterDomain {
         }
         self.observed.used();
 
-        // D4: substeps from the stiffness/CFL rule, from parameters only.
+        // D4: substeps from the CFL rule over the materials the chain holds.
+        // Snow stiffens as it packs: live, the step budgets the packing the
+        // last read tick held with a quarter to spare; offline the most it can
+        // reach, so an export repeats. A point whose stiffness outruns the
+        // step keeps the share it has room for (matter_material.wgsl
+        // `matter_capped`), so a late read softens it for a frame and never
+        // blows it up.
         let v_est = free_fall_speed(f64::from(layout.size[1]));
-        let stiffness = f64::from(ctx.scalar_or_param("stiffness", 1.0).clamp(0.5, 3.0));
-        let (angle_lo, angle_hi) = FRICTION_ANGLE_RANGE;
-        let friction_angle = f64::from(
-            ctx.scalar_or_param("friction_angle", SAND_FRICTION_ANGLE)
-                .clamp(angle_lo, angle_hi),
-        );
-        let cohesion = f64::from(
-            ctx.scalar_or_param("cohesion", 0.0)
-                .clamp(COHESION_KPA_RANGE.0, COHESION_KPA_RANGE.1),
-        );
-        let ranged = |name, default, (lo, hi): (f32, f32)| {
-            f64::from(ctx.scalar_or_param(name, default).clamp(lo, hi))
-        };
-        let kind = match ctx.params.get("material") {
-            Some(ParamValue::Enum(index)) => MatterKind::from_index(*index as usize),
-            _ => None,
-        }
-        .unwrap_or(MatterKind::Sand);
-        let dials = MatterDials {
-            stiffness: 1.0,
-            friction_angle,
-            cohesion_kpa: cohesion,
-            hardening: ranged("hardening", SNOW_HARDENING, HARDENING_RANGE),
-            yield_stress: ranged("yield_stress", 1.0e4, YIELD_STRESS_RANGE),
-            viscosity: ranged("viscosity", 20.0, VISCOSITY_RANGE),
-            density: f64::from(density),
-        };
-        // Jelly's damping is explicit: past the most the substep cap holds it
-        // would blow up, so it runs at that and the domain says so (D4).
-        let dials = if kind == MatterKind::Jelly {
-            let cap = damping_fitting_cap(f64::from(density), f64::from(cell_size));
-            let damping_limited = dials.viscosity > cap;
-            if damping_limited != self.damping_limited {
-                self.damping_limited = damping_limited;
-                if damping_limited {
-                    log::warn!(
-                        "[matter] Damping {:.0} Pa·s needs more than {MAX_SUBSTEPS} substeps at this cell size; running at {cap:.0}",
-                        dials.viscosity
-                    );
-                }
-            }
-            MatterDials {
-                viscosity: dials.viscosity.min(cap),
-                ..dials
-            }
+        let sand = MatterMaterial::sand(1.0, f64::from(SAND_FRICTION_ANGLE), 0.0);
+        let built = ctx.scalar_or_param("wave", sand.wave_speed(f64::from(SAND_DENSITY)) as f32);
+        let packing = if offline {
+            SNOW_HARDENING_MAX
         } else {
-            dials
+            let held = f64::from(ctx.scalar_or_param("hardened", SNOW_HARDENING_MAX as f32));
+            (held * 1.25).clamp(1.0, SNOW_HARDENING_MAX)
         };
-        // The wave speed scales with Stiffness (D3): the largest Stiffness
-        // whose substeps fit the cap runs, and the domain says so.
-        let unit_wave = MatterMaterial::of(kind, dials).wave_speed(f64::from(density));
-        let fitted = stiffness.min(stiffness_fitting_cap(
-            f64::from(cell_size),
-            unit_wave,
-            v_est,
-        ));
-        let limited = fitted < stiffness;
-        if limited != self.limited {
-            self.limited = limited;
-            if limited {
-                log::warn!(
-                    "[matter] Stiffness {stiffness:.2} needs more than {MAX_SUBSTEPS} substeps at this cell size; running at {fitted:.2}"
-                );
-            }
-        }
-        let material = MatterMaterial::of(
-            kind,
-            MatterDials {
-                stiffness: fitted,
-                ..dials
-            },
-        );
-        let wave = material.wave_speed(f64::from(density)) as f32;
+        let wave = built.max(ctx.scalar_or_param("snow_wave", 0.0) * packing.sqrt() as f32);
         let body_limit = match &self.coupled.owner {
             Some(owner) => live_body_limit(owner, cell_size, wave, density),
             None => None,
         };
-        let viscous_limit = material
-            .viscous_limit(f64::from(density), f64::from(cell_size))
-            .map(|limit| limit as f32);
+        let diffusivity = f64::from(ctx.scalar_or_param("diffusivity", 0.0));
+        let viscous = (diffusivity > 0.0)
+            .then(|| viscous_limit(diffusivity, f64::from(cell_size)) as f32);
         let nominal_substeps =
-            substeps_per_tick(cell_size, wave, v_est as f32, body_limit, viscous_limit);
+            substeps_per_tick(cell_size, wave, v_est as f32, body_limit, viscous);
+        let wave_reach = ACOUSTIC_CFL * f64::from(cell_size);
+        // The share of its stiffness the stiffest material keeps at the cap.
+        let room = stiffness_room(
+            wave_reach,
+            TICK / f64::from(nominal_substeps.min(MAX_SUBSTEPS)),
+            v_est,
+            f64::from(wave),
+        );
+        let limited = room < 1.0;
+        if limited != self.limited {
+            self.limited = limited;
+            if limited {
+                log::warn!(
+                    "[matter] the stiffest material needs more than {MAX_SUBSTEPS} substeps at this cell size; it runs at {:.0}% of its stiffness",
+                    room * 100.0
+                );
+            }
+        }
         // A frame without ticks reports what one Sim Rate interval runs, so
         // the substep count and unit hold steady between ticks.
         let duration = if frame.ticks == 0 {
@@ -1663,16 +1602,15 @@ impl MatterDomain {
             ),
             ("display_time", display_time as f32),
             ("dropped_seconds", frame.dropped_seconds as f32),
-            ("mu", material.mu as f32),
-            ("lambda", material.lambda as f32),
-            ("alpha", material.alpha as f32),
-            ("cohesion", material.cohesion as f32),
-            ("softening", COHESION_SOFTENING),
-            ("wall_friction", material.wall_friction() as f32),
-            ("density", density),
+            ("wave_reach", wave_reach as f32),
+            ("speed_estimate", v_est as f32),
+            (
+                "wall_friction",
+                ctx.scalar_or_param("wall_friction", sand.wall_friction() as f32),
+            ),
             (
                 "limited_by_substeps",
-                if limited { fitted as f32 } else { 0.0 },
+                if limited { room as f32 } else { 0.0 },
             ),
             ("momentum_unit", unit),
             ("body_count", self.bodies.count() as f32),
@@ -1687,10 +1625,6 @@ impl MatterDomain {
             ("moved_hi_x", self.moved_box[1][0]),
             ("moved_hi_y", self.moved_box[1][1]),
             ("moved_hi_z", self.moved_box[1][2]),
-            ("material_rule", material.rule as u32 as f32),
-            ("yield_strain", material.yield_strain as f32),
-            ("relax_time", material.relax_time as f32),
-            ("hardening", material.hardening as f32),
             // The shaped fill's region row in a tick, -1 for a box or none:
             // the fill seeds only the box cells inside its shape.
             (

@@ -5,11 +5,11 @@
 //                 workgroup-memory tree;
 //   grid_main   — the same over grid nodes;
 //   finish_main — one workgroup folds the partials in a fixed order and
-//                 writes the 18 stats words.
+//                 writes the 19 stats words.
 // Every sum runs in a fixed order, so stats are deterministic. Non-finite
 // values are found with an exponent-bits test: fast math may fold isfinite().
-// Composed after matter_material.wgsl: each point's elastic energy comes from
-// the stretches of its F.
+// Composed after matter_material.wgsl: each point's mass and elastic energy
+// come from its row of the material table and the stretches of its F.
 
 struct MatterPoint {
     position: vec3<f32>,
@@ -50,6 +50,8 @@ struct Partial {
     tile_removed: u32,
     // Held pool slots: node.matter_state grows the pool by them.
     held: u32,
+    // The largest hardening a snow point's packing asks for; 0 with no snow.
+    max_hardening: f32,
 }
 
 struct StatsParams {
@@ -60,15 +62,11 @@ struct StatsParams {
     field_min_x: f32,
     field_min_y: f32,
     field_min_z: f32,
-    lambda: f32,
+    tick_index: u32,
     gravity_x: f32,
     gravity_y: f32,
     gravity_z: f32,
-    mu: f32,
-    density: f32,
-    tick_index: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 const GROUP: u32 = 256u;
@@ -81,6 +79,8 @@ const PER_THREAD: u32 = 8u;
 @group(0) @binding(4) var<storage, read_write> partials: array<Partial>;
 @group(0) @binding(5) var<storage, read_write> stats: array<u32>;
 @group(0) @binding(6) var<storage, read> tiles: array<u32>;
+// The material table (node.matter_material): a point's row by its slot.
+@group(0) @binding(7) var<storage, read> materials: array<f32>;
 
 // The world tile table's read side (prepended) over `tiles`: the grid
 // passes run over held tiles only, so a node of a tile the table no longer
@@ -118,6 +118,7 @@ fn empty() -> Partial {
     p.elastic = 0.0;
     p.tile_removed = 0u;
     p.held = 0u;
+    p.max_hardening = 0.0;
     return p;
 }
 
@@ -140,6 +141,7 @@ fn combine(a: Partial, b: Partial) -> Partial {
     p.elastic = a.elastic + b.elastic;
     p.tile_removed = a.tile_removed + b.tile_removed;
     p.held = a.held + b.held;
+    p.max_hardening = max(a.max_hardening, b.max_hardening);
     return p;
 }
 
@@ -163,7 +165,14 @@ fn point_partial(pt: MatterPoint) -> Partial {
         p.nonfinite = 1u;
         return p;
     }
-    let m = v0 * params.density;
+    let base = matter_slot(pt.affine_z.w) * 16u;
+    let row = MatterRow(
+        vec4<f32>(materials[base], materials[base + 1u], materials[base + 2u], materials[base + 3u]),
+        vec4<f32>(materials[base + 4u], materials[base + 5u], materials[base + 6u], materials[base + 7u]),
+        vec4<f32>(materials[base + 8u], materials[base + 9u], materials[base + 10u], materials[base + 11u]),
+        vec4<f32>(0.0),
+    );
+    let m = v0 * row.c.y;
     let v = pt.velocity;
     // field_min is the potential's datum: potential energy is -m g·(x - field_min).
     let rel = pt.position - vec3<f32>(params.field_min_x, params.field_min_y, params.field_min_z);
@@ -171,8 +180,13 @@ fn point_partial(pt: MatterPoint) -> Partial {
     let svd = matter_svd(transpose(mat3x3<f32>(pt.f_x.xyz, pt.f_y.xyz, pt.f_z.xyz)));
     let e = matter_energy(
         matter_log_stretch(svd.sigma),
-        MatterMaterial(params.mu, params.lambda, 0.0, 0.0, 1.0, 0u, 0.0, 0.0, 0.0, 0.0),
+        MatterMaterial(row.a.x, row.a.y, 0.0, 0.0, 1.0, 0u, 0.0, 0.0, 0.0, 0.0, MM_SNOW_HARDENING_MAX),
     );
+    if u32(row.b.y + 0.5) == MATTER_SNOW {
+        // What the packing asks for, before the substep's room holds it:
+        // node.matter_domain picks the next step from this.
+        p.max_hardening = clamp(exp(row.c.x * (1.0 - exp(pt.f_x.w))), MM_SNOW_HARDENING_MIN, MM_SNOW_HARDENING_MAX);
+    }
     p.live = 1u;
     p.max_speed = length(v);
     p.min_j = j;
@@ -290,5 +304,6 @@ fn finish_main(@builtin(local_invocation_id) lid: vec3<u32>) {
         stats[15] = params.tick_index;
         stats[16] = s.tile_removed;
         stats[17] = s.held;
+        stats[18] = bitcast<u32>(s.max_hardening);
     }
 }

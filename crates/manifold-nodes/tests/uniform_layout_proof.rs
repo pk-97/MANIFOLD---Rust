@@ -576,6 +576,8 @@ const NON_STANDALONE: &[&str] = &[
     "node.matter_to_grid",
     // Surface grains: an atomic occupancy count, then a neighbour read.
     "node.matter_grains",
+    // A material row copied into the table; no kernel, no uniforms.
+    "node.matter_material",
     // Region detection and tracking are CPU/FFI stateful boundaries. Their
     // Channels records are proven by the extended ABI test; neither node has
     // a generated standalone uniform mirror for its run() path.

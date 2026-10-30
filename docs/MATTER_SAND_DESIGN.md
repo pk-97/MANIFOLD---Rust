@@ -114,7 +114,7 @@ A Sand item is made of a `Matter` (`SandFields.matter`): Sand, Snow, Clay, Mud, 
 
 Dials: Stiffness for all; Friction Angle and Cohesion for sand; Hardening for snow; Firmness (shear yield stress, Pa) and Thickness (plastic viscosity, Pa·s) for clay, mud and goo; a Density for each, starting at its material's (snow 400, clay 1800, mud 1700, goo 1400, jelly 1050 kg/m³). Snow's substeps budget for five times its stiffness (fully packed), so it costs about two and a half times sand's steps. Clay runs at sand's Young's modulus rather than its real one, since only the yield shows.
 
-Each item is still its own domain: two items pass through each other. Every point has a slot for its material index (`affine_z.w`, 0 today; the rule comes from the domain), so one shared domain per scene means filling that slot and reading the rule per point, not new material maths.
+Every Matter item in a scene runs on one solver (step 7 below), so they collide.
 
 ## Build order
 
@@ -139,6 +139,20 @@ One batch per step, in step order, each built, checked and committed before the 
 - Not built: the sand's porosity in the pressure solve's open fractions (the drag stands in for it), water inside sand taking only the pores' volume, more than one Sand or Water coupling.
 
 References: Tampubolon et al. 2017 ("Multi-species simulation of porous sand and water mixtures") and Gao et al. 2018 ("Animating fluid sediment mixture in particle-laden flows").
+
+## 7. One Matter solver per scene
+
+Peter, 30 Oct: every Matter item shares one solver and one grid, so snow, sand, jelly and mud collide instead of passing through each other, and the per-item grid work (tables, static-mesh caches, grid passes over the same tiles) is done once.
+
+- **Owner and members.** The first Matter item in tree order splices the whole Live Matter group. Every later one (a member) splices only its draw: its frame, surface, grains and look. Its solver nodes are dropped and every wire they fed comes from the owner's instead. Grid-wide rows (Cell Size, Bounds and faces, Domain Size, Fill Height, Particles per Cell, Seed, Gravity, Speed) bind on the owner only and leave members' cards.
+- **Material slot.** Each item is a slot, 0 for the owner, in tree order, at most `MAX_MATTER_SLOTS` (8). A point carries its slot in `affine_z.w`, written by the fill.
+- **`node.matter_material`.** One per item, holding the material rows the card binds (Matter, Stiffness, Friction Angle, Cohesion, the densities, Hardening, Firmness, Thickness, Damping), with a `slot` param. It computes `MatterMaterial::of` on the CPU and writes its 16-float row into a copy of its input table (`materials`, `MAX_MATTER_SLOTS` rows): μ, λ, α, β₀, q_s, rule, yield strain, relax time, ξ, density, lift, drag rate, wall friction. Its scalars fold down the chain: the fastest unhardened wave (`wave`), snow's (`snow_wave`), the largest damping diffusivity η/ρ (`diffusivity`), the heaviest density, and the owner's wall friction. The last node's outputs feed the domain and every atom.
+- **The step follows the stiffness present.** The domain's substeps come from the folded wave, snow's times √h for the packing it last read (`node.matter_stats` word 18, the largest snow hardening, through the state's `hardened` output on a state-capture input), and the viscous limit, capped at `MAX_SUBSTEPS`. Live it reads h with 25% to spare; offline it budgets the full 5 so exports repeat. The domain publishes `wave_reach` (the distance a wave may cross in one substep) and `speed_estimate` (the material's own speed budget); what is left over is the wave speed the chosen step carries.
+- **Caps per point.** `grid_to_matter` and the stats build each point's material from its row and cap it to the step: stiffness times at most `(wave_reach / dt − speed_estimate)² ρ / (λ + 2μ)` (snow's hardening held under it, other materials' μ and λ scaled down only past it) and Kelvin-Voigt damping at most `ρ dx² / (12 dt)`. A late read can soften a hard-packed point for a frame, never blow it up. This replaces `stiffness_fitting_cap` and `damping_fitting_cap`; `limited_by_substeps` reports the share of stiffness the stiffest material keeps.
+- **Per-point values.** P2G's mass, the stats' mass and energy, the water's lift and drag all read the point's row.
+- **Fills.** Domain role k is slot k's fill. The domain lays the grid over every fill, writes a fill table (box cells, region row, slot per fill) and the total point count; `node.matter_fill` seeds the pool (slot 0) then each box in order.
+- **Draws.** `node.matter_frame` has a `slot` param: a point of another slot publishes as an unused slot (radius 0), so each item's surface and grains build from its own material only. With one item, slot −1 publishes every point, as before. The coupling frame (water, wet map, water on sand, smoke and fire) publishes every slot, so every Matter material meets water and gas.
+- **Not in this step.** Wall friction per point (the owner's is used at walls), Particles per Cell per item, and a member's Bounds.
 
 ## Kept open for the unified solver
 

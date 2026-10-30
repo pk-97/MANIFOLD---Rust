@@ -68,6 +68,8 @@ pub(crate) struct MatterScene {
     executor: Executor,
     state: StateStore,
     pub domain: NodeInstanceId,
+    /// The node.matter_material whose dials the points are made of.
+    pub material: NodeInstanceId,
     pub frame_node: NodeInstanceId,
     pub state_node: NodeInstanceId,
     /// Each collider's node.transform_3d.
@@ -127,6 +129,7 @@ impl MatterScene {
         let g2p = add(&mut graph, "node.grid_to_matter");
         let stats = add(&mut graph, "node.matter_stats");
         let frame = add(&mut graph, "node.matter_frame");
+        let material = add(&mut graph, "node.matter_material");
         fn wire(
             graph: &mut Graph,
             from: (NodeInstanceId, &'static str),
@@ -196,13 +199,16 @@ impl MatterScene {
         for port in ["simulation_time", "display_time", "epoch"] {
             wire(&mut graph, (domain, port), (frame, port));
         }
-        wire(&mut graph, (domain, "density"), (p2g, "density"));
-        for port in ["mu", "lambda", "density"] {
-            wire(&mut graph, (domain, port), (stats, port));
+        for node in [state, p2g, g2p, stats] {
+            wire(&mut graph, (material, "materials"), (node, "materials"));
         }
-        for port in ["mu", "lambda", "alpha", "cohesion", "softening", "density"] {
+        for port in ["wave", "snow_wave", "diffusivity", "density", "wall_friction"] {
+            wire(&mut graph, (material, port), (domain, port));
+        }
+        for port in ["wave_reach", "speed_estimate"] {
             wire(&mut graph, (domain, port), (g2p, port));
         }
+        wire(&mut graph, (state, "hardened"), (domain, "hardened"));
         for node in [update, reaction] {
             wire(
                 &mut graph,
@@ -329,12 +335,11 @@ impl MatterScene {
             "gravity_z",
             ParamValue::Float(settings.gravity[2]),
         );
-        set(
-            &mut graph,
-            "stiffness",
-            ParamValue::Float(settings.stiffness),
-        );
-        set(&mut graph, "cohesion", ParamValue::Float(settings.cohesion));
+        for (name, value) in [("stiffness", settings.stiffness), ("cohesion", settings.cohesion)] {
+            graph
+                .set_param(material, name, ParamValue::Float(value))
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        }
         set(&mut graph, "seed", ParamValue::Float(settings.seed as f32));
         set(
             &mut graph,
@@ -402,6 +407,7 @@ impl MatterScene {
             executor: Executor::new(Box::new(backend)),
             state: StateStore::new(),
             domain,
+            material,
             frame_node: frame,
             state_node: state,
             points,
@@ -577,6 +583,12 @@ impl MatterScene {
     pub(crate) fn set_domain(&mut self, name: &str, value: f32) {
         self.graph
             .set_param(self.domain, name, ParamValue::Float(value))
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    }
+
+    pub(crate) fn set_material(&mut self, name: &str, value: f32) {
+        self.graph
+            .set_param(self.material, name, ParamValue::Float(value))
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
     }
 
@@ -930,10 +942,10 @@ fn matter_substeps_follow_stiffness_live() {
     });
     scene.tick();
     assert_eq!(scene.state_input("substeps_per_tick"), 21.0);
-    scene.set_domain("stiffness", 0.5);
+    scene.set_material("stiffness", 0.5);
     scene.tick();
     assert_eq!(scene.state_input("substeps_per_tick"), 14.0);
-    scene.set_domain("stiffness", 2.0);
+    scene.set_material("stiffness", 2.0);
     scene.tick();
     assert_eq!(scene.state_input("substeps_per_tick"), 35.0);
     assert!(scene.frame_input("count") > 0.0);

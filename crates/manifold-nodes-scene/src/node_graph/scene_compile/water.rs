@@ -63,6 +63,8 @@ pub(crate) fn items_of(
 const SAND_FRAME: &str = "frame";
 const SAND_STATE: &str = "state";
 const SAND_DOMAIN: &str = "domain";
+/// The Sand template's `node.matter_material`: what the Sand is made of.
+const MATTER_MATERIAL: &str = "material";
 const WATER_SAND_READERS: [&str; 2] = ["step", "water_wetness"];
 const WATER_WETNESS: &str = "water_wetness";
 
@@ -130,7 +132,7 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
 /// Water's display level set and velocity (the sources of its Physics View
 /// switches) on its display tiles (the wet map's), into the Sand's state on
 /// the next frame, which lifts the grains under water and drags them toward
-/// the water's velocity.
+/// the water's velocity, each by its own row of the material table.
 fn water_on_sand(
     b: &mut Builder<'_>,
     owner: &str,
@@ -167,13 +169,7 @@ fn water_on_sand(
         state,
         manifold_core::liquid_domain::WATER_PUSH_INPUT,
     );
-    for port in [
-        "density",
-        "material_rule",
-        "gravity_x",
-        "gravity",
-        "gravity_z",
-    ] {
+    for port in ["gravity_x", "gravity", "gravity_z"] {
         b.wire(domain, port, state, port);
     }
 }
@@ -225,9 +221,9 @@ fn emit(
         "bounds",
         SerializedParamValue::Bool { value: bounds },
     );
-    if let ItemFields::Sand(sand) = &item.fields {
+    if let (ItemFields::Sand(sand), Some(material)) = (&item.fields, node(MATTER_MATERIAL)) {
         b.set(
-            domain,
+            material,
             "material",
             SerializedParamValue::Enum {
                 value: sand.matter.index(),
