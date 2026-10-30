@@ -785,6 +785,28 @@ fn place(
     }
 }
 
+// The Water of the particles round cell q: the first live one's in q, then
+// in the 26 cells round it, 0 with none. A sheet's birth joins the water
+// whose sheet it fills.
+fn sheet_water(q: vec3<i32>) -> u32 {
+    for (var k = 0; k < 27; k = k + 1) {
+        // k + 13 visits the centre (1, 1, 1) first.
+        let n = (k + 13) % 27;
+        let c = q + vec3<i32>(n % 3, (n / 3) % 3, n / 9) - vec3<i32>(1);
+        if !ts_cell_stored(c) {
+            continue;
+        }
+        let range = ranges[ts_cell_at(c)];
+        for (var j = range.start; j < range.start + range.count; j = j + 1u) {
+            let radius = particles[j].position_radius.w;
+            if radius > 0.0 {
+                return water_of(radius);
+            }
+        }
+    }
+    return 0u;
+}
+
 // Each drawn birth into the slot after the live prefix its index gives, in
 // the saved velocity at its seed (the engine's birth velocity; the FLIP
 // update then gives it the new field's), with the identity the reservation
@@ -809,6 +831,8 @@ fn write(
     let before = base + kept_before(512u * slot, cell, li);
     ts_home(idx);
     let kept = (atomicLoad(&flags[idx]) >> 16u) & 255u;
+    if kept == 0u { return; }
+    let water = sheet_water(ts_cell_coord(idx));
     let origin = vec3<f32>(u.ox, u.oy, u.oz);
     var k = 0u;
     for (var o = 0u; o < 8u; o = o + 1u) {
@@ -818,8 +842,7 @@ fn write(
         let e = record_birth(idx, o, birth);
         if live + birth >= n { continue; }
         let world = e.p + origin;
-        // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell, as the fill's.
-        particles[live + birth] = FluidParticle(vec4<f32>(world, 0.31017524 * u.h),
+        particles[live + birth] = FluidParticle(vec4<f32>(world, birth_radius(u.h, water)),
             saved_velocity((world - origin) / u.h), birth_identity[2] + birth);
     }
 }

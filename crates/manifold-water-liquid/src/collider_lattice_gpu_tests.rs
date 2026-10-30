@@ -62,6 +62,7 @@ fn bodies_at(geometry: &Arc<PreparedFluidGeometry>, cell: f32) -> LiquidBodies {
         velocity: [0.0; 3],
         inherit_motion: 0.0,
         friction: 0.0,
+        water: 0,
     };
     let mut bodies = LiquidBodies::with_regions();
     assert_eq!(

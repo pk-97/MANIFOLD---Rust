@@ -253,6 +253,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("velocity_z"), label: "Velocity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("inherit_motion"), label: "Inherit Motion", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 2.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("friction"), label: "Friction", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("water"), label: "Water", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, (crate::MAX_WATERS - 1) as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("path"), label: "Mesh File", ty: ParamType::String, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("compound_materials"), label: "Compound Materials", ty: ParamType::Table, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("mesh_index"), label: "Mesh Index", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0, 1024.0)), enum_values: &[] },
@@ -384,6 +385,7 @@ impl Primitive for FluidRoleSource {
                     velocity,
                     inherit_motion,
                     friction,
+                    water: role_water(ctx),
                 },
             );
             return;
@@ -579,6 +581,7 @@ impl FluidRoleSource {
                 velocity,
                 inherit_motion,
                 friction,
+                water: role_water(ctx),
             },
         );
     }
@@ -704,6 +707,11 @@ fn wired_f32(ctx: &EffectNodeContext<'_, '_>, name: &str) -> Result<Option<f32>,
         Some(ParamValue::Float(value)) => Ok(Some(value)),
         Some(_) => Err(format!("Fluid role input `{name}` must be a scalar float")),
     }
+}
+
+/// The Water the role belongs to, within the indices a radius carries.
+fn role_water(ctx: &EffectNodeContext<'_, '_>) -> u32 {
+    (ctx.scalar_or_param("water", 0.0).round().max(0.0) as u32).min(crate::MAX_WATERS - 1)
 }
 
 fn resolve_f32(ctx: &EffectNodeContext<'_, '_>, name: &str, default: f32) -> Result<f32, String> {

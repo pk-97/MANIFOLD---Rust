@@ -1,4 +1,5 @@
 //! Buffer extent rule owned by this node.
+use crate::primitives::gpu_flip_domain::fill_table::{FILL_ROWS, FillRow};
 use crate::primitives::gpu_flip_domain::region_sites::RegionSites;
 use crate::primitives::gpu_flip_domain::{geometry_read, gpu_flip_geometry};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
@@ -11,16 +12,16 @@ use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::bodies::LiquidShape;
 use manifold_water_liquid::bounds::{NO_KILL_HEIGHT, bounds_outputs, face_masks};
 use manifold_water_liquid::coupling::REACTION_FLOATS;
-use manifold_water_liquid::extent::walked_fill;
+use manifold_water_liquid::extent::walked_fills;
 use manifold_water_liquid::fields::FieldFrame;
 use std::mem::size_of;
 
 fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let fill = walked_fill(x, "GPU FLIP")?;
+    let fills = walked_fills(x);
     let geometry = gpu_flip_geometry(
         geometry_read(x.params(), |name, default| x.scalar(name, default)),
         x.transform("domain"),
-        fill,
+        &fills,
     )
     .map_err(Verdict::Refused)?;
     for (name, value) in geometry.outputs() {
@@ -47,7 +48,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.publish("dynamic_bodies", 0.0);
     x.publish("region_count", 0.0);
     x.publish("region_site_total", 0.0);
-    x.publish("fill_region", -1.0);
+    x.publish("fill_version", 0.0);
     x.publish("clock_obstacle_count", 0.0);
     x.publish("clock_source_count", 0.0);
     x.publish("live_hit_count", 0.0);
@@ -71,6 +72,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         ),
         ("regions", size_of::<LiquidBody>() as u64),
         ("region_sites", size_of::<RegionSites>() as u64),
+        ("fill_boxes", size_of::<[FillRow; FILL_ROWS]>() as u64),
         ("shapes", size_of::<LiquidShape>() as u64),
         ("atlas", 4),
         ("collider_nodes", 16),

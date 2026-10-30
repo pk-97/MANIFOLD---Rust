@@ -78,17 +78,17 @@ pub fn particle_values(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("out", x.items("particles").unwrap_or(0) * 4)
 }
 
-/// The box a liquid domain's Initial Fill places, as the walk resolves its
-/// role wires ([`crate::fluid_role::initial_fill`], the node's own rule).
-/// `solver` names the liquid in a refusal.
-pub fn walked_fill(
+/// The boxes a GPU FLIP domain's Initial Fills place, one per Water it holds,
+/// as the walk resolves its role wires. The walk does not know which Water a
+/// role seeds, so it sizes every Fill that is on, up to one per Water; the
+/// node refuses a second Fill of one Water by name.
+pub fn walked_fills(
     x: &AtomExtent<'_>,
-    solver: &str,
-) -> Result<Option<manifold_node_engine::scene::transform::Transform>, Verdict> {
-    use crate::fluid_role::{FluidRoleKind, initial_fill};
-    let fills = (0..crate::role_count(x.params()))
+) -> [Option<manifold_node_engine::scene::transform::Transform>; crate::MAX_WATERS as usize] {
+    use crate::fluid_role::FluidRoleKind;
+    let mut fills = (0..crate::role_count(x.params()))
         .filter_map(|index| x.object(&format!("role_{index}")))
         .filter(|(kind, _)| *kind == FluidRoleKind::InitialFill.index())
-        .map(|(_, placed)| placed);
-    initial_fill(fills).map_err(|reason| Verdict::Refused(format!("{solver}: {reason}")))
+        .filter_map(|(_, placed)| placed);
+    std::array::from_fn(|_| fills.next())
 }

@@ -254,6 +254,27 @@ fn nb_reseed_sites(idx: u32, p: vec3<i32>) -> u32 {
     return sites;
 }
 
+// The Water of the particles round cell p: the first live one's in p, then
+// in the 26 cells round it, 0 with none. A reseed joins the water it refills.
+fn nb_water(p: vec3<i32>) -> u32 {
+    for (var k = 0; k < 27; k = k + 1) {
+        // k + 13 visits the centre (1, 1, 1) first.
+        let n = (k + 13) % 27;
+        let c = p + vec3<i32>(n % 3, (n / 3) % 3, n / 9) - vec3<i32>(1);
+        if !ts_cell_stored(c) {
+            continue;
+        }
+        let range = cell_range(ts_cell_at(c));
+        for (var j = 0u; j < range.count; j = j + 1u) {
+            let radius = emitted[range.start + j].position_radius.w;
+            if radius > 0.0 {
+                return water_of(radius);
+            }
+        }
+    }
+    return 0u;
+}
+
 // 512 threads a slot of C, after the move's sort (`nb_scan` cleared): each
 // cell's reseed count, scanned next.
 @compute @workgroup_size(256)
@@ -279,6 +300,7 @@ fn nb_reseed_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let p = ts_cell_coord(idx);
     let sites = nb_reseed_sites(idx, p);
+    let water = nb_water(p);
     let last = ranges[ts_pool_len() - 1u];
     var rank = before;
     for (var k = 0u; k < 8u; k = k + 1u) {
@@ -289,8 +311,7 @@ fn nb_reseed_write(@builtin(global_invocation_id) gid: vec3<u32>) {
         if slot < birth_identity[7] {
             let q = nb_site(k);
             let x = u.origin + (vec3<f32>(p) + q) * u.cell_size;
-            // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell, as the fill's.
-            emitted[slot] = FluidParticle(vec4<f32>(x, 0.31017524 * u.cell_size), sample(q, p, 0u), birth_identity[2] + rank);
+            emitted[slot] = FluidParticle(vec4<f32>(x, birth_radius(u.cell_size, water)), sample(q, p, 0u), birth_identity[2] + rank);
         }
         rank = rank + 1u;
     }

@@ -98,6 +98,7 @@ fn particle_publication_reorder_death_birth_empty_and_retired_tails() {
                     identity: &identity,
                     stats: &stats,
                     metadata: &metadata,
+                    water: None,
                 },
             )
             .unwrap();
@@ -289,6 +290,7 @@ fn particle_identity_multiple_substeps_keep_birth_ids() {
                 identity: &identity,
                 stats: &stats,
                 metadata: &metadata,
+                    water: None,
             },
         )
         .unwrap();
@@ -520,6 +522,7 @@ fn publish_case(
                 identity: &identity,
                 stats: &stats,
                 metadata: &metadata,
+                    water: None,
             },
         )
         .map_err(|error| format!("{}: encode refused: {error}", case.label))?;
@@ -542,6 +545,7 @@ fn check_case(case: &Case, got: &[u32], got_metadata: &[u32]) -> Result<(), Stri
         case.slots,
         case.identity,
         &case.stats,
+        None,
     );
     let want = words(&want);
     if let Some(word) = got.iter().zip(want).position(|(g, w)| g != w) {
@@ -709,6 +713,7 @@ fn republish(
                 identity: &identity,
                 stats: &stats,
                 metadata,
+                water: None,
             },
         )
         .unwrap();

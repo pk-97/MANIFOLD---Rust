@@ -168,14 +168,15 @@ pub fn wall_velocity_outputs(
     ]
 }
 
-/// The lowest Initial Fill or Inflow when an epoch began: the fill's lower
+/// The lowest Initial Fill or Inflow when an epoch began: each fill's lower
 /// edge and each Inflow's box minimum y (`inflows`).
 pub fn lowest_source(
-    fill: Option<Transform>,
+    fills: impl IntoIterator<Item = Transform>,
     inflows: impl IntoIterator<Item = f32>,
 ) -> Option<f32> {
-    fill.map(|fill| fill.pos[1] - 0.5 * fill.scale[1])
+    fills
         .into_iter()
+        .map(|fill| fill.pos[1] - 0.5 * fill.scale[1])
         .chain(inflows)
         .reduce(f32::min)
 }

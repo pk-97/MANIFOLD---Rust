@@ -32,7 +32,7 @@ use super::gpu_flip_pressure::MAX_ITERATIONS;
 use super::gpu_flip_step::{
     BOX_BAND_CELLS, pool_tiles, read_max_iterations, read_sheet_fill_rate, read_solve_level,
 };
-use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
+use super::liquid_fill::{SITES_PER_CELL, box_count, pool_count, site_range};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::fluid_domain::{
     CELL_SIZE_METRES, DEFAULT_CELL_SIZE, FluidDomainLayout, domain_layout, unbounded_seed,
@@ -63,7 +63,7 @@ use manifold_water_liquid::coupling::{
     SharesSolids, decode_reaction, takes_reaction,
 };
 use manifold_water_liquid::fluid_role::{
-    FluidRole, FluidRoleKind, InitialFill, PreparedFluidGeometry, take_initial_fill,
+    FluidRole, FluidRoleKind, InitialFills, PreparedFluidGeometry, take_initial_fills,
 };
 use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_liquid::{PARTICLE_RADIUS_CELLS, RolePorts, WATER_DENSITY};
@@ -71,12 +71,14 @@ use manifold_water_rigid::coupled_frame::{CoupledRigidInputs, RigidFrame, RigidP
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
 use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
+use fill_table::{FILL_ROWS, FillRow, FillTable};
 use region_sites::{RegionSiteBuffer, RegionSiteRows};
 use {
     manifold_physics::force_lattice::ForceLattice, manifold_water_liquid::fields,
     manifold_water_liquid::fields::LiquidFields, manifold_water_liquid::fields::LiquidImpulses,
 };
 
+mod fill_table;
 mod region_sites;
 
 manifold_core::testkit_visible! {
@@ -91,8 +93,9 @@ pub struct GpuFlipSetup {
     pub bounds: bool,
     /// The authored Fill Height in metres.
     pub fill_height: f32,
-    /// The Initial Fill's box as placed (min then max), None without one.
-    pub initial_fill: Option<[[f32; 3]; 2]>,
+    /// Each Water's Initial Fill box as placed (min then max), None without
+    /// one.
+    pub initial_fills: [Option<[[f32; 3]; 2]>; FILL_ROWS],
 }
 }
 
@@ -111,11 +114,14 @@ pub struct GpuFlipGeometry {
     pub setup: GpuFlipSetup,
     /// The pool's height in half-cell sites of this frame's grid box.
     pub pool_sites: u32,
-    /// The Initial Fill's site range per axis in this frame's grid box (empty
-    /// without one).
-    pub box_sites: [[u32; 2]; 3],
+    /// Each Water's Initial Fill site range per axis in this frame's grid box
+    /// (empty without one).
+    pub box_sites: [[[u32; 2]; 3]; FILL_ROWS],
     /// What the fill changed to fit the domain, on the values this frame ran.
     pub fit: SetupFit,
+    /// The Water whose Initial Fill `fit.column` reports, when one was clipped
+    /// or left outside.
+    pub(crate) unfit_fill: Option<usize>,
     pub particles: u64,
     /// The V-cycle level the pressure solves run on; live, so not in the
     /// setup.
@@ -134,13 +140,18 @@ impl GpuFlipGeometry {
         pool_tiles(self.layout.cells, self.wall_faces)
     }
 
+    /// The sites the fill table's boxes seed in all, after the pool.
+    pub(crate) fn fill_box_sites(&self) -> u64 {
+        self.box_sites
+            .iter()
+            .map(|sites| box_count(self.layout.cells, self.pool_sites, *sites))
+            .sum()
+    }
+
     /// The scalar outputs fixed by the setup, by name.
-    pub fn outputs(&self) -> [(&'static str, f32); 16] {
+    pub fn outputs(&self) -> [(&'static str, f32); 11] {
         let GpuFlipGeometry {
-            layout,
-            pool_sites,
-            box_sites,
-            ..
+            layout, pool_sites, ..
         } = *self;
         let h = layout.cell_size;
         [
@@ -152,12 +163,7 @@ impl GpuFlipGeometry {
             ("fill_cells_y", layout.cells[1] as f32),
             ("fill_cells_z", layout.cells[2] as f32),
             ("pool_sites", pool_sites as f32),
-            ("box_x0", box_sites[0][0] as f32),
-            ("box_x1", box_sites[0][1] as f32),
-            ("box_y0", box_sites[1][0] as f32),
-            ("box_y1", box_sites[1][1] as f32),
-            ("box_z0", box_sites[2][0] as f32),
-            ("box_z1", box_sites[2][1] as f32),
+            ("fill_box_sites", self.fill_box_sites() as f32),
             (
                 "particle_mass",
                 (f64::from(WATER_DENSITY) * h * h * h / f64::from(SITES_PER_CELL)) as f32,
@@ -168,17 +174,19 @@ impl GpuFlipGeometry {
     }
 }
 
-/// The fill in the layout's half-cell sites: the pool's height and the
-/// Initial Fill's site range per axis (empty without one). A height past
-/// the top is capped there and a volume past a wall is clipped to the domain;
-/// one wholly outside fills nothing (`manifold_core::liquid_setup`, which the
-/// setup check reports from). An unusable height or a volume that is not an
-/// axis-aligned finite box is refused by name.
+/// The fill in the layout's half-cell sites: the pool's height and each
+/// Water's Initial Fill site range per axis (empty without one), with the
+/// Water whose fit the setup reports. A height past the top is capped there
+/// and a volume past a wall is clipped to the domain; one wholly outside
+/// fills nothing (`manifold_core::liquid_setup`, which the setup check
+/// reports from: the first Water's fill that did not fit). An unusable height
+/// or a volume that is not an axis-aligned finite box is refused by name.
+#[allow(clippy::type_complexity)]
 fn fill_sites(
     layout: &FluidDomainLayout,
     fill_height: f32,
-    initial_fill: Option<Transform>,
-) -> Result<(u32, [[u32; 2]; 3], SetupFit), String> {
+    initial_fills: &[Option<Transform>],
+) -> Result<(u32, [[[u32; 2]; 3]; FILL_ROWS], SetupFit, Option<usize>), String> {
     let filled =
         fit_fill_height(layout, fill_height).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let mut fit = SetupFit {
@@ -197,8 +205,12 @@ fn fill_sites(
         h,
         layout.cells[1],
     )[1];
-    let mut sites = [[0u32; 2]; 3];
-    if let Some(volume) = initial_fill {
+    let mut sites = [[[0u32; 2]; 3]; FILL_ROWS];
+    let mut unfit = None;
+    for (water, volume) in initial_fills.iter().take(FILL_ROWS).enumerate() {
+        let Some(volume) = volume else {
+            continue;
+        };
         if volume.billboard
             || volume
                 .rot_euler
@@ -209,22 +221,26 @@ fn fill_sites(
         }
         let (edges, outcome) = fit_column(layout, volume.pos, volume.scale)
             .map_err(|reason| format!("GPU FLIP: {reason}"))?;
-        fit.column = outcome;
+        if outcome != ColumnOutcome::Fits && unfit.is_none() {
+            fit.column = outcome;
+            unfit = Some(water);
+        }
         if let Some((lo, hi)) = edges {
-            for (d, range) in sites.iter_mut().enumerate() {
+            for (d, range) in sites[water].iter_mut().enumerate() {
                 *range = site_range(lo[d], hi[d], min[d], h, layout.cells[d]);
             }
         }
     }
-    Ok((pool, sites, fit))
+    Ok((pool, sites, fit, unfit))
 }
 
 manifold_core::testkit_visible! {
 /// The domain box and fill from the domain's params and wires
 /// (`read` is `scalar_or_param`, with the Bounds switch as 0 or 1: see
 /// [`geometry_read`]), the grid box moved onto whole world cells
-/// ([`on_world_cells`]) and the Bounds box as placed. With Bounds off the
-/// grid starts from the Fill's own box, else the hidden one
+/// ([`on_world_cells`]) and the Bounds box as placed. `initial_fills` holds
+/// each Water's Initial Fill, by Water. With Bounds off the grid starts from
+/// the box round the Fills, else the hidden one
 /// ([`unbounded_seed`]) and Fill Height, which fills the Bounds box from its
 /// floor, is 0. Refused by name, in this order: a solve level the pool
 /// lacks, a fill that is not a usable shape, and a fill past the count a
@@ -232,7 +248,7 @@ manifold_core::testkit_visible! {
 pub fn gpu_flip_geometry(
     read: impl Fn(&str, f32) -> f32,
     domain: Option<Transform>,
-    initial_fill: Option<Transform>,
+    initial_fills: &[Option<Transform>],
 ) -> Result<GpuFlipGeometry, String> {
     let bounds = read("bounds", 1.0) != 0.0;
     let cell_size = read("cell_metres", DEFAULT_CELL_SIZE);
@@ -243,7 +259,12 @@ pub fn gpu_flip_geometry(
         false => Some(unbounded_seed(
             world.map(Into::into),
             domain_size,
-            initial_fill.as_ref().map(|volume| box_about(volume.pos, volume.scale)),
+            union_box(
+                initial_fills
+                    .iter()
+                    .flatten()
+                    .map(|volume| box_about(volume.pos, volume.scale)),
+            ),
             f64::from(cell_size),
         )),
     };
@@ -259,8 +280,12 @@ pub fn gpu_flip_geometry(
     let max_iterations = read_max_iterations(read("max_iterations", MAX_ITERATIONS as f32)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let sheet_fill_rate = read_sheet_fill_rate(read("sheet_fill_rate", 0.0)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let fill_height = if bounds { read("fill_height", DEFAULT_FILL_HEIGHT) } else { 0.0 };
-    let (pool_sites, box_sites, fit) = fill_sites(&layout, fill_height, initial_fill)?;
-    let particles = filled_sites(layout.cells, pool_sites, box_sites);
+    let (pool_sites, box_sites, fit, unfit_fill) = fill_sites(&layout, fill_height, initial_fills)?;
+    let particles = pool_count(layout.cells, pool_sites)
+        + box_sites
+            .iter()
+            .map(|sites| box_count(layout.cells, pool_sites, *sites))
+            .sum::<u64>();
     if particles > u64::from(EXACT_F32_COUNT) {
         return Err(format!(
             "GPU FLIP: the pool holds {particles} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly. Raise Cell Size or lower Fill Height."
@@ -270,9 +295,15 @@ pub fn gpu_flip_geometry(
         cell_size: layout.cell_size,
         bounds,
         fill_height,
-        initial_fill: initial_fill.map(|volume| box_about(volume.pos, volume.scale)),
+        initial_fills: std::array::from_fn(|water| {
+            initial_fills
+                .get(water)
+                .copied()
+                .flatten()
+                .map(|volume| box_about(volume.pos, volume.scale))
+        }),
     };
-    Ok(GpuFlipGeometry { layout, bounds_box, wall_faces, setup, pool_sites, box_sites, particles, solve_level, max_iterations, sheet_fill_rate, fit })
+    Ok(GpuFlipGeometry { layout, bounds_box, wall_faces, setup, pool_sites, box_sites, particles, solve_level, max_iterations, sheet_fill_rate, fit, unfit_fill })
 }
 }
 
@@ -339,7 +370,7 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 65] = [
+const OUTPUTS: [&str; 60] = [
     "fill_min_x",
     "fill_min_y",
     "fill_min_z",
@@ -349,12 +380,8 @@ const OUTPUTS: [&str; 65] = [
     "fill_cells_z",
     "closed_faces",
     "pool_sites",
-    "box_x0",
-    "box_x1",
-    "box_y0",
-    "box_y1",
-    "box_z0",
-    "box_z1",
+    "fill_box_sites",
+    "fill_version",
     "particle_mass",
     "gravity_x",
     "gravity",
@@ -404,11 +431,10 @@ const OUTPUTS: [&str; 65] = [
     "wall_velocity_hi_y",
     "wall_velocity_hi_z",
     "pool_tiles",
-    "fill_region",
 ];
-const TICKS: usize = 19;
-const EPOCH: usize = 20;
-const IMPULSE_TICK: usize = 33;
+const TICKS: usize = 15;
+const EPOCH: usize = 16;
+const IMPULSE_TICK: usize = 29;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
 const _: () = assert!(matches!(OUTPUTS[EPOCH].as_bytes(), b"epoch"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
@@ -517,9 +543,7 @@ manifold_node_engine::primitive! {
         wall_velocity_hi_x: ScalarF32, wall_velocity_hi_y: ScalarF32, wall_velocity_hi_z: ScalarF32,
         kill_height: ScalarF32,
         pool_sites: ScalarF32,
-        box_x0: ScalarF32, box_x1: ScalarF32,
-        box_y0: ScalarF32, box_y1: ScalarF32,
-        box_z0: ScalarF32, box_z1: ScalarF32,
+        fill_box_sites: ScalarF32, fill_version: ScalarF32,
         particle_mass: ScalarF32,
         gravity_x: ScalarF32, gravity: ScalarF32, gravity_z: ScalarF32,
         ticks: ScalarF32,
@@ -547,8 +571,7 @@ manifold_node_engine::primitive! {
         sheet_fill_rate: ScalarF32,
         region_site_total: ScalarF32,
         pool_tiles: ScalarF32,
-        fill_region: ScalarF32,
-        bodies: Array(LiquidBody), regions: Array(LiquidBody), region_sites: Array(u32), shapes: Array(LiquidShape), atlas: Array(u32),
+        bodies: Array(LiquidBody), regions: Array(LiquidBody), region_sites: Array(u32), fill_boxes: Array(u32), shapes: Array(LiquidShape), atlas: Array(u32),
         collider_nodes: Array(manifold_node_engine::mesh::Vec4Vertex), collider_triangles: Array(manifold_node_engine::mesh::Vec4Vertex),
         reaction: Array(f32),
         contacts: Array(f32),
@@ -594,12 +617,14 @@ manifold_node_engine::primitive! {
         setup_report: SetupReport = SetupReport::default(),
         // The domain box of the accepted setup.
         layout: Option<FluidDomainLayout> = None,
-        // The pool height and the Initial Fill's site range of the grid box
-        // this frame ran (the fill gizmos).
-        fill_sites: (u32, [[u32; 2]; 3]) = (0, [[0; 2]; 3]),
-        // The shaped Initial Fill's geometry the accepted setup seeded; a new
-        // one restarts the liquid, so the fill seeds the new shape.
-        fill_shape: Option<Arc<PreparedFluidGeometry>> = None,
+        // The pool height and each Water's Initial Fill site range of the grid
+        // box this frame ran (the fill gizmos).
+        fill_sites: (u32, [[[u32; 2]; 3]; FILL_ROWS]) = (0, [[[0; 2]; 3]; FILL_ROWS]),
+        // Each Water's shaped Initial Fill geometry the accepted setup seeded;
+        // a new one restarts the liquid, so the fill seeds the new shape.
+        fill_shapes: [Option<Arc<PreparedFluidGeometry>>; FILL_ROWS] = [const { None }; FILL_ROWS],
+        // The fill boxes `node.liquid_fill` seeds from, one row per Water.
+        fill_table: FillTable = FillTable::default(),
         // Last frame's Bounds box, None with Bounds off: the walls' velocity
         // is this frame's box against it.
         last_bounds: Option<[[f32; 3]; 2]> = None,
@@ -655,6 +680,7 @@ impl Primitive for GpuFlipDomain {
                 | "contacts"
                 | "regions"
                 | "region_sites"
+                | "fill_boxes"
                 | "shapes"
                 | "atlas"
                 | "collider_nodes"
@@ -675,6 +701,7 @@ impl Primitive for GpuFlipDomain {
             "impulses" => return self.fields.impulses_buffer(),
             "live_hits" => return self.fields.live_hits_buffer(),
             "region_sites" => return self.region_site_buffer.buffer(),
+            "fill_boxes" => return self.fill_table.buffer(),
             _ => {}
         }
         self.body_buffers.output(port)
@@ -692,6 +719,7 @@ impl Primitive for GpuFlipDomain {
                 | "contacts"
                 | "regions"
                 | "region_sites"
+                | "fill_boxes"
                 | "shapes"
                 | "atlas"
                 | "collider_nodes"
@@ -777,8 +805,8 @@ impl Primitive for GpuFlipDomain {
         }
         let role_pending = self.role_ports.read(&ctx.inputs);
         let mut roles = self.role_ports.take();
-        // The Initial Fill seeds the water; the bodies never see it.
-        let fill = take_initial_fill(&mut roles);
+        // The Initial Fills seed the water; the bodies never see them.
+        let fills = take_initial_fills(&mut roles);
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
         if ctx.sim_step.authored_sample_only {
@@ -823,7 +851,7 @@ impl Primitive for GpuFlipDomain {
         let computed = if self.role_pending {
             Ok(None)
         } else {
-            self.compute(ctx, &roles, fill)
+            self.compute(ctx, &roles, fills)
         };
         self.role_ports.put_back(roles);
         if let Some(owner) = self.coupled.owner.as_ref() {
@@ -896,6 +924,11 @@ impl Primitive for GpuFlipDomain {
                 fresh && self.rows_fresh,
                 "node.gpu_flip_domain.region_sites",
             );
+            self.fill_table.upload(
+                gpu,
+                &mut self.body_buffers,
+                "node.gpu_flip_domain.fill_boxes",
+            );
             if let Err(error) = bodies_uploaded {
                 ctx.error(error);
             }
@@ -964,8 +997,9 @@ impl PhysicsNode for GpuFlipDomain {
         ))
     }
 
-    /// The pool under the fill height and the initial column as the fill
-    /// seeds them (whole half-cell sites), then bodies, regions and forces.
+    /// The pool under the fill height and each Water's initial column as the
+    /// fill seeds them (whole half-cell sites), then bodies, regions and
+    /// forces.
     fn write_physics_gizmos(&self, out: &mut Vec<PhysicsGizmo>) {
         let (Some(layout), Some(_)) = (self.layout, self.setup) else {
             return;
@@ -981,9 +1015,12 @@ impl PhysicsNode for GpuFlipDomain {
                 [max[0], top, max[2]],
             ));
         }
-        if box_sites.iter().all(|[lo, hi]| hi > lo) {
+        for sites in box_sites
+            .iter()
+            .filter(|sites| sites.iter().all(|[lo, hi]| hi > lo))
+        {
             let corner = |end: usize| {
-                std::array::from_fn(|i| layout.min[i] + box_sites[i][end] as f32 * site)
+                std::array::from_fn(|i| layout.min[i] + sites[i][end] as f32 * site)
             };
             out.push(PhysicsGizmo::aabb(
                 PhysicsGizmoFamily::Fill,
@@ -1136,23 +1173,23 @@ impl GpuFlipDomain {
         &mut self,
         ctx: &EffectNodeContext<'_, '_>,
         roles: &[Option<FluidRole>],
-        fill: Result<Option<InitialFill>, String>,
+        fills: Result<InitialFills, String>,
     ) -> Result<Option<[f32; OUTPUTS.len()]>, String> {
-        let geometry = fill
+        let geometry = fills
             .map_err(|reason| format!("GPU FLIP: {reason}"))
-            .and_then(|fill| {
-                let column = fill.map(|fill| fill.column);
+            .and_then(|fills| {
+                let columns = fills.map(|fill| fill.map(|fill| fill.column));
                 gpu_flip_geometry(
                     geometry_read(ctx.params, |name, default| {
                         ctx.scalar_or_param(name, default)
                     }),
                     ctx.inputs.transform("domain"),
-                    column,
+                    &columns,
                 )
-                .map(|geometry| (geometry, column, fill.and_then(|fill| fill.shape)))
+                .map(|geometry| (geometry, columns, fills.map(|fill| fill.and_then(|fill| fill.shape))))
             });
-        let (geometry, column, shaped) = match geometry {
-            Ok((geometry, column, shaped)) => (geometry, column, shaped),
+        let (geometry, columns, shaped) = match geometry {
+            Ok((geometry, columns, shaped)) => (geometry, columns, shaped),
             Err(reason) => {
                 self.setup_report.refuse(&reason);
                 return Err(reason);
@@ -1160,7 +1197,10 @@ impl GpuFlipDomain {
         };
         self.setup_report.accept(
             geometry.fit,
-            column.map(|column| (column.pos, column.scale)),
+            geometry
+                .unfit_fill
+                .and_then(|water| columns[water])
+                .map(|column| (column.pos, column.scale)),
         );
         let speed = ctx.scalar_or_param("speed", 1.0);
         let gravity = [
@@ -1220,13 +1260,18 @@ impl GpuFlipDomain {
         {
             return Ok(None);
         }
-        let fill_shape = shaped
-            .and_then(|slot| roles[slot].as_ref())
-            .map(|role| Arc::clone(&role.geometry));
-        let reshaped = match (&self.fill_shape, &fill_shape) {
-            (Some(seeded), Some(shape)) => !Arc::ptr_eq(seeded, shape),
-            (seeded, shape) => seeded.is_some() != shape.is_some(),
-        };
+        let fill_shapes = shaped.map(|slot| {
+            slot.and_then(|slot| roles[slot].as_ref())
+                .map(|role| Arc::clone(&role.geometry))
+        });
+        let reshaped = self
+            .fill_shapes
+            .iter()
+            .zip(&fill_shapes)
+            .any(|pair| match pair {
+                (Some(seeded), Some(shape)) => !Arc::ptr_eq(seeded, shape),
+                (seeded, shape) => seeded.is_some() != shape.is_some(),
+            });
         let restart = self.setup != Some(geometry.setup) || self.coupled.owner_fresh || reshaped;
         // Finish the prior reaction before reusing its buffer. Live and
         // offline share per-tick exchanges; only the clock limits live work.
@@ -1277,7 +1322,7 @@ impl GpuFlipDomain {
             }
         }
         self.setup = Some(geometry.setup);
-        self.fill_shape = fill_shape;
+        self.fill_shapes = fill_shapes;
         self.layout = Some(geometry.layout);
         self.fill_sites = (geometry.pool_sites, geometry.box_sites);
         let frame = self.clock.advance(
@@ -1382,7 +1427,7 @@ impl GpuFlipDomain {
         }
         self.observed.used();
         let (scene, kill_height) = within_key_span(
-            self.scene(&geometry, column, frame.epoch, drawn_radius),
+            self.scene(&geometry, &columns, frame.epoch, drawn_radius),
             geometry.setup.cell_size,
         )?;
         self.scene_box = scene;
@@ -1441,6 +1486,16 @@ impl GpuFlipDomain {
             .owner
             .as_ref()
             .map_or_else(Default::default, LiquidRigidOwner::handover);
+        // Each Water's fill box, and a shaped one's region row in a tick:
+        // the fill seeds only the sites inside its shape.
+        let rows: [FillRow; FILL_ROWS] = std::array::from_fn(|water| {
+            let [[x0, x1], [y0, y1], [z0, z1]] = geometry.box_sites[water];
+            let region = shaped[water]
+                .and_then(|slot| self.bodies.region_of(slot))
+                .map_or(0, |row| row as u32 + 1);
+            [x0, x1, y0, y1, z0, z1, water as u32, region]
+        });
+        self.fill_table.set(rows, frame.epoch);
         let per_frame = [
             ("closed_faces", wall_faces as f32),
             ("open_faces", open_faces as f32),
@@ -1495,14 +1550,7 @@ impl GpuFlipDomain {
             ("handover_velocity", handover.velocity),
             ("handover_rotation", handover.rotation),
             ("first_tick", first_tick as f32),
-            // The shaped fill's region row in a tick, -1 for a box or none:
-            // the fill seeds only the sites inside its shape.
-            (
-                "fill_region",
-                shaped
-                    .and_then(|slot| self.bodies.region_of(slot))
-                    .map_or(-1.0, |row| row as f32),
-            ),
+            ("fill_version", self.fill_table.version() as f32),
         ];
         let simulated: f64 = (0..u64::from(frame.ticks))
             .map(|tick| {
@@ -1557,7 +1605,7 @@ impl GpuFlipDomain {
     fn scene(
         &mut self,
         geometry: &GpuFlipGeometry,
-        column: Option<Transform>,
+        columns: &[Option<Transform>],
         epoch: u32,
         drawn_radius: f32,
     ) -> ([[f32; 3]; 2], f32) {
@@ -1570,7 +1618,7 @@ impl GpuFlipDomain {
                 .region_boxes()
                 .filter(|(kind, _)| *kind == FluidRoleKind::Inflow)
                 .map(|(_, placed)| placed[0][1]);
-            lowest_source(column, inflows)
+            lowest_source(columns.iter().flatten().copied(), inflows)
         });
         let kill = kill_height(
             self.bodies
@@ -1587,7 +1635,12 @@ impl GpuFlipDomain {
             .map(|(_, placed)| placed)
             .filter(|placed| placed[1][1] >= kill)
             .chain(self.bodies.region_boxes().map(|(_, placed)| placed))
-            .chain(column.map(|fill| box_about(fill.pos, fill.scale)));
+            .chain(
+                columns
+                    .iter()
+                    .flatten()
+                    .map(|fill| box_about(fill.pos, fill.scale)),
+            );
         match union_box(placed) {
             Some(scene) => (scene, kill),
             None => (geometry.bounds_box, kill),
@@ -1801,7 +1854,7 @@ mod tests {
             "fill_height" => fill,
             _ => default,
         };
-        gpu_flip_geometry(read, None, volume)
+        gpu_flip_geometry(read, None, &[volume])
     }
 
     /// A pending liquid makes a hit wait for it; only a failed one refuses
@@ -1937,7 +1990,7 @@ mod tests {
         };
         let at64 = geometry(64.0, 0.16, Some(column)).expect("64 fills");
         assert_eq!(
-            (at64.pool_sites, at64.box_sites),
+            (at64.pool_sites, at64.box_sites[0]),
             (5, [[5, 43], [5, 67], [8, 120]])
         );
         assert_eq!(at64.particles, 128 * 5 * 128 + 38 * 62 * 112);
@@ -1985,7 +2038,7 @@ mod tests {
                 default
             }
         };
-        let moved = gpu_flip_geometry(read, Some(pose), None).expect("fills");
+        let moved = gpu_flip_geometry(read, Some(pose), &[]).expect("fills");
         let h = moved.layout.cell_size;
         assert_eq!(h, 0.0625);
         assert_eq!(moved.layout.min, [-1.625, -0.875, -2.8125]);
@@ -2047,7 +2100,7 @@ mod tests {
             "fill_height" => 0.16,
             _ => default,
         };
-        let at = gpu_flip_geometry(read, Some(pose), Some(column)).expect("fills");
+        let at = gpu_flip_geometry(read, Some(pose), &[Some(column)]).expect("fills");
         let h = at.layout.cell_size;
         let first = at.layout.min.map(|v| box_cell(v, h));
         for (axis, &cell) in first.iter().enumerate() {
@@ -2058,7 +2111,7 @@ mod tests {
             // The box-relative position the fill kernel computes.
             let local =
                 |site: u32| f64::from(at.layout.min[axis]) + (0.25 + 0.5 * f64::from(site)) * h;
-            let [first, end] = at.box_sites[axis];
+            let [first, end] = at.box_sites[0][axis];
             assert!(end > first);
             assert!((world(first) - local(first)).abs() < 1e-5, "axis {axis}");
             let lo = f64::from(column.pos[axis] - 0.5 * column.scale[axis]);
@@ -2153,7 +2206,7 @@ mod tests {
                 "fill_height" => fill,
                 _ => default,
             };
-            gpu_flip_geometry(read, Some(pose), None).expect("fits")
+            gpu_flip_geometry(read, Some(pose), &[]).expect("fits")
         };
         let pose = Transform {
             pos: [0.37, 1.1, -0.8],
@@ -2225,7 +2278,7 @@ mod tests {
                     _ => default,
                 },
                 None,
-                volume,
+                &[volume],
             )
         };
         assert_eq!(
@@ -2291,7 +2344,7 @@ mod tests {
         let inside = geometry(64.0, 0.16, Some(at_wall)).expect("fills");
         let clipped = geometry(64.0, 0.16, Some(past_wall)).expect("a clipped column fills");
         assert_eq!(
-            clipped.box_sites, inside.box_sites,
+            clipped.box_sites[0], inside.box_sites[0],
             "the part inside is the same fill"
         );
         assert!(clipped.particles > geometry(64.0, 0.16, None).unwrap().particles);
@@ -2302,7 +2355,7 @@ mod tests {
             ..Transform::default()
         };
         let none = geometry(64.0, 0.16, Some(away)).expect("a column outside fills nothing");
-        assert_eq!(none.box_sites, [[0; 2]; 3]);
+        assert_eq!(none.box_sites[0], [[0; 2]; 3]);
         assert_eq!(
             none.particles,
             geometry(64.0, 0.16, None).unwrap().particles
@@ -2326,8 +2379,8 @@ mod tests {
             scale: [0.41, 1.0, 1.0],
             ..Transform::default()
         };
-        let at = gpu_flip_geometry(read, None, Some(column)).expect("fills");
-        assert_eq!(at.box_sites[0], [27, 39]);
+        let at = gpu_flip_geometry(read, None, &[Some(column)]).expect("fills");
+        assert_eq!(at.box_sites[0][0], [27, 39]);
     }
 
     /// Bounds off has neither mask, no slab and no box to crop bodies to, and
@@ -2348,7 +2401,7 @@ mod tests {
                 "fill_height" => 0.0,
                 _ => default,
             };
-            gpu_flip_geometry(read, Some(pose), None).expect("fits")
+            gpu_flip_geometry(read, Some(pose), &[]).expect("fits")
         };
         let (off, on) = (at(0.0), at(1.0));
         assert!(!off.setup.bounds && on.setup.bounds);
@@ -2448,10 +2501,10 @@ mod tests {
             scale: [1.0, 0.4, 1.0],
             ..Transform::default()
         };
-        assert_eq!(lowest_source(Some(fill), [0.9, 2.0]), Some(0.8));
-        assert_eq!(lowest_source(Some(fill), [0.5]), Some(0.5));
-        assert_eq!(lowest_source(None, [2.0, 1.5]), Some(1.5));
-        assert_eq!(lowest_source(None, []), None);
+        assert_eq!(lowest_source([fill], [0.9, 2.0]), Some(0.8));
+        assert_eq!(lowest_source([fill], [0.5]), Some(0.5));
+        assert_eq!(lowest_source([], [2.0, 1.5]), Some(1.5));
+        assert_eq!(lowest_source([], []), None);
     }
 
     /// The scene box with Bounds off is the box round everything placed; an
@@ -2479,7 +2532,7 @@ mod tests {
                 ("max_iterations", Some(v)) => v,
                 _ => default,
             };
-            gpu_flip_geometry(read, None, None)
+            gpu_flip_geometry(read, None, &[])
         };
         assert_eq!(at(None).expect("default").max_iterations, 900);
         assert_eq!(at(Some(120.0)).expect("120").max_iterations, 120);
@@ -2502,7 +2555,7 @@ mod tests {
                     _ => default,
                 },
                 None,
-                None,
+                &[],
             )
         };
         let off = at(None).expect("default");
@@ -2529,7 +2582,7 @@ mod tests {
                 "solve_level" => level,
                 _ => default,
             };
-            gpu_flip_geometry(read, None, None)
+            gpu_flip_geometry(read, None, &[])
         };
         assert_eq!(at(64.0, 3.0).expect("level 3 at 64").solve_level, 3);
         assert_eq!(at(64.0, 0.0).expect("level 0").solve_level, 0);
@@ -2550,7 +2603,7 @@ mod extent;
 #[cfg(any(test, feature = "testkit"))]
 impl GpuFlipGeometry {
     pub fn box_sites_for_test(&self) -> [[u32; 2]; 3] {
-        self.box_sites
+        self.box_sites[0]
     }
     pub fn pool_sites_for_test(&self) -> u32 {
         self.pool_sites

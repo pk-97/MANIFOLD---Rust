@@ -154,7 +154,7 @@ fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     let inflow = emit_inflow(site);
     let p = emit_position(idx, site, inflow);
     // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell, as the fill's.
-    emitted[slot] = FluidParticle(vec4<f32>(p, 0.31017524 * u.cell_size), region_velocity(inflow, p), birth_identity[2] + before);
+    emitted[slot] = FluidParticle(vec4<f32>(p, birth_radius(u.cell_size, region_water(inflow))), region_velocity(inflow, p), birth_identity[2] + before);
 }
 
 // One thread, on the tick's first substep before any birth stage: the

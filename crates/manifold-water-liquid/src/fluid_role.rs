@@ -59,47 +59,54 @@ pub struct InitialFill {
     pub shape: Option<usize>,
 }
 
+/// A liquid's Initial Fills by the Water each seeds ([`FluidRole::water`]):
+/// Waters that share one solver each bring their own.
+pub type InitialFills = [Option<InitialFill>; crate::MAX_WATERS as usize];
+
 /// Takes the Initial Fill roles out of `roles`, since a liquid seeds them
-/// rather than simulating them, and returns the one that is on
-/// ([`initial_fill`]). A fill with a mesh is shaped: it stays in `roles` and
-/// its column is the world box round the mesh.
-pub fn take_initial_fill(roles: &mut [Option<FluidRole>]) -> Result<Option<InitialFill>, String> {
+/// rather than simulating them, and returns the one that is on for each
+/// Water ([`initial_fill`]: a Water takes one). A fill with a mesh is
+/// shaped: it stays in `roles` and its column is the world box round the
+/// mesh.
+pub fn take_initial_fills(roles: &mut [Option<FluidRole>]) -> Result<InitialFills, String> {
     let is_fill = |role: &Option<FluidRole>| {
         role.as_ref()
             .is_some_and(|role| role.kind == FluidRoleKind::InitialFill)
     };
-    let slot = initial_fill(
-        roles
-            .iter()
-            .enumerate()
-            .filter(|(_, role)| is_fill(role))
-            .map(|(slot, role)| role.as_ref().filter(|role| role.enabled).map(|_| slot)),
-    )?;
-    let fill = match slot {
-        Some(slot) => {
-            let role = roles[slot].as_ref().expect("a fill's slot holds it");
-            Some(if role.geometry.meshes.is_empty() {
-                InitialFill {
-                    column: role.transform,
-                    shape: None,
-                }
-            } else {
-                InitialFill {
-                    column: posed_column(role.geometry.bounds(), role.transform)
-                        .ok_or("the Fill's mesh has no finite bounds")?,
-                    shape: Some(slot),
-                }
-            })
-        }
-        None => None,
-    };
-    let shaped = fill.and_then(|fill| fill.shape);
+    let mut fills: InitialFills = [None; crate::MAX_WATERS as usize];
+    for (water, fill) in fills.iter_mut().enumerate() {
+        let slot = initial_fill(
+            roles
+                .iter()
+                .enumerate()
+                .filter(|(_, role)| {
+                    is_fill(role) && role.as_ref().is_some_and(|role| role.water as usize == water)
+                })
+                .map(|(slot, role)| role.as_ref().filter(|role| role.enabled).map(|_| slot)),
+        )?;
+        let Some(slot) = slot else {
+            continue;
+        };
+        let role = roles[slot].as_ref().expect("a fill's slot holds it");
+        *fill = Some(if role.geometry.meshes.is_empty() {
+            InitialFill {
+                column: role.transform,
+                shape: None,
+            }
+        } else {
+            InitialFill {
+                column: posed_column(role.geometry.bounds(), role.transform)
+                    .ok_or("the Fill's mesh has no finite bounds")?,
+                shape: Some(slot),
+            }
+        });
+    }
     for (slot, role) in roles.iter_mut().enumerate() {
-        if is_fill(role) && shaped != Some(slot) {
+        if is_fill(role) && !fills.iter().flatten().any(|fill| fill.shape == Some(slot)) {
             *role = None;
         }
     }
-    Ok(fill)
+    Ok(fills)
 }
 
 /// The axis-aligned box round the local box `bounds` (min then max) that
@@ -237,6 +244,9 @@ pub struct FluidRole {
     pub velocity: [f32; 3],
     pub inherit_motion: f32,
     pub friction: f32,
+    /// The Water of the liquid solver this role seeds or feeds: its particles
+    /// carry it ([`crate::birth_radius`]), below [`crate::MAX_WATERS`].
+    pub water: u32,
 }
 
 #[cfg(test)]
@@ -266,11 +276,13 @@ mod tests {
             velocity: [4.0, 5.0, 6.0],
             inherit_motion: 0.25,
             friction: 0.75,
+            water: 0,
         }
     }
 
-    /// A liquid takes its Initial Fill out of its roles: one enabled fill is
-    /// its box, a switched-off one is no fill, and two are refused by name.
+    /// A liquid takes its Initial Fills out of its roles: one enabled fill is
+    /// its Water's box, a switched-off one is no fill, two of one Water are
+    /// refused by name, and two Waters sharing the solver each keep theirs.
     #[test]
     fn a_liquid_takes_one_initial_fill_out_of_its_roles() {
         let fill = |x: f32, enabled: bool| {
@@ -287,9 +299,7 @@ mod tests {
         };
         let mut roles = vec![Some(role()), fill(1.0, true), None, fill(2.0, false)];
         assert_eq!(
-            take_initial_fill(&mut roles)
-                .unwrap()
-                .map(|f| (f.column.pos[0], f.shape)),
+            take_initial_fills(&mut roles).unwrap()[0].map(|f| (f.column.pos[0], f.shape)),
             Some((1.0, None))
         );
         assert!(roles[0].is_some(), "the inflow stays");
@@ -300,17 +310,29 @@ mod tests {
 
         let mut none = vec![Some(role()), fill(2.0, false)];
         assert_eq!(
-            take_initial_fill(&mut none),
-            Ok(None),
+            take_initial_fills(&mut none),
+            Ok([None; crate::MAX_WATERS as usize]),
             "a switched-off fill seeds nothing"
         );
 
         let mut two = vec![fill(1.0, true), fill(2.0, true)];
         assert!(
-            take_initial_fill(&mut two)
+            take_initial_fills(&mut two)
                 .unwrap_err()
                 .contains("one Initial Fill")
         );
+
+        let of_water = |water: u32, x: f32| {
+            fill(x, true).map(|role| FluidRole { water, ..role })
+        };
+        let mut shared = vec![of_water(3, 1.0), Some(role()), of_water(0, 2.0)];
+        let fills = take_initial_fills(&mut shared).unwrap();
+        let columns: Vec<_> = fills
+            .iter()
+            .enumerate()
+            .filter_map(|(water, fill)| fill.map(|fill| (water, fill.column.pos[0])))
+            .collect();
+        assert_eq!(columns, [(0, 2.0), (3, 1.0)]);
     }
 
     /// A fill with a mesh stays among the roles, and its column is the world
@@ -334,7 +356,7 @@ mod tests {
             ..role()
         };
         let mut roles = vec![Some(role()), Some(shaped)];
-        let fill = take_initial_fill(&mut roles).unwrap().expect("a fill");
+        let fill = take_initial_fills(&mut roles).unwrap()[0].expect("a fill");
         assert_eq!(fill.shape, Some(1));
         assert!(roles[1].is_some(), "the shaped fill stays for its lattice");
         let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-4);

@@ -27,7 +27,7 @@ use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_water_liquid::bodies::{
     COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_FILL_SHAPE, LIQUID_POSE, LiquidBody, LiquidShape,
 };
-use manifold_water_liquid::float_param;
+use manifold_water_liquid::{PARTICLE_WATER, float_param};
 use manifold_water_liquid::primitives::prefix_scan::{PrefixScan, ScanLabels};
 use manifold_water_liquid::primitives::sort_particles_into_cells::int_param;
 
@@ -102,9 +102,16 @@ pub(super) fn site_range(lo: f64, hi: f64, min: f64, cell_size: f64, cells: u32)
     [first(lo), first(hi).max(first(lo))]
 }
 
-/// The sites a pool plus a box clipped above it fill, in the kernel's
-/// enumeration: `pool` site layers of the whole floor, then the box.
-pub(crate) fn filled_sites(cells: [u32; 3], pool: u32, sites: [[u32; 2]; 3]) -> u64 {
+/// The pool's sites, the first the kernel enumerates: `pool` site layers of
+/// the whole floor, never past the lattice top.
+pub(crate) fn pool_count(cells: [u32; 3], pool: u32) -> u64 {
+    let n = site_lattice(cells);
+    u64::from(n[0]) * u64::from(pool.min(n[1])) * u64::from(n[2])
+}
+
+/// The sites of one fill box above the pool, clipped to the lattice: what the
+/// kernel enumerates of it after the pool and the boxes before it.
+pub(crate) fn box_count(cells: [u32; 3], pool: u32, sites: [[u32; 2]; 3]) -> u64 {
     let n = site_lattice(cells);
     let pool = pool.min(n[1]);
     let clip = |d: usize, lo: u32| {
@@ -112,20 +119,18 @@ pub(crate) fn filled_sites(cells: [u32; 3], pool: u32, sites: [[u32; 2]; 3]) -> 
         let b = sites[d][1].min(n[d]);
         u64::from(b.saturating_sub(a))
     };
-    let pool_sites = u64::from(n[0]) * u64::from(pool) * u64::from(n[2]);
-    pool_sites + clip(0, sites[0][0]) * clip(1, sites[1][0].max(pool)) * clip(2, sites[2][0])
+    clip(0, sites[0][0]) * clip(1, sites[1][0].max(pool)) * clip(2, sites[2][0])
 }
 
-/// The fill from `read` (`scalar_or_param`): pool height and box in sites.
-pub(crate) fn fill_of(read: impl Fn(&str, f32) -> f32) -> (u32, [[u32; 2]; 3]) {
-    let int = |name: &str, default: f32| read(name, default).round().max(0.0) as u32;
-    let pool = int("pool_sites", 5.0);
-    let sites = [
-        [int("box_x0", 0.0), int("box_x1", 0.0)],
-        [int("box_y0", 0.0), int("box_y1", 0.0)],
-        [int("box_z0", 0.0), int("box_z1", 0.0)],
-    ];
-    (pool, sites)
+/// A fill table holding one box, Water `water`'s (`fill_boxes`), for proofs
+/// that run the fill without its domain.
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn one_box_table(sites: [[u32; 2]; 3], water: u32) -> Vec<u32> {
+    let mut table = vec![0; 8 * manifold_water_liquid::MAX_WATERS as usize];
+    let [[x0, x1], [y0, y1], [z0, z1]] = sites;
+    let row = 8 * water as usize;
+    table[row..row + 8].copy_from_slice(&[x0, x1, y0, y1, z0, z1, water, 0]);
+    table
 }
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`.
@@ -140,12 +145,6 @@ struct FillUniforms {
     fill_cells_y: i32,
     fill_cells_z: i32,
     pool_sites: i32,
-    box_x0: i32,
-    box_x1: i32,
-    box_y0: i32,
-    box_y1: i32,
-    box_z0: i32,
-    box_z1: i32,
     jitter: f32,
     seed: i32,
     body_count: i32,
@@ -157,29 +156,27 @@ struct FillUniforms {
     bounds_hi_x: f32,
     bounds_hi_y: f32,
     bounds_hi_z: f32,
-    fill_region: i32,
     dispatch_count: u32,
 }
 
 manifold_node_engine::primitive! {
     name: LiquidFill,
     type_id: "node.liquid_fill",
-    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the box node.gpu_flip_domain places on whole world cells (fill_min_x/y/z its first corner in metres, fill_cells_x/y/z its cells per axis; site j at (1/4 + j/2) cells along each axis from the box's first cell, 2 sites per cell, so a site sits at the same world position whatever the box): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site the FLIP engine's solid holds when the epoch starts is left dead, radius 0: the solid is the Wall faces of the Bounds box (bounds_lo/hi in metres as placed, closed_faces the Wall bits −X +X −Y +Y −Z +Z; none by default) and the first body_count bodies at their poses, the smaller of the two at each node of a grid 1.5 cells outside the box, read trilinearly from that grid's nodes. With fill_region at or above 0 the box is a shaped fill's: a site outside region row fill_region of regions (its shape in shapes and atlas, its pose at the epoch's start) is left dead too, so the fill takes the shape. Only the live sites are kept, in site order, ids unchanged, in storage of exactly their count; count is the live sites, the slots a liquid starts with (node.liquid_state grows its own storage for sources). A fill past the 16,777,216 particles a count carries exactly is refused.",
+    purpose: "Place a liquid's starting particles at rest, one per half-cell site of the box node.gpu_flip_domain places on whole world cells (fill_min_x/y/z its first corner in metres, fill_cells_x/y/z its cells per axis; site j at (1/4 + j/2) cells along each axis from the box's first cell, 2 sites per cell, so a site sits at the same world position whatever the box): every site below pool_sites, then each row of fill_boxes in turn (the domain's table, one row per Water's Initial Fill: its sites [x0, x1) × [max(y0, pool_sites), y1) × [z0, z1), its Water and its shaped fill's region row plus one, 0 for a box; fill_box_sites the boxes' sites in all, fill_version moving on whenever the table would seed differently), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell, carrying the row's Water (a pool's is Water 0); ids count from 1. A site the FLIP engine's solid holds when the epoch starts is left dead, radius 0: the solid is the Wall faces of the Bounds box (bounds_lo/hi in metres as placed, closed_faces the Wall bits −X +X −Y +Y −Z +Z; none by default) and the first body_count bodies at their poses, the smaller of the two at each node of a grid 1.5 cells outside the box, read trilinearly from that grid's nodes. A shaped fill's row names its region: a site of it outside that row of regions (its shape in shapes and atlas, its pose at the epoch's start) is left dead too, so the fill takes the shape. Only the live sites are kept, in site order, ids unchanged, in storage of exactly their count; count is the live sites, the slots a liquid starts with (node.liquid_state grows its own storage for sources). A fill past the 16,777,216 particles a count carries exactly is refused.",
     inputs: {
         fill_min_x: ScalarF32 optional, fill_min_y: ScalarF32 optional, fill_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
         fill_cells_x: ScalarF32 optional, fill_cells_y: ScalarF32 optional, fill_cells_z: ScalarF32 optional,
         pool_sites: ScalarF32 optional,
-        box_x0: ScalarF32 optional, box_x1: ScalarF32 optional,
-        box_y0: ScalarF32 optional, box_y1: ScalarF32 optional,
-        box_z0: ScalarF32 optional, box_z1: ScalarF32 optional,
         bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
         collider_nodes: Array(manifold_node_engine::mesh::Vec4Vertex) optional,
         collider_triangles: Array(manifold_node_engine::mesh::Vec4Vertex) optional,
         regions: Array(LiquidBody) optional,
-        fill_region: ScalarF32 optional,
+        fill_boxes: Array(u32) optional,
+        fill_box_sites: ScalarF32 optional,
+        fill_version: ScalarF32 optional,
         body_count: ScalarF32 optional,
         epoch: ScalarF32 optional,
         closed_faces: ScalarF32 optional,
@@ -199,12 +196,6 @@ manifold_node_engine::primitive! {
         int_param!("fill_cells_y", "Fill Cells Y", 64.0, 1.0, 16_777_216.0),
         int_param!("fill_cells_z", "Fill Cells Z", 64.0, 1.0, 16_777_216.0),
         int_param!("pool_sites", "Pool Height (half cells)", 5.0, 0.0, 2048.0),
-        int_param!("box_x0", "Box Min X (half cell)", 0.0, 0.0, 2048.0),
-        int_param!("box_x1", "Box Max X (half cell)", 0.0, 0.0, 2048.0),
-        int_param!("box_y0", "Box Min Y (half cell)", 0.0, 0.0, 2048.0),
-        int_param!("box_y1", "Box Max Y (half cell)", 0.0, 0.0, 2048.0),
-        int_param!("box_z0", "Box Min Z (half cell)", 0.0, 0.0, 2048.0),
-        int_param!("box_z1", "Box Max Z (half cell)", 0.0, 0.0, 2048.0),
         float_param!("jitter", "Jitter", 0.0, 0.0, 1.0),
         int_param!("seed", "Seed", 0.0, 0.0, 16_777_215.0),
         int_param!("body_count", "Bodies", 0.0, 0.0, MAX_LIQUID_BODIES as f32),
@@ -216,7 +207,6 @@ manifold_node_engine::primitive! {
         float_param!("bounds_hi_x", "Bounds Max X", 0.0, -1.0e4, 1.0e4),
         float_param!("bounds_hi_y", "Bounds Max Y", 0.0, -1.0e4, 1.0e4),
         float_param!("bounds_hi_z", "Bounds Max Z", 0.0, -1.0e4, 1.0e4),
-        int_param!("fill_region", "Fill Region", -1.0, -1.0, 16_777_215.0),
     ],
     depth_rule: Terminal,
     composition_notes: "Feeds node.liquid_state's seed; count is the filled sites that state starts its live slots from. The pool and box sites, the fill's box (fill_min, fill_cells, cell_size), the Bounds box and Wall faces, bodies, shapes, atlas, the collider trees, body_count and epoch come from the liquid's domain, so a Resolution change refills at the new size and a restart refills around the colliders' starting poses.",
@@ -228,11 +218,11 @@ manifold_node_engine::primitive! {
     aliases: ["seed liquid", "initial water", "dam break fill", "pool"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/liquid_fill_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH, LIQUID_FILL_SHAPE],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH, LIQUID_FILL_SHAPE, PARTICLE_WATER],
     extra_fields: {
         buffer: Option<GpuBuffer> = None,
-        filled: Option<([u32; 26], usize)> = None,
+        filled: Option<([u32; 21], usize)> = None,
         // The live sites the last fill kept.
         live: u32 = 0,
         compact: Option<(GpuComputePipeline, GpuComputePipeline)> = None,
@@ -290,18 +280,26 @@ impl Primitive for LiquidFill {
             ctx.error("Liquid Fill: jitter must be 0 to 1".to_string());
             return;
         }
-        let (pool, sites) = fill_of(|name, default| ctx.scalar_or_param(name, default));
+        let pool = int("pool_sites", 5.0);
         let seed = int("seed", 0.0);
         let body_count = int("body_count", 0.0).min(MAX_LIQUID_BODIES as u32) as i32;
-        let fill_region = ctx.scalar_or_param("fill_region", -1.0).round();
-        // With colliders or a shaped fill the sites depend on their pose at
-        // the epoch's start.
-        let epoch = if body_count > 0 || fill_region >= 0.0 {
+        // With colliders the sites depend on their pose at the epoch's start;
+        // a shaped fill's own pose moves the table's version on.
+        let epoch = if body_count > 0 {
             int("epoch", 0.0)
         } else {
             0
         };
-        let filled = filled_sites(cells, pool, sites);
+        // The fill boxes after the pool, from the domain's table: none
+        // without it.
+        let boxes = ctx.inputs.array("fill_boxes");
+        let box_sites = if boxes.is_some() {
+            u64::from(int("fill_box_sites", 0.0))
+        } else {
+            0
+        };
+        let version = int("fill_version", 0.0);
+        let filled = pool_count(cells, pool) + box_sites;
         if filled > u64::from(EXACT_F32_COUNT) {
             ctx.outputs.set_scalar("count", ParamValue::Float(0.0));
             ctx.error(format!(
@@ -326,18 +324,6 @@ impl Primitive for LiquidFill {
             ),
             _ => 0,
         };
-        // A shaped fill's region row, read from the regions beside the
-        // collider shapes; without them the fill is its whole box.
-        let fill_region = match (regions, colliders.1) {
-            (Some(regions), Some(_))
-                if fill_region >= 0.0
-                    && (fill_region as u64)
-                        < regions.size / std::mem::size_of::<LiquidBody>() as u64 =>
-            {
-                fill_region as i32
-            }
-            _ => -1,
-        };
         // Only a Wall face's plane decides a site: an open face's, which
         // follows the bodies when Bounds is off, never refills.
         let face = |i: usize| {
@@ -357,12 +343,8 @@ impl Primitive for LiquidFill {
             cells[1],
             cells[2],
             pool,
-            sites[0][0],
-            sites[0][1],
-            sites[1][0],
-            sites[1][1],
-            sites[2][0],
-            sites[2][1],
+            box_sites as u32,
+            version,
             jitter.to_bits(),
             seed,
             body_count as u32,
@@ -374,7 +356,6 @@ impl Primitive for LiquidFill {
             face(3),
             face(4),
             face(5),
-            fill_region as u32,
         ];
         if let Some(kept) = &self.buffer
             && self.filled == Some((key, kept.identity_key()))
@@ -403,10 +384,12 @@ impl Primitive for LiquidFill {
             }
             _ => (buffer, buffer, buffer, buffer, buffer),
         };
-        let regions = match regions {
-            Some(regions) if fill_region >= 0 => regions,
+        // A shaped fill's region row is read beside the collider shapes.
+        let regions = match (regions, colliders.1) {
+            (Some(regions), Some(_)) => regions,
             _ => buffer,
         };
+        let boxes = boxes.unwrap_or(buffer);
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let clamp = |v: u32| v.min(i32::MAX as u32) as i32;
         let uniforms = FillUniforms {
@@ -418,12 +401,6 @@ impl Primitive for LiquidFill {
             fill_cells_y: clamp(cells[1]),
             fill_cells_z: clamp(cells[2]),
             pool_sites: clamp(pool),
-            box_x0: clamp(sites[0][0]),
-            box_x1: clamp(sites[0][1]),
-            box_y0: clamp(sites[1][0]),
-            box_y1: clamp(sites[1][1]),
-            box_z0: clamp(sites[2][0]),
-            box_z1: clamp(sites[2][1]),
             jitter,
             seed: clamp(seed),
             body_count,
@@ -435,7 +412,6 @@ impl Primitive for LiquidFill {
             bounds_hi_x: bounds[3],
             bounds_hi_y: bounds[4],
             bounds_hi_z: bounds[5],
-            fill_region,
             dispatch_count: filled,
         };
         gpu.native_enc.dispatch_compute(
@@ -477,6 +453,11 @@ impl Primitive for LiquidFill {
                 },
                 GpuBinding::Buffer {
                     binding: 7,
+                    buffer: boxes,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 8,
                     buffer,
                     offset: 0,
                 },
@@ -632,17 +613,17 @@ mod tests {
         // Pool 5 site layers of a 64³ floor (128 × 128 sites), box x 5..43,
         // y 0..67 clipped to 5..67, z 8..120.
         assert_eq!(
-            filled_sites([64; 3], 5, [[5, 43], [0, 67], [8, 120]]),
+            pool_count([64; 3], 5) + box_count([64; 3], 5, [[5, 43], [0, 67], [8, 120]]),
             128 * 5 * 128 + 38 * 62 * 112
         );
         // An empty box adds nothing; the pool never passes the lattice top.
         assert_eq!(
-            filled_sites([8; 3], 40, [[0, 0], [0, 0], [0, 0]]),
+            pool_count([8; 3], 40) + box_count([8; 3], 40, [[0, 0], [0, 0], [0, 0]]),
             16 * 16 * 16
         );
         // A box past the lattice is clipped to it.
         assert_eq!(
-            filled_sites([8; 3], 0, [[12, 40], [0, 16], [0, 16]]),
+            pool_count([8; 3], 0) + box_count([8; 3], 0, [[12, 40], [0, 16], [0, 16]]),
             4 * 16 * 16
         );
     }

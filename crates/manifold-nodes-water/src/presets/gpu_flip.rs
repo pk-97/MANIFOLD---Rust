@@ -347,7 +347,7 @@ impl WaterScene {
             "fill_height" => self.fill_height as f32,
             _ => default,
         };
-        gpu_flip_geometry(read, None, self.initial_volume()).expect("the scene fits its domain")
+        gpu_flip_geometry(read, None, &[self.initial_volume()]).expect("the scene fits its domain")
     }
 
     #[cfg(any(test, feature = "testkit"))]
@@ -357,7 +357,7 @@ impl WaterScene {
 
     #[cfg(any(test, feature = "testkit"))]
     pub fn box_sites(&self) -> [[u32; 2]; 3] {
-        self.geometry().box_sites
+        self.geometry().box_sites[0]
     }
 
     /// Particles the fill places; the particle arrays hold exactly this many.
@@ -538,30 +538,22 @@ const WALL_VELOCITY_WIRES: [&str; 6] = [
     "wall_velocity_hi_z",
 ];
 
-/// The colliders and the shaped fill's region the fill seeds around, as the
+/// The colliders and the shaped fills' regions the fill seeds around, as the
 /// domain publishes them.
-pub(crate) const FILL_SHAPE_WIRES: [&str; 9] = [
+pub(crate) const FILL_SHAPE_WIRES: [&str; 8] = [
     "bodies",
     "shapes",
     "atlas",
     "collider_nodes",
     "collider_triangles",
     "regions",
-    "fill_region",
     "body_count",
     "epoch",
 ];
 
-/// The fill's sites, as the domain publishes them.
-const FILL_WIRES: [&str; 7] = [
-    "pool_sites",
-    "box_x0",
-    "box_x1",
-    "box_y0",
-    "box_y1",
-    "box_z0",
-    "box_z1",
-];
+/// The fill's sites, as the domain publishes them: the pool, then the fill
+/// table, one box per Water.
+const FILL_WIRES: [&str; 4] = ["pool_sites", "fill_boxes", "fill_box_sites", "fill_version"];
 
 /// The scene's forces and impulses, as the domain publishes them.
 const FIELD_WIRES: [&str; 9] = [
@@ -625,9 +617,8 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     if let Some(volume) = scene.initial_volume() {
         b.initial_fill(domain, volume);
     }
-    // The params hold the domain's own sites, so the planned storage is the
-    // fill's; the wires carry any change.
-    let sites = geometry.box_sites;
+    // The params hold the domain's own pool, so the planned storage is the
+    // fill's; the wires carry any change and the fill table.
     let fill = b.node(
         "fill",
         "node.liquid_fill",
@@ -636,12 +627,6 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
             &FILL_BOX_WIRES,
             &[
                 ("pool_sites", int(geometry.pool_sites as usize)),
-                ("box_x0", int(sites[0][0] as usize)),
-                ("box_x1", int(sites[0][1] as usize)),
-                ("box_y0", int(sites[1][0] as usize)),
-                ("box_y1", int(sites[1][1] as usize)),
-                ("box_z0", int(sites[2][0] as usize)),
-                ("box_z1", int(sites[2][1] as usize)),
                 ("jitter", float(SEED_JITTER)),
                 ("seed", int(0)),
             ],

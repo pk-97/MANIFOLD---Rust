@@ -2872,3 +2872,79 @@ impl CpuMeshes<'_> {
 fn trs_identity() -> [[f32; 4]; 4] {
     manifold_core::scene_doc::transform::trs_matrix([0.0; 3], [0.0; 3], [1.0; 3])
 }
+
+/// Boundless Waters share one liquid solver and a tank keeps its own: one
+/// domain steps both, their Fills take its ports in turn carrying their
+/// Water, and each Water's frame draws only its own particles.
+#[test]
+fn boundless_waters_share_one_liquid_solver() {
+    use manifold_core::effect_graph_def::SerializedParamValue;
+    use manifold_core::scene_doc::{SourceRole, WaterFields, WaterSourceFields};
+    use manifold_node_engine::load::expand::prepare_scene_modifiers;
+
+    let mut doc = SceneDoc::base();
+    for (k, bounds) in [false, false, true].into_iter().enumerate() {
+        let water = ItemId::new(format!("water{k}"));
+        let end = doc.items.len();
+        let fields = ItemFields::Water(WaterFields {
+            bounds,
+            ..WaterFields::default()
+        });
+        doc.insert(None, end, Item::new(water.clone(), "Water", fields))
+            .unwrap();
+        let fill = ItemFields::WaterSource(WaterSourceFields {
+            role: SourceRole::Fill,
+            ..WaterSourceFields::default()
+        });
+        let fill = Item::new(ItemId::new(format!("fill{k}")), "Fill", fill);
+        doc.insert(Some(&water), 0, fill).unwrap();
+    }
+    let def = scene_layer(doc).gen_params().unwrap().graph.clone().unwrap();
+    let mut registry = PrimitiveRegistry::with_builtin();
+    manifold_water_rigid::testkit::physics_fixtures::register(&mut registry);
+    let prepared = prepare_scene_modifiers(&def, &registry).unwrap();
+    let graph = manifold_core::flatten::flatten_groups(&prepared.def).unwrap();
+    let int = |node: &EffectGraphNode, name: &str| match node.params.get(name) {
+        Some(SerializedParamValue::Int { value }) => Some(*value),
+        _ => None,
+    };
+    let owner = |node: &EffectGraphNode| {
+        ["water0", "water1", "water2"]
+            .into_iter()
+            .find(|water| node.node_id.as_str().contains(&format!("{water}:")))
+    };
+    let of_type = |type_id: &'static str| {
+        graph
+            .nodes
+            .iter()
+            .filter(move |node| node.type_id == type_id)
+    };
+    let domains: Vec<_> = of_type("node.gpu_flip_domain").map(owner).collect();
+    assert_eq!(domains, [Some("water0"), Some("water2")], "the shared solver and the tank's");
+    let shared = of_type("node.gpu_flip_domain")
+        .find(|node| owner(node) == Some("water0"))
+        .unwrap();
+    assert_eq!(int(shared, "roles"), Some(2), "both Fills feed it");
+    let water_on = |port: &str| {
+        let wire = graph
+            .wires
+            .iter()
+            .find(|wire| wire.to_node == shared.id && wire.to_port == port)
+            .unwrap_or_else(|| panic!("nothing on {port}"));
+        let role = graph.nodes.iter().find(|n| n.id == wire.from_node).unwrap();
+        int(role, "water")
+    };
+    assert_eq!((water_on("role_0"), water_on("role_1")), (Some(0), Some(1)));
+    let mut frames: Vec<_> = of_type("node.liquid_frame")
+        .map(|frame| (owner(frame), int(frame, "water")))
+        .collect();
+    frames.sort();
+    assert_eq!(
+        frames,
+        [
+            (Some("water0"), Some(0)),
+            (Some("water1"), Some(1)),
+            (Some("water2"), None)
+        ]
+    );
+}

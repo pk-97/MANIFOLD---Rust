@@ -130,4 +130,46 @@ pub const WATER_DENSITY: f32 = 1000.0;
 /// (8 per cell). The surface's blobs are this times Particle Scale at most.
 pub const PARTICLE_RADIUS_CELLS: f32 = 0.31017524;
 
+pub use manifold_core::liquid_domain::MAX_WATERS;
+const WATER_MASK: u32 = MAX_WATERS - 1;
+
+/// The WGSL side of [`birth_radius`] and [`water_of`], for every kernel that
+/// births or sorts liquid particles by Water.
+pub const PARTICLE_WATER: &str = include_str!("primitives/shaders/particle_water.wgsl");
+
+/// A newborn liquid particle's radius at `cell_size`: [`PARTICLE_RADIUS_CELLS`]
+/// cells, its low mantissa bits Water `water`, so Waters that share one solver
+/// keep their particles apart for drawing. At most seven units in the last
+/// place off the plain radius.
+pub fn birth_radius(cell_size: f32, water: u32) -> f32 {
+    let bits = (PARTICLE_RADIUS_CELLS * cell_size).to_bits();
+    f32::from_bits((bits & !WATER_MASK) | (water & WATER_MASK))
+}
+
+/// The Water a live particle's radius carries ([`birth_radius`]).
+pub fn water_of(radius: f32) -> u32 {
+    radius.to_bits() & WATER_MASK
+}
+
+#[cfg(test)]
+mod particle_water_tests {
+    use super::{MAX_WATERS, PARTICLE_RADIUS_CELLS, birth_radius, water_of};
+
+    /// Every Water's index comes back from the radius it was born with, at
+    /// cell sizes from a centimetre to a metre, and the radius stays live and
+    /// within seven units in the last place of the sphere's.
+    #[test]
+    fn a_radius_carries_its_water() {
+        for cell in [0.01_f32, 0.0425, 0.0625, 0.13, 1.0] {
+            let plain = PARTICLE_RADIUS_CELLS * cell;
+            for water in 0..MAX_WATERS {
+                let radius = birth_radius(cell, water);
+                assert_eq!(water_of(radius), water);
+                assert!(radius >= f32::MIN_POSITIVE);
+                assert!(radius.to_bits().abs_diff(plain.to_bits()) <= 7);
+            }
+        }
+    }
+}
+
 pub mod substep_history;

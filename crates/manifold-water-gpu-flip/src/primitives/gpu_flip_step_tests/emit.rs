@@ -29,19 +29,15 @@ pub(super) fn gpu_flip_liquid_fill_places_pool_then_box() {
         ("fill_min_y", MIN[1]),
         ("fill_min_z", MIN[2]),
         ("pool_sites", pool as f32),
-        ("box_x0", sites[0][0] as f32),
-        ("box_x1", sites[0][1] as f32),
-        ("box_y0", sites[1][0] as f32),
-        ("box_y1", sites[1][1] as f32),
-        ("box_z0", sites[2][0] as f32),
-        ("box_z1", sites[2][1] as f32),
+        ("fill_box_sites", 90.0),
         ("jitter", jitter),
         ("seed", seed as f32),
     ]);
+    let table = harness.array::<u32>(&super::super::liquid_fill::one_box_table(sites, 0), 0);
     let mut fill = LiquidFill::new();
     let (scalars, errors) = harness.run(
         &mut fill,
-        &[],
+        &[("fill_boxes", table.0)],
         &[("particles", out.0), ("count", count)],
         &step,
     );

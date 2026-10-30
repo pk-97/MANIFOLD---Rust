@@ -64,6 +64,11 @@ fn region_holding(x: vec3<f32>, code: f32, closed: bool) -> i32 {
     return -1;
 }
 
+// The Water region r's births carry (bodies.rs region_row).
+fn region_water(r: i32) -> u32 {
+    return u32(regions[u32((u.tick_index - u.first_tick) * u.region_count + r)].inv_inertia_y.x);
+}
+
 // An inflow's velocity at x: its authored velocity plus its share of the
 // region's own rigid motion there (the engine's append-object-velocity).
 fn region_velocity(r: i32, x: vec3<f32>) -> vec3<f32> {

@@ -9,7 +9,9 @@ struct Params {
     cap: u32,
     // Nonzero on the pass that reads first_upsweep's pairs, dead ones marked.
     first: u32,
-    pad0: u32,
+    // 1 + the Water whose records publish (particle_water.wgsl), every other
+    // Water's counted as dead; 0 publishes every Water's.
+    water: u32,
 }
 @group(0) @binding(0) var<uniform> p: Params;
 // FluidParticle records as two vec4<u32>: the radius is word 3, the id word 7.
@@ -116,14 +118,15 @@ fn rank_tile(lid: u32, valid: bool, digit: u32) -> vec2<u32> {
 }
 
 // The first pass's counts, from the records: each becomes a (birth id,
-// source index) pair, a dead one marked.
+// source index) pair, a dead one or another Water's marked.
 @compute @workgroup_size(256)
 fn first_upsweep(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>) {
     let i = wid.x * TILE + lid.x;
     var valid = false;
     var key = 0u;
     if i < in_use() {
-        valid = is_live(source[2u * i].w);
+        let radius = source[2u * i].w;
+        valid = is_live(radius) && (p.water == 0u || water_of(bitcast<f32>(radius)) + 1u == p.water);
         key = source[2u * i + 1u].w;
         pairs_out[i] = key;
         pairs_out[p.cap + i] = select(DEAD, i, valid);

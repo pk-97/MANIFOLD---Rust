@@ -32,6 +32,11 @@ pub const SAND_INPUTS: [&str; 2] = ["sand", "sand_count"];
 /// A scene runs one Matter solver for each group of this many.
 pub const MAX_MATTER_SLOTS: usize = 8;
 
+/// Most Waters one liquid solver holds: each particle carries its Water's
+/// index in the low bits of its radius. A scene's Boundless Waters share one
+/// solver for each group of this many.
+pub const MAX_WATERS: u32 = 8;
+
 /// The input a Sand's state takes the water on: last frame's push at each
 /// grain. The water is not part of the sand's surface either.
 pub const WATER_PUSH_INPUT: &str = "water_push";

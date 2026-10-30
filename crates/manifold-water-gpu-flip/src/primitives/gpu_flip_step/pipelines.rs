@@ -2,6 +2,7 @@
 
 use super::*;
 use manifold_node_engine::scene::world_tiles::READ_SIDE;
+use manifold_water_liquid::PARTICLE_WATER;
 use manifold_water_liquid::tile_storage::TILE_GRID;
 
 pub(super) struct Pipelines {
@@ -102,7 +103,7 @@ manifold_core::testkit_visible! {
 /// proof that composes one of them on its own.
 pub(crate) fn step_source_with(body: &str) -> String {
     with_stats_layout(&format!(
-        "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{COLLIDER_BVH}\n{FORCE_LATTICE}\n{TILE_GRID}\n{READ_SIDE}\n{body}"
+        "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{COLLIDER_BVH}\n{FORCE_LATTICE}\n{TILE_GRID}\n{READ_SIDE}\n{PARTICLE_WATER}\n{body}"
     ))
 }
 }

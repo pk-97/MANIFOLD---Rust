@@ -1,5 +1,6 @@
-//! The publication copy behind `node.liquid_frame`: live records sorted by
-//! birth id, ties in source order, then a zeroed tail. A stable LSD radix
+//! The publication copy behind `node.liquid_frame`: live records, of one
+//! Water when asked (the index their radius carries, `crate::birth_radius`),
+//! sorted by birth id, ties in source order, then a zeroed tail. A stable LSD radix
 //! sort of (key, source index) pairs, 4 bits a pass: per pass a tile digit
 //! histogram, the shared PrefixScan over the digit-major counts, and a
 //! scatter ranked in workgroup memory; then one gather moves the records.
@@ -21,6 +22,11 @@ use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 const SHADER: &str = include_str!("shaders/particle_publication.wgsl");
+
+/// The shader with the stats layout and the Water helpers ahead of it.
+fn shader() -> String {
+    with_stats_layout(&format!("{}\n{SHADER}", crate::PARTICLE_WATER))
+}
 /// Elements a workgroup sorts per pass (the shader's `TILE`).
 const TILE: u32 = 256;
 const DIGITS: u32 = 16;
@@ -74,13 +80,16 @@ pub struct Publication<'a> {
     /// Four words: live count, identity epoch, accepted, high-water. A new
     /// target's high-water is its slot count.
     pub metadata: &'a GpuBuffer,
+    /// The Water whose records publish, the others counted as dead; every
+    /// Water's with `None`.
+    pub water: Option<u32>,
 }
 }
 impl ParticlePublication {
     manifold_core::testkit_visible! {
         pub fn prepare(&mut self, device: &GpuDevice) {
             if self.pipelines.is_none() {
-                let shader = with_stats_layout(SHADER);
+                let shader = shader();
                 self.pipelines = Some(
                     ["first_upsweep", "upsweep", "downsweep", "gather_args", "gather"].map(
                         |entry| device.create_compute_pipeline(&shader, entry, "particle_publication"),
@@ -138,7 +147,7 @@ impl ParticlePublication {
                 enc.compute_memory_barrier_buffers();
             };
             let cap = (pairs[0].size / 8) as u32;
-            let mut params = [0, cap, 1, 0];
+            let mut params = [0, cap, 1, job.water.map_or(0, |water| water + 1)];
             sorted(
                 enc,
                 first_upsweep,
@@ -250,21 +259,28 @@ pub mod reference {
         radius >= f32::MIN_POSITIVE
     }
 
+    /// Live, and of Water `water` when one is named ([`crate::water_of`]):
+    /// what a publication keeps.
+    pub fn kept(radius: f32, water: Option<u32>) -> bool {
+        live(radius) && water.is_none_or(|water| crate::water_of(radius) == water)
+    }
+
     /// The target's `slots` records and the four metadata words (live count,
-    /// epoch, accepted, high-water) after a publication into a target whose
-    /// high-water covered every record.
+    /// epoch, accepted, high-water) after a publication of Water `water` into
+    /// a target whose high-water covered every record.
     pub fn publish(
         source: &[FluidParticle],
         count: u32,
         slots: u32,
         identity: [u32; 4],
         stats: &[u32],
+        water: Option<u32>,
     ) -> (Vec<FluidParticle>, [u32; 4]) {
         let slots = slots as usize;
-        // initialize: live records in place, everything else zeroed.
+        // initialize: kept records in place, everything else zeroed.
         let mut src: Vec<FluidParticle> = (0..slots)
             .map(|i| {
-                let keep = (i as u32) < count && live(source[i].position_radius[3]);
+                let keep = (i as u32) < count && kept(source[i].position_radius[3], water);
                 if keep {
                     source[i]
                 } else {
@@ -309,11 +325,12 @@ pub mod reference {
         source: &[FluidParticle],
         count: u32,
         slots: u32,
+        water: Option<u32>,
     ) -> Vec<FluidParticle> {
         let mut records: Vec<FluidParticle> = source[..count as usize]
             .iter()
             .copied()
-            .filter(|p| live(p.position_radius[3]))
+            .filter(|p| kept(p.position_radius[3], water))
             .collect();
         records.sort_by_key(|p| p.id);
         records.resize(slots as usize, FluidParticle::default());
@@ -328,7 +345,7 @@ mod tests {
     use manifold_node_engine::particles::FluidParticle;
 
     /// Finite records, a fifth of them dead by each kind of non-positive or
-    /// subnormal radius, ids under `mask`.
+    /// subnormal radius, the live ones of Waters 0 to 2, ids under `mask`.
     fn records(seed: u64, count: u32, mask: u32) -> Vec<FluidParticle> {
         let mut seed = seed;
         let mut next = move || {
@@ -345,7 +362,7 @@ mod tests {
                     1 => -0.0,
                     2 => -0.25,
                     3 => f32::from_bits(0x0000_0400),
-                    _ => 0.05,
+                    _ => crate::birth_radius(0.16, (r >> 8) as u32 % 3),
                 };
                 FluidParticle {
                     position_radius: [i as f32, 1.0, 2.0, radius],
@@ -373,31 +390,39 @@ mod tests {
         for (slots, count, mask) in SIZES {
             let source = records(0x2545_f491_4f6c_dd1d ^ u64::from(slots), count, mask);
             let identity = [9, 0xdead_beef, 0, 0];
-            let (frame, metadata) = reference::publish(
-                &source,
-                count,
-                slots,
-                identity,
-                &[0; LIQUID_STATS_WORDS as usize],
-            );
-            let want = reference::stable_id_sort(&source, count, slots);
-            assert_eq!(
-                bytemuck::cast_slice::<_, u32>(&frame),
-                bytemuck::cast_slice::<_, u32>(&want),
-                "slots {slots}"
-            );
-            let live = source
-                .iter()
-                .filter(|p| reference::live(p.position_radius[3]))
-                .count() as u32;
-            assert_eq!(metadata, [live, 0xdead_beef, 1, live]);
+            for water in [None, Some(2)] {
+                let (frame, metadata) = reference::publish(
+                    &source,
+                    count,
+                    slots,
+                    identity,
+                    &[0; LIQUID_STATS_WORDS as usize],
+                    water,
+                );
+                let want = reference::stable_id_sort(&source, count, slots, water);
+                assert_eq!(
+                    bytemuck::cast_slice::<_, u32>(&frame),
+                    bytemuck::cast_slice::<_, u32>(&want),
+                    "slots {slots}, Water {water:?}"
+                );
+                let live = source
+                    .iter()
+                    .filter(|p| reference::kept(p.position_radius[3], water))
+                    .count() as u32;
+                assert_eq!(metadata, [live, 0xdead_beef, 1, live]);
+            }
         }
     }
 
     /// The shader's passes on the CPU, word for word, over buffers of exactly
     /// the sizes `encode` allocates (an index past one panics): pairs of
     /// `slots` capacity, `DIGITS × tiles` scanned counts.
-    fn radix_model(source: &[FluidParticle], count: u32, slots: u32) -> Vec<FluidParticle> {
+    fn radix_model(
+        source: &[FluidParticle],
+        count: u32,
+        slots: u32,
+        water: Option<u32>,
+    ) -> Vec<FluidParticle> {
         const DEAD: u32 = u32::MAX;
         let cap = slots as usize;
         let tile = TILE as usize;
@@ -425,7 +450,8 @@ mod tests {
                 for i in t * tile..(t + 1) * tile {
                     let (valid, key) = if first && i < count as usize {
                         let words: &[u32] = bytemuck::cast_slice(std::slice::from_ref(&source[i]));
-                        let valid = words[3].wrapping_sub(0x0080_0000) <= 0x7f00_0000;
+                        let valid = words[3].wrapping_sub(0x0080_0000) <= 0x7f00_0000
+                            && water.is_none_or(|w| crate::water_of(f32::from_bits(words[3])) == w);
                         pairs[0][i] = words[7];
                         pairs[0][cap + i] = if valid { i as u32 } else { DEAD };
                         (valid, words[7])
@@ -495,25 +521,28 @@ mod tests {
     fn particle_publication_radix_passes_match_the_reference() {
         for (slots, count, mask) in SIZES {
             let source = records(0x9e37_79b9_7f4a_7c15 ^ u64::from(count), count, mask);
-            let (want, _) = reference::publish(
-                &source,
-                count,
-                slots,
-                [0; 4],
-                &[0; LIQUID_STATS_WORDS as usize],
-            );
-            let got = radix_model(&source, count, slots);
-            assert_eq!(
-                bytemuck::cast_slice::<_, u32>(&got),
-                bytemuck::cast_slice::<_, u32>(&want),
-                "{count} of {slots}"
-            );
+            for water in [None, Some(1)] {
+                let (want, _) = reference::publish(
+                    &source,
+                    count,
+                    slots,
+                    [0; 4],
+                    &[0; LIQUID_STATS_WORDS as usize],
+                    water,
+                );
+                let got = radix_model(&source, count, slots, water);
+                assert_eq!(
+                    bytemuck::cast_slice::<_, u32>(&got),
+                    bytemuck::cast_slice::<_, u32>(&want),
+                    "{count} of {slots}, Water {water:?}"
+                );
+            }
         }
     }
 
     #[test]
     fn particle_publication_shader_validates() {
-        let shader = super::with_stats_layout(super::SHADER);
+        let shader = super::shader();
         let module = naga::front::wgsl::parse_str(&shader).unwrap();
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),

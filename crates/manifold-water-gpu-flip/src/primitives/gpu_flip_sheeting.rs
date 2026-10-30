@@ -102,7 +102,8 @@ struct Gate {
 /// The kernel with the world tile read side it indexes the lattice through.
 pub(super) fn source() -> String {
     format!(
-        "{READ_SIDE}\n{}",
+        "{READ_SIDE}\n{}\n{}",
+        manifold_water_liquid::PARTICLE_WATER,
         include_str!("shaders/gpu_flip_sheeting.wgsl")
     )
 }

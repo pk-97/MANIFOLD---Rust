@@ -58,7 +58,7 @@ use manifold_water_liquid::coupling::{
     DomainWalls, LiquidRigidOwner, ObservedPush, PendingTick, SharedSolids, SharesSolids,
     takes_reaction,
 };
-use manifold_water_liquid::fluid_role::{FluidRole, FluidRoleKind, InitialFill, take_initial_fill};
+use manifold_water_liquid::fluid_role::{FluidRole, FluidRoleKind, InitialFill, take_initial_fills};
 use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_rigid::coupled_frame::{CoupledRigidInputs, RigidFrame, RigidPresentation};
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
@@ -371,7 +371,7 @@ pub(crate) fn roles_per_slot(params: &ParamValues, roles: usize) -> usize {
 /// Each Matter item's Initial Fill, by slot: the role ports in runs of the
 /// `roles_per_slot` param, slot k's run from port k·roles_per_slot (every
 /// port slot 0's when it is 0). A slot takes one Initial Fill
-/// ([`take_initial_fill`]); a shaped one keeps its port, where its region
+/// (Water 0's of [`take_initial_fills`]); a shaped one keeps its port, where its region
 /// row is.
 pub(crate) fn take_slot_fills(
     roles: &mut [Option<FluidRole>],
@@ -380,7 +380,7 @@ pub(crate) fn take_slot_fills(
     let per_slot = roles_per_slot(params, roles.len());
     let mut fills = [None; MAX_MATTER_SLOTS];
     for (slot, run) in roles.chunks_mut(per_slot).enumerate() {
-        let Some(fill) = take_initial_fill(run)? else {
+        let Some(fill) = take_initial_fills(run)?[0] else {
             continue;
         };
         let Some(kept) = fills.get_mut(slot) else {
@@ -1949,13 +1949,7 @@ impl MatterDomain {
             return (geometry.bounds_box, NO_KILL_HEIGHT);
         }
         let floor = self.source_floor.of_epoch(epoch, || {
-            lowest_source(
-                None,
-                fills
-                    .iter()
-                    .flatten()
-                    .map(|fill| fill.pos[1] - 0.5 * fill.scale[1]),
-            )
+            lowest_source(fills.iter().flatten().copied(), std::iter::empty())
         });
         let v0 =
             (geometry.setup.cell_size.powi(3) / f64::from(geometry.setup.points_per_cell)) as f32;

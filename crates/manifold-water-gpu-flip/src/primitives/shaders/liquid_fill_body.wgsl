@@ -5,11 +5,12 @@
 // FLIP Fluids engine's seeding lattice. The domain puts the box on whole world
 // cells (cell p centred on p·h), so site j is world half cell 2p + 1 + j, at
 // a fixed world position whatever the box's corner. Sites are enumerated in
-// lattice order: first the pool (every site below `pool_sites`), then the box
-// [box_x0, x1) × [max(box_y0, pool), y1) × [box_z0, z1). Each particle is
-// jittered by up to jitter / 4 cells each way by a hash of (seed, slot) and
-// starts at rest; the radius is that of a sphere of an eighth of a cell;
-// id = slot + 1. The box starts at fill_min (metres)
+// lattice order: first the pool (every site below `pool_sites`), then each
+// row of the fill table `fill_boxes` in turn, its sites [x0, x1) ×
+// [max(y0, pool), y1) × [z0, z1). Each particle is jittered by up to
+// jitter / 4 cells each way by a hash of (seed, slot) and starts at rest; the
+// radius is that of a sphere of an eighth of a cell, carrying its row's Water
+// (the pool's is Water 0); id = slot + 1. The box starts at fill_min (metres)
 // and has fill_cells cells per axis. A site the engine's solid holds when the epoch starts keeps its slot and id
 // with radius 0, dead: the engine seeds a site only where the solid distance
 // is positive (_addNewFluidCellsAABB). That distance is the Bounds box's Wall
@@ -18,12 +19,37 @@
 // enabled body at its pose (rows 0..body_count of `bodies`, sampled from its
 // shape's lattice in the atlas), each node of a grid 1.5 cells outside the
 // box the smaller of the two, read trilinearly as
-// _solidSDF.trilinearInterpolate. With fill_region at or above 0 the box is a
-// shaped fill's: a site outside region row fill_region of `regions` (its
-// lattice in `shapes` and `atlas`, read as the step reads a region) is dead
-// too. `bodies` and `regions` (LiquidBody → Element), `shapes` (LiquidShape →
-// Element2), `atlas` and the collider trees (Vec4Vertex → Element3) are
-// gathered.
+// _solidSDF.trilinearInterpolate. A row with a region (its word 7 the region
+// row plus one) is a shaped fill's: a site of it outside that row of
+// `regions` (its lattice in `shapes` and `atlas`, read as the step reads a
+// region) is dead too. `bodies` and `regions` (LiquidBody → Element), `shapes`
+// (LiquidShape → Element2), `atlas`, `fill_boxes` and the collider trees
+// (Vec4Vertex → Element3) are gathered.
+
+// Rows of the fill table: one per Water (gpu_flip_domain/fill_table.rs).
+const LIQUID_FILL_ROWS: u32 = 8u;
+
+// Row k of the fill table: its first site and sites per axis, clipped to the
+// lattice `n` and lifted above the pool.
+struct LiquidFillBox {
+    lo: vec3<u32>,
+    size: vec3<u32>,
+};
+
+fn liquid_fill_box(k: u32, n: vec3<u32>, pool: u32) -> LiquidFillBox {
+    let row = 8u * k;
+    let lo = vec3<u32>(
+        min(buf_fill_boxes[row], n.x),
+        max(min(buf_fill_boxes[row + 2u], n.y), pool),
+        min(buf_fill_boxes[row + 4u], n.z),
+    );
+    let hi = vec3<u32>(
+        min(buf_fill_boxes[row + 1u], n.x),
+        min(buf_fill_boxes[row + 3u], n.y),
+        min(buf_fill_boxes[row + 5u], n.z),
+    );
+    return LiquidFillBox(lo, max(hi, lo) - lo);
+}
 
 fn liquid_fill_hash(x: u32) -> u32 {
     let s = x * 747796405u + 2891336453u;
@@ -114,12 +140,6 @@ fn body(
     fill_cells_y: i32,
     fill_cells_z: i32,
     pool_sites: i32,
-    box_x0: i32,
-    box_x1: i32,
-    box_y0: i32,
-    box_y1: i32,
-    box_z0: i32,
-    box_z1: i32,
     jitter: f32,
     seed: i32,
     body_count: i32,
@@ -131,45 +151,49 @@ fn body(
     bounds_hi_x: f32,
     bounds_hi_y: f32,
     bounds_hi_z: f32,
-    fill_region: i32,
 ) -> Element4 {
     lf_cell = cell_size;
     var out = Element4(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
     let n = 2u * vec3<u32>(max(vec3<i32>(fill_cells_x, fill_cells_y, fill_cells_z), vec3<i32>(0)));
     let pool = min(u32(max(pool_sites, 0)), n.y);
-    let x0 = min(u32(max(box_x0, 0)), n.x);
-    let x1 = min(u32(max(box_x1, 0)), n.x);
-    let y0 = max(min(u32(max(box_y0, 0)), n.y), pool);
-    let y1 = min(u32(max(box_y1, 0)), n.y);
-    let z0 = min(u32(max(box_z0, 0)), n.z);
-    let z1 = min(u32(max(box_z1, 0)), n.z);
-    let ex = select(0u, x1 - x0, x1 > x0);
-    let ey = select(0u, y1 - y0, y1 > y0);
-    let ez = select(0u, z1 - z0, z1 > z0);
     let pool_count = n.x * pool * n.z;
-    if idx >= pool_count + ex * ey * ez {
-        return out;
-    }
     var s: vec3<u32>;
+    var water = 0u;
+    var region = -1;
     if idx < pool_count {
         s = vec3<u32>(idx % n.x, (idx / n.x) % pool, idx / (n.x * pool));
     } else {
-        let e = idx - pool_count;
-        s = vec3<u32>(x0 + e % ex, y0 + (e / ex) % ey, z0 + e / (ex * ey));
+        // The boxes' sites follow the pool's, row after row.
+        var e = idx - pool_count;
+        var row = LIQUID_FILL_ROWS;
+        for (var k = 0u; k < LIQUID_FILL_ROWS; k = k + 1u) {
+            let b = liquid_fill_box(k, n, pool);
+            let sites = b.size.x * b.size.y * b.size.z;
+            if e < sites {
+                s = b.lo + vec3<u32>(e % b.size.x, (e / b.size.x) % b.size.y, e / (b.size.x * b.size.y));
+                row = k;
+                break;
+            }
+            e = e - sites;
+        }
+        if row == LIQUID_FILL_ROWS {
+            return out;
+        }
+        water = buf_fill_boxes[8u * row + 6u];
+        region = i32(buf_fill_boxes[8u * row + 7u]) - 1;
     }
     let key = idx * 3u + u32(seed) * 2654435761u;
     let unit = vec3<f32>(liquid_fill_unit(key), liquid_fill_unit(key + 1u), liquid_fill_unit(key + 2u));
     let local = vec3<f32>(0.25) + 0.5 * vec3<f32>(s) + 0.5 * jitter * (unit - vec3<f32>(0.5));
     let lo = vec3<f32>(fill_min_x, fill_min_y, fill_min_z);
-    // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell.
     let x = lo + local * cell_size;
     let solid = liquid_fill_in_native_solid(
         x, lo, cell_size,
         vec3<f32>(bounds_lo_x, bounds_lo_y, bounds_lo_z),
         vec3<f32>(bounds_hi_x, bounds_hi_y, bounds_hi_z),
         u32(closed_faces), body_count);
-    let outside = idx >= pool_count && fill_region >= 0 && !liquid_fill_in_shape(x, fill_region, cell_size);
-    let radius = select(0.31017524 * cell_size, 0.0, solid || outside);
+    let outside = region >= 0 && !liquid_fill_in_shape(x, region, cell_size);
+    let radius = select(birth_radius(cell_size, water), 0.0, solid || outside);
     out.position_radius = vec4<f32>(x, radius);
     out.id = idx + 1u;
     return out;

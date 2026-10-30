@@ -7,10 +7,11 @@
 //! exclusion 2): it owns the publication history.
 
 use manifold_gpu::BufferUse;
+use std::borrow::Cow;
 use manifold_gpu::GpuBuffer;
 
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_water_liquid::display_cursor::{CursorFrame, DisplayCursor};
@@ -43,7 +44,7 @@ const PROVIDED: [&str; PROVIDED_PORTS] = [
 manifold_node_engine::primitive! {
     name: LiquidFrame,
     type_id: "node.liquid_frame",
-    purpose: "Publish a particle liquid's state as particle frames for the liquid surface: every frame that ends on a new simulated tick publishes a compact copy of the slots in use, sorted by persistent nonzero birth id, into a retained history slot, with the retired live count and a cleared tail; frames A and B are the retired pair bracketing the display time, with its blend and span. The whitewater classes foam_in, bubble_in, spray_in and dust_in per frame as frame B's foam_b, bubble_b, spray_b and dust_b. A tick whose stats flag a non-finite record is never shown.",
+    purpose: "Publish a particle liquid's state as particle frames for the liquid surface: every frame that ends on a new simulated tick publishes a compact copy of the live slots in use (with Water at or above 0, only that Water's: the index each particle's radius carries, so Waters sharing one solver each draw their own), sorted by persistent nonzero birth id, into a retained history slot, with the retired live count and a cleared tail; frames A and B are the retired pair bracketing the display time, with its blend and span. The whitewater classes foam_in, bubble_in, spray_in and dust_in per frame as frame B's foam_b, bubble_b, spray_b and dust_b. A tick whose stats flag a non-finite record is never shown.",
     inputs: {
         particles: Array(FluidParticle) required,
         stats: Array(u32) required,
@@ -64,7 +65,9 @@ manifold_node_engine::primitive! {
         spray_b: Array(FluidParticle), dust_b: Array(FluidParticle),
         presented_time: ScalarF32, publications_skipped: ScalarF32,
     },
-    params: [],
+    params: [
+        ParamDef { name: Cow::Borrowed("water"), label: "Water", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0, (manifold_water_liquid::MAX_WATERS - 1) as f32)), enum_values: &[] },
+    ],
     depth_rule: Terminal,
     composition_notes: "Reads node.liquid_state's out, stats and identity after the region; the identity's record says how many of out's slots are in use, and simulation_time, display_time and epoch from the liquid's domain; the whitewater inputs from liquid_state's foam/bubble/spray/dust_particles, read back through foam_b..dust_b by node.interpolate_particle_frames as particles_b with this node's blend and span. Its outputs are the particle-frame seam node.fluid_surface and node.matter_frame also publish, so the Liquid Surface atoms and whitewater read any solver unchanged. identity_a/b carry each accepted frame identity epoch. Domain reset, identity renumbering and growth start a new run; a pair never straddles one. presented_time is the time the pair samples (t_A + blend × span); publications_skipped counts endpoints that found no history slot. Publication preserves solver storage order.",
     examples: [],
@@ -191,6 +194,10 @@ impl Primitive for LiquidFrame {
         let simulation_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));
         let display_time = f64::from(ctx.scalar_or_param("display_time", 0.0));
         let epoch = ctx.scalar_or_param("epoch", 0.0).round().max(0.0) as u32;
+        // Every Water's particles below 0, else that Water's alone.
+        let water = Some(ctx.scalar_or_param("water", -1.0).round())
+            .filter(|water| *water >= 0.0)
+            .map(|water| (water as u32).min(manifold_water_liquid::MAX_WATERS - 1));
         // Live uncoupled water presents at the cursor (section 3.4); export
         // presents exactly at the request whatever the wire says (D6).
         let offline = ctx.sim_step.offline();
@@ -276,6 +283,7 @@ impl Primitive for LiquidFrame {
                             stats,
                             identity: identity.expect("identity checked"),
                             metadata: target.metadata.as_ref().expect("acquired slot"),
+                            water,
                         },
                     );
                     #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]

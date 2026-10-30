@@ -338,6 +338,7 @@ struct Controls {
     friction: f32,
     velocity: [f32; 3],
     inherit_motion: f32,
+    water: u32,
 }
 
 impl Controls {
@@ -348,6 +349,7 @@ impl Controls {
             friction: role.friction,
             velocity: role.velocity,
             inherit_motion: role.inherit_motion,
+            water: role.water,
         }
     }
 }
@@ -1505,7 +1507,8 @@ fn coupled_row(row: &LiquidBody, offset: f32) -> LiquidBody {
 
 /// A source or drain's row: a body row with the region code in
 /// `angular_velocity.w`, and the emitted velocity (m/s, world) with the
-/// share of the region's own motion added to it in `inv_inertia_x`.
+/// share of the region's own motion added to it in `inv_inertia_x`; the
+/// Water its births carry in `inv_inertia_y.x`.
 fn region_row(row: LiquidBody, kind: FluidRoleKind, controls: Controls) -> LiquidBody {
     let code = match kind {
         FluidRoleKind::Inflow => REGION_INFLOW,
@@ -1521,6 +1524,7 @@ fn region_row(row: LiquidBody, kind: FluidRoleKind, controls: Controls) -> Liqui
             code,
         ],
         inv_inertia_x: [v[0], v[1], v[2], controls.inherit_motion.clamp(0.0, 1.0)],
+        inv_inertia_y: [controls.water as f32, 0.0, 0.0, 0.0],
         ..row
     }
 }
@@ -1642,6 +1646,7 @@ mod tests {
             velocity: [0.0; 3],
             inherit_motion: 0.0,
             friction: 0.25,
+            water: 0,
         })
     }
 
@@ -2159,23 +2164,24 @@ mod tests {
     }
 
     /// Inflow and Outflow roles become region rows, not body rows: the code,
-    /// the emitted velocity and the inherited share ride in the row, shape
+    /// the emitted velocity, the inherited share and the Water ride in the row, shape
     /// indices stay the role order, and coupled shapes follow the roles'.
     #[test]
     fn liquid_bodies_split_regions_from_coupled_bodies() {
         let geometry = cube();
         let hull = cube();
-        let region = |kind, pos| {
+        let region = |kind, pos, water| {
             Some(FluidRole {
                 kind,
                 velocity: [0.0, -2.0, 1.0],
                 inherit_motion: 0.5,
+                water,
                 ..inflow(&geometry, pos, 0.0).unwrap()
             })
         };
         let roles = vec![
-            region(FluidRoleKind::Inflow, [0.0, 2.0, 0.0]),
-            region(FluidRoleKind::Outflow, [1.0, 0.0, 0.0]),
+            region(FluidRoleKind::Inflow, [0.0, 2.0, 0.0], 5),
+            region(FluidRoleKind::Outflow, [1.0, 0.0, 0.0], 0),
         ];
         let mut bodies = LiquidBodies::with_regions();
         ready_coupled(&mut bodies, &roles, &[Arc::clone(&hull)]);
@@ -2205,6 +2211,7 @@ mod tests {
             (0.0, 1.0)
         );
         assert_eq!(regions[0].inv_inertia_x, [0.0, -2.0, 1.0, 0.5]);
+        assert_eq!(regions[0].inv_inertia_y[0], 5.0, "its Water");
         assert_eq!(regions[0].position_inv_mass[..3], [0.0, 2.0, 0.0]);
         let moved = LiquidBody {
             position_inv_mass: [1.0, 0.0, 0.0, 1.0],

@@ -5,7 +5,7 @@
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 
-use super::LiquidFill;
+use super::{LiquidFill, box_count, one_box_table};
 
 /// The box's sites in the kernel's order: the pool's layers over the whole
 /// floor, then the box clipped above the pool and to the fill's box.
@@ -51,17 +51,13 @@ fn assert_world_sites(
         ("fill_min_y", fill_min[1]),
         ("fill_min_z", fill_min[2]),
         ("pool_sites", pool as f32),
-        ("box_x0", sites[0][0] as f32),
-        ("box_x1", sites[0][1] as f32),
-        ("box_y0", sites[1][0] as f32),
-        ("box_y1", sites[1][1] as f32),
-        ("box_z0", sites[2][0] as f32),
-        ("box_z1", sites[2][1] as f32),
+        ("fill_box_sites", box_count(cells, pool, sites) as f32),
     ]);
+    let table = harness.array::<u32>(&one_box_table(sites, 0), 0);
     let mut fill = LiquidFill::new();
     let (_, errors) = harness.run(
         &mut fill,
-        &[],
+        &[("fill_boxes", table.0)],
         &[("particles", out.0), ("count", count)],
         &step,
     );
