@@ -395,16 +395,17 @@ pub fn push_chrome(
             );
         }
 
-        // Live tempo from audio: green while locked, yellow while listening.
-        let audio_dot = if !content_state.audio_tempo_enabled {
-            color::STATUS_DOT_INACTIVE
-        } else if content_state.audio_tempo_locked {
-            color::STATUS_DOT_GREEN
-        } else {
-            color::STATUS_DOT_YELLOW
+        // Live tempo from audio: red with no sound on the input, yellow while
+        // listening, green while locked.
+        use crate::audio_mod_runtime::AudioTempo;
+        let audio_dot = match content_state.audio_tempo {
+            AudioTempo::Off => color::STATUS_DOT_INACTIVE,
+            AudioTempo::NoInput => color::STATUS_BAD,
+            AudioTempo::Listening => color::STATUS_DOT_YELLOW,
+            AudioTempo::Locked => color::STATUS_DOT_GREEN,
         };
         ui.transport
-            .set_audio_tempo_state(content_state.audio_tempo_enabled, audio_dot);
+            .set_audio_tempo_state(content_state.audio_tempo != AudioTempo::Off, audio_dot);
 
         // MIDI Clock
         if !content_state.midi_clock_enabled {

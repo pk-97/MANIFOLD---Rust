@@ -701,6 +701,20 @@ impl AudioModRuntime {
                         }
                     }
                 }
+                // Live tempo hears the first send's audio input only. A timeline layer plays at the project's
+                // tempo, so following it would chase its own reading.
+                if i == 0
+                    && has_cap
+                    && !interrupted
+                    && let Some(follow) = self.tempo_follow.as_mut()
+                {
+                    let heard_at = self
+                        .capture_batch
+                        .source_time_at(mono_mix.len())
+                        .unwrap_or_else(std::time::Instant::now);
+                    let beats_per_bar = project.settings.time_signature_numerator.max(1) as u32;
+                    follow.submit(&mono_mix, canonical, beats_per_bar, heard_at);
+                }
                 if !layers.is_empty() {
                     layer_mix.clear();
                     for layer_id in layers {
@@ -763,18 +777,6 @@ impl AudioModRuntime {
                 }
                 entry.stage(&mono_mix);
                 staged_sends.push(i);
-                if i == 0
-                    && let Some(follow) = self.tempo_follow.as_mut()
-                {
-                    // A capture-only send carries the clock its samples were heard at. A send with layers has
-                    // none, and its samples are taken as heard now.
-                    let heard_at = (entry.capture_generation.is_some() && layers.is_empty())
-                        .then(|| self.capture_batch.source_time_at(mono_mix.len()))
-                        .flatten()
-                        .unwrap_or_else(std::time::Instant::now);
-                    let beats_per_bar = project.settings.time_signature_numerator.max(1) as u32;
-                    follow.submit(&mono_mix, canonical, beats_per_bar, heard_at);
-                }
             }
 
             // The detector workers ran while the sends were mixed. Collect them under one
@@ -848,6 +850,10 @@ impl AudioModRuntime {
             }
         }
 
+        if let Some(follow) = self.tempo_follow.as_mut() {
+            follow.poll();
+        }
+
         self.analyzers = analyzers;
         self.mono_mix = mono_mix;
         self.layer_mix = layer_mix;
@@ -887,6 +893,22 @@ impl AudioModRuntime {
 
     pub fn tempo_follow(&self) -> Option<&TempoFollow> {
         self.tempo_follow.as_ref()
+    }
+
+    /// What live tempo is doing at `now`, for the transport's dot.
+    pub fn tempo_status(&self, now: std::time::Instant) -> AudioTempo {
+        match &self.tempo_follow {
+            None => AudioTempo::Off,
+            Some(follow) if follow.lock.is_some() => AudioTempo::Locked,
+            Some(follow)
+                if follow
+                    .sound_at
+                    .is_some_and(|at| now.saturating_duration_since(at) < SILENT_AFTER) =>
+            {
+                AudioTempo::Listening
+            }
+            Some(_) => AudioTempo::NoInput,
+        }
     }
 
     /// Set which send the Audio Setup scope is showing (`None` = panel closed /
@@ -1457,8 +1479,24 @@ mod hop_tests {
     }
 }
 
-/// Live tempo from the first send: the beat follower's thread, its newest lock, and where its stream time sits on
-/// the clock.
+/// What live tempo is doing, for the transport's dot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AudioTempo {
+    #[default]
+    Off,
+    /// Nothing louder than [`SOUND_FLOOR`] on the first send's audio input for [`SILENT_AFTER`].
+    NoInput,
+    /// Hearing sound, no steady beat yet.
+    Listening,
+    Locked,
+}
+
+/// About -60 dBFS: quieter input counts as silence.
+const SOUND_FLOOR: f32 = 1e-3;
+const SILENT_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Live tempo from the first send's audio input: the beat follower's thread, its newest lock, and where its stream
+/// time sits on the clock.
 #[derive(Default)]
 pub struct TempoFollow {
     worker: Option<FollowWorker>,
@@ -1467,6 +1505,8 @@ pub struct TempoFollow {
     lock: Option<Lock>,
     /// Stream seconds at the end of the last submit, and the instant that sample was heard.
     anchor: Option<(f64, std::time::Instant)>,
+    /// When the input last carried sound.
+    sound_at: Option<std::time::Instant>,
 }
 
 impl TempoFollow {
@@ -1493,10 +1533,18 @@ impl TempoFollow {
             return;
         };
         worker.submit(mono);
-        if let Some(Ok(lock)) = worker.latest() {
+        self.anchor = Some((worker.stream_s(), heard_at));
+        if mono.iter().any(|s| s.abs() > SOUND_FLOOR) {
+            self.sound_at = Some(heard_at);
+        }
+    }
+
+    /// Takes the newest lock the worker finished, every tick, so a hearing that ends after the input stops still
+    /// lands.
+    fn poll(&mut self) {
+        if let Some(Ok(lock)) = self.worker.as_mut().and_then(FollowWorker::latest) {
             self.lock = Some(lock);
         }
-        self.anchor = Some((worker.stream_s(), heard_at));
     }
 
     /// The newest lock. It holds through hearings that find no steady beat, so a breakdown keeps the grid.

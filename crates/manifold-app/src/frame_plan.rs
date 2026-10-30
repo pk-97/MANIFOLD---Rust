@@ -193,6 +193,8 @@ pub(crate) struct ChromeInputs {
     pub osc_sender_enabled: bool,
     pub ableton_sync: u8,
     pub clock_authority: u8,
+    /// What live tempo from audio is doing: the AUDIO button and its dot.
+    pub audio_tempo: u8,
     /// The shown BPM, in tenths.
     pub bpm_tenths: i32,
     /// Detect progress in tenths of a percent, and whether it shows.
@@ -942,6 +944,7 @@ impl FramePlanner {
             osc_sender_enabled: content.osc_sender_enabled,
             ableton_sync: content.ableton_sync_status as u8,
             clock_authority: content.clock_authority as u8,
+            audio_tempo: content.audio_tempo as u8,
             bpm_tenths: (bpm * 10.0).round() as i32,
             detect_permille: (progress * 1000.0).round() as u16,
             detect_show: content.percussion_show_progress,
@@ -1317,6 +1320,7 @@ mod tests {
         for edit in [
             |i: &mut FrameInputs| i.chrome.playing = true,
             |i: &mut FrameInputs| i.chrome.link_peers = 2,
+            |i: &mut FrameInputs| i.chrome.audio_tempo = 3,
             |i: &mut FrameInputs| i.chrome.detect_permille = 500,
             |i: &mut FrameInputs| i.chrome.text = 3,
             |i: &mut FrameInputs| i.chrome.is_dirty = true,

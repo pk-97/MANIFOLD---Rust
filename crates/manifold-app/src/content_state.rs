@@ -168,10 +168,8 @@ pub struct ContentState {
     pub midi_clock_device_name: Arc<str>,
     /// Available MIDI input device names for the CLK device dropdown.
     pub midi_device_names: Arc<[String]>,
-    /// Live tempo from audio is switched on.
-    pub audio_tempo_enabled: bool,
-    /// The beat follower holds a lock; otherwise it is still listening.
-    pub audio_tempo_locked: bool,
+    /// What live tempo from audio is doing.
+    pub audio_tempo: crate::audio_mod_runtime::AudioTempo,
     /// Live per-send audio levels (RMS amplitude 0..1), indexed by send order.
     /// Fixed-size + count so it rides the snapshot with no per-frame alloc.
     pub audio_send_levels: [f32; manifold_audio::analysis::MAX_SENDS],
@@ -625,8 +623,7 @@ impl Default for ContentState {
             midi_clock_receiving: false,
             midi_clock_device_name: Arc::from(""),
             midi_device_names: Arc::from([]),
-            audio_tempo_enabled: false,
-            audio_tempo_locked: false,
+            audio_tempo: crate::audio_mod_runtime::AudioTempo::Off,
             audio_send_levels: [0.0; manifold_audio::analysis::MAX_SENDS],
             audio_send_count: 0,
             fire_meters: manifold_core::audio_trigger::FireMeterCapture::default(),

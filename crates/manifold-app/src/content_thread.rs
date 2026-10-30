@@ -1603,11 +1603,9 @@ impl ContentThread {
                 .link_sync
                 .as_ref()
                 .is_some_and(|s| s.is_link_enabled()),
-            audio_tempo_enabled: self.audio_mod_runtime.tempo_follow().is_some(),
-            audio_tempo_locked: self
+            audio_tempo: self
                 .audio_mod_runtime
-                .tempo_follow()
-                .is_some_and(|f| f.lock().is_some()),
+                .tempo_status(std::time::Instant::now()),
             link_peers: self
                 .transport_controller
                 .link_sync
