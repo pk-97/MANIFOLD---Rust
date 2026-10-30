@@ -47,6 +47,12 @@ pub struct SceneObject {
     /// after the normal (`node.terrain`), so shading darkens sky light by it.
     /// Off, that slot is padding and never read.
     pub sky_blocking: bool,
+    /// How much each copy's shade differs from the next, 0 to 1: a hash of
+    /// its place picks a brightness and a lean toward warm or cool.
+    pub copy_shade: f32,
+    /// How far the scene's Wind bends this mesh, 0 to 1: 0 holds still, 1
+    /// leans it like grass. The bend grows toward the top of the mesh.
+    pub sway: f32,
     /// Local TRS. Identity ([`Transform::default`]) when the `transform`
     /// input port is unwired.
     pub transform: Transform,

@@ -58,7 +58,7 @@ const OWN_SPACE: &str =
 const GROUP_CLOCK: &str = "the import Group's Animation rows";
 const CLOCK_PAYLOAD: &str = "the clip data loads from the model file";
 
-pub static OBJECT_ROWS: [PropertyRow; 78] = [
+pub static OBJECT_ROWS: [PropertyRow; 79] = [
     row("pos_x", T, Transform, setup())
         .unit(Unit::Metres)
         .limit(HardLimit::Unlimited),
@@ -77,6 +77,8 @@ pub static OBJECT_ROWS: [PropertyRow; 78] = [
     row("billboard", T, Transform, setup()),
     row("visible", DRAW, Look, setup()).toggle(),
     row("cast_shadows", DRAW, Look, setup()),
+    row("sway", DRAW, Look, setup())
+        .tip("How far the scene's Wind bends it, more toward its top. 0 holds still; grass wants about 1, trees about 0.2"),
     row("emission_strength", DRAW, Look, setup()).limit(AT_LEAST_ZERO),
     row("gain", DRAW, Look, setup()).limit(AT_LEAST_ZERO),
     row(

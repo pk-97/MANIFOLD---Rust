@@ -302,6 +302,55 @@ struct VsOut {
 // reuse it verbatim — ONE source of truth for the instance/mirror/tangent
 // transform chain. spirv-opt's InlineExhaustive pass inlines it back into
 // every caller, so vs_main's compiled output is unchanged by the split.
+// Copies vary in shade: each copy's place hashes to a brightness and a lean
+// toward warm or cool, `relief.z` deep, so a forest of one tree reads as
+// many. At full depth a copy is up to COPY_BRIGHTNESS / 2 lighter or darker
+// and COPY_WARMTH / 2 redder or bluer.
+const COPY_BRIGHTNESS: f32 = 0.9;
+const COPY_WARMTH: f32 = 0.5;
+
+fn copy_shade(place: vec3<f32>) -> vec3<f32> {
+    let key = vec2<i32>(bitcast<i32>(place.x), bitcast<i32>(place.z));
+    let bright = cover_rule_hash(key) - 0.5;
+    let warm = cover_rule_hash(key.yx) - 0.5;
+    let depth = u.relief.z;
+    return (1.0 + COPY_BRIGHTNESS * depth * bright)
+        * (1.0 + vec3<f32>(COPY_WARMTH, 0.0, -COPY_WARMTH) * depth * warm);
+}
+
+// Wind: a mesh with Sway leans downwind and swings, more toward its top,
+// as `seconds` finds it. `root` is its origin in the world and `rise` a
+// vertex's height above that origin in the mesh's own units; `size` turns
+// those into metres. At Sway 1 a 10 m/s wind leans it half a radian. The
+// turbulence moves with the wind as rolling gusts (cover_rule_noise), and
+// each mesh swings at a rate from its height, tall trees slowly and grass
+// fast. Leaves and blades flutter a little across the wind. Zero when the
+// draw has no Sway or the scene no Wind.
+const WIND_LEAN: f32 = 0.05;
+const WIND_MAX_LEAN: f32 = 0.7;
+const WIND_SWING: f32 = 0.35;
+const WIND_FLUTTER: f32 = 0.02;
+
+fn wind_bend(root: vec3<f32>, rise: f32, size: f32, seconds: f32) -> vec3<f32> {
+    let height = u.sway.y;
+    if u.sway.x <= 0.0 || height <= 0.0 || u.wind.z + u.wind.w <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let along = clamp(rise / height, 0.0, 1.0);
+    let tall = height * abs(size);
+    let downwind = vec3<f32>(u.wind.x, 0.0, u.wind.y);
+    let gust = cover_rule_noise((root.xz - u.wind.xy * u.wind.z * seconds) / u.wind_clock.x);
+    let speed = u.wind.z + u.wind.w * gust;
+    let phase = cover_rule_hash(vec2<i32>(bitcast<i32>(root.x), bitcast<i32>(root.z))) * 6.2831853;
+    let swing = sin(seconds * 7.54 / sqrt(max(tall, 0.05)) + phase);
+    let lean = clamp(u.sway.x * WIND_LEAN * speed * (1.0 + WIND_SWING * swing), -WIND_MAX_LEAN, WIND_MAX_LEAN);
+    let bend = along * along * tall;
+    let across = vec3<f32>(-u.wind.y, 0.0, u.wind.x);
+    let flutter = sin(seconds * 9.0 + rise * 13.0 + phase) * WIND_FLUTTER * u.sway.x * speed * 0.1;
+    return downwind * sin(lean) * bend - vec3<f32>(0.0, (1.0 - cos(lean)) * bend, 0.0)
+        + across * flutter * along * tall;
+}
+
 fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     let v = verts[vid];
     let inst = instances[iid];
@@ -355,9 +404,16 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     let inst_normal = rot * (local_normal * msign * scale_sign);
 
     var out: VsOut;
-    let world = u.model * vec4<f32>(inst_pos, 1.0);
+    // A copy's root is its place; one object's is its own origin.
+    let wind_root = (u.model * vec4<f32>(inst.pos_scale.xyz, 1.0)).xyz;
+    let wind_size = inst.pos_scale.w * length(u.model[1].xyz);
+    let world = u.model * vec4<f32>(inst_pos, 1.0)
+        + vec4<f32>(wind_bend(wind_root, local_pos.y, wind_size, u.wind_clock.y), 0.0);
     out.world_pos = world.xyz;
     out.vertex_color = v.color;
+    if u.relief.z > 0.0 {
+        out.vertex_color = vec4<f32>(v.color.rgb * copy_shade(inst.pos_scale.xyz), v.color.a);
+    }
     out.sky_blocked = select(0.0, v.sky_blocked, u.relief.y > 0.5);
     out.instance_scale = abs(inst.pos_scale.w);
     out.clip_pos = u.view_proj * world;

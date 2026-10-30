@@ -51,13 +51,27 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> Result<(), String> {
             lineage,
         });
     });
+    let mut wind_bound = false;
     for Placed { item, .. } in &found {
         if let ItemFields::Force(force) = &item.fields {
-            emit_force(b, item, force, &found)?;
+            let bend_plants = force.force == ForceType::Wind && !wind_bound;
+            wind_bound |= bend_plants;
+            emit_force(b, item, force, &found, bend_plants)?;
         }
     }
     Ok(())
 }
+
+/// The Wind rows the renderer's wind follows, by the param each drives
+/// there (`render_scene`'s `wind_*` params).
+const PLANT_WIND: [(&str, &str); 6] = [
+    ("enabled", "wind_enabled"),
+    ("direction_x", "wind_direction_x"),
+    ("direction_z", "wind_direction_z"),
+    ("speed", "wind_speed"),
+    ("turbulence", "wind_turbulence"),
+    ("turbulence_size", "wind_turbulence_size"),
+];
 
 /// An item in tree order: whether physics moves it (its own setting or an
 /// enclosing group's) and the ids from the top down to it.
@@ -117,11 +131,14 @@ fn swarm_objects(b: &mut Builder<'_>, swarm: &ItemId, items: &[Placed<'_>]) -> V
         .collect()
 }
 
+/// `bend_plants`: this Wind also bends whatever has Sway, through the
+/// renderer's wind params, which follow its rows.
 fn emit_force(
     b: &mut Builder<'_>,
     item: &Item,
     force: &ForceFields,
     items: &[Placed<'_>],
+    bend_plants: bool,
 ) -> Result<(), String> {
     let targets = match &force.targets {
         ForceTargets::Physics => SceneTargetSelection::AllObjects,
@@ -160,7 +177,33 @@ fn emit_force(
         &[],
     )?;
     let id = node(item.id.as_str(), "force");
-    let bindings = bindings(&specs, &id);
+    let mut bindings = bindings(&specs, &id);
+    if bend_plants {
+        let render = node(SCENE, "render");
+        let render_index = b.scene("render");
+        for (host, param) in &specs {
+            let Some((_, to)) = PLANT_WIND.iter().find(|(from, _)| from == param) else {
+                continue;
+            };
+            // The renderer starts where the row starts; the binding carries
+            // every change after.
+            b.set_number(render_index, to, host.default_value);
+            bindings.push(BindingDef {
+                id: host.id.clone(),
+                label: host.name.clone(),
+                default_value: host.default_value,
+                target: BindingTarget::Node {
+                    node_id: render.clone(),
+                    param: (*to).to_owned(),
+                },
+                convert: ParamConvert::Float,
+                user_added: false,
+                scale: 1.0,
+                offset: 0.0,
+                default_mirrors_node_param: false,
+            });
+        }
+    }
     let instance = SceneModifierInstanceDef {
         id,
         scene: node(SCENE, "render"),

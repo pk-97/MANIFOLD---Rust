@@ -38,7 +38,9 @@ step upgrades a system that already exists; nothing here runs beside one.
   map, so it rides the ground as it wears. Reach (metres) fills a window of
   cells round the camera instead, full to half the Reach and thinning to
   none at it; each cell keeps its slot as the camera moves, so nothing
-  swims. No wind on plants.
+  swims. Copies of a tree vary in shade (`copy_shade`, a hash of each
+  copy's place). Anything with Sway bends in the scene's first Wind
+  (`wind_bend` in `render_scene.wgsl`, shadows and motion vectors too).
 - Cost (50k spruces, 1080p, stills profile): cut-out cards are shaded at
   every layer, since `discard` defeats hidden-surface removal; the Lumen
   session is adding a depth pass for cut-out draws. The terrain's Depth
@@ -115,7 +117,9 @@ All inside `node.terrain` and the shared `CoverRule`.
 
 ## Phase 5: Motion
 
-The existing Wind force drives plants too. Grass bends with it; trees sway
+Built: Sway (Object row) bends a mesh in the first Wind force by its height,
+with rolling gusts from the Wind's turbulence. Open: per-branch sway from
+`node.tree`, and gusts following the music. The existing Wind force drives plants too. Grass bends with it; trees sway
 by branch level (`node.tree` writes each vertex's level and distance along
 its branch); its gusts can follow the music.
 

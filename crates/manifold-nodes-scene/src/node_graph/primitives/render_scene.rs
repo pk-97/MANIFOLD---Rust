@@ -938,13 +938,23 @@ struct RenderSceneUniforms {
     /// x: metres the height picture carves a box-mapped surface, 0 for
     /// none (parallax in render_scene.wgsl's `begin_surface`). y: 1 when the
     /// vertices carry how much sky the land hides (`SceneObject::sky_blocking`).
-    /// zw unused.
+    /// z: how much each copy's shade differs (`SceneObject::copy_shade`).
+    /// w unused.
     relief: [f32; 4],
+    /// The scene's Wind: xy the downwind direction on the ground, z its
+    /// speed and w its turbulence, in m/s. Zero with no Wind.
+    wind: [f32; 4],
+    /// x: the Wind's turbulence size in metres, y: this frame's seconds,
+    /// z: last frame's.
+    wind_clock: [f32; 4],
+    /// x: how far the Wind bends this draw (`SceneObject::sway`, 0 holds
+    /// still), y: its mesh's height above its own origin.
+    sway: [f32; 4],
 }
 
 // A whole number of vec4s, naga's uniform-size rule. New fields append at the
 // tail so every existing offset holds.
-const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 992);
+const _: () = assert!(std::mem::size_of::<RenderSceneUniforms>() == 1040);
 
 /// Per-map sampling metadata. Core maps retain hardware anisotropic
 /// samplers; extension maps use these settings within Metal sampler limits.
@@ -2500,6 +2510,9 @@ struct FramePrelude<'ctx> {
     envmap_pending: bool,
     /// The `env_rotation` param: radians every envmap lookup turns by.
     env_rotation: f32,
+    /// `RenderSceneUniforms::wind` and `wind_clock`, the same for every draw.
+    wind: [f32; 4],
+    wind_clock: [f32; 4],
     atmosphere: manifold_node_engine::scene::atmosphere::Atmosphere,
     render_mode: manifold_node_engine::scene::render_mode::RenderMode,
     light_data: Vec<[f32; 4]>,
@@ -2786,6 +2799,9 @@ fn build_uniforms(
         instance_inner: IDENTITY_M4,
         prev_instance_inner: IDENTITY_M4,
         relief: [material.depth, 0.0, 0.0, 0.0],
+        wind: [0.0; 4],
+        wind_clock: [0.0; 4],
+        sway: [0.0; 4],
     }
 }
 
@@ -3055,6 +3071,8 @@ impl RenderScene {
             cast_shadows: true,
             closed: false,
             sky_blocking: false,
+            copy_shade: 0.0,
+            sway: 0.0,
             transform: manifold_node_engine::scene::transform::Transform::default(),
             parent_transform: None,
             material: inputs.material("material"),
@@ -3162,6 +3180,8 @@ impl RenderScene {
             envmap_wired: _,
             envmap_pending: _,
             env_rotation: _,
+            wind: _,
+            wind_clock: _,
             atmosphere: _,
             render_mode: _,
             light_data: _,

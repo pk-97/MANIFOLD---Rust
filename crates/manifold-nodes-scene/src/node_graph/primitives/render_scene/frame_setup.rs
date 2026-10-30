@@ -90,6 +90,8 @@ impl RenderScene {
             envmap_wired,
             envmap_pending,
             env_rotation,
+            wind,
+            wind_clock,
             atmosphere,
             render_mode,
             view_proj,
@@ -374,6 +376,9 @@ impl RenderScene {
             );
             uniforms.instance_inner = instance_inner;
             uniforms.relief[1] = if object.sky_blocking { 1.0 } else { 0.0 };
+            uniforms.relief[2] = object.copy_shade;
+            uniforms.wind = *wind;
+            uniforms.wind_clock = *wind_clock;
             uniforms.appearance[3] = *env_rotation;
             uniforms.prev_instance_inner = prev_inner_n;
             if single_object.is_some() {
@@ -575,12 +580,19 @@ impl RenderScene {
             // past its vertex). The per-copy camera cull places it with each
             // copy's own transform; a live extent only drops vertices inside
             // it.
-            let copy_bounds = (geometry_content_known
+            let mesh_bounds = (geometry_content_known
                 && fill_mode == manifold_gpu::GpuTriangleFillMode::Fill
                 && !points)
                 .then(|| mesh_slot.and_then(|s| inputs.cpu_value_slot::<Option<MeshBounds>>(s)))
                 .flatten()
                 .flatten();
+            // Sway bends the mesh by its height above its own origin, so its
+            // box makes room for the lean.
+            if object.sway > 0.0 {
+                let height = mesh_bounds.map_or(0.0, |b| b.max[1].max(0.0));
+                uniforms.sway = [object.sway, height, 0.0, 0.0];
+            }
+            let copy_bounds = mesh_bounds.map(|b| swaying_bounds(b, object.sway));
             // The whole-object test needs nothing but the model matrix to
             // place the vertices: no instances, no live extent. It is tested
             // against the same jittered `view_proj` the draw uniforms carry,
@@ -1099,6 +1111,7 @@ impl RenderScene {
             Some(ParamValue::Float(turn)) => *turn,
             _ => 0.0,
         };
+        let (wind, wind_clock) = wind_uniforms(ctx);
         // Scene-wide atmosphere (P3). Unwired = Atmosphere::default() = fog
         // density 0 = no fog (the shader's exp fog collapses to identity), so
         // an unwired atmosphere is byte-identical to no atmosphere.
@@ -1589,6 +1602,8 @@ impl RenderScene {
                 envmap_wired,
                 envmap_pending,
                 env_rotation,
+                wind,
+                wind_clock,
                 atmosphere,
                 render_mode,
                 light_data,
@@ -1682,12 +1697,7 @@ fn shadow_caster_entry(
     let source = if dark || kind == ShadowCaster::CUBE_FACE {
         [0.0, 1.0, 0.0, 0.0]
     } else if l.mode == LightMode::Sun {
-        [
-            -l.dir[0],
-            -l.dir[1],
-            -l.dir[2],
-            sun_cone_half_angle(l),
-        ]
+        [-l.dir[0], -l.dir[1], -l.dir[2], sun_cone_half_angle(l)]
     } else {
         [l.pos[0], l.pos[1], l.pos[2], light_size]
     };
@@ -1696,6 +1706,22 @@ fn shadow_caster_entry(
     } else {
         [l.color[0], l.color[1], l.color[2]]
     };
+    // A sun's penumbra grows with the gap between blocker and receiver at
+    // the sun's angle, wherever the blocker is: per unit of this cascade's
+    // depth (its ortho depth runs 0..far, its uv across 2·range), in uv.
+    let light_size = if l.mode == LightMode::Sun {
+        let far = l
+            .pos
+            .iter()
+            .zip(l.aim)
+            .map(|(p, a)| (p - a) * (p - a))
+            .sum::<f32>()
+            .sqrt()
+            + l.range;
+        far * l.sun_radius.tan() / (2.0 * l.range.max(1e-3))
+    } else {
+        light_size
+    };
     ShadowCaster {
         view_proj: l.shadow_view_proj(),
         shadow: [l.shadow_bias, khw, texel, light_size],
@@ -1703,13 +1729,59 @@ fn shadow_caster_entry(
         color: [rgb[0], rgb[1], rgb[2], kind],
     }
 }
-    // A sun's penumbra grows with the gap between blocker and receiver at
-    // the sun's angle, wherever the blocker is: per unit of this cascade's
-    // depth (its ortho depth runs 0..far, its uv across 2·range), in uv.
-    let light_size = if l.mode == LightMode::Sun {
-        let far = l.pos.iter().zip(l.aim).map(|(p, a)| (p - a) * (p - a)).sum::<f32>().sqrt()
-            + l.range;
-        far * l.sun_radius.tan() / (2.0 * l.range.max(1e-3))
-    } else {
-        light_size
+
+/// How far past its height a swaying mesh can lean sideways and rise, as a
+/// share of its height: `render_scene.wgsl`'s `WIND_MAX_LEAN` and flutter.
+const WIND_LEAN_ROOM: f32 = 0.85;
+
+/// A swaying mesh's box with room for its lean: wider by its height times
+/// `WIND_LEAN_ROOM` every way across, and that much taller.
+fn swaying_bounds(b: MeshBounds, sway: f32) -> MeshBounds {
+    if sway <= 0.0 {
+        return b;
+    }
+    let reach = b.max[1].max(0.0) * WIND_LEAN_ROOM;
+    MeshBounds {
+        min: [b.min[0] - reach, b.min[1], b.min[2] - reach],
+        max: [b.max[0] + reach, b.max[1] + reach, b.max[2] + reach],
+    }
+}
+
+/// The scene's Wind for `render_scene.wgsl`'s `wind_bend`: the downwind
+/// direction on the ground, speed and turbulence (m/s), then turbulence size
+/// (m) and this and last frame's seconds. All zero with the Wind off.
+fn wind_uniforms(ctx: &EffectNodeContext<'_, '_>) -> ([f32; 4], [f32; 4]) {
+    let value = |name: &str, default: f32| match ctx.params.get(name) {
+        Some(ParamValue::Float(v)) => *v,
+        _ => default,
     };
+    if value("wind_enabled", 0.0) < 0.5 {
+        return ([0.0; 4], [0.0; 4]);
+    }
+    let (x, z) = (
+        value("wind_direction_x", 1.0),
+        value("wind_direction_z", 0.0),
+    );
+    let length = (x * x + z * z).sqrt();
+    let (x, z) = if length > 1e-4 {
+        (x / length, z / length)
+    } else {
+        (1.0, 0.0)
+    };
+    let seconds = ctx.time.seconds.0 as f32;
+    let before = seconds - ctx.time.delta.0 as f32;
+    (
+        [
+            x,
+            z,
+            value("wind_speed", 0.0).max(0.0),
+            value("wind_turbulence", 0.0).max(0.0),
+        ],
+        [
+            value("wind_turbulence_size", 2.0).max(0.05),
+            seconds,
+            before,
+            0.0,
+        ],
+    )
+}

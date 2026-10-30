@@ -201,7 +201,7 @@ const fn unused(property: &'static str, why: &'static str) -> PropertyRow {
     row(property, DRAW, Look, Exposure::Internal(why))
 }
 
-const fn rows(s: Start) -> [PropertyRow; 61] {
+const fn rows(s: Start) -> [PropertyRow; 63] {
     [
         POS_X,
         pos_y(s.height),
@@ -440,6 +440,8 @@ const fn rows(s: Start) -> [PropertyRow; 61] {
         unused("instances_space", NO_MESH),
         unused("closed", NO_MESH),
         unused("sky_blocking", NO_MESH),
+        unused("copy_shade", NO_MESH),
+        unused("sway", NO_MESH),
         unused("foam", NO_WATER_LOOK),
         unused("foam_coverage", NO_WATER_LOOK),
         unused("mist", NO_WATER_LOOK),
@@ -455,8 +457,8 @@ const fn rows(s: Start) -> [PropertyRow; 61] {
     ]
 }
 
-pub static SMOKE_ROWS: [PropertyRow; 61] = rows(SMOKE);
-pub static FIRE_ROWS: [PropertyRow; 61] = rows(FIRE);
+pub static SMOKE_ROWS: [PropertyRow; 63] = rows(SMOKE);
+pub static FIRE_ROWS: [PropertyRow; 63] = rows(FIRE);
 
 /// The Quality field, shared with Water and Sand.
 pub static GAS_FIELDS: [FieldRow; 1] = [QUALITY_FIELD];

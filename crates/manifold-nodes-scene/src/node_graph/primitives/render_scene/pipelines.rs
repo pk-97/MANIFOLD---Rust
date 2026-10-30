@@ -26,7 +26,7 @@ impl RenderScene {
         ),
         (
             "// GBUFFER_VS_VELOCITY_BODY",
-            "out.clip_now = out.clip_pos;\n    let prev_world = u.prev_model * vec4<f32>(prev_inst_pos, 1.0);\n    out.clip_prev = u.prev_view_proj * prev_world;",
+            "out.clip_now = out.clip_pos;\n    let prev_world = u.prev_model * vec4<f32>(prev_inst_pos, 1.0)\n        + vec4<f32>(wind_bend(wind_root, local_pos.y, wind_size, u.wind_clock.z), 0.0);\n    out.clip_prev = u.prev_view_proj * prev_world;",
         ),
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
@@ -67,7 +67,7 @@ impl RenderScene {
         ),
         (
             "// GBUFFER_VS_VELOCITY_BODY",
-            "out.clip_now = out.clip_pos;\n    let prev_world = u.prev_model * vec4<f32>(prev_inst_pos, 1.0);\n    out.clip_prev = u.prev_view_proj * prev_world;",
+            "out.clip_now = out.clip_pos;\n    let prev_world = u.prev_model * vec4<f32>(prev_inst_pos, 1.0)\n        + vec4<f32>(wind_bend(wind_root, local_pos.y, wind_size, u.wind_clock.z), 0.0);\n    out.clip_prev = u.prev_view_proj * prev_world;",
         ),
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
@@ -105,7 +105,7 @@ impl RenderScene {
         ),
         (
             "// GBUFFER_VS_VELOCITY_BODY",
-            "out.clip_now = out.clip_pos;\n    let prev_world = u.prev_model * vec4<f32>(prev_inst_pos, 1.0);\n    out.clip_prev = u.prev_view_proj * prev_world;",
+            "out.clip_now = out.clip_pos;\n    let prev_world = u.prev_model * vec4<f32>(prev_inst_pos, 1.0)\n        + vec4<f32>(wind_bend(wind_root, local_pos.y, wind_size, u.wind_clock.z), 0.0);\n    out.clip_prev = u.prev_view_proj * prev_world;",
         ),
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (
@@ -143,7 +143,7 @@ impl RenderScene {
         ),
         (
             "// GBUFFER_VS_VELOCITY_BODY",
-            "out.clip_now = out.clip_pos;\n    let prev_world = u.prev_model * vec4<f32>(prev_inst_pos, 1.0);\n    out.clip_prev = u.prev_view_proj * prev_world;",
+            "out.clip_now = out.clip_pos;\n    let prev_world = u.prev_model * vec4<f32>(prev_inst_pos, 1.0)\n        + vec4<f32>(wind_bend(wind_root, local_pos.y, wind_size, u.wind_clock.z), 0.0);\n    out.clip_prev = u.prev_view_proj * prev_world;",
         ),
         ("-> @location(0) vec4<f32> {", "-> FsOut {"),
         (

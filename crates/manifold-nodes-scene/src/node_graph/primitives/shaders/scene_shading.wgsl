@@ -204,8 +204,17 @@ struct Uniforms {
     // x: metres the height picture (the normal map's alpha) carves a
     // surface, 0 for none (parallax in begin_surface). y: 1 when the
     // vertices carry how much sky the land hides (a Terrain), 0 when that
-    // slot is padding. zw unused.
+    // slot is padding. z: how much each copy's shade differs (copy_shade),
+    // 0 for none. w unused.
     relief: vec4<f32>,
+    // The scene's Wind (`wind_bend`): xy the downwind direction on the
+    // ground, z its speed and w its turbulence, in m/s.
+    wind: vec4<f32>,
+    // x: turbulence size in metres, y: this frame's seconds, z: last frame's.
+    wind_clock: vec4<f32>,
+    // x: how far the Wind bends this draw (Sway, 0 holds still), y: its
+    // mesh's height above its own origin.
+    sway: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -601,6 +610,10 @@ fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, searc
 // on the map.
 const SUN_CASCADES: i32 = 4;
 const CASCADE_EDGE: f32 = 0.97;
+// Past this far out from a cascade's centre a point mixes in the next
+// cascade's shadow, all of it by CASCADE_EDGE, so no seam shows where the
+// cascades change.
+const CASCADE_BLEND: f32 = 0.85;
 
 // The caster slot whose shadow view holds `world_pos`: `slot` itself,
 // except for a sun (`ShadowCaster::SUN`), whose cascades sit at `slot` and
@@ -658,7 +671,23 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
         }
         return textureLoad(rt_shadow_mask, vec2<i32>(frag_xy), i32(ch / 4u), 0)[ch % 4u];
     }
-    let slot = caster_face(i32(slot_f + 0.5), world_pos);
+    let first = i32(slot_f + 0.5);
+    let slot = caster_face(first, world_pos);
+    let shadow = caster_shadow(slot, first, world_pos, frag_xy);
+    // A sun's point near its cascade's edge mixes toward the next one.
+    if casters[first].color.w == 0.0 && slot < first + SUN_CASCADES - 1 {
+        let clip = (casters[slot].view_proj * vec4<f32>(world_pos, 1.0)).xy;
+        let blend = smoothstep(CASCADE_BLEND, CASCADE_EDGE, max(abs(clip.x), abs(clip.y)));
+        if blend > 0.0 {
+            return mix(shadow, caster_shadow(slot + 1, first, world_pos, frag_xy), blend);
+        }
+    }
+    return shadow;
+}
+
+// Light visibility from caster `slot`'s map alone; `first` is the light's
+// first caster slot.
+fn caster_shadow(slot: i32, first: i32, world_pos: vec3<f32>, frag_xy: vec2<f32>) -> f32 {
     let vp = casters[slot].view_proj;
     let params = casters[slot].shadow;
     let bias = params.x;
@@ -689,7 +718,7 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
         // (`shadow_caster_entry`): a sun's angle, not the blocker's
         // distance, sets it. Its search reaches as far as the widest
         // penumbra the filter draws.
-        let sun = casters[i32(slot_f + 0.5)].color.w == 0.0;
+        let sun = casters[first].color.w == 0.0;
         let growth = select(0.0, light_size, sun);
         let search_radius_uv = select(
             pcss_search_radius_uv(vp, world_pos, suv, light_size),

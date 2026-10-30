@@ -42,11 +42,19 @@ use manifold_node_engine::scene::scene_object::{
 const COVER_PORTS: [(&str, [&str; 3]); 2] = [
     (
         "cover1",
-        ["cover1_base_color_map", "cover1_normal_map", "cover1_mr_map"],
+        [
+            "cover1_base_color_map",
+            "cover1_normal_map",
+            "cover1_mr_map",
+        ],
     ),
     (
         "cover2",
-        ["cover2_base_color_map", "cover2_normal_map", "cover2_mr_map"],
+        [
+            "cover2_base_color_map",
+            "cover2_normal_map",
+            "cover2_mr_map",
+        ],
     ),
 ];
 
@@ -262,6 +270,24 @@ manifold_node_engine::primitive! {
             range: None,
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("copy_shade"),
+            label: "Copy Shade",
+            // How much each copy's shade differs (`SceneObject::copy_shade`).
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("sway"),
+            label: "Sway",
+            // How far the scene's Wind bends this mesh (`SceneObject::sway`).
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
         // A Smoke's or Fire's look (`node.gas_volume` wired to gas_state):
         // the renderer's volume pass reads these.
         // The smoke's colour (its scattering tint), red.
@@ -389,6 +415,8 @@ impl Primitive for SceneObjectNode {
         let cast_shadows = ctx.scalar_or_param("cast_shadows", 1.0) > 0.5;
         let closed = matches!(ctx.params.get("closed"), Some(ParamValue::Bool(true)));
         let sky_blocking = matches!(ctx.params.get("sky_blocking"), Some(ParamValue::Bool(true)));
+        let copy_shade = ctx.scalar_or_param("copy_shade", 0.0).clamp(0.0, 1.0);
+        let sway = ctx.scalar_or_param("sway", 0.0).clamp(0.0, 1.0);
         let emission_strength = ctx.scalar_or_param("emission_strength", 1.0);
         let gain = ctx.scalar_or_param("gain", 1.0);
         let mut transform = ctx.inputs.transform("transform").unwrap_or_default();
@@ -462,6 +490,8 @@ impl Primitive for SceneObjectNode {
             cast_shadows,
             closed,
             sky_blocking,
+            copy_shade,
+            sway,
             transform,
             parent_transform,
             material,
@@ -587,7 +617,16 @@ fn field_surface(ctx: &mut EffectNodeContext<'_, '_>, levelset: Slot) -> Option<
 /// an empty box is a node error, and the object draws no gas.
 fn gas_volume(ctx: &mut EffectNodeContext<'_, '_>, state: Slot) -> Option<GasVolume> {
     let scalar = |name: &str| scalar_input(ctx, name);
-    let (Some(velocity), Some(cell_size), Some(ox), Some(oy), Some(oz), Some(nx), Some(ny), Some(nz)) = (
+    let (
+        Some(velocity),
+        Some(cell_size),
+        Some(ox),
+        Some(oy),
+        Some(oz),
+        Some(nx),
+        Some(ny),
+        Some(nz),
+    ) = (
         ctx.inputs.slot_of("gas_velocity"),
         scalar("gas_cell_size"),
         scalar("gas_origin_x"),
@@ -596,7 +635,8 @@ fn gas_volume(ctx: &mut EffectNodeContext<'_, '_>, state: Slot) -> Option<GasVol
         scalar("gas_dims_x"),
         scalar("gas_dims_y"),
         scalar("gas_dims_z"),
-    ) else {
+    )
+    else {
         ctx.error(
             "scene_object: `gas_state` is wired but its velocity, cell size, origin or dims is not",
         );

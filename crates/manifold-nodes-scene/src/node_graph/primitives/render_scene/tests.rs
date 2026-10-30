@@ -973,7 +973,7 @@ fn reconfigure_grows_and_shrinks_ports_and_params() {
     assert!(!node.inputs().iter().any(|p| p.name == "light_3"));
     assert_eq!(
         node.parameters().len(),
-        13,
+        19,
         "object count never grows the fixed scene-level toggle set"
     );
 

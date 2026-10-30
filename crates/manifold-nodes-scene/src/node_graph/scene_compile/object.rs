@@ -31,6 +31,9 @@ pub(crate) fn object_wires(
     ]
 }
 
+/// How much each copy of a tree's bark and leaves differs in shade.
+const TREE_COPY_SHADE: f32 = 0.5;
+
 /// The mesh node a built-in shape is, and the platonic solid index where it
 /// is one. `None` for the shapes with their own emitter (Ocean, Mesh from
 /// file, the curve shapes).
@@ -271,6 +274,10 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
             "sky_blocking",
             SerializedParamValue::Bool { value: true },
         );
+    }
+    if grown {
+        // A forest of one tree: each copy takes its own shade.
+        b.set_number(object, "copy_shade", TREE_COPY_SHADE);
     }
     if let Some(rest) = rest {
         b.drawn.push(Drawn {

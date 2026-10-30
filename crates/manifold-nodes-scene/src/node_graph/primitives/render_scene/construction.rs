@@ -324,6 +324,57 @@ impl RenderScene {
                 range: Some((-std::f32::consts::PI, std::f32::consts::PI)),
                 enum_values: &[],
             },
+            // The scene's Wind, which bends whatever has Sway
+            // (`render_scene.wgsl`'s `wind_bend`). The scene compiler binds
+            // these to the first Wind force's rows; off, nothing bends.
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("wind_enabled"),
+                label: "Wind On",
+                ty: ParamType::Float,
+                default: ParamValue::Float(0.0),
+                range: Some((0.0, 1.0)),
+                enum_values: &[],
+            },
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("wind_direction_x"),
+                label: "Wind Direction X",
+                ty: ParamType::Float,
+                default: ParamValue::Float(1.0),
+                range: Some((-1.0, 1.0)),
+                enum_values: &[],
+            },
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("wind_direction_z"),
+                label: "Wind Direction Z",
+                ty: ParamType::Float,
+                default: ParamValue::Float(0.0),
+                range: Some((-1.0, 1.0)),
+                enum_values: &[],
+            },
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("wind_speed"),
+                label: "Wind Speed (m/s)",
+                ty: ParamType::Float,
+                default: ParamValue::Float(0.0),
+                range: Some((0.0, 50.0)),
+                enum_values: &[],
+            },
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("wind_turbulence"),
+                label: "Wind Turbulence (m/s)",
+                ty: ParamType::Float,
+                default: ParamValue::Float(0.0),
+                range: Some((0.0, 50.0)),
+                enum_values: &[],
+            },
+            ParamDef {
+                name: std::borrow::Cow::Borrowed("wind_turbulence_size"),
+                label: "Wind Turbulence Size (m)",
+                ty: ParamType::Float,
+                default: ParamValue::Float(2.0),
+                range: Some((0.05, 100.0)),
+                enum_values: &[],
+            },
             // Scene-wide shading mode (SCENE_RENDER_MODE_DESIGN.md): Rendered,
             // Solid, Wireframe, Points. A wired `render_mode_in` input overrides it.
             ParamDef {
