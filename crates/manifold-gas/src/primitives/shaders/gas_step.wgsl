@@ -14,7 +14,8 @@
 // per second, state is x density (soot), y temperature (0 ambient, 1 a hot
 // flame), z fuel and w flame. A cell inside one of the scene's solids holds
 // no gas, its faces move with the solid, and the pressure solve treats it as
-// a wall.
+// a wall. Water and sand are solids too: a cell at least half full of them
+// moves with their mean velocity there (cs_matter, cs_solids).
 //
 // Roles rotate: the host names three velocity and three state buffers and
 // binds them as vel_in/state_in (last frame's result), vel_a/state_a and
@@ -65,8 +66,10 @@ struct Params {
     // row `solid_base` of `bodies`.
     solid_base: u32,
     solid_count: u32,
-    pad2: u32,
-    pad3: u32,
+    // This frame's water and sand particles (SOLIDS): the first
+    // `water_count` of `water`, then the first `sand_count` of `sand`.
+    water_count: u32,
+    sand_count: u32,
     pad4: u32,
 }
 
@@ -129,12 +132,28 @@ struct LiquidShape {
 @group(0) @binding(20) var<storage, read> collider_triangles: array<vec4<f32>>;
 // Two words a cell: the solid's velocity there, (x, y) then (z, kind) as
 // halves. Kind 0 is air, 1 inside a Collider's mesh (cs_solids_static), 2
-// inside a body or a hull (cs_solids).
+// inside a body or a hull, 3 water or sand (cs_solids).
 @group(0) @binding(21) var<storage, read_write> solid: array<u32>;
 // The source sits on the static solids under it: one word, the box's height
 // in cells less the lowest air cell of the column through the source's
 // centre (cs_solids_static), so the largest is the lowest.
 @group(0) @binding(22) var<storage, read_write> source_floor: array<atomic<u32>>;
+// Four words a cell, in units of 1 / MATTER_SCALE: how full of water and
+// sand the cell is (its volume's fraction), then that fraction times their
+// velocity, x y z, as two's complement sums (cs_matter).
+@group(0) @binding(23) var<storage, read_write> matter: array<atomic<u32>>;
+// node.liquid_frame's and node.matter_frame's particles: position and
+// radius, velocity, id.
+struct GasParticle {
+    position_radius: vec4<f32>,
+    velocity: vec3<f32>,
+    id: u32,
+}
+@group(0) @binding(24) var<storage, read> water: array<GasParticle>;
+@group(0) @binding(25) var<storage, read> sand: array<GasParticle>;
+const MATTER_SCALE: f32 = 65536.0;
+// A cell at least this full of water or sand is a solid to the gas.
+const MATTER_FULL: f32 = 0.5;
 
 fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(atlas[index / 2u]);
@@ -678,9 +697,53 @@ fn cs_solids_static(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
+// Each water or sand particle's volume, spread over the eight cells round it
+// by its trilinear weights, with its velocity: once a frame, from the
+// frame's particles, before the ticks. Dead particles (radius 0) add nothing.
+@compute @workgroup_size(64, 1, 1)
+fn cs_matter(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(num_workgroups) groups: vec3<u32>,
+) {
+    let n = gid.x + gid.y * groups.x * 64u;
+    var p: GasParticle;
+    if n < params.water_count {
+        p = water[n];
+    } else if n - params.water_count < params.sand_count {
+        p = sand[n - params.water_count];
+    } else {
+        return;
+    }
+    let r = p.position_radius.w;
+    let g = (p.position_radius.xyz - params.origin) / params.h - vec3<f32>(0.5);
+    let base = vec3<i32>(floor(g));
+    let f = g - floor(g);
+    // A sphere's volume in cells, scaled to the fixed point.
+    let volume = 4.18879 * r * r * r / (params.h * params.h * params.h) * MATTER_SCALE;
+    if volume <= 0.0 || any(base < vec3<i32>(-1)) || any(base >= vec3<i32>(params.dims)) {
+        return;
+    }
+    for (var k = 0u; k < 8u; k++) {
+        let o = vec3<u32>(k & 1u, (k >> 1u) & 1u, k >> 2u);
+        let c = base + vec3<i32>(o);
+        if any(c < vec3<i32>(0)) || any(c >= vec3<i32>(params.dims)) {
+            continue;
+        }
+        let w = select(1.0 - f, f, o == vec3<u32>(1u));
+        let share = w.x * w.y * w.z * volume;
+        let i = 4u * cell_index(vec3<u32>(c));
+        atomicAdd(&matter[i], u32(share + 0.5));
+        let v = vec3<i32>(round(share * p.velocity));
+        atomicAdd(&matter[i + 1u], bitcast<u32>(v.x));
+        atomicAdd(&matter[i + 2u], bitcast<u32>(v.y));
+        atomicAdd(&matter[i + 3u], bitcast<u32>(v.z));
+    }
+}
+
 // The moving solids at this tick's start: a cell inside a body or a
 // Collider's hull takes the velocity of the one it is deepest in (kind 2); a
-// cell inside a Collider's mesh keeps it, and the rest is air.
+// cell inside a Collider's mesh keeps it; a cell at least half full of water
+// or sand takes their mean velocity (kind 3), and the rest is air.
 @compute @workgroup_size(4, 4, 4)
 fn cs_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !inside(gid) {
@@ -720,6 +783,17 @@ fn cs_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
                 body.position_inv_mass.xyz,
                 x,
             );
+        }
+    }
+    if kind == 0.0 && params.water_count + params.sand_count > 0u {
+        let full = f32(atomicLoad(&matter[4u * i]));
+        if full >= MATTER_FULL * MATTER_SCALE {
+            kind = 3.0;
+            velocity = vec3<f32>(
+                f32(bitcast<i32>(atomicLoad(&matter[4u * i + 1u]))),
+                f32(bitcast<i32>(atomicLoad(&matter[4u * i + 2u]))),
+                f32(bitcast<i32>(atomicLoad(&matter[4u * i + 3u]))),
+            ) / full;
         }
     }
     solid[2u * i] = pack2x16float(velocity.xy);

@@ -59,8 +59,8 @@ pub fn compile(doc: &SceneDoc) -> Result<EffectGraphDef, String> {
     group::emit_tree(&mut b);
     camera::aim_all(&mut b);
     swarm::finish(&mut b);
-    water::emit_all(&mut b);
-    gas::emit_all(&mut b);
+    let matter = water::emit_all(&mut b);
+    gas::emit_all(&mut b, matter);
     world::emit(&mut b);
     camera::finish_cut(&mut b);
     copies::join_world(&mut b);
@@ -79,8 +79,8 @@ pub fn drawn_items(doc: &SceneDoc) -> Vec<manifold_foundation::ItemId> {
     material::emit_all(&mut b);
     swarm::emit_all(&mut b);
     group::emit_tree(&mut b);
-    water::emit_all(&mut b);
-    gas::emit_all(&mut b);
+    let matter = water::emit_all(&mut b);
+    gas::emit_all(&mut b, matter);
     swarm::draw_alike(&mut b);
     b.object_items
 }

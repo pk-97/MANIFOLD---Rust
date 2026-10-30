@@ -23,6 +23,11 @@ fn gas_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.provide("state", bytes.packed);
     x.provide("velocity", bytes.packed);
     x.hold(bytes.total());
+    // Water or sand wired: their field and the solid field, four and two
+    // words a cell.
+    if x.input("water").is_some() || x.input("sand").is_some() {
+        x.hold(geometry.cells() * 24);
+    }
     Ok(())
 }
 inventory::submit! {

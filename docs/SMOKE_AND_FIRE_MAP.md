@@ -2,8 +2,8 @@
 
 Two scene items, Smoke and Fire, on one gas solver and one volume renderer.
 Fire burns fuel, glows, gives off smoke and lights the scene. Smoke shades
-itself from the sun and sky. Both are pushed by nothing and push nothing
-back. A scene without them builds no gas node and runs no pass.
+itself from the sun and sky. Both flow round the World's solids, water and
+sand, are pushed by them and by scene forces, and push nothing back. A scene without them builds no gas node and runs no pass.
 
 ## Where it lives
 
@@ -48,8 +48,14 @@ World Speed and Reset reach it as they reach water.
    the solve leaves it out (the count of open neighbours rides in the low
    bits of the divergence). The source sits on the static solids under its
    centre, so a box floor sunk in the ground emits from the ground's top.
-   The kernels are built twice, with and without solids: smoke with no
-   solid runs none of their code.
+   The first Water's and the first Sand's particles a frame back
+   (`particles_b` of their frames, read as state captures: the gas runs
+   with the World's solids owner, before this frame's ticks) are solids too: each spreads its volume
+   and velocity over the eight cells round it once a frame (`cs_matter`),
+   and a cell at least half full is a solid moving with their mean
+   velocity, so smoke rolls over water and a splash or a sand slide shoves
+   it. The kernels are built twice, with and without solids: smoke with no
+   solid, water or sand runs none of their code.
 1. Advect velocity and state: MacCormack with the min/max clamp. Air that
    comes in through an open face arrives still, so no wind at a face can
    feed itself (with the edge's own velocity, a crosswind grew over seconds

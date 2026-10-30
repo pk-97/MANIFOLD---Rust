@@ -66,13 +66,21 @@ const SAND_DOMAIN: &str = "domain";
 const WATER_SAND_READERS: [&str; 2] = ["step", "water_wetness"];
 const WATER_WETNESS: &str = "water_wetness";
 
+/// The particle frames of the first Water and the first Sand, which Smoke
+/// and Fire flow round (`gas::emit_all`).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct MatterFrames {
+    pub(crate) water: Option<u32>,
+    pub(crate) sand: Option<u32>,
+}
+
 /// Emit every Water and Sand and its sources. With no water solver linked,
 /// they draw nothing. The first Sand is porous to every Water: its particles
 /// this frame reach each water's step, which slows the water inside the
 /// sand, so water soaks into a pile instead of passing through it, and each
 /// water's wet map, which marks the sand where the water touches it. The
 /// first Water drags the first Sand back ([`water_on_sand`]).
-pub(crate) fn emit_all(b: &mut Builder<'_>) {
+pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
     let mut sand: Option<BTreeMap<String, u32>> = None;
     let mut water_ids = Vec::new();
     for (item, group) in waters(b.doc) {
@@ -85,12 +93,19 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) {
             }
         }
     }
+    let mut frames = MatterFrames {
+        water: water_ids
+            .first()
+            .and_then(|(_, ids)| ids.get(SAND_FRAME).copied()),
+        sand: None,
+    };
     let Some(sand) = sand else {
-        return;
+        return frames;
     };
     let Some(&frame) = sand.get(SAND_FRAME) else {
-        return;
+        return frames;
     };
+    frames.sand = Some(frame);
     let [points, count] = manifold_core::liquid_domain::SAND_INPUTS;
     for (_, ids) in &water_ids {
         for reader in WATER_SAND_READERS
@@ -108,6 +123,7 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) {
     ) {
         water_on_sand(b, owner, ids, [frame, state, domain]);
     }
+    frames
 }
 
 /// The water at each grain of the Sand (`node.water_on_sand`), from the

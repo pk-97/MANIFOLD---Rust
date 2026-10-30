@@ -18,7 +18,7 @@ use manifold_core::scene_world_controls::{WORLD_INPUTS, WorldControlInput};
 use manifold_foundation::ItemId;
 
 use super::builder::Builder;
-use super::water::{follow_cell, items_of};
+use super::water::{MatterFrames, follow_cell, items_of};
 
 /// `node.gas_volume`'s `kind`.
 const SMOKE: f32 = 0.0;
@@ -58,14 +58,15 @@ fn world_controls() -> impl Iterator<Item = (WorldControlInput, &'static str)> {
         .filter(|(control, _)| control.world != AIR_RESISTANCE)
 }
 
-/// Emit every Smoke and Fire, in tree order.
-pub(crate) fn emit_all(b: &mut Builder<'_>) {
+/// Emit every Smoke and Fire, in tree order. Each flows round the first
+/// Water and the first Sand: their particles a frame back are solids to it.
+pub(crate) fn emit_all(b: &mut Builder<'_>, matter: MatterFrames) {
     for (item, group) in gases(b.doc) {
-        emit(b, &item, group.as_ref());
+        emit(b, &item, group.as_ref(), matter);
     }
 }
 
-fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>) {
+fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, matter: MatterFrames) {
     let (kind, quality) = match &item.fields {
         ItemFields::Smoke(gas) => (SMOKE, gas.quality),
         ItemFields::Fire(gas) => (FIRE, gas.quality),
@@ -92,6 +93,15 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>) {
     for (control, role) in world_controls() {
         let value = b.add(owner, role, "node.value");
         b.wire(value, "out", gas, control.input);
+    }
+    for (frame, points, count) in [
+        (matter.water, "water", "water_count"),
+        (matter.sand, "sand", "sand_count"),
+    ] {
+        if let Some(frame) = frame {
+            b.wire(frame, "particles_b", gas, points);
+            b.wire(frame, "count_b", gas, count);
+        }
     }
 
     let object = b.add(owner, "object", "node.scene_object");
