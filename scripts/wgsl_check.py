@@ -196,6 +196,7 @@ STACKS = {
     "scene_scatter": (False, [SCENE / "cover_rule.wgsl", SCENE / "scatter_on_mesh.wgsl"]),
     "scene_tree": (False, [SCENE / "tree.wgsl"]),
     "scene_terrain": (False, [SCENE / "terrain.wgsl"]),
+    "scene_daylight": (False, [SCENE / "daylight.wgsl", SCENE / "bake_daylight.wgsl"]),
     "scene_wet_pass": (False, [WET_CONSTS, WET_LAYOUT, SCENE / "wet_pass.wgsl"]),
     "scene_foam_pass": (False, [SCENE / "water_field_common.wgsl", SCENE / "foam_pass.wgsl"]),
 }

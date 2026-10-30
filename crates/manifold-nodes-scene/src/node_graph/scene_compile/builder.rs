@@ -41,7 +41,8 @@ pub(crate) struct Builder<'d> {
     pub(crate) objects: Vec<u32>,
     /// The item each entry of `objects` draws.
     pub(crate) object_items: Vec<ItemId>,
-    pub(crate) lights: Vec<u32>,
+    /// The lights the render takes: each a node and its Light port.
+    pub(crate) lights: Vec<(u32, &'static str)>,
     /// The node whose `out` is the finished image: the cinematic tail the
     /// camera emitter built, or what the Environment put after it. `None`
     /// sends the render straight out.
@@ -674,8 +675,8 @@ impl<'d> Builder<'d> {
         for (k, object) in objects.into_iter().enumerate() {
             self.wire(object, "object", render, &format!("object_{k}"));
         }
-        for (k, light) in lights.into_iter().enumerate() {
-            self.wire(light, "out", render, &format!("light_{k}"));
+        for (k, (light, port)) in lights.into_iter().enumerate() {
+            self.wire(light, port, render, &format!("light_{k}"));
         }
         let output = self.scene("output");
         match self.tail {

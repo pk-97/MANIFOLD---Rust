@@ -2,8 +2,11 @@
 //! environment map at a configurable resolution. Outputs an
 //! equirectangular Rgba16Float Texture2D suitable for wiring into
 //! `node.render_mesh`'s `envmap` input for PBR-IBL rendering. In `HDRI` mode
-//! it outputs the wired `hdri` texture instead, so one Mode (Gradient,
-//! Softbox, HDRI) picks what lights the scene.
+//! it outputs the wired `hdri` texture instead; in `Daylight` mode the sky
+//! the wired Sun makes through the air (`shaders/bake_daylight.wgsl`), and
+//! passes that Sun on as its `sun` output, its colour as much of it as gets
+//! through the air. One Mode (Gradient, Softbox, HDRI, Daylight) picks what
+//! lights the scene.
 //!
 //! The studio aesthetic — ambient floor + bright horizon band + overhead
 //! softbox + floor fill + two strip lights + azimuthal modulation — is
@@ -21,6 +24,8 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::light::{Light, LightMode};
+
+use super::daylight::{self, Atmosphere};
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -66,13 +71,62 @@ pub struct EnvmapUniforms {
 
 /// `mode` values. HDRI copies the wired `hdri` texture; with nothing wired it
 /// bakes black, so a half-set-up scene is dark rather than showing a stale sky.
+/// Daylight bakes the sky the wired Sun makes; with no Sun it bakes black.
 const MODE_HDRI: u32 = 2;
+const MODE_DAYLIGHT: u32 = 3;
 
 fn mode_index(params: &ParamValues) -> u32 {
     match params.get("mode") {
-        Some(ParamValue::Enum(v)) => (*v).min(MODE_HDRI),
-        Some(ParamValue::Float(f)) => (f.round().max(0.0) as u32).min(MODE_HDRI),
+        Some(ParamValue::Enum(v)) => (*v).min(MODE_DAYLIGHT),
+        Some(ParamValue::Float(f)) => (f.round().max(0.0) as u32).min(MODE_DAYLIGHT),
         _ => 0,
+    }
+}
+
+/// `DaylightUniforms` in `bake_daylight.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+struct DaylightUniforms {
+    width: u32,
+    height: u32,
+    intensity: f32,
+    sun_disc_intensity: f32,
+    /// Toward the sun; w the disc's angular radius.
+    sun: [f32; 4],
+    /// The Sun light's colour times its Intensity, above the air.
+    sun_light: [f32; 4],
+}
+
+const DAYLIGHT_SHADER: &str = concat!(
+    include_str!("shaders/daylight.wgsl"),
+    include_str!("shaders/bake_daylight.wgsl")
+);
+/// `MS_SIZE` in `bake_daylight.wgsl`: the multiple-scattering table's side.
+const MS_SIZE: u32 = 32;
+
+/// Daylight's kernels and its multiple-scattering table, which depends only
+/// on the air, so it is filled once.
+struct DaylightBake {
+    ms: manifold_gpu::GpuComputePipeline,
+    sky: manifold_gpu::GpuComputePipeline,
+    table: manifold_gpu::GpuBuffer,
+    filled: bool,
+}
+
+impl DaylightBake {
+    fn new(device: &manifold_gpu::GpuDevice) -> Result<Self, String> {
+        let make = |entry: &str| {
+            device.create_compute_pipeline(DAYLIGHT_SHADER, entry, "node.bake_environment.daylight")
+        };
+        Ok(Self {
+            ms: make("ms_main"),
+            sky: make("sky_main"),
+            table: device.try_create_buffer(
+                u64::from(MS_SIZE * MS_SIZE) * 16,
+                manifold_gpu::BufferUse::Gpu,
+            )?,
+            filled: false,
+        })
     }
 }
 
@@ -138,6 +192,7 @@ manifold_node_engine::primitive! {
     },
     outputs: {
         envmap: Texture2D,
+        sun: Light,
     },
     params: [
         ParamDef {
@@ -192,8 +247,8 @@ manifold_node_engine::primitive! {
             // presets), 1 = softbox (D7 black-void studio), 2 = HDRI (the
             // wired `hdri` texture, scaled by `intensity`).
             default: ParamValue::Enum(0),
-            range: Some((0.0, 2.0)),
-            enum_values: &["Gradient", "Softbox", "HDRI"],
+            range: Some((0.0, 3.0)),
+            enum_values: &["Gradient", "Softbox", "HDRI", "Daylight"],
         },
         ParamDef {
             name: Cow::Borrowed("emitter_count"),
@@ -293,6 +348,10 @@ manifold_node_engine::primitive! {
     extra_fields: {
         // HDRI mode's copy kernel, built the first time that mode runs.
         hdri_pipeline: Option<manifold_gpu::GpuComputePipeline> = None,
+        // Daylight mode's kernels and table, built the first time it runs,
+        // and the uniforms and Sun it last baked from.
+        daylight: Option<DaylightBake> = None,
+        last_daylight: Option<(DaylightUniforms, Option<Light>)> = None,
         // The `hdri` input's logical content version at the last copy. `None`
         // reads as changed: a pending or unbound input is never assumed still.
         last_hdri_version: Option<ContentVersion> = None,
@@ -357,6 +416,10 @@ impl Primitive for BakeEquirectEnvmap {
         let azimuth_variation = read_float("azimuth_variation", 0.12);
         let intensity = read_float("intensity", 1.0);
         let mode = mode_index(ctx.params);
+        if mode == MODE_DAYLIGHT {
+            self.run_daylight(ctx, width, height, intensity);
+            return;
+        }
         let emitter_count = match ctx.params.get("emitter_count") {
             Some(ParamValue::Float(f)) => f.round().clamp(1.0, 8.0) as u32,
             _ => 3,
@@ -504,6 +567,116 @@ impl Primitive for BakeEquirectEnvmap {
         self.last_uniforms = Some(uniforms);
         self.last_output_identity = Some(output_identity);
         self.last_hdri_version = hdri_version;
+    }
+}
+
+impl BakeEquirectEnvmap {
+    /// Daylight mode: pass the Sun on through the air, and bake the sky it
+    /// makes whenever the Sun, the disc or the size changes.
+    fn run_daylight(
+        &mut self,
+        ctx: &mut EffectNodeContext<'_, '_>,
+        width: u32,
+        height: u32,
+        intensity: f32,
+    ) {
+        let read = |name: &str| match ctx.params.get(name) {
+            Some(ParamValue::Float(f)) => *f,
+            _ => 0.0,
+        };
+        let (disc_intensity, disc_size) = (read("sun_disc_intensity"), read("sun_disc_size"));
+        let sun = ctx
+            .inputs
+            .light("sun")
+            .filter(|l| matches!(l.mode, LightMode::Sun));
+        let toward = sun.map_or([0.0, 1.0, 0.0], |l| [-l.dir[0], -l.dir[1], -l.dir[2]]);
+        if let Some(mut light) = sun {
+            let through = daylight::sunlight_through_air(&daylight::EARTH, toward);
+            for (channel, share) in light.color.iter_mut().zip(through) {
+                *channel *= share;
+            }
+            ctx.outputs.set_light("sun", light);
+        }
+        let Some(envmap) = ctx.outputs.texture_2d("envmap") else {
+            return;
+        };
+        if envmap.width == 0 || envmap.height == 0 {
+            return;
+        }
+        let above_air = sun.map_or([0.0; 3], |l| [l.color[0], l.color[1], l.color[2]]);
+        let uniforms = DaylightUniforms {
+            width: envmap.width.min(width),
+            height: envmap.height.min(height),
+            intensity,
+            sun_disc_intensity: disc_intensity,
+            sun: [toward[0], toward[1], toward[2], disc_size],
+            sun_light: [above_air[0], above_air[1], above_air[2], 0.0],
+        };
+        let output_identity = envmap.identity_key();
+        let content_unchanged = self.last_daylight == Some((uniforms, sun));
+        if content_unchanged
+            && self.last_output_identity == Some(output_identity)
+            && ctx.outputs_retained()
+        {
+            ctx.mark_outputs_unchanged();
+            return;
+        }
+        let gpu = ctx.gpu_encoder();
+        if self.daylight.is_none() {
+            match DaylightBake::new(gpu.device) {
+                Ok(bake) => self.daylight = Some(bake),
+                Err(error) => {
+                    ctx.error(format!(
+                        "Bake Environment: the Daylight sky needs storage the device cannot give: {error}"
+                    ));
+                    return;
+                }
+            }
+        }
+        let Some(bake) = self.daylight.as_mut() else {
+            return;
+        };
+        let air: Atmosphere = daylight::EARTH;
+        let bindings = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Texture {
+                binding: 1,
+                texture: envmap,
+            },
+            GpuBinding::Bytes {
+                binding: 2,
+                data: bytemuck::bytes_of(&air),
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: &bake.table,
+                offset: 0,
+            },
+        ];
+        if !bake.filled {
+            gpu.native_enc.dispatch_compute(
+                &bake.ms,
+                &bindings,
+                [MS_SIZE.div_ceil(8), MS_SIZE.div_ceil(8), 1],
+                "node.bake_environment.daylight.ms",
+            );
+            gpu.native_enc.compute_memory_barrier_buffers();
+            bake.filled = true;
+        }
+        gpu.native_enc.dispatch_compute(
+            &bake.sky,
+            &bindings,
+            [uniforms.width.div_ceil(16), uniforms.height.div_ceil(16), 1],
+            "node.bake_environment.daylight",
+        );
+        if content_unchanged {
+            ctx.mark_output_content_unchanged();
+        }
+        self.last_daylight = Some((uniforms, sun));
+        self.last_output_identity = Some(output_identity);
     }
 }
 

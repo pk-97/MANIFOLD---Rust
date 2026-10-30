@@ -14,6 +14,7 @@ mod sample_mesh_triangles;
 manifold_core::testkit_visible! { mod mesh_stagger_envelope; }
 manifold_core::testkit_visible! { mod analytic_echo_instances; }
 mod bake_equirect_envmap;
+mod daylight;
 mod consecutive_edges;
 mod curve_solid_source;
 mod mesh_fragment;

@@ -3,8 +3,9 @@
 //! Sea Horizon mode) and owns the
 //! scene's Exposure on every camera lens. The first Sun in compile order
 //! (item id order) lights the softbox sky's sun disc; the sky takes one Sun
-//! (BUG-u3gco, sky sun disc from every Sun). A scene takes one Environment:
-//! a second compiles to nothing.
+//! (BUG-u3gco, sky sun disc from every Sun). Under the Daylight sky that Sun
+//! reaches the render through the sky, tinted by the air it crosses. A
+//! scene takes one Environment: a second compiles to nothing.
 
 use std::collections::BTreeMap;
 
@@ -70,7 +71,7 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) {
         for (param, value) in lamp_params(mode) {
             b.set(light, &param, value);
         }
-        b.lights.push(light);
+        b.lights.push((light, "out"));
         if mode == 0 && sun.is_none() {
             sun = Some(light);
         }
@@ -89,7 +90,8 @@ fn emit_environment(b: &mut Builder<'_>, item: &Item, sun: Option<u32>) {
         return;
     };
     let owner = item.id.as_str();
-    // `node.bake_environment`'s modes: Gradient 0, Softbox 1, HDRI 2.
+    // `node.bake_environment`'s modes: Gradient 0, Softbox 1, HDRI 2,
+    // Daylight 3.
     let mode = match source {
         EnvironmentSource::None => {
             b.rows(item);
@@ -101,6 +103,9 @@ fn emit_environment(b: &mut Builder<'_>, item: &Item, sun: Option<u32>) {
         EnvironmentSource::Sky {
             style: SkyStyle::Softbox,
         } => 1,
+        EnvironmentSource::Sky {
+            style: SkyStyle::Daylight,
+        } => 3,
         EnvironmentSource::Hdri { .. } | EnvironmentSource::SeaHorizon { .. } => 2,
     };
     let environment = b.add(owner, "environment", "node.bake_environment");
@@ -130,8 +135,16 @@ fn emit_environment(b: &mut Builder<'_>, item: &Item, sun: Option<u32>) {
         }
         background(b, owner, environment);
     }
+    if mode == 3 {
+        background(b, owner, environment);
+    }
     if let Some(sun) = sun {
         b.wire(sun, "out", environment, "sun");
+        if mode == 3
+            && let Some(entry) = b.lights.iter_mut().find(|(light, _)| *light == sun)
+        {
+            *entry = (environment, "sun");
+        }
     }
     let render = b.scene("render");
     b.wire(environment, "envmap", render, "envmap");

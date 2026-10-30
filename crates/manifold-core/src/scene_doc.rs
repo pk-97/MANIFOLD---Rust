@@ -440,6 +440,10 @@ pub enum SkyStyle {
     Gradient,
     #[default]
     Softbox,
+    /// The sky the Sun makes through the air: its colour and brightness
+    /// follow the Sun's height, and the Sun's own light is tinted by the air
+    /// it crosses.
+    Daylight,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

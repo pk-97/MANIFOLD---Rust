@@ -63,6 +63,11 @@ fn softbox(fields: &ItemFields) -> bool {
     sky(fields, SkyStyle::Softbox)
 }
 
+/// A sky with a sun disc in it: Softbox or Daylight.
+fn sun_sky(fields: &ItemFields) -> bool {
+    softbox(fields) || sky(fields, SkyStyle::Daylight)
+}
+
 /// An image-based source: an HDRI file, with or without the sea under it.
 fn hdri(fields: &ItemFields) -> bool {
     matches!(
@@ -71,6 +76,12 @@ fn hdri(fields: &ItemFields) -> bool {
             source: EnvironmentSource::Hdri { .. } | EnvironmentSource::SeaHorizon { .. }
         })
     )
+}
+
+/// A source that can stand behind the scene as its background: an HDRI, or
+/// the Daylight sky.
+fn behind(fields: &ItemFields) -> bool {
+    hdri(fields) || sky(fields, SkyStyle::Daylight)
 }
 
 fn sea_horizon(fields: &ItemFields) -> bool {
@@ -191,8 +202,8 @@ pub static LIGHT_ROWS: [PropertyRow; 48] = [
     softbox_row("emitter_intensity").default(1.5),
     softbox_row("emitter_elevation"),
     softbox_row("emitter_width"),
-    softbox_row("sun_disc_intensity"),
-    softbox_row("sun_disc_size"),
+    row("sun_disc_intensity", ENV, Environment, setup()).when(sun_sky),
+    row("sun_disc_size", ENV, Environment, setup()).when(sun_sky),
     softbox_row("fill").default(0.3),
     row(
         "white_furnace",
@@ -243,14 +254,14 @@ pub static LIGHT_ROWS: [PropertyRow; 48] = [
         .switch(Feature::Background)
         .toggle()
         .default(0.0)
-        .when(hdri),
+        .when(behind),
     row("bg_blur", BG_BLUR, Environment, setup())
         .param("radius")
         .range(0.0, 64.0)
         .limit(AT_LEAST_ZERO)
         .gate(BACKGROUND_ON)
         .default(0.0)
-        .when(hdri),
+        .when(behind),
     row(
         "bg_blur_mode",
         BG_BLUR,
@@ -258,14 +269,14 @@ pub static LIGHT_ROWS: [PropertyRow; 48] = [
         Exposure::Internal("the background blur is the node's default kind"),
     )
     .param("mode")
-    .when(hdri),
+    .when(behind),
     row("bg_brightness", BG_GAIN, Environment, setup())
         .param("gain")
         .range(0.0, 4.0)
         .limit(AT_LEAST_ZERO)
         .gate(BACKGROUND_ON)
         .default(1.0)
-        .when(hdri),
+        .when(behind),
     // Sea Horizon: the lower half of the HDRI is open water (`node.sea_horizon_env`).
     row("sea_ior", SEA, Environment, setup())
         .param("ior")
@@ -332,6 +343,10 @@ const SKIES: &[Choice] = &[
     Choice {
         key: "softbox",
         label: "Softbox",
+    },
+    Choice {
+        key: "daylight",
+        label: "Daylight",
     },
 ];
 
@@ -450,6 +465,12 @@ pub static LIGHT_FIELDS: [FieldRow; 4] = [
                                 style: SkyStyle::Gradient,
                             },
                     }) => "gradient",
+                    Some(LightType::Environment {
+                        source:
+                            EnvironmentSource::Sky {
+                                style: SkyStyle::Daylight,
+                            },
+                    }) => "daylight",
                     _ => "softbox",
                 }
                 .to_owned(),
@@ -468,6 +489,7 @@ pub static LIGHT_FIELDS: [FieldRow; 4] = [
             let style = match key.as_str() {
                 "gradient" => SkyStyle::Gradient,
                 "softbox" => SkyStyle::Softbox,
+                "daylight" => SkyStyle::Daylight,
                 _ => return Err(wrong_value("sky_style", value)),
             };
             *source = EnvironmentSource::Sky { style };
