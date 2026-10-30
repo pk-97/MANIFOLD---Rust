@@ -53,8 +53,10 @@ pub(super) fn cpu_gradient(q: [f64; 3], field: &[FaceSample]) -> [[f64; 3]; 3] {
             let c: [i64; 3] = std::array::from_fn(|b| base[b] + bit[b] as i64);
             if (0..3).all(|b| c[b] >= 0 && c[b] <= N[b] as i64) {
                 let c: [usize; 3] = c.map(|value| value as usize);
-                let v = f64::from(field[c[0] + (N[0] + 1) * (c[1] + (N[1] + 1) * c[2])].velocity[a]);
-                let w: [f64; 3] = std::array::from_fn(|b| if bit[b] == 1 { t[b] } else { 1.0 - t[b] });
+                let v =
+                    f64::from(field[c[0] + (N[0] + 1) * (c[1] + (N[1] + 1) * c[2])].velocity[a]);
+                let w: [f64; 3] =
+                    std::array::from_fn(|b| if bit[b] == 1 { t[b] } else { 1.0 - t[b] });
                 let d: [f64; 3] = std::array::from_fn(|b| if bit[b] == 1 { 1.0 } else { -1.0 });
                 for (g, slope) in gradient.iter_mut().enumerate() {
                     let product: f64 = (0..3).map(|b| if b == g { d[b] } else { w[b] }).product();
@@ -77,10 +79,18 @@ fn check_affine(got: &ParticleAffine, q0: [f64; 3], field: &[FaceSample], id: u3
     let want = cpu_gradient(q0, field);
     for (a, row) in [got.x, got.y, got.z].into_iter().enumerate() {
         for b in 0..3 {
-            close(row[b], want[a][b] / f64::from(H), 10.0 / f64::from(H), &format!("{what} affine {a}/{b}"));
+            close(
+                row[b],
+                want[a][b] / f64::from(H),
+                10.0 / f64::from(H),
+                &format!("{what} affine {a}/{b}"),
+            );
         }
     }
-    assert_eq!(got.id, id, "{what}: the affine is tagged with its particle's id");
+    assert_eq!(
+        got.id, id,
+        "{what}: the affine is tagged with its particle's id"
+    );
 }
 
 #[test]
@@ -231,7 +241,10 @@ pub(super) fn gpu_flip_faces_to_particles_reads_native_stored_face_values() {
     // The linear field's slope, in closed form, at the interior points.
     let (_, affines) = run(&linear);
     for i in [0, 2, 8] {
-        for (a, row) in [affines[i].x, affines[i].y, affines[i].z].into_iter().enumerate() {
+        for (a, row) in [affines[i].x, affines[i].y, affines[i].z]
+            .into_iter()
+            .enumerate()
+        {
             let want = [1.0, 2.0, 3.0].map(|slope: f64| slope / f64::from(H));
             for b in 0..3 {
                 close(row[b], want[b], 10.0, &format!("point {i} slope {a}/{b}"));

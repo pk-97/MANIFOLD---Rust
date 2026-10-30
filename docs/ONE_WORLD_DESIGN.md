@@ -72,6 +72,16 @@ Landed before the table, on the tick loop:
 - **Water on Matter.** `node.matter_water_push` (`water-gpu-mpm/src/primitives/matter_water_push.rs`) sits in the Matter's tick body between `node.matter_state`'s out and Points to Grid, in place, and runs once a tick at its first substep. It reads the first Water's step (`faces`, `distance`, `tiles`, `pool_tiles`, `cell_size`; `liquid_domain::WATER_PUSH_PORTS`) through state-capture inputs, so in tick k the Matter steps against the water of tick k−1's end, and the water steps against the Matter of tick k's end. The lift and drag law is the old one, exact over the tick.
 - **Gone.** `node.water_on_sand` and its sampling of the display level set, and `node.matter_state`'s once-a-frame drag (`water_push`, `matter_water_drag.wgsl`).
 
+## W5 in code: bodies in the loop
+
+- **One wait per tick boundary.** A co-iterated group waits for the GPU once between two ticks, before any member starts the next one (`settle_group_tick`, `exec/execution/substep_region.rs`), when a member's clock owner asks for a host step. The lead's host step settles the tick that ended and steps Box3D over it. A region outside a group still waits inside its own iterations.
+- **Pairs around the host step.** `NodePairBehavior::before_tick` and `after_tick` run around those host steps for each co-iterating pair. `SharedSolidsPair` (`nodes-water/src/physics_scene.rs`) hands the owner the other liquid's push over the tick that ended (`SharesSolids::tick_push`) before it settles, then hands the other liquid the owner's rows for the next tick (`SharesSolids::take_tick`), which it writes into its body rows and starts its push from zero.
+- **So** every liquid pushes the bodies each tick, and every liquid meets them where Box3D put them that tick, not where the first tick's rows carried them. The frame's last tick still reaches the owner through `take_observed_push` before its frame-start settle. Bodies stay one tick behind the liquids' push (explicit coupling); Box3D steps once per tick.
+
+## Porous sand in the pressure solve (next)
+
+The water's solve treats solids by Batty's cut cells: each face's open fraction `w` (`l.s`, `open_fractions`) and the solid's velocity `v_s` on the part it covers (`l.v`, `solid_face_velocity` then `solid_extrapolate`); the divergence holds the mixture's flux `w·u + (c − w)·v_s` (`divergence.wgsl`), the pressure weights are `w`, and the projection holds covered faces to `v_s`. Sand joins as a porous moving solid: after the extrapolation, a pass over the held cells takes the sand's share `φ` and mean velocity at each cell (`sand_drag` already sums them, `sand_share`) and, on each of the cell's faces no body cuts (`w = 1`), sets `w' = 1 − φ·s` and `v_s` to the sand's velocity, where `s` is the grains' solid share of the material's bulk (the material's lift × bulk density over water's: 0.6 for sand, 1 for mud or jelly). The solve then pushes the water out of the way of falling sand (the level rises as sand pours in) and through a pile only where its pores let it; `sand_drag` stays as the drag inside the pores. Faces a body cuts keep the body's `w` and `v_s`, so the body reaction is unchanged.
+
 ## Phase 6 in code: Terrain as a solid
 
 W6 landed before the table, as a solid every solver already reads:

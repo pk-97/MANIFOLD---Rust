@@ -1179,9 +1179,10 @@ fn quaternion_angle(a: [f32; 4], b: [f32; 4]) -> f32 {
 /// The solids one liquid's rigid owner shares with every other Water and
 /// Sand and every Smoke and Fire in its scene (SCENE_DOCUMENT_DESIGN.md
 /// section 7.8 (Physics and collision shapes)): each Collider's and Body's
-/// hull and its row at the first tick of this frame. A liquid keeps the
-/// bodies' mass and pushes them: its push reaches Box3D through the owner
-/// ([`LiquidRigidOwner::add_observed_push`]). A gas holds them to their
+/// hull and its row at the first tick of this frame; a liquid takes each
+/// later tick's rows as the owner steps them ([`SharesSolids::take_tick`]).
+/// A liquid keeps the bodies' mass and pushes them: its push reaches Box3D
+/// through the owner each tick ([`LiquidRigidOwner::add_observed_push`]). A gas holds them to their
 /// motion (no inverse mass or inertia) and only flows round them. With no
 /// liquid to own it, the World runs free and a gas takes its solids from it
 /// ([`Self::copy_from_world`]).
@@ -1473,10 +1474,21 @@ pub trait SharesSolids {
         false
     }
     /// Its push on the owner's bodies over its last frame, once; None when
-    /// that frame pushed nothing.
+    /// that frame pushed nothing. Inside a frame of the World's loop it
+    /// pushes tick by tick ([`Self::tick_push`]), so this is the frame's last
+    /// tick.
     fn take_observed_push(&mut self) -> Option<ObservedPush> {
         None
     }
+    /// Its push on the owner's bodies over the World tick that just ended,
+    /// between two ticks of a frame; None when it pushes nothing.
+    fn tick_push(&self) -> Option<ObservedPush> {
+        None
+    }
+    /// Between two ticks of a frame, once the owner settled the tick before
+    /// `tick`: the bodies' rows for `tick` (the owner's), and its push starts
+    /// again from zero.
+    fn take_tick(&mut self, _tick: u32, _rows: &[LiquidBody]) {}
 }
 
 #[cfg(test)]

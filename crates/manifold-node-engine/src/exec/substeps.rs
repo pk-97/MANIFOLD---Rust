@@ -1968,6 +1968,8 @@ mod tests {
         type_id: EffectNodeType,
         outputs: Vec<NodeOutput>,
         ticks: &'static [u32],
+        /// Asks for a host step before each later tick, and logs it.
+        host: Option<Log>,
     }
 
     impl EffectNode for TickClock {
@@ -1995,9 +1997,27 @@ mod tests {
                 SubstepClockOutput::single("out", start, Seconds(start.0 + 1.0), tick, 2)
             })
         }
+        fn substep_host_sync(&self, iteration: u32) -> bool {
+            self.host.is_some()
+                && self
+                    .ticks
+                    .get(iteration as usize)
+                    .is_some_and(|&tick| tick > 0)
+        }
+        fn substep_host_step(
+            &mut self,
+            iteration: u32,
+            _gpu: Option<&mut crate::gpu::gpu_encoder::GpuEncoder<'_>>,
+        ) -> Result<(), String> {
+            if let Some(log) = &self.host {
+                log.lock().unwrap().push(format!("water host {iteration}"));
+            }
+            Ok(())
+        }
     }
 
-    struct CoIterating;
+    /// Logs what crosses between the pair at each tick boundary.
+    struct CoIterating(Log);
 
     impl crate::exec::node_pairs::NodePairBehavior for CoIterating {
         fn set_enabled(&self, _node: &mut dyn EffectNode, _enabled: bool) {}
@@ -2013,6 +2033,23 @@ mod tests {
         fn co_iterates(&self) -> bool {
             true
         }
+        fn before_tick(
+            &self,
+            _first: &mut dyn EffectNode,
+            _second: &mut dyn EffectNode,
+            tick: u32,
+        ) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("sand pushed before tick {tick}"));
+        }
+        fn after_tick(&self, _first: &dyn EffectNode, _second: &mut dyn EffectNode, tick: u32) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("sand takes tick {tick}"));
+        }
     }
 
     /// Two regions on one clock step tick by tick: the one stepping two
@@ -2023,15 +2060,17 @@ mod tests {
         let log: Log = Arc::default();
         let mut graph = Graph::new();
         let f32_ty = PortType::Scalar(ScalarType::F32);
-        let clock = |graph: &mut Graph, ticks| {
+        let clock = |graph: &mut Graph, ticks, host| {
             graph.add_node(Box::new(TickClock {
                 type_id: EffectNodeType::new("test.tick_clock"),
                 outputs: vec![output("out", f32_ty)],
                 ticks,
+                host,
             }))
         };
-        let water_clock = clock(&mut graph, &[0, 1]);
-        let sand_clock = clock(&mut graph, &[0, 0, 1, 1]);
+        // The water leads: it steps the bodies on the host between ticks.
+        let water_clock = clock(&mut graph, &[0, 1], Some(log.clone()));
+        let sand_clock = clock(&mut graph, &[0, 0, 1, 1], None);
         let src = graph.add_node(Box::new(Adder::constant("src", log.clone(), 1.0)));
         let boundary = |graph: &mut Graph, iterations| {
             let mut sim = SimBoundary::new(log.clone(), Arc::new(Mutex::new(iterations)));
@@ -2068,7 +2107,7 @@ mod tests {
         graph.connect((water, "out"), (consumer, "a")).unwrap();
         graph.connect((sand, "out"), (consumer, "b")).unwrap();
         graph
-            .add_node_pair(water_clock, sand_clock, Box::new(CoIterating))
+            .add_node_pair(water_clock, sand_clock, Box::new(CoIterating(log.clone())))
             .unwrap();
 
         let plan = compile(&graph).unwrap();
@@ -2083,19 +2122,25 @@ mod tests {
             .cloned()
             .collect();
         // Sand: 1 + 0, then 1 + 1 = 2 ends tick 0, before any water. The
-        // water reads 2 (1 + 0 + 2 = 3). Tick 1's sand reads the water's 3:
-        // 2 + 2 + 3 = 7, then 7 + 3 + 3 = 13. The water reads 13.
+        // water reads 2 (1 + 0 + 2 = 3). Between the ticks, before any sand
+        // of tick 1, the sand's push reaches the lead, the lead steps on the
+        // host once, and the sand takes its state. Tick 1's sand reads the
+        // water's 3: 2 + 2 + 3 = 7, then 7 + 3 + 3 = 13. The water reads 13.
         assert_eq!(
             bodies,
             [
                 "sand a=1 b=0 c=none",
                 "sand a=1 b=1 c=none",
                 "water a=1 b=0 c=2",
+                "sand pushed before tick 1",
+                "water host 1",
+                "sand takes tick 1",
                 "sand a=2 b=2 c=3",
                 "sand a=7 b=3 c=3",
                 "water a=3 b=1 c=13",
             ]
         );
+        assert_eq!(exec.substep_host_syncs(), 1);
     }
 
     #[test]

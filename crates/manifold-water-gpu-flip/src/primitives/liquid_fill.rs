@@ -27,9 +27,9 @@ use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_water_liquid::bodies::{
     COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_FILL_SHAPE, LIQUID_POSE, LiquidBody, LiquidShape,
 };
-use manifold_water_liquid::{PARTICLE_WATER, float_param};
 use manifold_water_liquid::primitives::prefix_scan::{PrefixScan, ScanLabels};
 use manifold_water_liquid::primitives::sort_particles_into_cells::int_param;
+use manifold_water_liquid::{PARTICLE_WATER, float_param};
 
 const COMPACT_SHADER: &str = include_str!("shaders/liquid_fill_compact.wgsl");
 const COMPACT_LABELS: ScanLabels = ScanLabels {
@@ -285,11 +285,7 @@ impl Primitive for LiquidFill {
         let body_count = int("body_count", 0.0).min(MAX_LIQUID_BODIES as u32) as i32;
         // With colliders the sites depend on their pose at the epoch's start;
         // a shaped fill's own pose moves the table's version on.
-        let epoch = if body_count > 0 {
-            int("epoch", 0.0)
-        } else {
-            0
-        };
+        let epoch = if body_count > 0 { int("epoch", 0.0) } else { 0 };
         // The fill boxes after the pool, from the domain's table: none
         // without it.
         let boxes = ctx.inputs.array("fill_boxes");

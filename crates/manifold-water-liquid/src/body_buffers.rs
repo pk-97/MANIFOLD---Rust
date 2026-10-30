@@ -77,6 +77,29 @@ impl LiquidBodyBuffers {
         self.stored.as_ref().map(|stored| &stored.bodies)
     }
 
+    /// Replace tick `tick`'s coupled rows with `rows` ([`LiquidBodies::set_coupled_rows`])
+    /// and write them into the stored rows, between two ticks of a frame:
+    /// the GPU has finished every command that touched them, and the next
+    /// reader is encoded after this write.
+    pub fn write_coupled_rows(
+        &self,
+        bodies: &mut LiquidBodies,
+        tick: usize,
+        rows: &[LiquidBody],
+    ) -> Result<(), String> {
+        let (offset, rows) = bodies.set_coupled_rows(tick, rows)?;
+        let stored = self
+            .bodies()
+            .ok_or("Liquid coupling: the body rows are missing")?;
+        let bytes: &[u8] = bytemuck::cast_slice(rows);
+        if offset + bytes.len() as u64 > stored.size {
+            return Err("Liquid coupling: the body rows outgrew their buffer".into());
+        }
+        // SAFETY: shared storage in bounds (checked above), idle between ticks.
+        unsafe { stored.write(offset, bytes) };
+        Ok(())
+    }
+
     pub fn contacts(&self) -> Option<&GpuBuffer> {
         self.stored.as_ref().map(|stored| &stored.contacts)
     }

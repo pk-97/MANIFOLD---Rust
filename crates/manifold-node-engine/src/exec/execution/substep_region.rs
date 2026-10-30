@@ -6,7 +6,10 @@
 //! commit, wait for the GPU and run the owner's host step between two
 //! iterations; nothing else in a region ever commits or waits. After that
 //! host step the owner's outputs are published again and the boundary may
-//! refresh its scalars, so the next iteration reads the finished one.
+//! refresh its scalars, so the next iteration reads the finished one. A
+//! co-iterated group waits once at a tick boundary, before any member starts
+//! the tick, and its co-iterating node pairs hand state across around those
+//! host steps.
 //!
 //! A region the plan marks `overlaps` runs its iterations on the encoder's
 //! async lane, and its tick publishers follow it there. The main lane carries
@@ -15,8 +18,9 @@
 //! lane, and an encoder that refuses it (a profiled frame) runs in order.
 
 use super::{Executor, FrameTally, StepEnv, StepFlow, StepPass, resolve_dims};
-use crate::exec::effect_node::NodeInstanceId;
+use crate::exec::effect_node::{EffectNode, NodeInstanceId};
 use crate::exec::execution_plan::ExecutionPlan;
+use crate::exec::node_pairs::NodePairBehavior;
 use crate::exec::substeps::{SubstepClockOutput, SubstepRegion};
 use crate::gpu::gpu_encoder::GpuEncoder;
 use crate::graph::Graph;
@@ -46,6 +50,46 @@ enum Opened {
     /// Nothing to iterate: a skipped, restarting or pending boundary.
     Ran,
     Abort,
+}
+
+/// The clock owner that asks to wait and step on the host before
+/// `iteration` of `region`, if any.
+fn host_step_before(
+    graph: &Graph,
+    region: &SubstepRegion,
+    iteration: u32,
+) -> Option<NodeInstanceId> {
+    region.clock.filter(|&clock| {
+        iteration > 0
+            && graph
+                .get_node(clock)
+                .is_some_and(|inst| inst.node.substep_host_sync(iteration))
+    })
+}
+
+/// Each co-iterating node pair whose two nodes own clocks of `members`'
+/// regions, in the order the graph registered them.
+fn for_group_pairs(
+    graph: &mut Graph,
+    plan: &ExecutionPlan,
+    members: &[usize],
+    mut each: impl FnMut(&dyn NodePairBehavior, &mut dyn EffectNode, &mut dyn EffectNode),
+) {
+    let owns = |node: NodeInstanceId| {
+        members
+            .iter()
+            .any(|&member| plan.substep_regions()[member].clock == Some(node))
+    };
+    for index in 0..graph.node_pairs().len() {
+        let pair = &graph.node_pairs()[index];
+        if !(pair.behavior.co_iterates() && owns(pair.first) && owns(pair.second)) {
+            continue;
+        }
+        let (behavior, first, second) = graph
+            .pair_nodes_mut(index)
+            .expect("a registered pair's nodes exist");
+        each(behavior, first.node.as_mut(), second.node.as_mut());
+    }
 }
 
 fn too_many_iterations(region: &SubstepRegion) {
@@ -259,6 +303,12 @@ impl Executor {
         let mut flow = StepFlow::Next;
         let mut tick = 0u32;
         'ticks: while runs.iter().any(|run| run.iteration.is_some()) {
+            if tick > 0
+                && self.settle_group_tick(graph, plan, members, runs, tick, gpu) == StepFlow::Abort
+            {
+                flow = StepFlow::Abort;
+                break;
+            }
             let mut next_tick = u32::MAX;
             for (run, &member) in runs.iter_mut().zip(members) {
                 let region = &plan.substep_regions()[member];
@@ -440,24 +490,16 @@ impl Executor {
         state: &mut Option<&mut StateStore>,
     ) -> StepFlow {
         // Only opted-in clock owners may wait. Coupled liquids ask
-        // once between ticks, bounded live by MAX_LIVE_TICKS - 1.
-        if let Some(clock) = region.clock
-            && iteration > 0
-            && graph
-                .get_node(clock)
-                .is_some_and(|inst| inst.node.substep_host_sync(iteration))
-        {
-            if let Some(gpu) = gpu.as_deref_mut() {
-                gpu.native_enc.commit_wait_and_continue(gpu.device);
-            }
-            self.substep_host_syncs += 1;
-            let owner = graph.get_node_mut(clock).expect("clock owner exists");
-            if let Err(error) = owner.node.substep_host_step(iteration, gpu.as_deref_mut()) {
-                eprintln!(
-                    "[graph error] node {clock:?} ({}): substep host step before iteration {iteration}: {error}",
-                    owner.node.type_id().as_str(),
-                );
-                return StepFlow::Abort;
+        // once between ticks, bounded live by MAX_LIVE_TICKS - 1. A group
+        // waited and stepped at its tick boundary (`settle_group_tick`).
+        if let Some(clock) = host_step_before(graph, region, iteration) {
+            if region.group.is_none() {
+                if let Some(gpu) = gpu.as_deref_mut() {
+                    gpu.native_enc.commit_wait_and_continue(gpu.device);
+                }
+                if self.host_step(graph, clock, iteration, gpu) == StepFlow::Abort {
+                    return StepFlow::Abort;
+                }
             }
             // The finished iteration refreshes what the next one reads: the
             // clock owner's outputs, then the boundary's scalars.
@@ -489,6 +531,81 @@ impl Executor {
             }
         }
         self.capture_step(graph, plan, region.steps[0], env, gpu, state);
+        StepFlow::Next
+    }
+
+    /// The clock owner's host step before `iteration`, once the GPU has
+    /// finished everything before it.
+    fn host_step(
+        &mut self,
+        graph: &mut Graph,
+        clock: NodeInstanceId,
+        iteration: u32,
+        gpu: &mut Option<&mut GpuEncoder<'_>>,
+    ) -> StepFlow {
+        self.substep_host_syncs += 1;
+        let owner = graph.get_node_mut(clock).expect("clock owner exists");
+        if let Err(error) = owner.node.substep_host_step(iteration, gpu.as_deref_mut()) {
+            eprintln!(
+                "[graph error] node {clock:?} ({}): substep host step before iteration {iteration}: {error}",
+                owner.node.type_id().as_str(),
+            );
+            return StepFlow::Abort;
+        }
+        StepFlow::Next
+    }
+
+    /// The boundary before group tick `tick`: every member's tick before it
+    /// has run and none has started it. When a member's clock owner asks for
+    /// a host step before its first iteration of `tick`, wait for the GPU
+    /// once, hand each co-iterating pair's first what its second did over the
+    /// last tick, run the host steps, then hand each second its first's state
+    /// for `tick`. Costs nothing while no owner asks.
+    #[allow(clippy::too_many_arguments)]
+    fn settle_group_tick(
+        &mut self,
+        graph: &mut Graph,
+        plan: &ExecutionPlan,
+        members: &[usize],
+        runs: &[RegionRun],
+        tick: u32,
+        gpu: &mut Option<&mut GpuEncoder<'_>>,
+    ) -> StepFlow {
+        let stepping = |graph: &Graph, run: &RegionRun, member: usize| {
+            let region = &plan.substep_regions()[member];
+            let iteration = run.iteration?;
+            let clock = host_step_before(graph, region, iteration)?;
+            let ordinal = graph
+                .get_node(clock)?
+                .node
+                .substep_clock_interval(iteration)?
+                .timing
+                .ordinal;
+            (ordinal == tick).then_some((clock, iteration))
+        };
+        if !runs
+            .iter()
+            .zip(members)
+            .any(|(run, &member)| stepping(graph, run, member).is_some())
+        {
+            return StepFlow::Next;
+        }
+        if let Some(gpu) = gpu.as_deref_mut() {
+            gpu.native_enc.commit_wait_and_continue(gpu.device);
+        }
+        for_group_pairs(graph, plan, members, |behavior, first, second| {
+            behavior.before_tick(first, second, tick);
+        });
+        for (run, &member) in runs.iter().zip(members) {
+            if let Some((clock, iteration)) = stepping(graph, run, member)
+                && self.host_step(graph, clock, iteration, gpu) == StepFlow::Abort
+            {
+                return StepFlow::Abort;
+            }
+        }
+        for_group_pairs(graph, plan, members, |behavior, first, second| {
+            behavior.after_tick(first, second, tick);
+        });
         StepFlow::Next
     }
 

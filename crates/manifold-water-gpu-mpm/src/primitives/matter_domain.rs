@@ -1196,11 +1196,43 @@ impl SharesSolids for MatterDomain {
     }
 
     fn take_observed_push(&mut self) -> Option<ObservedPush> {
-        let scale = self.coupled.push.take()?;
+        let push = self.tick_push();
+        self.coupled.push = None;
+        push
+    }
+
+    fn tick_push(&self) -> Option<ObservedPush> {
+        let scale = self.coupled.push?;
         let reaction = self.reaction.clone()?;
         Some(Box::new(move |rows, impulses| {
             decode(scale, rows, reaction_words(Some(&reaction)), impulses)
         }))
+    }
+
+    fn take_tick(&mut self, tick: u32, rows: &[LiquidBody]) {
+        if self.coupled.owner.is_some() || rows.is_empty() {
+            return;
+        }
+        if let Err(error) =
+            self.body_buffers
+                .write_coupled_rows(&mut self.bodies, tick as usize, rows)
+        {
+            self.coupled.host_error = Some(error);
+            return;
+        }
+        // The push sums from zero again, in this tick's momentum unit.
+        if let Some(push) = &mut self.coupled.push {
+            if let Some(reaction) = &self.reaction {
+                reaction.zero_fill();
+            }
+            if let Some(record) = self
+                .schedule
+                .iter()
+                .find(|record| record.timing.ordinal == tick)
+            {
+                *push = record.reaction_scale(*push);
+            }
+        }
     }
 }
 
@@ -1739,17 +1771,8 @@ impl MatterDomain {
             .iter()
             .filter(|row| takes_reaction(row))
             .count();
-        // Another water's bodies move on through each later tick of this frame.
-        if row_ticks > 0 && self.coupled.owner.is_none() && !self.observed.rows().is_empty() {
-            let mut seconds = 0.0;
-            for tick in 1..frame.ticks as usize {
-                seconds += frame
-                    .interval(tick as u64 - 1)
-                    .map_or(0.0, |interval| interval.duration().0 as f32);
-                self.bodies
-                    .set_coupled_rows(tick, self.observed.rows_after(seconds))?;
-            }
-        }
+        // Another water's bodies reach each later tick of this frame as its
+        // owner steps them, between the World's ticks (`take_tick`).
         self.observed.used();
 
         // D4: substeps from the CFL rule over the materials the chain holds.
@@ -2117,19 +2140,8 @@ impl MatterDomain {
                 )
             },
         )?;
-        let (offset, rows) = self.bodies.set_coupled_rows(tick as usize, owner.rows())?;
-        let bodies = self
-            .body_buffers
-            .bodies()
-            .ok_or("Matter coupling: the body rows are missing")?;
-        let bytes: &[u8] = bytemuck::cast_slice(rows);
-        if offset + bytes.len() as u64 > bodies.size {
-            return Err("Matter coupling: the body rows outgrew their buffer".into());
-        }
-        // SAFETY: shared storage in bounds (checked above); the GPU has
-        // completed every command that touched it, and the next reader is
-        // encoded after this write.
-        unsafe { bodies.write(offset, bytes) };
+        self.body_buffers
+            .write_coupled_rows(&mut self.bodies, tick as usize, owner.rows())?;
         reaction.zero_fill();
         owner.set_pending(PendingTick {
             tick: exchange.pending.tick + u64::from(tick),

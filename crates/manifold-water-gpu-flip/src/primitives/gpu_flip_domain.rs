@@ -33,6 +33,7 @@ use super::gpu_flip_step::{
     BOX_BAND_CELLS, pool_tiles, read_max_iterations, read_sheet_fill_rate, read_solve_level,
 };
 use super::liquid_fill::{SITES_PER_CELL, box_count, pool_count, site_range};
+use fill_table::{FILL_ROWS, FillRow, FillTable};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::fluid_domain::{
     CELL_SIZE_METRES, DEFAULT_CELL_SIZE, FluidDomainLayout, domain_layout, unbounded_seed,
@@ -71,7 +72,6 @@ use manifold_water_rigid::coupled_frame::{CoupledRigidInputs, RigidFrame, RigidP
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
 use manifold_water_rigid::physics::{RigidSceneInputs, RigidSceneObservation};
 use manifold_water_rigid::physics_events::ResolvedNodeImpulse;
-use fill_table::{FILL_ROWS, FillRow, FillTable};
 use region_sites::{RegionSiteBuffer, RegionSiteRows};
 use {
     manifold_physics::force_lattice::ForceLattice, manifold_water_liquid::fields,
@@ -908,8 +908,7 @@ impl Primitive for GpuFlipDomain {
             // until the next tick so the owner reads them once the frame
             // retires. Water that takes another liquid's solids sums its push
             // over the frame, which that owner reads at its next settle.
-            if values[TICKS] > 0.0
-                && (self.coupled.owner.is_some() || self.coupled.push.is_some())
+            if values[TICKS] > 0.0 && (self.coupled.owner.is_some() || self.coupled.push.is_some())
             {
                 gpu.native_enc.clear_buffer(reaction);
             }
@@ -986,11 +985,36 @@ impl SharesSolids for GpuFlipDomain {
     }
 
     fn take_observed_push(&mut self) -> Option<ObservedPush> {
-        let offset = self.coupled.push.take()?;
+        let push = self.tick_push();
+        self.coupled.push = None;
+        push
+    }
+
+    fn tick_push(&self) -> Option<ObservedPush> {
+        let offset = self.coupled.push?;
         let reaction = self.reaction.clone()?;
         Some(Box::new(move |rows, impulses| {
             decode_reaction(offset, rows, reaction_floats(Some(&reaction)), impulses)
         }))
+    }
+
+    fn take_tick(&mut self, tick: u32, rows: &[LiquidBody]) {
+        if self.coupled.owner.is_some() || rows.is_empty() {
+            return;
+        }
+        if let Err(error) =
+            self.body_buffers
+                .write_coupled_rows(&mut self.bodies, tick as usize, rows)
+        {
+            self.coupled.host_error = Some(error);
+            return;
+        }
+        // The push sums from zero again.
+        if self.coupled.push.is_some()
+            && let Some(reaction) = &self.reaction
+        {
+            reaction.zero_fill();
+        }
     }
 }
 
@@ -1032,9 +1056,8 @@ impl PhysicsNode for GpuFlipDomain {
             .iter()
             .filter(|sites| sites.iter().all(|[lo, hi]| hi > lo))
         {
-            let corner = |end: usize| {
-                std::array::from_fn(|i| layout.min[i] + sites[i][end] as f32 * site)
-            };
+            let corner =
+                |end: usize| std::array::from_fn(|i| layout.min[i] + sites[i][end] as f32 * site);
             out.push(PhysicsGizmo::aabb(
                 PhysicsGizmoFamily::Fill,
                 corner(0),
@@ -1199,7 +1222,13 @@ impl GpuFlipDomain {
                     ctx.inputs.transform("domain"),
                     &columns,
                 )
-                .map(|geometry| (geometry, columns, fills.map(|fill| fill.and_then(|fill| fill.shape))))
+                .map(|geometry| {
+                    (
+                        geometry,
+                        columns,
+                        fills.map(|fill| fill.and_then(|fill| fill.shape)),
+                    )
+                })
             });
         let (geometry, columns, shaped) = match geometry {
             Ok((geometry, columns, shaped)) => (geometry, columns, shaped),
@@ -1433,17 +1462,8 @@ impl GpuFlipDomain {
         // bodies through that liquid's owner.
         self.coupled.push = (self.coupled.owner.is_none() && frame.ticks > 0 && dynamic_bodies > 0)
             .then(|| self.bodies.count() - self.observed.rows().len());
-        // Another water's bodies move on through each later tick of this frame.
-        if row_ticks > 0 && self.coupled.owner.is_none() && !self.observed.rows().is_empty() {
-            let mut seconds = 0.0;
-            for tick in 1..frame.ticks as usize {
-                seconds += frame
-                    .interval(tick as u64 - 1)
-                    .map_or(0.0, |interval| interval.duration().0 as f32);
-                self.bodies
-                    .set_coupled_rows(tick, self.observed.rows_after(seconds))?;
-            }
-        }
+        // Another liquid's bodies reach each later tick of this frame as its
+        // owner steps them, between the World's ticks (`take_tick`).
         self.observed.used();
         let sources = union_box(
             columns
@@ -1779,19 +1799,8 @@ impl GpuFlipDomain {
                 )
             },
         )?;
-        let (offset, rows) = self.bodies.set_coupled_rows(tick as usize, owner.rows())?;
-        let bodies = self
-            .body_buffers
-            .bodies()
-            .ok_or("GPU FLIP coupling: the body rows are missing")?;
-        let bytes: &[u8] = bytemuck::cast_slice(rows);
-        if offset + bytes.len() as u64 > bodies.size {
-            return Err("GPU FLIP coupling: the body rows outgrew their buffer".into());
-        }
-        // SAFETY: shared storage in bounds (checked above); the GPU has
-        // completed every command that touched it, and the next reader is
-        // encoded after this write.
-        unsafe { bodies.write(offset, bytes) };
+        self.body_buffers
+            .write_coupled_rows(&mut self.bodies, tick as usize, owner.rows())?;
         let (offset, contacts) = self
             .bodies
             .set_coupled_contacts(tick as usize, owner.contacts())?;
@@ -1803,7 +1812,9 @@ impl GpuFlipDomain {
         if offset + bytes.len() as u64 > buffer.size {
             return Err("GPU FLIP coupling: the contact normals outgrew their buffer".into());
         }
-        // SAFETY: as the rows above.
+        // SAFETY: shared storage in bounds (checked above); the GPU has
+        // completed every command that touched it, and the next reader is
+        // encoded after this write.
         unsafe { buffer.write(offset, bytes) };
         // The CFL samples must belong to the same accepted tick as its body
         // rows. Reusing the first tick's world-space hull with the next tick's

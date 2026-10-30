@@ -96,6 +96,10 @@ mod tests {
         table.set(rows, 1);
         assert_eq!(table.version(), shaped);
         table.set(rows, 2);
-        assert_eq!(table.version(), shaped + 1, "a shaped fill reposes each epoch");
+        assert_eq!(
+            table.version(),
+            shaped + 1,
+            "a shaped fill reposes each epoch"
+        );
     }
 }

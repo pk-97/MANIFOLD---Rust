@@ -44,7 +44,11 @@ fn particle_affines(
             };
             ParticleAffine {
                 x: row(0),
-                id: if flow.is_none() && i % 7 == 3 { p.id + 1 } else { p.id },
+                id: if flow.is_none() && i % 7 == 3 {
+                    p.id + 1
+                } else {
+                    p.id
+                },
                 y: row(1),
                 z: row(2),
                 ..ParticleAffine::default()
@@ -55,7 +59,11 @@ fn particle_affines(
 
 /// The APIC gather over `sorted` (its affines beside it) into every record's
 /// faces.
-fn particles_to_faces(sorted: &[FluidParticle], ranges: &[CellRange], affines: &[ParticleAffine]) -> Vec<FaceSample> {
+fn particles_to_faces(
+    sorted: &[FluidParticle],
+    ranges: &[CellRange],
+    affines: &[ParticleAffine],
+) -> Vec<FaceSample> {
     let step = StepParams {
         capacity: sorted.len() as u32,
         ..lattice()
@@ -122,11 +130,19 @@ pub(super) fn gpu_flip_particles_to_faces_carries_a_linear_flow_exactly() {
             let x: [f64; 3] = std::array::from_fn(|b| {
                 f64::from(MIN[b]) + (p[b] as f64 + if b == a { 0.0 } else { 0.5 }) * f64::from(H)
             });
-            close(face.velocity[a], flow(x, a), 10.0, &format!("flow {p:?}/{a}"));
+            close(
+                face.velocity[a],
+                flow(x, a),
+                10.0,
+                &format!("flow {p:?}/{a}"),
+            );
             checked += 1;
         }
     }
-    assert!(checked > 200, "the fixture reaches most faces, got {checked}");
+    assert!(
+        checked > 200,
+        "the fixture reaches most faces, got {checked}"
+    );
 }
 
 /// Checks the particles to faces pass against the APIC sum
@@ -155,13 +171,16 @@ pub(super) fn check_apic_faces(
             {
                 let d: [f64; 3] = std::array::from_fn(|b| {
                     centre[b]
-                        - (f64::from(particle.position_radius[b]) - f64::from(MIN[b])) / f64::from(H)
+                        - (f64::from(particle.position_radius[b]) - f64::from(MIN[b]))
+                            / f64::from(H)
                 });
                 let w: f64 = d.iter().map(|d| (1.0 - d.abs()).max(0.0)).product();
                 let row = [affine.x, affine.y, affine.z][a];
                 let own = affine.id == particle.id;
                 let lift: f64 = if own {
-                    (0..3).map(|b| f64::from(row[b]) * d[b] * f64::from(H)).sum()
+                    (0..3)
+                        .map(|b| f64::from(row[b]) * d[b] * f64::from(H))
+                        .sum()
                 } else {
                     0.0
                 };

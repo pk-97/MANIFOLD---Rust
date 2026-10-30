@@ -28,6 +28,13 @@ pub trait NodePairBehavior: AsAny + Send {
     fn co_iterates(&self) -> bool {
         false
     }
+    /// Between two ticks of a co-iterated group, once the GPU has finished
+    /// every member's tick before `tick` and before any clock owner's host
+    /// step: what `second` did over that tick reaches `first`.
+    fn before_tick(&self, _first: &mut dyn EffectNode, _second: &mut dyn EffectNode, _tick: u32) {}
+    /// After that boundary's host steps, before any member starts `tick`:
+    /// `first`'s state for `tick` reaches `second`.
+    fn after_tick(&self, _first: &dyn EffectNode, _second: &mut dyn EffectNode, _tick: u32) {}
 }
 
 /// One ordered pair of graph nodes that must be evaluated as one unit.

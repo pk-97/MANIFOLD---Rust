@@ -113,8 +113,7 @@ impl NodePairBehavior for SharedSolidsPair {
         _inputs: Option<&mut EffectNodeContext<'_, '_>>,
         _step: manifold_node_engine::exec::effect_node::SimStep,
     ) {
-        let Some(push) = shares_solids_mut(water).and_then(SharesSolids::take_observed_push)
-        else {
+        let Some(push) = shares_solids_mut(water).and_then(SharesSolids::take_observed_push) else {
             return;
         };
         if let Some(owner) = shares_solids_mut(owner).and_then(SharesSolids::rigid_owner_mut) {
@@ -136,6 +135,28 @@ impl NodePairBehavior for SharedSolidsPair {
     /// One clock: the lead's and the taker's regions step tick by tick.
     fn co_iterates(&self) -> bool {
         true
+    }
+
+    /// Between two ticks: what the other liquid pushed the bodies over the
+    /// tick that ended reaches the owner before it settles that tick.
+    fn before_tick(&self, owner: &mut dyn EffectNode, water: &mut dyn EffectNode, _tick: u32) {
+        let Some(push) = shares_solids_mut(water).and_then(|water| water.tick_push()) else {
+            return;
+        };
+        if let Some(owner) = shares_solids_mut(owner).and_then(SharesSolids::rigid_owner_mut) {
+            owner.add_observed_push(push);
+        }
+    }
+
+    /// Once the owner stepped the bodies: the other liquid meets them where
+    /// they are at `tick`.
+    fn after_tick(&self, owner: &dyn EffectNode, water: &mut dyn EffectNode, tick: u32) {
+        let Some(owner) = shares_solids(owner).and_then(SharesSolids::rigid_owner) else {
+            return;
+        };
+        if let Some(water) = shares_solids_mut(water) {
+            water.take_tick(tick, owner.rows());
+        }
     }
 }
 
