@@ -1660,6 +1660,12 @@ fn transmission_diffuse(
 // cell then stands for a clump of grains, so its contrast and bend fall with
 // k, but never below a floor: far sand keeps a fine speckle and its glints,
 // as film sand does, instead of going flat.
+//
+// Grains differ by how much light each absorbs, so a bright material's
+// grains differ little: its light scatters on through the grains round it
+// and evens them out. Past GRAIN_DARK_ALBEDO the shades, dark grains and
+// crevices fade toward none at white (snow, white gypsum sand), while the
+// bends and glints stay, so snow sparkles without dark specks.
 struct Grain {
     albedo: vec3<f32>,
     normal: vec3<f32>,
@@ -1688,10 +1694,14 @@ fn grain_hash(c: vec3<i32>) -> vec3<f32> {
 // material's colour on average.
 const GRAIN_MEAN: f32 = 0.82;
 
+// The luminance at and below which grains vary fully.
+const GRAIN_DARK_ALBEDO: f32 = 0.5;
+
 // Octave `k` of the pattern on one plane: `q` the point in that plane, in the
 // octave's cells, `u` and `v` the world directions of its axes, `plane` which
-// plane it is (so the planes' grains differ).
-fn grain_plane(q: vec2<f32>, u: vec3<f32>, v: vec3<f32>, plane: i32, n: vec3<f32>, k: f32) -> GrainOctave {
+// plane it is (so the planes' grains differ), `absorbs` how fully its
+// grains vary (1 at or below GRAIN_DARK_ALBEDO, 0 at white).
+fn grain_plane(q: vec2<f32>, u: vec3<f32>, v: vec3<f32>, plane: i32, n: vec3<f32>, k: f32, absorbs: f32) -> GrainOctave {
     let corner = floor(q - vec2<f32>(0.5));
     let cell = vec2<i32>(corner);
     let f = q - corner;
@@ -1711,7 +1721,7 @@ fn grain_plane(q: vec2<f32>, u: vec3<f32>, v: vec3<f32>, plane: i32, n: vec3<f32
         id = select(id, h, nearer);
     }
     // A clump of 4^k grains varies less than one grain.
-    let contrast = max(exp2(-1.5 * k), 0.35);
+    let contrast = max(exp2(-1.5 * k), 0.35) * absorbs;
     var shade = 0.8 + 0.4 * id.x;
     shade = select(shade, 0.45, id.y < 0.07);
     let crevice = mix(0.5, 1.0, smoothstep(0.0, 0.3, sqrt(d2) - sqrt(d1)));
@@ -1732,22 +1742,22 @@ const GRAIN_PLANE_MIN: f32 = 0.02;
 
 // Octave `k` of the pattern at `p`, in that octave's cells: the three planes'
 // patterns blended by the eighth power of the normal's components.
-fn grain_octave(p: vec3<f32>, n: vec3<f32>, k: f32) -> GrainOctave {
+fn grain_octave(p: vec3<f32>, n: vec3<f32>, k: f32, absorbs: f32) -> GrainOctave {
     let a = abs(n);
     let a2 = a * a;
     let a4 = a2 * a2;
     let w = a4 * a4 / dot(a4 * a4, vec3<f32>(1.0));
     var sum = GrainOctave(vec3<f32>(0.0), vec3<f32>(0.0), 0.0);
     if w.x > GRAIN_PLANE_MIN {
-        let o = grain_plane(p.yz, vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), 0, n, k);
+        let o = grain_plane(p.yz, vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), 0, n, k, absorbs);
         sum = GrainOctave(sum.tint + w.x * o.tint, sum.bend + w.x * o.bend, sum.glint + w.x * o.glint);
     }
     if w.y > GRAIN_PLANE_MIN {
-        let o = grain_plane(p.xz, vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), 1, n, k);
+        let o = grain_plane(p.xz, vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), 1, n, k, absorbs);
         sum = GrainOctave(sum.tint + w.y * o.tint, sum.bend + w.y * o.bend, sum.glint + w.y * o.glint);
     }
     if w.z > GRAIN_PLANE_MIN {
-        let o = grain_plane(p.xy, vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), 2, n, k);
+        let o = grain_plane(p.xy, vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), 2, n, k, absorbs);
         sum = GrainOctave(sum.tint + w.z * o.tint, sum.bend + w.z * o.bend, sum.glint + w.z * o.glint);
     }
     let kept = max(dot(select(vec3<f32>(0.0), w, w > vec3<f32>(GRAIN_PLANE_MIN)), vec3<f32>(1.0)), 1e-6);
@@ -1762,8 +1772,10 @@ fn sand_grain(world_pos: vec3<f32>, n: vec3<f32>, albedo: vec3<f32>, roughness: 
     let level = max(log2(2.0 * footprint / size), 0.0);
     let k = floor(level);
     let t = level - k;
-    let near = grain_octave(world_pos / (size * exp2(k)), n, k);
-    let far = grain_octave(world_pos / (size * exp2(k + 1.0)), n, k + 1.0);
+    let luminance = dot(albedo, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let absorbs = saturate((1.0 - luminance) / (1.0 - GRAIN_DARK_ALBEDO));
+    let near = grain_octave(world_pos / (size * exp2(k)), n, k, absorbs);
+    let far = grain_octave(world_pos / (size * exp2(k + 1.0)), n, k + 1.0, absorbs);
     return Grain(
         albedo * mix(near.tint, far.tint, t),
         normalize(n + mix(near.bend, far.bend, t)),

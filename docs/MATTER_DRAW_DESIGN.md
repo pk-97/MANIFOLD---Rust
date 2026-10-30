@@ -25,7 +25,7 @@ Every material draws from the particle surface, since forces (a swarm, an audio 
 
 1. **Material coordinates.** Each point's fill position, in a side buffer `node.matter_fill` writes (the point record has no room). The surface carries them onto its vertices, so a texture, grain or tool mark moves with the material instead of swimming through it. Sand, snow, clay and mud use it.
 2. **Loose or bulk.** A point with few neighbours is loose. `node.matter_grains` already counts neighbours in an occupancy table. Loose points draw as pieces (sand grains, snow crumbs, mud droplets), bulk points as the surface.
-3. **Scanned texture sets** (`scene_schema::matter_set`): sand, snow, clay and mud start on a starter material (colour, roughness, normal and height pictures), box mapped at its real size and carved by parallax. Their colour and roughness come from the pictures.
+3. **Scanned texture sets** (`scene_schema::matter_set`): clay, mud, gravel, pebbles and lava start on a starter material (colour, roughness, normal and height pictures), box mapped at its real size and carved by parallax. Their colour and roughness come from the pictures. Sand and snow shade as their own grains instead (the material's Grain Size), since a scan's ripples and drifts slide over sand as it flows.
 4. **The particle surface** for goo, mud and the bulk of sand and snow, with each material's own settings: the sim's cell (Detail 0), no water-only steps, and smooth normals from the field rather than the triangles' facets.
 5. **Detail in the shader, not the mesh.** Per-pixel normals from a texture in material coordinates: sand grain, snow crust, clay marks, mud lumps.
 

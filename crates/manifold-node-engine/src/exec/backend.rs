@@ -277,6 +277,14 @@ pub trait Backend: Send {
         None
     }
 
+    /// The slot an array read of `slot` resolves to this frame: an array
+    /// switch's chosen input while the switch aliases it onto its output, so
+    /// a reader sees that input's buffer, extent and CPU payloads (its mesh's
+    /// box), else `slot` itself.
+    fn array_source(&self, slot: Slot) -> Slot {
+        slot
+    }
+
     /// Publish an array slot's live extent. Drained from the per-step scratch
     /// by the executor, same shape as [`Backend::set_mesh_source`].
     fn set_live_extent(&mut self, _slot: Slot, _value: crate::scene::live_extent::LiveExtent) {}

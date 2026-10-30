@@ -1,12 +1,12 @@
-// node.matter_grains — a matter frame's outer layer and loose sand drawn as
-// grains: the sand's skin, flying grains, thin streams and the spray off an
-// impact. Hand WGSL under exclusion 1 (atomics across passes):
+// node.matter_grains — a matter frame's loose sand drawn as grains: flying
+// grains, thin streams and sheets and the spray off an impact. Resting sand
+// draws as its surface, whose material shades it as grains. Hand WGSL under exclusion 1 (atomics across passes):
 //   count_main: each live point adds one to its occupancy cell, two point
 //     spacings on a side (eight points when packed), in an open-addressed
 //     table of (cell key, count) pairs the node clears first.
 //   emit_main: each point sums its own cell and the 26 round it. Fewer than
-//     OUTER points there is the outer layer or loose sand, which draws its
-//     grains; more is the deep bulk, whose grains are holes the draw skips. A
+//     OUTER points there is loose sand, which draws its grains; more is a
+//     resting surface or the bulk, whose grains are holes the draw skips. A
 //     grain fades in by size as its block thins from OUTER to OUTER_FULL, so
 //     no grain pops in or out from one frame to the next.
 // A drawing point of radius r draws n = ceil(2 r² / g²) grains of Grain Size
@@ -72,9 +72,12 @@ const RADIUS_SCALE: f32 = 0.6203505;
 // Points in a point's 3³ block of cells below which it draws grains at full
 // size, and at which they have faded to nothing: packed sand holds 216, a
 // flat surface about half that, a one-point-thick sheet about a sixth and a
-// lone grain one, so the outer layer and everything looser draw grains.
-const OUTER_FULL: f32 = 150.0;
-const OUTER: f32 = 200.0;
+// lone grain one, so sheets and everything looser draw grains while a
+// resting surface draws none. Grains on every surface point cost millions of
+// copies a frame and read as fuzz at a few metres, where real grains are
+// far under a pixel.
+const OUTER_FULL: f32 = 24.0;
+const OUTER: f32 = 48.0;
 // The share of its radius a grain-drawing point gives the surface under it.
 const UNDER: f32 = 0.5;
 const BULK_GONE: f32 = 6.0;

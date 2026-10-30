@@ -532,11 +532,6 @@ impl MetalBackend {
         self.unowned_arrays.contains_key(&slot)
     }
 
-    /// The slot an array read of `slot` resolves to this frame.
-    fn array_source(&self, slot: Slot) -> Slot {
-        self.array_aliases.get(&slot).copied().unwrap_or(slot)
-    }
-
     /// Pin a [`ResourceId`] to a host-supplied 3D [`GpuTexture`] for a
     /// [`PortType::Texture3D`] wire. The chain-build code creates the
     /// volume at dimensions computed from the producing primitive's
@@ -1102,6 +1097,10 @@ impl Backend for MetalBackend {
 
     fn live_extent(&self, slot: Slot) -> Option<crate::scene::live_extent::LiveExtent> {
         self.live_extents.get(&self.array_source(slot)).cloned()
+    }
+
+    fn array_source(&self, slot: Slot) -> Slot {
+        self.array_aliases.get(&slot).copied().unwrap_or(slot)
     }
 
     fn set_live_extent(&mut self, slot: Slot, value: crate::scene::live_extent::LiveExtent) {

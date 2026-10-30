@@ -320,32 +320,38 @@ const FROM_SET: [&str; 4] = ["color_r", "color_g", "color_b", "roughness"];
 
 /// The scanned material set a Sand of `matter` starts with, a folder of the
 /// starter materials: its colour, roughness, normal and height pictures,
-/// box mapped at the ground's real size and carved by parallax. Sand: dune
-/// ripples. Snow: soft drifted snow. Clay: worked clay with finger smears.
-/// Mud: damp rippled mud. Gravel: mixed grey and pink crushed stone.
+/// box mapped at the ground's real size and carved by parallax. Clay: worked
+/// clay with finger smears. Mud: damp rippled mud. Gravel: mixed grey and pink crushed stone.
 /// Pebbles: mixed river stones, one stone per pebble. Lava: dark crust with
-/// molten rock glowing in its seams. Goo, jelly and liquid metal are clear
-/// or mirror-bright and draw no picture.
+/// molten rock glowing in its seams. Sand and snow shade as their own grains
+/// instead: a scan shows the ripples or drifts of one place, which do not
+/// belong on a fresh pile and slide over sand as it flows. Goo, jelly and
+/// liquid metal are clear or mirror-bright and draw no picture.
 pub fn matter_set(matter: Matter) -> Option<&'static str> {
     match matter {
-        Matter::Sand => Some("Ground097"),
-        Matter::Snow => Some("Snow010A"),
         Matter::Clay => Some("Clay006"),
         Matter::Mud => Some("Ground094C"),
         Matter::Gravel => Some("Gravel022"),
         Matter::Pebbles => Some("Rocks022"),
         Matter::Lava => Some("LavaCrust"),
-        Matter::Goo | Matter::Jelly | Matter::LiquidMetal => None,
+        Matter::Sand | Matter::Snow | Matter::Goo | Matter::Jelly | Matter::LiquidMetal => None,
     }
 }
 
 /// What a Sand of `matter` looks like over the Sand template's look, each
-/// from what the material is made of. Sand, snow, clay and mud take their
-/// colour, roughness and grain from their scanned set ([`matter_set`]), so
-/// the procedural grain is off and a colour here tints the picture:
-/// - Snow: ice (IOR 1.31). Light runs millimetres to a centimetre inside,
-///   blue the furthest, so creases and thin edges glow faintly blue; a
-///   little light stays at the surface for its crust.
+/// from what the material is made of. Clay, mud, gravel, pebbles and lava
+/// take their colour and roughness from their scanned set ([`matter_set`]),
+/// so the procedural grain is off and a colour here tints the picture:
+/// - Sand: the template's dry beach sand, shaded as grains 0.4 mm across
+///   (medium sand): each its own shade, a few dark mineral grains and a few
+///   glinting facets, the gaps darker. From a few metres they blend into the
+///   fine speckle of a real pile.
+/// - Snow: ice (IOR 1.31), white at about 0.9 reflectance and fairly rough,
+///   shaded as settled grains a millimetre across: so bright that its
+///   grains barely differ in shade, but their facets glint. Light runs
+///   millimetres to a centimetre inside, blue the furthest, so creases and
+///   thin edges glow faintly blue; a little light stays at the surface for
+///   its crust.
 /// - Clay: satin, its light spreading a few millimetres, red the furthest,
 ///   tinted as its picture.
 /// - Mud: soil darkened as water darkens it (its picture's colour times
@@ -361,11 +367,15 @@ pub fn matter_set(matter: Matter) -> Option<&'static str> {
 ///   its seams glowing at about six times white (the picture's emission).
 fn matter_look(matter: Matter) -> &'static [(&'static str, f32)] {
     match matter {
-        Matter::Sand => &[("grain", 0.0)],
+        Matter::Sand => &[("grain", 0.4)],
         Matter::Snow => &[
+            ("color_r", 0.88),
+            ("color_g", 0.9),
+            ("color_b", 0.92),
+            ("roughness", 0.7),
             ("specular", 0.5),
             ("ior", 1.31),
-            ("grain", 0.0),
+            ("grain", 1.0),
             ("subsurface_weight", 0.85),
             ("subsurface_radius_r", 0.004),
             ("subsurface_radius_g", 0.006),
@@ -443,6 +453,7 @@ fn matter_look(matter: Matter) -> &'static [(&'static str, f32)] {
             ("emission_r", 1.0),
             ("emission_g", 1.0),
             ("emission_b", 1.0),
-            ("emission_intensity", 6.0),        ],
+            ("emission_intensity", 6.0),
+        ],
     }
 }
