@@ -3,12 +3,14 @@
 //! gives the beat period and phase, which is exact for music on a fixed grid; the downbeat activation summed per beat
 //! of the bar then picks which beat is bar 1.
 
+mod follow;
 mod mel;
 mod model;
 mod resample;
 #[cfg(test)]
 mod tests;
 
+pub use follow::{FollowWorker, Heard, Listener, Lock, Tracker, Tuning};
 use mel::{BANDS, FPS, RATE};
 
 /// Frames the network sees at once (30 s), its training length.
@@ -19,14 +21,13 @@ const BORDER: usize = 6;
 /// Chunks run on this many threads at most, two cores fewer than the machine has so the content and UI threads keep
 /// theirs; each worker holds about 50 MB of activations.
 const MAX_WORKERS: usize = 8;
+/// Beats a song needs for a grid; the fit also starts from the run of this many beats whose gaps vary least.
 const MIN_BEATS: usize = 16;
 /// A picked beat within this of the fitted line is on the grid.
 const ON_GRID_S: f64 = 0.04;
 /// Share of picked beats that must sit on one grid for the song to have a steady tempo. Intros and breakdowns
 /// without drums give scattered beats, and scattered beats land on a grid only by chance (about one in five).
 const STEADY_SHARE: f64 = 0.6;
-/// The fit starts from the run of this many beats whose gaps vary least.
-const START_BEATS: usize = 16;
 /// Beat This!'s peak window: a beat is the highest activation within ±70 ms.
 const PEAK_RADIUS: usize = 3;
 
@@ -87,7 +88,17 @@ pub fn song_grid(mono: &[f32], rate: u32, beats_per_bar: u32) -> Result<Grid, No
         return Err(NoGrid::TooShort);
     }
     let (beat, downbeat) = activations(&mel);
-    fit(&beat, &downbeat, beats_per_bar.max(1))
+    fit(&beat, &downbeat, beats_per_bar.max(1), MIN_BEATS).map(|(grid, _)| grid)
+}
+
+/// Every beat and every downbeat Beat This! picks in `mono` (`rate` Hz), in seconds, looking at the whole song.
+pub fn song_beats(mono: &[f32], rate: u32) -> (Vec<f64>, Vec<f64>) {
+    let mel = mel::log_mel(&resample::resample(mono, rate, RATE));
+    if mel.len() / BANDS <= 2 * BORDER {
+        return (Vec::new(), Vec::new());
+    }
+    let (beat, downbeat) = activations(&mel);
+    (pick(&beat), pick(&downbeat))
 }
 
 /// Chunk starts as Beat This!'s `split_piece` makes them: the first starts BORDER frames before the song, each
@@ -177,17 +188,19 @@ fn pick(logits: &[f32]) -> Vec<f64> {
                 && (i + 1..(i + PEAK_RADIUS + 1).min(n)).all(|j| logits[j] <= l)
         })
         .map(|i| {
-            let shift = if i > 0 && i + 1 < n {
-                let (a, b, c) = (logits[i - 1] as f64, logits[i] as f64, logits[i + 1] as f64);
-                let curve = a - 2.0 * b + c;
-                if curve < 0.0 {
-                    (0.5 * (a - c) / curve).clamp(-0.5, 0.5)
+            // A neighbour masked out as -inf (outside the frames being read) leaves the peak on its frame.
+            let shift =
+                if i > 0 && i + 1 < n && logits[i - 1].is_finite() && logits[i + 1].is_finite() {
+                    let (a, b, c) = (logits[i - 1] as f64, logits[i] as f64, logits[i + 1] as f64);
+                    let curve = a - 2.0 * b + c;
+                    if curve < 0.0 {
+                        (0.5 * (a - c) / curve).clamp(-0.5, 0.5)
+                    } else {
+                        0.0
+                    }
                 } else {
                     0.0
-                }
-            } else {
-                0.0
-            };
+                };
             (i as f64 + shift) / FPS
         })
         .collect()
@@ -212,9 +225,15 @@ fn line(times: &[f64], ks: &[i64], keep: &[bool]) -> (f64, f64) {
     (mt - p * mk, p)
 }
 
-fn fit(beat: &[f32], downbeat: &[f32], beats_per_bar: u32) -> Result<Grid, NoGrid> {
+/// The steady grid through the beats picked from `beat`, at least `min_beats` of them, and the share of them on it.
+fn fit(
+    beat: &[f32],
+    downbeat: &[f32],
+    beats_per_bar: u32,
+    min_beats: usize,
+) -> Result<(Grid, f64), NoGrid> {
     let times = pick(beat);
-    if times.len() < MIN_BEATS {
+    if times.len() < min_beats {
         return Err(NoGrid::FewBeats(times.len()));
     }
     // Start inside the song's most regular run of beats, from its median gap and the beats' mean phase there, then
@@ -226,14 +245,14 @@ fn fit(beat: &[f32], downbeat: &[f32], beats_per_bar: u32) -> Result<Grid, NoGri
         let mean = g.iter().sum::<f64>() / g.len() as f64;
         (g.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / g.len() as f64).sqrt() / mean
     };
-    let run = START_BEATS - 1;
+    let run = min_beats - 1;
     let start = (0..=gaps.len() - run)
         .min_by(|&i, &j| spread(&gaps[i..i + run]).total_cmp(&spread(&gaps[j..j + run])))
         .expect("MIN_BEATS covers a run");
     let mut regular = gaps[start..start + run].to_vec();
     regular.sort_by(f64::total_cmp);
     let p0 = regular[run / 2];
-    let mid = times[start + START_BEATS / 2];
+    let mid = times[start + min_beats / 2];
     let near = || times.iter().filter(|t| (*t - mid).abs() <= 8.0 * p0);
     let (s, c) = near().fold((0.0, 0.0), |(s, c), t| {
         let angle = std::f64::consts::TAU * (t - mid) / p0;
@@ -254,6 +273,10 @@ fn fit(beat: &[f32], downbeat: &[f32], beats_per_bar: u32) -> Result<Grid, NoGri
                 return Err(NoGrid::Unsteady { on_grid: 0.0 });
             }
             (a, p) = line(&times, &ks, &on);
+            // Inliers that all share one beat number give no slope.
+            if !(p.is_finite() && p > 0.0) {
+                return Err(NoGrid::Unsteady { on_grid: 0.0 });
+            }
         }
         if radius >= span {
             break;
@@ -288,9 +311,12 @@ fn fit(beat: &[f32], downbeat: &[f32], beats_per_bar: u32) -> Result<Grid, NoGri
             mean(score[i]).total_cmp(&mean(score[j]))
         })
         .expect("a bar has a beat");
-    Ok(Grid {
-        period_s: p,
-        downbeat_s: a + p * phase as f64,
-        beats_per_bar,
-    })
+    Ok((
+        Grid {
+            period_s: p,
+            downbeat_s: a + p * phase as f64,
+            beats_per_bar,
+        },
+        on_grid,
+    ))
 }

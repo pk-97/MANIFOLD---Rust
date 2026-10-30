@@ -82,7 +82,7 @@ fn fit_finds_tempo_and_bar_one_through_gaps_and_strays() {
     let downbeats: Vec<f64> = grid.iter().skip(2).step_by(4).copied().collect();
     let (beat, downbeat) = activation(grid[159] + 1.0, &beats, &downbeats);
 
-    let g = fit(&beat, &downbeat, 4).unwrap();
+    let (g, _) = fit(&beat, &downbeat, 4, MIN_BEATS).unwrap();
     assert!((g.bpm() - 127.4).abs() < 0.02, "bpm {}", g.bpm());
     let bar = 4.0 * period;
     let off = (g.downbeat_s - grid[2]).rem_euclid(bar);
@@ -97,7 +97,64 @@ fn fit_refuses_a_tempo_change() {
     let beats: Vec<f64> = first.iter().chain(&second).copied().collect();
     let (beat, downbeat) = activation(75.0, &beats, &[]);
     assert!(matches!(
-        fit(&beat, &downbeat, 4),
+        fit(&beat, &downbeat, 4, MIN_BEATS),
         Err(NoGrid::Unsteady { .. })
     ));
+}
+
+#[test]
+fn bar_one_moves_only_after_enough_votes() {
+    use super::follow::BarVote;
+    let p = 0.5;
+    let mut bar = BarVote::default();
+    assert_eq!(bar.settle(1.0, p, 4, 4), 1.0);
+    // Next update agrees (a bar later): follows it.
+    assert_eq!(bar.settle(3.0, p, 4, 4), 3.0);
+    // Three updates say bar 1 is a beat later: held where it was.
+    for vote in [5.5, 7.5, 9.5] {
+        let kept = bar.settle(vote, p, 4, 4);
+        assert!(
+            ((kept - vote) / p).round() as i64 % 4 != 0,
+            "held at {kept}"
+        );
+    }
+    // The fourth in a row moves it.
+    assert_eq!(bar.settle(11.5, p, 4, 4), 11.5);
+}
+
+#[test]
+fn tempo_holds_until_enough_hearings_agree() {
+    use super::follow::TempoHold;
+    let grid = |period_s: f64, downbeat_s: f64| Grid {
+        period_s,
+        downbeat_s,
+        beats_per_bar: 4,
+    };
+    let mut hold = TempoHold::default();
+    assert_eq!(hold.settle(grid(0.5, 1.0), 3), grid(0.5, 1.0));
+    // Double tempo with its downbeat on an off-beat: folded back, onto the held beats.
+    assert_eq!(hold.settle(grid(0.25, 3.25), 3), grid(0.5, 3.5));
+    // Half tempo: every heard beat is a held beat.
+    assert_eq!(hold.settle(grid(1.0, 5.0), 3), grid(0.5, 5.0));
+    // Four times, its downbeat three quarter-beats past a held beat: folded onto the next held beat.
+    assert_eq!(hold.settle(grid(0.125, 6.375), 3), grid(0.5, 6.5));
+    // A small change is taken at once.
+    assert_eq!(hold.settle(grid(0.49, 7.0), 3), grid(0.49, 7.0));
+    // An unrelated tempo keeps the held grid.
+    assert_eq!(hold.settle(grid(0.3, 8.0), 3), grid(0.49, 7.0));
+    // Three hearings in a row of one new tempo win.
+    assert_eq!(hold.settle(grid(0.245, 9.0), 3), grid(0.49, 9.0));
+    assert_eq!(hold.settle(grid(0.245, 11.0), 3), grid(0.49, 11.0));
+    assert_eq!(hold.settle(grid(0.245, 13.0), 3), grid(0.245, 13.0));
+}
+
+#[test]
+fn a_peak_beside_masked_frames_stays_finite() {
+    let mut logits = vec![-5.0f32; 40];
+    logits[10] = f32::NEG_INFINITY;
+    logits[11] = 3.0;
+    logits[30] = 4.0;
+    logits[31] = f32::NEG_INFINITY;
+    let times = pick(&logits);
+    assert_eq!(times, vec![11.0 / FPS, 30.0 / FPS]);
 }
