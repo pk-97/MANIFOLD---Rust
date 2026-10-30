@@ -15,10 +15,11 @@
 //
 // Blocks are 4³ stencil base nodes (the sorter's key, `ranges[block]` over
 // `order`): block 8·slot + b is octant b of slot's tile, block 8P the points
-// in tiles the table does not hold. The scatter runs two workgroups per held
-// slot (the table's held-slot triple), four blocks each, so it pays for the
-// tiles that hold matter and not for the pool; workgroup 0 also takes block
-// 8P. A held block accumulates into a 6³-node workgroup tile, flushed once
+// in tiles the table does not hold. The scatter runs one workgroup per block
+// of every held slot, from the triple args_main writes off the table's
+// held-slot triple, so it pays for the tiles that hold matter and not for the
+// pool; workgroup 0 also takes block 8P. A workgroup per block rather than
+// per four keeps a dense block's points spread over more threads at once. A held block accumulates into a 6³-node workgroup tile, flushed once
 // per nonzero word; a point that has left its block since the sort adds
 // globally. Integer sums make both routes bit-identical.
 //
@@ -64,7 +65,8 @@ struct P2gParams {
     pool_tiles: u32,
     // 1 when this substep lays the bulk.
     bulk: u32,
-    _pad1: u32,
+    // The word of the table's held-slot triple in `tile_args` (args_main).
+    held_word: u32,
     _pad2: u32,
     _pad3: u32,
     _pad4: u32,
@@ -83,6 +85,9 @@ struct P2gParams {
 // The bulk, SAND_BULK_WORDS a pooled node; bound to the accumulator, and
 // never touched, while `params.bulk` is 0.
 @group(0) @binding(8) var<storage, read_write> bulk: array<atomic<u32>>;
+// The table's indirect triples, and the scatter's own (args_main).
+@group(0) @binding(9) var<storage, read> tile_args: array<u32>;
+@group(0) @binding(10) var<storage, read_write> scatter_args: array<u32>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
@@ -273,13 +278,19 @@ fn scatter_block(block: u32, lid: u32) {
     }
 }
 
-// Workgroup w takes blocks 4·(w & 1) to 4·(w & 1) + 3 of held slot w / 2.
+// The scatter's triple: eight workgroups a held slot, where the table's
+// triple dispatches two (512 threads a slot, 256 a group).
+@compute @workgroup_size(1)
+fn args_main() {
+    scatter_args[0] = 4u * tile_args[params.held_word];
+    scatter_args[1] = 1u;
+    scatter_args[2] = 1u;
+}
+
+// Workgroup w takes block w & 7 of held slot w / 8.
 @compute @workgroup_size(256)
 fn scatter_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
-    let first = held[wg.x >> 1u] * 8u + (wg.x & 1u) * 4u;
-    for (var k = 0u; k < 4u; k = k + 1u) {
-        scatter_block(first + k, lid);
-    }
+    scatter_block(held[wg.x >> 3u] * 8u + (wg.x & 7u), lid);
     if wg.x == 0u {
         scatter_block(8u * params.pool_tiles, lid);
     }

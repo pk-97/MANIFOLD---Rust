@@ -70,7 +70,9 @@ pub(crate) struct P2gParams {
     pub(crate) pool_tiles: u32,
     /// 1 when this substep lays the bulk.
     pub(crate) bulk: u32,
-    pub(crate) _pad: [u32; 4],
+    /// The word of the table's held-slot triple in its args.
+    pub(crate) held_word: u32,
+    pub(crate) _pad: [u32; 3],
 }
 
 manifold_node_engine::primitive! {
@@ -137,6 +139,10 @@ manifold_node_engine::primitive! {
     extra_fields: {
         kernel: Option<GpuComputePipeline> = None,
         clear: Option<GpuComputePipeline> = None,
+        // Writes the scatter's triple, a workgroup per block of every held
+        // slot, into `scatter_args`.
+        args: Option<GpuComputePipeline> = None,
+        scatter_args: Option<GpuBuffer> = None,
         tiles: Option<WorldTiles> = None,
         sorter: ParticleSorter = ParticleSorter::default(),
         order: Option<GpuBuffer> = None,
@@ -160,6 +166,16 @@ impl Primitive for MatterToGrid {
                 "clear_main",
                 "node.matter_to_grid.clear",
             ));
+        }
+        if self.args.is_none() {
+            self.args = Some(device.create_compute_pipeline(
+                SHADER.as_str(),
+                "args_main",
+                "node.matter_to_grid.args",
+            ));
+        }
+        if self.scatter_args.is_none() {
+            self.scatter_args = Some(device.create_buffer(12, BufferUse::Gpu));
         }
         self.sorter.prepare_pooled_blocks(device);
         if self.gate.is_none() {
@@ -413,8 +429,36 @@ impl Primitive for MatterToGrid {
             momentum_unit,
             pool_tiles: pool,
             bulk: u32::from(bulk.is_some()),
-            _pad: [0; 4],
+            held_word: (held_args_offset() / 4) as u32,
+            _pad: [0; 3],
         };
+        let scatter_args = self
+            .scatter_args
+            .as_ref()
+            .expect("scatter args allocated by prepare_pipelines");
+        gpu.native_enc.dispatch_compute(
+            self.args
+                .as_ref()
+                .expect("args kernel built by prepare_pipelines"),
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                GpuBinding::Buffer {
+                    binding: 9,
+                    buffer: tiles.args(),
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 10,
+                    buffer: scatter_args,
+                    offset: 0,
+                },
+            ],
+            [1, 1, 1],
+            "node.matter_to_grid.args",
+        );
         let bindings = [
             GpuBinding::Bytes {
                 binding: 0,
@@ -464,8 +508,8 @@ impl Primitive for MatterToGrid {
         gpu.native_enc.dispatch_compute_indirect(
             kernel,
             &bindings,
-            tiles.args(),
-            held_args_offset(),
+            scatter_args,
+            0,
             "node.matter_to_grid",
         );
     }
@@ -496,7 +540,8 @@ fn encode_clear(
         momentum_unit: 0.0,
         pool_tiles: pool,
         bulk: u32::from(bulk.is_some()),
-        _pad: [0; 4],
+        held_word: 0,
+        _pad: [0; 3],
     };
     enc.dispatch_compute_indirect(
         clear,
