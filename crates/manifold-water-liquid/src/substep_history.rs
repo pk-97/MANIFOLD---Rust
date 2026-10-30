@@ -469,8 +469,7 @@ mod tests {
             let row = pool_len(pool) * 16;
             // Its own H, and one sized for a shared key set.
             for entries in [table_entries(pool), table_entries(4 * pool)] {
-                let per_slot =
-                    16 + ROW_ARGUMENT_BYTES + table_words_at(entries, pool) * 4 + row;
+                let per_slot = 16 + ROW_ARGUMENT_BYTES + table_words_at(entries, pool) * 4 + row;
                 for slots in [1, 6, 7, 262] {
                     assert_eq!(
                         history_bytes(pool, entries, slots),

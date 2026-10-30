@@ -18,7 +18,7 @@
 // scene's solids holds no gas, its faces move with the solid, and the
 // pressure solve treats it as a wall. Water and sand are solids too: a cell
 // the water fills, read through the water's own tiles, or at least half full
-// of grains, moves with them (cs_matter, cs_solids).
+// of sand, read from the Sand's own grid, moves with them (cs_solids).
 //
 // Roles rotate: the host names three velocity and three fine state buffers
 // and binds them as vel_in/fine_in (last tick's result), vel_a/fine_a and
@@ -70,10 +70,10 @@ struct Params {
     solid_base: u32,
     solid_count: u32,
     // The water this tick (SOLIDS): its tiles' pool, 0 while none reaches the
-    // gas, and its cell in metres; and the first `sand_count` grains of
-    // `sand`.
+    // gas, and its cell in metres; and one over the Sand's cell, 0 while none
+    // does.
     water_pool: u32,
-    sand_count: u32,
+    sand_inv_cell: f32,
     water_cell: f32,
 }
 
@@ -144,10 +144,6 @@ struct LiquidShape {
 // in cells less the lowest air cell of the column through the source's
 // centre (cs_solids_static), so the largest is the lowest.
 @group(0) @binding(22) var<storage, read_write> source_floor: array<atomic<u32>>;
-// Four words a cell, in units of 1 / MATTER_SCALE: how full of grains the
-// cell is (its volume's fraction), then that fraction times their velocity,
-// x y z, as two's complement sums (cs_matter).
-@group(0) @binding(23) var<storage, read_write> matter: array<atomic<u32>>;
 // The first Water's step as this tick left it: its pooled faces and
 // distance (metres, negative inside the water) on its world tiles.
 struct FaceSample {
@@ -157,19 +153,18 @@ struct FaceSample {
 @group(0) @binding(24) var<storage, read> water_faces: array<FaceSample>;
 @group(0) @binding(28) var<storage, read> water_distance: array<f32>;
 @group(0) @binding(29) var<storage, read> water_tiles: array<u32>;
-// The first Sand's grains at this tick's end (node.matter_stats'
-// grain_view): its bulk's sphere, velocity and solid share.
-struct GasGrain {
-    position_radius: vec4<f32>,
-    velocity_solid: vec4<f32>,
-}
-@group(0) @binding(25) var<storage, read> sand: array<GasGrain>;
+// The first Sand's grid as its tick ended (sand_read.wgsl): its nodes, its
+// bulk and its table, whose header carries its pool.
+@group(0) @binding(23) var<storage, read> sand_grid: array<SandNode>;
+@group(0) @binding(25) var<storage, read> sand_bulk: array<u32>;
+@group(0) @binding(30) var<storage, read> sand_tiles: array<u32>;
+fn ms_pool_tiles() -> u32 { return sand_tiles[1]; }
+fn ms_table_word(i: u32) -> u32 { return sand_tiles[i]; }
 // One bit a body row (bit b % 32 of word b / 32): a Collider that moves this
 // frame, laid each tick by cs_solids and left out of the static solids.
 @group(0) @binding(26) var<storage, read> moving: array<u32>;
 // The fine state published on the frame's last tick, as fine_a holds it.
 @group(0) @binding(27) var<storage, read_write> state_out: array<u32>;
-const MATTER_SCALE: f32 = 65536.0;
 // A cell at least this full of water or grains is a solid to the gas.
 const MATTER_FULL: f32 = 0.5;
 
@@ -872,50 +867,11 @@ fn cs_solids_static(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// Each grain's bulk volume, spread over the eight cells round it by its
-// trilinear weights, with its velocity: each tick, from the grains as the
-// Sand's tick left them. Unused slots (radius 0) add nothing.
-@compute @workgroup_size(64, 1, 1)
-fn cs_matter(
-    @builtin(global_invocation_id) gid: vec3<u32>,
-    @builtin(num_workgroups) groups: vec3<u32>,
-) {
-    let n = gid.x + gid.y * groups.x * 64u;
-    if n >= params.sand_count {
-        return;
-    }
-    let p = sand[n];
-    let r = p.position_radius.w;
-    let g = (p.position_radius.xyz - params.origin) / params.h - vec3<f32>(0.5);
-    let base = vec3<i32>(floor(g));
-    let f = g - floor(g);
-    // A sphere's volume in cells, scaled to the fixed point.
-    let volume = 4.18879 * r * r * r / (params.h * params.h * params.h) * MATTER_SCALE;
-    if volume <= 0.0 || any(base < vec3<i32>(-1)) || any(base >= vec3<i32>(params.dims)) {
-        return;
-    }
-    for (var k = 0u; k < 8u; k++) {
-        let o = vec3<u32>(k & 1u, (k >> 1u) & 1u, k >> 2u);
-        let c = base + vec3<i32>(o);
-        if any(c < vec3<i32>(0)) || any(c >= vec3<i32>(params.dims)) {
-            continue;
-        }
-        let w = select(1.0 - f, f, o == vec3<u32>(1u));
-        let share = w.x * w.y * w.z * volume;
-        let i = 4u * cell_index(vec3<u32>(c));
-        atomicAdd(&matter[i], u32(share + 0.5));
-        let v = vec3<i32>(round(share * p.velocity_solid.xyz));
-        atomicAdd(&matter[i + 1u], bitcast<u32>(v.x));
-        atomicAdd(&matter[i + 2u], bitcast<u32>(v.y));
-        atomicAdd(&matter[i + 3u], bitcast<u32>(v.z));
-    }
-}
-
 // The moving solids at this tick's start: a cell inside a body, a Collider's
 // hull or a moving Collider's mesh takes the velocity of the one it is
 // deepest in (kind 2); a cell inside a still Collider's mesh keeps it; a cell
 // the water fills at least half takes the water's velocity, else one at least
-// half full of grains their mean velocity (kind 3); the rest is air.
+// half full of sand the sand's (kind 3); the rest is air.
 @compute @workgroup_size(4, 4, 4)
 fn cs_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !inside(gid) {
@@ -969,15 +925,11 @@ fn cs_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
             velocity = water.xyz;
         }
     }
-    if kind == 0.0 && params.sand_count > 0u {
-        let full = f32(atomicLoad(&matter[4u * i]));
-        if full >= MATTER_FULL * MATTER_SCALE {
+    if kind == 0.0 && params.sand_inv_cell > 0.0 {
+        let sand = sand_at(x, params.sand_inv_cell);
+        if sand.fraction >= MATTER_FULL {
             kind = 3.0;
-            velocity = vec3<f32>(
-                f32(bitcast<i32>(atomicLoad(&matter[4u * i + 1u]))),
-                f32(bitcast<i32>(atomicLoad(&matter[4u * i + 2u]))),
-                f32(bitcast<i32>(atomicLoad(&matter[4u * i + 3u]))),
-            ) / full;
+            velocity = sand.velocity;
         }
     }
     solid[2u * i] = pack2x16float(velocity.xy);

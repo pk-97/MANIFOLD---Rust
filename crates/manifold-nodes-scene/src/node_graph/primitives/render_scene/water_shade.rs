@@ -91,12 +91,7 @@ pub(super) fn ripple_uniforms(
     Ok(RippleUniforms {
         world_to_local,
         local_to_world: field.model,
-        tiles: [
-            field.pool_tiles,
-            0,
-            u32::from(has_foam),
-            0,
-        ],
+        tiles: [field.pool_tiles, 0, u32::from(has_foam), 0],
         // 0 is the shader's off value for the tile side.
         field: [
             field.cell_size,

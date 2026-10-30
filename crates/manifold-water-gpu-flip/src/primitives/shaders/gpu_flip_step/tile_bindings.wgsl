@@ -33,23 +33,13 @@
 // canonical element is `CANON_CORNER`.
 @group(0) @binding(43) var<storage, read_write> tile_corners: array<f32>;
 
-// A Matter grain as the water sees it (fluid_particles.rs MatterGrain): its
-// bulk's sphere, its velocity and the share of its bulk its grains fill.
-struct MatterGrain {
-    position_radius: vec4<f32>,
-    velocity_solid: vec4<f32>,
-}
-
-// A wired Sand's grains this frame, `u.sand_count` of them.
-@group(0) @binding(72) var<storage, read> sand_points: array<MatterGrain>;
-
-// The sand at each held cell's low corner, SAND_WORDS words a corner: its
-// volume share in SAND_FIXED units, then its momentum along x, y and z in
-// SAND_MOMENTUM_FIXED units (i32 in the u32 words), then its grains' solid
-// share in SAND_FIXED units. Added by `sand_corners`, read by `sand_drag`
-// and taken (reset to 0) by `sand_porous` in the same step.
-const SAND_WORDS: u32 = 5u;
-@group(0) @binding(73) var<storage, read_write> sand_share: array<atomic<u32>>;
+// A wired Sand's grid as its tick ended (sand_read.wgsl): its nodes, its
+// bulk and its table, whose header carries its pool.
+@group(0) @binding(72) var<storage, read> sand_grid: array<SandNode>;
+@group(0) @binding(73) var<storage, read> sand_bulk: array<u32>;
+@group(0) @binding(76) var<storage, read> sand_tiles: array<u32>;
+fn ms_pool_tiles() -> u32 { return sand_tiles[1]; }
+fn ms_table_word(i: u32) -> u32 { return sand_tiles[i]; }
 
 // Slots handed out this build (world_tiles.rs TileLists::fresh).
 @group(0) @binding(53) var<storage, read> tiles_fresh_list: array<u32>;

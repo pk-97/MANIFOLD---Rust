@@ -292,27 +292,19 @@ impl StepState {
             ],
             "gpu_flip.step.forces",
         );
-        // A wired Sand: its grains' share at the corners, then its drag on
-        // the forced faces; `sand_porous` takes the shares after the solids.
-        if let (Some(points), Some(share)) = (step.sand, self.sand_share.as_ref()) {
-            enc.dispatch_compute(
-                &pipes.sand_corners,
-                &[
-                    uniform(&base),
-                    buffer(46, step.clock_plan),
-                    buffer(51, table),
-                    buffer(72, points),
-                    buffer(73, share),
-                ],
-                [p.sand_count.div_ceil(256), 1, 1],
-                "gpu_flip.step.sand_corners",
-            );
-            enc.compute_memory_barrier_buffers();
+        // A wired Sand's drag on the forced faces, read from its grid at
+        // each held cell's low corner.
+        if let Some(sand) = step.sand {
             over(
                 enc,
                 &pipes.sand_drag,
                 held,
-                &[buffer(4, &l.f), buffer(73, share)],
+                &[
+                    buffer(4, &l.f),
+                    buffer(72, sand.grid),
+                    buffer(73, sand.bulk),
+                    buffer(76, sand.tiles),
+                ],
                 "gpu_flip.step.sand_drag",
             );
             enc.compute_memory_barrier_buffers();
@@ -372,13 +364,19 @@ impl StepState {
         // moving with it, once the solids' velocity is final
         // (forces.wgsl `sand_porous`). It writes the solid velocity, so the
         // next step without bodies clears that again.
-        if let (Some(_), Some(share)) = (step.sand, self.sand_share.as_ref()) {
+        if let Some(sand) = step.sand {
             enc.compute_memory_barrier_buffers();
             over(
                 enc,
                 &pipes.sand_porous,
                 held,
-                &[buffer(20, &l.s), buffer(4, &l.v), buffer(73, share)],
+                &[
+                    buffer(20, &l.s),
+                    buffer(4, &l.v),
+                    buffer(72, sand.grid),
+                    buffer(73, sand.bulk),
+                    buffer(76, sand.tiles),
+                ],
                 "gpu_flip.step.sand_porous",
             );
             enc.compute_memory_barrier_buffers();

@@ -28,6 +28,18 @@ pub const LIQUID_DOMAIN_TYPE_IDS: &[&str] = &[
 /// water's surface, so the surface walk never follows them.
 pub const SAND_INPUTS: [&str; 2] = ["sand", "sand_count"];
 
+/// The ports a material stepping a World tick after the first Sand reads
+/// its grid through (a Water's step, a Smoke or Fire's): the grid's nodes,
+/// the bulk its Points to Grid lays, its table, pool and cell. The sand is
+/// not part of the reader's domain.
+pub const SAND_GRID: [&str; 5] = [
+    "sand_grid",
+    "sand_bulk",
+    "sand_tiles",
+    "sand_pool_tiles",
+    "sand_cell",
+];
+
 /// Most Matter items (Sands) one solver holds: its material table's rows.
 /// A scene runs one Matter solver for each group of this many.
 pub const MAX_MATTER_SLOTS: usize = 8;
@@ -102,7 +114,7 @@ pub fn liquid_domains_in(nodes: &[EffectGraphNode]) -> Vec<NestedLiquidDomain> {
 /// domain it meets. A field surface (particles → sort → blobs → volume →
 /// smoothing), a mesh drawn from the particles, and particles or grains drawn
 /// as copies of a fixed mesh all reach their domain. A Sand wired into a
-/// Water's step ([`SAND_INPUTS`]) is not the water's, nor a Water pushing a
+/// Water's step ([`SAND_INPUTS`], [`SAND_GRID`]) is not the water's, nor a Water pushing a
 /// Sand ([`WATER_PUSH_NODE`]) the sand's, nor the other material's table a
 /// solver shares its keys with ([`SHARED_TABLE`]).
 pub fn liquid_domain_of(
@@ -149,6 +161,7 @@ pub fn liquid_domain_of(
         for wire in index.flat.wires.iter().filter(|wire| {
             wire.to_node == id
                 && !SAND_INPUTS.contains(&wire.to_port.as_str())
+                && !SAND_GRID.contains(&wire.to_port.as_str())
                 && !SHARED_TABLE.contains(&wire.to_port.as_str())
                 && !(node.type_id == WATER_PUSH_NODE
                     && (WATER_PUSH_STEP.contains(&wire.to_port.as_str())

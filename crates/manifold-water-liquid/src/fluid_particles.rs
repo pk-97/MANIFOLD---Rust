@@ -72,33 +72,43 @@ impl KnownItem for FluidBlob {
     const SPECS: &'static [ChannelSpec] = FLUID_BLOB_SPECS;
 }
 
-/// One Matter grain as a liquid stepping the same tick sees it
-/// (`node.matter_stats`' `grain_view`, a Water step's `sand`).
+/// One resolved Matter grid node (`node.matter_grid_update`), which a
+/// material stepping the same tick reads ([`SAND_READ`]). 32 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct MatterGrain {
-    /// Metres; w = the radius of the sphere of its bulk volume, 0 for an
-    /// unused slot.
-    pub position_radius: [f32; 4],
-    /// Metres per second; w = the share of its bulk its grains fill (sand's
-    /// packing, 1 for a material with no pores).
-    pub velocity_solid: [f32; 4],
+pub struct MatterGridNode {
+    /// Velocity after forces and boundaries; w = mass in kg (0 = empty).
+    pub velocity_mass: [f32; 4],
+    /// Velocity before forces (momentum / mass), which node.matter_body_reaction
+    /// replays forces from; w = 1 when the resolve clamped this node's velocity.
+    pub velocity_before: [f32; 4],
 }
 
-pub const MATTER_GRAIN_SPECS: &[ChannelSpec] = &[
+pub const MATTER_GRID_NODE_SPECS: &[ChannelSpec] = &[
     ChannelSpec {
-        name: well_known::POSITION_RADIUS,
+        name: well_known::VELOCITY_MASS,
         ty: ChannelElementType::Vec4F,
     },
     ChannelSpec {
-        name: well_known::VELOCITY_SOLID,
+        name: well_known::VELOCITY_BEFORE,
         ty: ChannelElementType::Vec4F,
     },
 ];
 
-impl KnownItem for MatterGrain {
-    const SPECS: &'static [ChannelSpec] = MATTER_GRAIN_SPECS;
+impl KnownItem for MatterGridNode {
+    const SPECS: &'static [ChannelSpec] = MATTER_GRID_NODE_SPECS;
 }
+
+/// A Sand's bulk on its own grid (`node.matter_to_grid`'s `bulk`): its
+/// words a node and their fixed point.
+pub const SAND_BULK: &str = include_str!("primitives/shaders/sand_bulk.wgsl");
+
+/// Bytes of [`SAND_BULK`] a pooled node.
+pub const SAND_BULK_BYTES: u64 = 8;
+
+/// The first Sand's grid read at a world point by a material stepping the
+/// same tick: `sand_at` over its bulk and velocities, through its table.
+pub const SAND_READ: &str = include_str!("primitives/shaders/sand_read.wgsl");
 
 /// The run of sorted particles inside one spatial bin.
 #[repr(C)]

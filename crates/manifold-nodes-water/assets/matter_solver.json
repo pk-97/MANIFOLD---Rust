@@ -415,6 +415,12 @@
     },
     {
       "fromNode": 3,
+      "fromPort": "tick_end",
+      "toNode": 5,
+      "toPort": "tick_end"
+    },
+    {
+      "fromNode": 3,
       "fromPort": "tick_index",
       "toNode": 8,
       "toPort": "tick_index"

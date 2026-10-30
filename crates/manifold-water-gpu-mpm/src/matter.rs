@@ -10,6 +10,7 @@ use manifold_node_engine::channel_names::well_known;
 use manifold_node_engine::ports::{ChannelElementType, ChannelSpec, KnownItem};
 use manifold_node_engine::scene::world_tiles::{TILE, pool_len};
 use manifold_physics::clock::TICK;
+use manifold_water_liquid::fluid_particles::MatterGridNode;
 use manifold_water_liquid::tile_pool::{MAX_POOL_TILES, POOL_BUDGET_BYTES, pool_capacity};
 use manifold_water_liquid::tile_storage::TILE_CELLS;
 use manifold_water_liquid::world_tiles::{Reach, run_tiles};
@@ -108,32 +109,6 @@ pub const MATTER_POINT_SPECS: &[ChannelSpec] = &[
 
 impl KnownItem for MatterPoint {
     const SPECS: &'static [ChannelSpec] = MATTER_POINT_SPECS;
-}
-
-/// One resolved grid node. 32 bytes.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct MatterGridNode {
-    /// Velocity after forces and boundaries; w = mass in kg (0 = empty).
-    pub velocity_mass: [f32; 4],
-    /// Velocity before forces (momentum / mass), which node.matter_body_reaction
-    /// replays forces from; w = 1 when the resolve clamped this node's velocity.
-    pub velocity_before: [f32; 4],
-}
-
-pub const MATTER_GRID_NODE_SPECS: &[ChannelSpec] = &[
-    ChannelSpec {
-        name: well_known::VELOCITY_MASS,
-        ty: ChannelElementType::Vec4F,
-    },
-    ChannelSpec {
-        name: well_known::VELOCITY_BEFORE,
-        ty: ChannelElementType::Vec4F,
-    },
-];
-
-impl KnownItem for MatterGridNode {
-    const SPECS: &'static [ChannelSpec] = MATTER_GRID_NODE_SPECS;
 }
 
 const _: () = {
@@ -888,7 +863,10 @@ mod tests {
     #[test]
     fn matter_records_match_their_channel_layouts() {
         assert_eq!(std430_stride(MATTER_POINT_SPECS), 160);
-        assert_eq!(std430_stride(MATTER_GRID_NODE_SPECS), 32);
+        assert_eq!(
+            std430_stride(manifold_water_liquid::fluid_particles::MATTER_GRID_NODE_SPECS),
+            32
+        );
     }
 
     /// MATTER_SAND_DESIGN.md section 3's worked numbers: Stiffness 1 gives

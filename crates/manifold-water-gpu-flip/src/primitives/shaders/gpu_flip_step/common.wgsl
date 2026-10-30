@@ -135,8 +135,8 @@ struct Params {
     // `surface_tension`): the water's pressure at the free surface is this
     // times its curvature, with `ghost` 1.
     tension: f32,
-    // Sand particles at binding 72 (`sand_corners`), 0 with no sand wired.
-    sand_count: u32,
+    // One over a wired Sand's cell in metres (sand_read.wgsl), 0 with none.
+    sand_inv_cell: f32,
     // How fast a full cell of sand slows the water, per second
     // (`manifold_core::liquid_domain::SAND_WATER_DRAG`).
     sand_drag: f32,

@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
 use manifold_core::liquid_domain::{
-    MAX_MATTER_SLOTS, MAX_WATERS, SHARED_TABLE, WATER_PUSH_NODE, WATER_PUSH_STEP,
+    MAX_MATTER_SLOTS, MAX_WATERS, SAND_GRID, SHARED_TABLE, WATER_PUSH_NODE, WATER_PUSH_STEP,
 };
 use manifold_core::scene_doc::{Item, ItemFields, ItemKind, Quality, SceneDoc, SourceShape};
 use manifold_core::scene_schema::{
@@ -172,18 +172,18 @@ struct MatterSlot<'a> {
     solver: Option<&'a BTreeMap<String, u32>>,
 }
 const WATER_WETNESS: &str = "water_wetness";
-/// The Sand template's tick-end node (`node.matter_stats`), whose
-/// `grain_view` holds every grain at the end of each tick.
+/// The Sand template's tick-end node (`node.matter_stats`), which reads the
+/// grid, its table and pool as each tick ends.
 const MATTER_TICK_STATS: &str = "matter_tick_stats";
 
 /// What Smoke and Fire flow round inside each tick of the World's loop
 /// (`gas::emit_all`): the first Water's step, whose tiles hold its water as
-/// the tick left it, and the first Sand's tick-end stats, whose `grain_view`
-/// holds its grains.
+/// the tick left it, and the first Sand's tick-end stats, through which its
+/// grid is found ([`wire_sand`]).
 #[derive(Clone, Copy, Default)]
 pub(crate) struct MatterFrames {
     pub(crate) water_step: Option<u32>,
-    pub(crate) grains: Option<u32>,
+    pub(crate) sand: Option<u32>,
 }
 
 /// Emit every Water and Sand and its sources. With no water solver linked,
@@ -291,7 +291,7 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
         water_step: water_ids
             .first()
             .and_then(|(_, ids)| ids.get("step").copied()),
-        grains: solvers
+        sand: solvers
             .first()
             .and_then(|solver| solver.ids.get(MATTER_TICK_STATS).copied()),
     };
@@ -301,11 +301,10 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
     let [points, count] = manifold_core::liquid_domain::SAND_INPUTS;
     let tick_end = solver.ids.get(MATTER_TICK_STATS).copied();
     for (_, ids) in &water_ids {
-        // The water steps each tick against the grains at the end of the
-        // same tick: the World runs Matter's tick, then the water's.
+        // The water steps each tick against the Sand's grid at the end of
+        // the same tick: the World runs Matter's tick, then the water's.
         if let (Some(&step), Some(tick_end)) = (ids.get("step"), tick_end) {
-            b.wire(tick_end, "grain_view", step, points);
-            b.wire(tick_end, "view_count", step, count);
+            wire_sand(b, tick_end, step);
         }
         if let Some(&wetness) = ids.get(WATER_WETNESS) {
             b.wire(frame, "particles_b", wetness, points);
@@ -317,6 +316,30 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
         share_tables(b, step, solver);
     }
     frames
+}
+
+/// Wire the first Sand's grid as its tick ends into a material stepping the
+/// same tick after it (a Water's step, a Smoke or Fire's), found through its
+/// tick-end `stats`: the grid's nodes, the bulk its Points to Grid lays on
+/// the tick's last substep, its table, pool and cell
+/// (`liquid_domain::SAND_GRID`).
+pub(crate) fn wire_sand(b: &mut Builder<'_>, stats: u32, reader: u32) {
+    let (Some((grid, grid_port)), Some((to_grid, tiles_port)), Some((pool, pool_port))) = (
+        b.input(stats, "grid"),
+        b.input(stats, "tiles"),
+        b.input(stats, "pool_tiles"),
+    ) else {
+        return;
+    };
+    let Some((cell, cell_port)) = b.input(to_grid, "cell_size") else {
+        return;
+    };
+    let [sand_grid, sand_bulk, sand_tiles, sand_pool, sand_cell] = SAND_GRID;
+    b.wire(grid, &grid_port, reader, sand_grid);
+    b.wire(to_grid, "bulk", reader, sand_bulk);
+    b.wire(to_grid, &tiles_port, reader, sand_tiles);
+    b.wire(pool, &pool_port, reader, sand_pool);
+    b.wire(cell, &cell_port, reader, sand_cell);
 }
 
 /// One Matter solver as emitted: the first Sand's id and node ids, and each

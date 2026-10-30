@@ -9,7 +9,8 @@
 //! the sides and top are open. The scene's Colliders and Bodies are solids the
 //! air flows round and a moving body pushes. Water and sand are solids too:
 //! a cell the water fills, read through the water's own tiles, or at least
-//! half full of the Matter's grains as this tick left them, moves with them,
+//! half full of sand, read from the Matter's own grid as this tick left it,
+//! moves with them,
 //! so smoke rolls over water and a splash or a sand slide shoves it. The
 //! fields stay on the GPU; the frame's last tick publishes the packed state
 //! and velocity of every cell into the loop's published arrays and the
@@ -29,12 +30,14 @@ use manifold_node_engine::scene::blackbody::{
     BLACKBODY_ENTRIES, BLACKBODY_MAX_KELVIN, BLACKBODY_MIN_KELVIN, blackbody_table,
 };
 use manifold_node_engine::scene::transform::Transform;
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_words};
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, read_side_as, table_words};
 use manifold_physics::force_lattice::ForceLattice;
 use manifold_water_liquid::bodies::{
     COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape,
 };
-use manifold_water_liquid::fluid_particles::{FaceSample, MatterGrain};
+use manifold_water_liquid::fluid_particles::{
+    FaceSample, MatterGridNode, SAND_BULK, SAND_BULK_BYTES, SAND_READ,
+};
 use manifold_water_liquid::grid::LIQUID_FACES;
 use manifold_water_liquid::whitewater::WHITEWATER_COMMON;
 
@@ -54,8 +57,6 @@ const DEFAULT_GRAVITY: f32 = 9.81;
 const IGNITION: f32 = 0.2;
 /// Threads per workgroup edge in `gas_step.wgsl`.
 const GROUP_EDGE: u32 = 4;
-/// Most workgroups along x of the particle kernel; more wrap onto y.
-const MAX_GROUPS_ACROSS: u32 = 65_535;
 /// Light sum buffers in the domain's ring: this frame's write, the one still
 /// in flight and the one the CPU reads.
 pub(crate) const RING: usize = 3;
@@ -93,8 +94,9 @@ const FINE: u32 = 2;
 static SHADERS: LazyLock<[String; 2]> = LazyLock::new(|| {
     [false, true].map(|solids| {
         format!(
-            "{}\n{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{COLLIDER_BVH}\n{READ_SIDE}\n{LIQUID_FACES}\n{WHITEWATER_COMMON}\n{}",
+            "{}\n{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{COLLIDER_BVH}\n{READ_SIDE}\n{}\n{SAND_BULK}\n{SAND_READ}\n{LIQUID_FACES}\n{WHITEWATER_COMMON}\n{}",
             shader_constants(solids),
+            read_side_as("ms_"),
             include_str!("shaders/gas_step.wgsl")
         )
     })
@@ -415,10 +417,10 @@ struct GasUniforms {
     impulse_base: u32,
     solid_base: u32,
     solid_count: u32,
-    /// The water's tiles' pool (0 while no water reaches the gas), the
-    /// grains this tick and the water's cell in metres.
+    /// The water's tiles' pool (0 while no water reaches the gas), one over
+    /// the Sand's cell (0 while no sand does) and the water's cell in metres.
     water_pool: u32,
-    sand_count: u32,
+    sand_inv_cell: f32,
     water_cell: f32,
 }
 
@@ -470,7 +472,7 @@ impl GasUniforms {
             solid_base: step.solids.map_or(0, |(base, _)| base),
             solid_count: step.solids.map_or(0, |(_, count)| count),
             water_pool: matter.water.map_or(0, |water| water.pool_tiles),
-            sand_count: matter.sand.map_or(0, |(_, count)| count),
+            sand_inv_cell: matter.sand.map_or(0.0, |sand| sand.inv_cell),
             water_cell: matter.water.map_or(0.0, |water| water.cell),
         }
     }
@@ -539,8 +541,6 @@ pub struct GasBuffers {
     static_written: Option<f32>,
     /// One word: where the source sits on the static solids.
     source_floor: GpuBuffer,
-    /// Four words a cell: the grains there, while a Sand reaches the gas.
-    matter: Option<GpuBuffer>,
 }
 
 impl GasBuffers {
@@ -584,34 +584,7 @@ impl GasBuffers {
             solid: None,
             static_written: None,
             source_floor: make(16, BufferUse::Gpu)?,
-            matter: None,
         })
-    }
-
-    /// Keep the grains' field while a Sand reaches the gas, admitted against
-    /// the World's budget; drop it when none does.
-    fn keep_matter(
-        &mut self,
-        device: &GpuDevice,
-        geometry: &GasGeometry,
-        wanted: bool,
-    ) -> Result<(), String> {
-        if !wanted {
-            self.matter = None;
-        } else if self.matter.is_none() {
-            let bytes = geometry.cells() * 16;
-            manifold_node_engine::load::expand::admit_world_bytes(
-                device.modifier_memory_snapshot(),
-                bytes,
-            )
-            .map_err(|error| refusal(geometry, bytes, error))?;
-            self.matter = Some(
-                device
-                    .try_create_buffer(bytes, BufferUse::Gpu)
-                    .map_err(|error| refusal(geometry, bytes, error))?,
-            );
-        }
-        Ok(())
     }
 
     /// Keep the solid field while the scene has solids, admitted against the
@@ -672,7 +645,6 @@ pub struct Pipelines {
     solids_static: Option<GpuComputePipeline>,
     solids: Option<GpuComputePipeline>,
     fill_solids: Option<GpuComputePipeline>,
-    matter: Option<GpuComputePipeline>,
 }
 
 impl Pipelines {
@@ -704,7 +676,6 @@ impl Pipelines {
             solids_static: solids.then(|| make("cs_solids_static")),
             solids: solids.then(|| make("cs_solids")),
             fill_solids: solids.then(|| make("cs_fill_solids")),
-            matter: solids.then(|| make("cs_matter")),
         }
     }
 }
@@ -748,7 +719,7 @@ fn binding_list<'a>(
     roles: Roles,
     shared: Shared<'a>,
     solids: &SolidBuffers<'a>,
-) -> [GpuBinding<'a>; 30] {
+) -> [GpuBinding<'a>; 31] {
     let bind = |binding: u32, buffer: &'a GpuBuffer| GpuBinding::Buffer {
         binding,
         buffer,
@@ -781,19 +752,20 @@ fn binding_list<'a>(
         bind(20, solids.triangles),
         bind(21, solids.cells),
         bind(22, &buffers.source_floor),
-        bind(23, solids.matter),
+        bind(23, solids.sand_grid),
         bind(24, solids.water_faces),
-        bind(25, solids.sand),
+        bind(25, solids.sand_bulk),
         bind(26, shared.moving),
         bind(27, shared.state),
         bind(28, solids.water_distance),
         bind(29, solids.water_tiles),
+        bind(30, solids.sand_tiles),
     ]
 }
 
 /// What the solid bindings hold: the scene's bodies, shapes, lattices and
-/// trees, the solid field, the grains' field, the water's tiles and the
-/// grains, or the placeholder for each the scene has none of.
+/// trees, the solid field, the water's tiles and the Sand's grid, or the
+/// placeholder for each the scene has none of.
 struct SolidBuffers<'a> {
     bodies: &'a GpuBuffer,
     shapes: &'a GpuBuffer,
@@ -801,11 +773,12 @@ struct SolidBuffers<'a> {
     nodes: &'a GpuBuffer,
     triangles: &'a GpuBuffer,
     cells: &'a GpuBuffer,
-    matter: &'a GpuBuffer,
     water_faces: &'a GpuBuffer,
     water_distance: &'a GpuBuffer,
     water_tiles: &'a GpuBuffer,
-    sand: &'a GpuBuffer,
+    sand_grid: &'a GpuBuffer,
+    sand_bulk: &'a GpuBuffer,
+    sand_tiles: &'a GpuBuffer,
 }
 
 /// The domain's bodies this frame: rows, shapes, lattices and trees.
@@ -835,11 +808,12 @@ impl<'a> SolidBuffers<'a> {
             nodes: body(bodies.nodes),
             triangles: body(bodies.triangles),
             cells: buffers.solid.as_ref().unwrap_or(none),
-            matter: buffers.matter.as_ref().unwrap_or(none),
             water_faces: matter.water.map_or(none, |water| water.faces),
             water_distance: matter.water.map_or(none, |water| water.distance),
             water_tiles: matter.water.map_or(none, |water| water.tiles),
-            sand: matter.sand.map_or(none, |(grains, _)| grains),
+            sand_grid: matter.sand.map_or(none, |sand| sand.grid),
+            sand_bulk: matter.sand.map_or(none, |sand| sand.bulk),
+            sand_tiles: matter.sand.map_or(none, |sand| sand.tiles),
         }
     }
 }
@@ -855,13 +829,24 @@ struct WaterTiles<'a> {
     cell: f32,
 }
 
+/// The first Sand's grid as its tick ended (sand_read.wgsl):
+/// node.matter_grid_update's nodes, node.matter_to_grid's bulk, its table and
+/// one over its cell in metres.
+#[derive(Clone, Copy)]
+struct SandGrid<'a> {
+    grid: &'a GpuBuffer,
+    bulk: &'a GpuBuffer,
+    tiles: &'a GpuBuffer,
+    inv_cell: f32,
+}
+
 /// The water and sand that reach the gas this tick: the first Water's
-/// tiles, and the first Sand's grains (`node.matter_stats`' `grain_view`)
-/// with their count; None for one not wired, empty or not yet stepped.
+/// tiles, and the first Sand's grid; None for one not wired, empty or not
+/// yet stepped.
 #[derive(Clone, Copy, Default)]
 struct Matter<'a> {
     water: Option<WaterTiles<'a>>,
-    sand: Option<(&'a GpuBuffer, u32)>,
+    sand: Option<SandGrid<'a>>,
 }
 
 impl<'a> Matter<'a> {
@@ -892,10 +877,28 @@ impl<'a> Matter<'a> {
                 })
         })();
         let sand = (|| {
-            let grains = ctx.inputs.array("sand")?;
-            let slots = grains.size / size_of::<MatterGrain>() as u64;
-            let count = (ctx.scalar_or_param("sand_count", 0.0).round().max(0.0) as u64).min(slots);
-            (count > 0).then_some((grains, count as u32))
+            let pool = ctx.scalar_or_param("sand_pool_tiles", 0.0).round();
+            let cell = ctx.scalar_or_param("sand_cell", 0.0);
+            // Before the Sand's first tick it has laid no bulk.
+            if !((1.0..=16_777_216.0).contains(&pool) && cell > 0.0 && cell.is_finite()) {
+                return None;
+            }
+            let pool_tiles = pool as u32;
+            let nodes = pool_len(pool_tiles);
+            let (grid, bulk, tiles) = (
+                ctx.inputs.array("sand_grid")?,
+                ctx.inputs.array("sand_bulk")?,
+                ctx.inputs.array("sand_tiles")?,
+            );
+            (grid.size >= nodes * size_of::<MatterGridNode>() as u64
+                && bulk.size >= nodes * SAND_BULK_BYTES
+                && tiles.size >= table_words(pool_tiles) * 4)
+                .then_some(SandGrid {
+                    grid,
+                    bulk,
+                    tiles,
+                    inv_cell: 1.0 / cell,
+                })
         })();
         Self { water, sand }
     }
@@ -977,7 +980,7 @@ impl Tick {
 manifold_node_engine::primitive! {
     name: GasVolume,
     type_id: "node.gas_volume",
-    purpose: "Step smoke or fire one tick in an axis-aligned box of cells: the body of the gas's tick loop (node.gas_ticks), once a tick of node.gas_domain's clock. The box is the domain's fine grid (cell_size, origin_x, origin_y, origin_z, dims_x, dims_y, dims_z; the air's cells are twice as coarse). The floor is a wall; the sides and top are open and fade what reaches them. A source at the floor's centre adds smoke density (Kind Smoke) or fuel that ignites past the ignition temperature (Kind Fire); hot gas rises against gravity, swirls, and expands where it burns. Each tick steps tick_dt seconds and reads the domain's force lattice tick_forces and impulse lattice tick_impulses (-1 for none) and its body rows (tick_solid_count from tick_solid_base): the scene's Colliders and Bodies, solids the air flows round and a moving body pushes. Water and sand are solids too: a cell the first Water's step fills at least half (its faces and distance read through its tiles, pool_tiles, at water_cell) moves with the water, and a cell at least half full of the first Sand's grains (sand, sand_count: node.matter_stats' grain_view) with them. restarted clears the fields on the frame's first tick; so does a change of the box's cell counts. On the frame's last tick (tick_last) it writes the published state (two words a fine cell: density and temperature, then fuel and flame, each pair as two halves) and velocity (u and v, then w and 0, as halves) in place into state and velocity, the loop's arrays, and the flames' light sums into light.",
+    purpose: "Step smoke or fire one tick in an axis-aligned box of cells: the body of the gas's tick loop (node.gas_ticks), once a tick of node.gas_domain's clock. The box is the domain's fine grid (cell_size, origin_x, origin_y, origin_z, dims_x, dims_y, dims_z; the air's cells are twice as coarse). The floor is a wall; the sides and top are open and fade what reaches them. A source at the floor's centre adds smoke density (Kind Smoke) or fuel that ignites past the ignition temperature (Kind Fire); hot gas rises against gravity, swirls, and expands where it burns. Each tick steps tick_dt seconds and reads the domain's force lattice tick_forces and impulse lattice tick_impulses (-1 for none) and its body rows (tick_solid_count from tick_solid_base): the scene's Colliders and Bodies, solids the air flows round and a moving body pushes. Water and sand are solids too: a cell the first Water's step fills at least half (its faces and distance read through its tiles, pool_tiles, at water_cell) moves with the water, and a cell at least half full of the first Sand's bulk (read from its grid through its table: sand_grid, sand_bulk, sand_tiles, sand_pool_tiles, sand_cell) with the sand. restarted clears the fields on the frame's first tick; so does a change of the box's cell counts. On the frame's last tick (tick_last) it writes the published state (two words a fine cell: density and temperature, then fuel and flame, each pair as two halves) and velocity (u and v, then w and 0, as halves) in place into state and velocity, the loop's arrays, and the flames' light sums into light.",
     inputs: {
         cell_size: ScalarF32 optional,
         origin_x: ScalarF32 optional, origin_y: ScalarF32 optional, origin_z: ScalarF32 optional,
@@ -1009,8 +1012,11 @@ manifold_node_engine::primitive! {
         tiles: Array(u32) optional,
         pool_tiles: ScalarF32 optional,
         water_cell: ScalarF32 optional,
-        sand: Array(MatterGrain) optional,
-        sand_count: ScalarF32 optional,
+        sand_grid: Array(MatterGridNode) optional,
+        sand_bulk: Array(u32) optional,
+        sand_tiles: Array(u32) optional,
+        sand_pool_tiles: ScalarF32 optional,
+        sand_cell: ScalarF32 optional,
     },
     outputs: {
         state_out: Array(u32),
@@ -1036,7 +1042,7 @@ manifold_node_engine::primitive! {
         gas_param!("seed", "Seed", Int, 0.0, 0.0, 16_777_215.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "The body of node.gas_ticks' region: state and velocity from node.gas_ticks, state_out and velocity_out back into its state_in and velocity_in. The fine grid, every tick_* scalar, restarted, solids_move, static_epoch, the lattices, body rows, shapes, trees, moving and light from node.gas_domain; gravity from the World. faces, distance, tiles and pool_tiles from the first Water's node.gpu_flip_step and water_cell its cell, and sand and sand_count from the first Sand's node.matter_stats grain_view and view_count: both step before the gas in each tick of the World's loop. The defaults are Smoke's; Fire sets Kind to 1 and its own rates.",
+    composition_notes: "The body of node.gas_ticks' region: state and velocity from node.gas_ticks, state_out and velocity_out back into its state_in and velocity_in. The fine grid, every tick_* scalar, restarted, solids_move, static_epoch, the lattices, body rows, shapes, trees, moving and light from node.gas_domain; gravity from the World. faces, distance, tiles and pool_tiles from the first Water's node.gpu_flip_step and water_cell its cell, and the sand_* inputs from the first Sand's node.matter_grid_update grid and node.matter_to_grid bulk, tiles, pool and cell: both step before the gas in each tick of the World's loop. The defaults are Smoke's; Fire sets Kind to 1 and its own rates.",
     examples: [],
     picker: { label: "Gas Volume", category: Atom },
     summary: "Steps smoke or fire in a box of cells, one tick.",
@@ -1079,7 +1085,11 @@ impl<'a> Frame<'a> {
         let whole = |name: &str| read(name, 0.0).round().max(0.0) as u32;
         let geometry = GasGeometry::from_fine(
             read("cell_size", 0.0),
-            [read("origin_x", 0.0), read("origin_y", 0.0), read("origin_z", 0.0)],
+            [
+                read("origin_x", 0.0),
+                read("origin_y", 0.0),
+                read("origin_z", 0.0),
+            ],
             [whole("dims_x"), whole("dims_y"), whole("dims_z")],
         );
         if geometry.cells() == 0 || !(geometry.cell > 0.0 && geometry.cell.is_finite()) {
@@ -1173,7 +1183,6 @@ impl GasVolume {
         let with_solids = with_bodies || matter.any();
         let stored = self.buffers.as_mut().expect("buffers were just allocated");
         stored.keep_solid(device, &geometry, with_solids)?;
-        stored.keep_matter(device, &geometry, matter.sand.is_some())?;
         // The Collider meshes are read through their trees, so they are laid
         // only when they or the box change; the moving solids, a lattice
         // each, and the water and sand every tick.
@@ -1261,30 +1270,6 @@ impl GasVolume {
             );
         }
         if tick.dt > 0.0 {
-            if let (Some(field), Some((_, count))) = (&buffers.matter, matter.sand) {
-                // The grains as the Sand's tick left them.
-                enc.clear_buffer(field);
-                enc.compute_memory_barrier_buffers();
-                let groups = count.div_ceil(64);
-                let across = groups.min(MAX_GROUPS_ACROSS);
-                let bindings = binding_list(
-                    uniform_bytes,
-                    buffers,
-                    Roles::new(last, (last + 1) % RING),
-                    shared,
-                    &solids,
-                );
-                pass(
-                    enc,
-                    pipelines
-                        .matter
-                        .as_ref()
-                        .expect("solids build their kernels"),
-                    &bindings,
-                    [across, groups.div_ceil(across), 1],
-                    "node.gas_volume.matter",
-                );
-            }
             let (a, b) = ((last + 1) % RING, (last + 2) % RING);
             let advection = binding_list(
                 uniform_bytes,
@@ -1346,13 +1331,8 @@ impl GasVolume {
             ] {
                 pass(enc, pipeline, &advection, fine_groups, label);
             }
-            let working = binding_list(
-                uniform_bytes,
-                buffers,
-                Roles::new(last, b),
-                shared,
-                &solids,
-            );
+            let working =
+                binding_list(uniform_bytes, buffers, Roles::new(last, b), shared, &solids);
             // Swirl at 0 confines nothing: its two passes don't run.
             let swirl = settings.vorticity > 0.0;
             for (pipeline, grid, label, runs) in [
@@ -1554,7 +1534,6 @@ mod tests {
                 "cs_solids_static",
                 "cs_solids",
                 "cs_fill_solids",
-                "cs_matter",
             ] {
                 assert!(
                     module.entry_points.iter().any(|point| point.name == entry),
@@ -1608,7 +1587,7 @@ mod tests {
             solid_base,
             solid_count,
             water_pool,
-            sand_count,
+            sand_inv_cell,
             water_cell,
         );
         assert_eq!(std::mem::size_of::<GasUniforms>(), 192);

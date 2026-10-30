@@ -93,7 +93,16 @@ fn build_shared(device: &GpuDevice, tiles: &WorldTiles, cells: &[[i32; 3]], othe
         table: other.table(),
         pool_tiles: other.pool_tiles(),
     };
-    build_with(device, tiles, cells, &plan(device, true), 0, None, None, Some(sharing));
+    build_with(
+        device,
+        tiles,
+        cells,
+        &plan(device, true),
+        0,
+        None,
+        None,
+        Some(sharing),
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -590,7 +599,11 @@ fn alias_and_full_table_are_reported() {
     let counts = read(tiles.counts(), count_words(0) as usize);
     assert_ne!(counts[exhausted_word(0)] & ALIAS, 0, "alias reported");
     let words = read(tiles.table(), table_words(tiles.pool_tiles()) as usize);
-    let held: Vec<u32> = table_keys(&words).iter().copied().filter(|&k| k != 0).collect();
+    let held: Vec<u32> = table_keys(&words)
+        .iter()
+        .copied()
+        .filter(|&k| k != 0)
+        .collect();
     assert_eq!(held, [tile_key([0, 0, 0])], "one key for both tiles");
 
     let mut tiny = WorldTiles::new(&device, 1, reach, LIQUID_POINTS).expect("world tiles");
@@ -763,13 +776,20 @@ fn cell_lookup_paths_agree_over_a_block_of_tiles() {
 /// Each table's held slots as (tile, slot, entry), read from its words.
 fn held(tiles: &WorldTiles) -> Vec<([i32; 3], u32, u32)> {
     let h = tiles.table_entries();
-    let words = read(tiles.table(), table_words_at(h, tiles.pool_tiles()) as usize);
+    let words = read(
+        tiles.table(),
+        table_words_at(h, tiles.pool_tiles()) as usize,
+    );
     (0..tiles.pool_tiles())
         .filter_map(|s| {
             let row = slot_row_word(h, s) as usize;
             let entry = words[row + 3];
             (entry != NONE).then(|| {
-                let tile = [words[row] as i32, words[row + 1] as i32, words[row + 2] as i32];
+                let tile = [
+                    words[row] as i32,
+                    words[row + 1] as i32,
+                    words[row + 2] as i32,
+                ];
                 (tile, s, entry)
             })
         })
@@ -782,7 +802,11 @@ fn assert_shared(a: &WorldTiles, b: &WorldTiles, step: &str) {
     let h = a.table_entries();
     let words_a = read(a.table(), table_words_at(h, a.pool_tiles()) as usize);
     let words_b = read(b.table(), table_words_at(h, b.pool_tiles()) as usize);
-    assert_eq!(table_keys(&words_a), table_keys(&words_b), "{step}: one key set");
+    assert_eq!(
+        table_keys(&words_a),
+        table_keys(&words_b),
+        "{step}: one key set"
+    );
     for (name, tiles, words) in [("a", a, &words_a), ("b", b, &words_b)] {
         let slots = held(tiles);
         assert!(!slots.is_empty(), "{step}: {name} holds tiles");
@@ -840,5 +864,9 @@ fn two_tables_share_one_key_set() {
     let h = a.table_entries();
     let words = read(a.table(), table_words_at(h, pool_a) as usize);
     let entry = find(table_keys(&words), tile_key([6, 0, 0])).expect("the pile's tile is a key");
-    assert_eq!(words[entry_slot_word(h, entry) as usize], NONE, "no water slot there");
+    assert_eq!(
+        words[entry_slot_word(h, entry) as usize],
+        NONE,
+        "no water slot there"
+    );
 }

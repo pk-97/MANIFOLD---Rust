@@ -134,71 +134,25 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
     faces_out[at] = out;
 }
 
-// Fixed-point units of one whole cell of sand in `sand_share`, and of one
-// whole cell of sand moving at 1 m/s in its momentum words (a 16th of the
-// share's, so tens of grains at tens of m/s stay inside an i32).
-const SAND_FIXED: f32 = 65536.0;
-const SAND_MOMENTUM_FIXED: f32 = 4096.0;
-
-// One thread a sand particle, after the step's table is built: its rest
-// volume (the sphere of its radius) over a cell's, and that volume times its
-// velocity, shared trilinearly among the eight corners round it. A grain whose own tile the water does not hold
-// is far from any water (the table holds rings of tiles round it) and adds
-// nothing, so a pile away from the water costs one lookup a grain.
-@compute @workgroup_size(256)
-fn sand_corners(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !clock_active() || gid.x >= u.sand_count { return; }
-    let point = sand_points[gid.x];
-    let r = point.position_radius.w * u.inv_cell;
-    if r <= 0.0 { return; }
-    let g = (point.position_radius.xyz - u.origin) * u.inv_cell;
-    let base = vec3<i32>(floor(g));
-    let home = ts_cell_at(base);
-    if home == ts_canon() { return; }
-    ts_home(home);
-    let f = g - floor(g);
-    let share = SAND_FIXED * 4.18879 * r * r * r;
-    for (var k = 0u; k < 8u; k = k + 1u) {
-        let o = vec3<u32>(k & 1u, (k >> 1u) & 1u, k >> 2u);
-        let idx = ts_cell_at(base + vec3<i32>(o));
-        if idx == ts_canon() { continue; }
-        let w = select(1.0 - f, f, o == vec3<u32>(1u));
-        let weight = w.x * w.y * w.z;
-        let corner = SAND_WORDS * idx;
-        atomicAdd(&sand_share[corner], u32(share * weight + 0.5));
-        // Signed momentum adds as two's complement in the u32 words.
-        let momentum = round(point.velocity_solid.xyz * (SAND_MOMENTUM_FIXED / SAND_FIXED) * share * weight);
-        for (var axis = 0u; axis < 3u; axis = axis + 1u) {
-            atomicAdd(&sand_share[corner + 1u + axis], bitcast<u32>(i32(momentum[axis])));
-        }
-        // Only a porous material closes faces: a continuous one (solid share
-        // 1) would seal the water inside it off from the solve; its drag
-        // holds that water.
-        let porous = select(0.0, point.velocity_solid.w, point.velocity_solid.w < 1.0);
-        atomicAdd(&sand_share[corner + 4u], u32(share * porous * weight + 0.5));
-    }
+// The first Sand at a held cell's low corner (origin + p·h), read from its
+// grid as its tick ended.
+fn sand_corner(at: u32) -> SandHere {
+    return sand_at(u.origin + vec3<f32>(ts_cell_coord(at)) / u.inv_cell, u.sand_inv_cell);
 }
 
 // 512 threads a held slot, after `face_gravity`: sand is a porous moving
 // solid, so the water inside it is drawn toward the sand's mean velocity at
-// the cell's low corner by its share there, which stands for the cell's
-// three faces (a grain's share spreads over the cell round it). The words
-// stay for `sand_porous`.
+// the cell's low corner by how full of sand it is there, which stands for
+// the cell's three faces.
 @compute @workgroup_size(256)
 fn sand_drag(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let corner = SAND_WORDS * list_cell(gid.x);
-    let total = f32(atomicLoad(&sand_share[corner])) / SAND_FIXED;
-    var momentum = vec3<f32>(0.0);
-    for (var axis = 0u; axis < 3u; axis = axis + 1u) {
-        momentum[axis] = f32(bitcast<i32>(atomicLoad(&sand_share[corner + 1u + axis])));
-    }
-    if total <= 0.0 { return; }
-    let sand_velocity = momentum / (SAND_MOMENTUM_FIXED * total);
     let at = list_cell(gid.x);
+    let sand = sand_corner(at);
+    if !(sand.fraction > 0.0) { return; }
     var here = faces_out[at];
-    let keep = exp(-u.sand_drag * min(total, 1.0) * adaptive_step_dt());
-    here.face_velocity = vec4<f32>(sand_velocity + (here.face_velocity.xyz - sand_velocity) * keep, here.face_velocity.w);
+    let keep = exp(-u.sand_drag * min(sand.fraction, 1.0) * adaptive_step_dt());
+    here.face_velocity = vec4<f32>(sand.velocity + (here.face_velocity.xyz - sand.velocity) * keep, here.face_velocity.w);
     faces_out[at] = here;
 }
 
@@ -209,23 +163,16 @@ fn sand_drag(@builtin(global_invocation_id) gid: vec3<u32>) {
 // faces, as in `sand_drag`) closes that much of the face, and the closed
 // part moves at the sand's mean velocity, with no friction and no body's
 // reaction. The divergence then holds the mixture's flux, so the water makes
-// way for sand coming in and passes a pile only through its pores. The
-// words are taken, so the next step's `sand_corners` adds to zero.
+// way for sand coming in and passes a pile only through its pores.
 @compute @workgroup_size(256)
 fn sand_porous(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let at = list_cell(gid.x);
-    let corner = SAND_WORDS * at;
-    let total = f32(atomicExchange(&sand_share[corner], 0u)) / SAND_FIXED;
-    var momentum = vec3<f32>(0.0);
-    for (var axis = 0u; axis < 3u; axis = axis + 1u) {
-        momentum[axis] = f32(bitcast<i32>(atomicExchange(&sand_share[corner + 1u + axis], 0u)));
-    }
+    let sand = sand_corner(at);
     // Packed past a full cell, the grains still fill only their packing.
-    let grains = f32(atomicExchange(&sand_share[corner + 4u], 0u)) / SAND_FIXED;
-    let solid = grains / max(total, 1.0);
-    if !(total > 0.0) || !(solid > 0.0) { return; }
-    let sand_velocity = momentum / (SAND_MOMENTUM_FIXED * total);
+    let solid = sand.solid / max(sand.fraction, 1.0);
+    if !(sand.fraction > 0.0) || !(solid > 0.0) { return; }
+    let sand_velocity = sand.velocity;
     var open = faces_rw[at];
     var moving = faces_out[at];
     var code = u32(moving.face_velocity.w);

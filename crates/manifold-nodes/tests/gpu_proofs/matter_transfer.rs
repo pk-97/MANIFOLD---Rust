@@ -24,9 +24,10 @@ use manifold_node_engine::{
     state_store::StateStore,
 };
 use manifold_water_gpu_mpm::matter::{
-    MASS_SCALE, MatterGridNode, MatterPoint, SAND_DENSITY, field_min, mass_unit, matter_nodes,
+    MASS_SCALE, MatterPoint, SAND_DENSITY, field_min, mass_unit, matter_nodes,
     matter_pool_tiles, momentum_unit,
 };
+use manifold_water_liquid::fluid_particles::MatterGridNode;
 use manifold_water_liquid::bounds::{ALL_FACES, NO_KILL_HEIGHT};
 use manifold_water_liquid::testkit::world_box::from_pool_under;
 

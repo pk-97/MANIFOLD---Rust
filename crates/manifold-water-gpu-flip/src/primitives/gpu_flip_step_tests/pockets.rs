@@ -141,8 +141,7 @@ impl Tiles {
             assert!(insert(keys, tile_key(t)), "the table holds every tile");
         }
         for (slot, t) in tiles.iter().enumerate() {
-            let entry =
-                find(table_keys(&words), tile_key(*t)).expect("an inserted tile is found");
+            let entry = find(table_keys(&words), tile_key(*t)).expect("an inserted tile is found");
             words[entry_slot_word(entries, entry) as usize] = slot as u32;
             let row = slot_row_word(entries, slot as u32) as usize;
             for a in 0..3 {

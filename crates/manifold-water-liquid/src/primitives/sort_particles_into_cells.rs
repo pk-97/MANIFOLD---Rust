@@ -26,9 +26,7 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::{FLUID_PARTICLE_SPECS, FluidParticle};
 use manifold_node_engine::ports::{ArrayType, ChannelElementType, std430_channel};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::world_tiles::{
-    READ_SIDE, lattice_origin, pool_len, table_words,
-};
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, lattice_origin, pool_len, table_words};
 
 /// The sort's passes. Composed after a key source: [`DENSE_KEYS`],
 /// [`POOLED_KEYS`] or [`BLOCK_KEYS`] (the pooled ones with `READ_SIDE` before

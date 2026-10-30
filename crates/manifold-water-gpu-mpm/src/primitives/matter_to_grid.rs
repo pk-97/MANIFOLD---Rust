@@ -6,7 +6,8 @@
 //! workgroup tile and flushes into the pooled accumulator. It clears the
 //! accumulator over the held tiles first and hands the held-tile list and its
 //! dispatch triple to the grid passes, so they pay only for tiles that hold
-//! matter.
+//! matter. While a material stepping the same tick reads the grid, the
+//! tick's last substep also lays the points' bulk on it (`bulk`).
 
 use manifold_gpu::BufferUse;
 use std::borrow::Cow;
@@ -16,19 +17,20 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 use crate::matter::{
     MATTER_REACH, MatterPoint, REBUILD_SUBSTEPS, grid_accum_bytes, momentum_unit_fits,
 };
+use manifold_core::liquid_domain::SHARED_TABLE;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::ports::ArrayType;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::active_elements;
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, lattice_origin};
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, lattice_origin, pool_len};
+use manifold_water_liquid::fluid_particles::{SAND_BULK, SAND_BULK_BYTES};
 use manifold_water_liquid::primitives::prefix_scan::{ScanLabels, open_gate};
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
     ParticleSorter, SortCount, SortJob, SortLabels, block_keys, record_read,
 };
-use manifold_water_liquid::tile_pool::pool_tiles_wire;
-use manifold_core::liquid_domain::SHARED_TABLE;
 use manifold_water_liquid::tile_pool::MAX_POOL_TILES;
+use manifold_water_liquid::tile_pool::pool_tiles_wire;
 use manifold_water_liquid::world_tiles::{
     Allocation, MATTER_POINTS, PointCount, SharedTable, WorldTiles, allocated_args_offset,
     shared_table_entries,
@@ -37,7 +39,7 @@ use manifold_water_liquid::world_tiles::{
 // The kernel after the table's read side it indexes its nodes through.
 static SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
-        "{READ_SIDE}\n{}\n{}",
+        "{READ_SIDE}\n{SAND_BULK}\n{}\n{}",
         super::matter_common::MATTER_MATERIAL,
         include_str!("shaders/matter_to_grid.wgsl")
     )
@@ -66,7 +68,9 @@ pub(crate) struct P2gParams {
     pub(crate) substep_in_tick: u32,
     pub(crate) momentum_unit: f32,
     pub(crate) pool_tiles: u32,
-    pub(crate) _pad: [u32; 5],
+    /// 1 when this substep lays the bulk.
+    pub(crate) bulk: u32,
+    pub(crate) _pad: [u32; 4],
 }
 
 manifold_node_engine::primitive! {
@@ -85,6 +89,8 @@ manifold_node_engine::primitive! {
         active_count: ScalarF32 optional,
         tick_index: ScalarF32 optional,
         substep_in_tick: ScalarF32 optional,
+        // 1 on the tick's last substep, which lays the bulk.
+        tick_end: ScalarF32 optional,
         momentum_unit: ScalarF32 optional,
         // The World's water table and pool, as the water's last tick left
         // them: this table shares its key set (`world_tiles::SharedTable`).
@@ -104,6 +110,10 @@ manifold_node_engine::primitive! {
         // `held_args` at `fresh_args_offset`), and 1 when it built, else 0.
         fresh: Array(u32),
         built: ScalarF32,
+        // Each node's bulk as the tick's last substep laid it
+        // (sand_bulk.wgsl), for a material stepping the same tick; laid
+        // only while read.
+        bulk: Array(u32),
     },
     params: [
         ParamDef { name: Cow::Borrowed("cell_size"), label: "Cell Size", ty: ParamType::Float, default: ParamValue::Float(0.0625), range: Some((1.0e-4, 100.0)), enum_values: &[] },
@@ -112,10 +122,11 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("active_count"), label: "Active Count", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_000_000.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("tick_index"), label: "Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("substep_in_tick"), label: "Substep in Tick", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("tick_end"), label: "Tick End", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("momentum_unit"), label: "Momentum Unit (m/s)", ty: ParamType::Float, default: ParamValue::Float(128.0), range: Some((1.0e-3, 1.0e9)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Region body of the Live Matter group, before node.matter_static_solid and node.matter_grid_update. It clears the accumulator over the held tiles itself, then scatters into it. accum/accum_out alias one Array(i32) of 4 words per pooled node (momentum xyz, mass), provided by node.matter_state for the same pool_tiles. Node p sits at p·cell_size. The tiles output is the world tile table every pooled matter atom reads; it and the point sort are rebuilt on substeps that are a multiple of the rebuild interval. cell_size, pool_tiles and momentum_unit come from node.matter_domain (node.matter_grid_update must read the same momentum_unit); step_dt, tick_index and substep_in_tick from the substep boundary. Points with id 0 are skipped. held/held_args are the held slots and their dispatch triple for the grid passes; fresh and built tell node.matter_static_solid which slots this substep's build handed out.",
+    composition_notes: "Region body of the Live Matter group, before node.matter_static_solid and node.matter_grid_update. It clears the accumulator over the held tiles itself, then scatters into it. accum/accum_out alias one Array(i32) of 4 words per pooled node (momentum xyz, mass), provided by node.matter_state for the same pool_tiles. Node p sits at p·cell_size. The tiles output is the world tile table every pooled matter atom reads; it and the point sort are rebuilt on substeps that are a multiple of the rebuild interval. cell_size, pool_tiles and momentum_unit come from node.matter_domain (node.matter_grid_update must read the same momentum_unit); step_dt, tick_index and substep_in_tick from the substep boundary. Points with id 0 are skipped. held/held_args are the held slots and their dispatch triple for the grid passes; fresh and built tell node.matter_static_solid which slots this substep's build handed out. tick_end from the boundary: on the tick's last substep, while bulk is wired, each point also adds its rest volume and its grains' share of it to its nodes (two words a pooled node), which a Water's or a Smoke's step reads with node.matter_grid_update's grid through tiles.",
     examples: ["SandColumn"],
     picker: { label: "Matter to Grid", category: Atom },
     summary: "Spreads each liquid particle's weight and motion onto the simulation grid around it.",
@@ -130,6 +141,7 @@ manifold_node_engine::primitive! {
         sorter: ParticleSorter = ParticleSorter::default(),
         order: Option<GpuBuffer> = None,
         gate: Option<GpuBuffer> = None,
+        bulk: Option<GpuBuffer> = None,
     },
 }
 
@@ -156,10 +168,13 @@ impl Primitive for MatterToGrid {
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "tiles" | "held" | "held_args" | "fresh")
+        matches!(port, "tiles" | "held" | "held_args" | "fresh" | "bulk")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
+        if port == "bulk" {
+            return self.bulk.as_ref();
+        }
         let tiles = self.tiles.as_ref()?;
         match port {
             "tiles" => Some(tiles.table()),
@@ -182,7 +197,7 @@ impl Primitive for MatterToGrid {
                 .find(|(p, _)| *p == "accum")
                 .map(|&(_, n)| n),
             // Provided storage, sized to the tile pool at run time.
-            "tiles" | "held" | "held_args" | "fresh" => Some(1),
+            "tiles" | "held" | "held_args" | "fresh" | "bulk" => Some(1),
             _ => None,
         }
     }
@@ -214,6 +229,8 @@ impl Primitive for MatterToGrid {
         let requested = count("active_count", 0.0);
         let tick_index = count("tick_index", 0.0);
         let substep_in_tick = count("substep_in_tick", 0.0);
+        let tick_end = ctx.scalar_or_param("tick_end", 1.0) > 0.5;
+        let wants_bulk = ctx.outputs.slot("bulk").is_some();
         let momentum_unit = ctx.scalar_or_param("momentum_unit", 128.0);
         // In place on the accumulator input; the GPU is touched on every path.
         let points = ctx.inputs.array("points");
@@ -277,6 +294,26 @@ impl Primitive for MatterToGrid {
                 }
             }
         }
+        let bulk_bytes = pool_len(pool) * SAND_BULK_BYTES;
+        if !wants_bulk {
+            self.bulk = None;
+        } else if self.bulk.as_ref().is_none_or(|b| b.size != bulk_bytes) {
+            self.bulk = None;
+            match gpu.device.try_create_buffer(bulk_bytes, BufferUse::Gpu) {
+                Ok(bulk) => {
+                    // Empty until the tick's last substep lays it.
+                    gpu.native_enc.clear_buffer(&bulk);
+                    self.bulk = Some(bulk);
+                }
+                Err(error) => {
+                    ctx.error(format!(
+                        "Matter to Grid: the bulk of a pool of {pool} tiles needs storage the device cannot give: {error}. Raise Cell Size."
+                    ));
+                    return;
+                }
+            }
+        }
+        let bulk = self.bulk.as_ref().filter(|_| tick_end);
         let clear = self
             .clear
             .as_ref()
@@ -284,7 +321,7 @@ impl Primitive for MatterToGrid {
         if active == 0 || step_dt <= 0.0 {
             // The grid passes still run over the last build's held tiles.
             let tiles = self.tiles.as_ref().expect("tiles built above");
-            encode_clear(gpu.native_enc, clear, tiles, accum, pool);
+            encode_clear(gpu.native_enc, clear, tiles, accum, bulk, pool);
             return;
         }
         if !momentum_unit_fits(momentum_unit, cell_size, step_dt) {
@@ -362,7 +399,7 @@ impl Primitive for MatterToGrid {
                 return;
             }
         }
-        encode_clear(gpu.native_enc, clear, tiles, accum, pool);
+        encode_clear(gpu.native_enc, clear, tiles, accum, bulk, pool);
         let ranges = self
             .sorter
             .ranges()
@@ -375,7 +412,8 @@ impl Primitive for MatterToGrid {
             substep_in_tick,
             momentum_unit,
             pool_tiles: pool,
-            _pad: [0; 5],
+            bulk: u32::from(bulk.is_some()),
+            _pad: [0; 4],
         };
         let bindings = [
             GpuBinding::Bytes {
@@ -417,6 +455,11 @@ impl Primitive for MatterToGrid {
                 buffer: materials,
                 offset: 0,
             },
+            GpuBinding::Buffer {
+                binding: 8,
+                buffer: bulk.unwrap_or(accum),
+                offset: 0,
+            },
         ];
         gpu.native_enc.dispatch_compute_indirect(
             kernel,
@@ -434,12 +477,14 @@ pub(crate) fn held_args_offset() -> u64 {
     allocated_args_offset(MATTER_REACH.ring_max)
 }
 
-/// Zeroes the accumulator over the held tiles and the canonical node.
+/// Zeroes the accumulator, and the bulk when this substep lays it, over the
+/// held tiles and the canonical node.
 fn encode_clear(
     enc: &mut manifold_gpu::GpuEncoder,
     clear: &GpuComputePipeline,
     tiles: &WorldTiles,
     accum: &GpuBuffer,
+    bulk: Option<&GpuBuffer>,
     pool: u32,
 ) {
     let uniforms = P2gParams {
@@ -450,7 +495,8 @@ fn encode_clear(
         substep_in_tick: 0,
         momentum_unit: 0.0,
         pool_tiles: pool,
-        _pad: [0; 5],
+        bulk: u32::from(bulk.is_some()),
+        _pad: [0; 4],
     };
     enc.dispatch_compute_indirect(
         clear,
@@ -467,6 +513,11 @@ fn encode_clear(
             GpuBinding::Buffer {
                 binding: 6,
                 buffer: &tiles.lists().by_rank,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 8,
+                buffer: bulk.unwrap_or(accum),
                 offset: 0,
             },
         ],

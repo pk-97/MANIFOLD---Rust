@@ -20,9 +20,10 @@ use manifold_physics::clock::TICK;
 use manifold_physics::force_lattice::ForceLattice;
 use manifold_physics::mesh_bvh::MeshBvh;
 use manifold_water_gpu_mpm::matter::{
-    MATTER_REACH, MatterGridNode, MatterPoint, REACTION_WORDS, field_min, lattice_nodes,
+    MATTER_REACH, MatterPoint, REACTION_WORDS, field_min, lattice_nodes,
     matter_nodes, momentum_unit,
 };
+use manifold_water_liquid::fluid_particles::MatterGridNode;
 use manifold_water_liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
 use manifold_water_liquid::testkit::world_box::BoxTable;
 use manifold_water_liquid::world_tiles::{allocated_args_offset, args_words};

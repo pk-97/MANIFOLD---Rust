@@ -7,6 +7,7 @@ use crate::primitives::gpu_flip_step::{
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
+use manifold_node_engine::scene::world_tiles::table_words_at;
 use manifold_water_liquid::bodies::LiquidBody;
 use manifold_water_liquid::coupling::REACTION_FLOATS;
 use manifold_water_liquid::extent::{PARTICLE, body_rows, field_reads, whole};
@@ -16,7 +17,6 @@ use manifold_water_liquid::primitives::sort_particles_into_cells::key_storage_by
 use manifold_water_liquid::tile_pool::pool_tiles_wire;
 use manifold_water_liquid::tile_storage::pool_len;
 use manifold_water_liquid::world_tiles::shared_table_entries;
-use manifold_node_engine::scene::world_tiles::table_words_at;
 use std::mem::size_of;
 
 fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -66,10 +66,6 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // step's cell and face arrays, the world tiles and the solver's fine
     // vectors.
     x.hold(pressure_scratch_bytes(pool) + step_scratch_bytes(pool, slots));
-    // A wired Sand's share and momentum at every corner of the pool.
-    if x.bytes("sand").is_some() {
-        x.hold(pool_len(pool) * super::SAND_CORNER_BYTES);
-    }
     field_reads(x)?;
     x.covers_if_bound("clock_status", 32)?;
     for (buffer, count) in [

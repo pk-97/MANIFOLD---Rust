@@ -9,8 +9,8 @@ use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use crate::matter::{
-    MATTER_POOL_FLOOR_TILES, MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS,
-    STATS_WORDS, grid_accum_bytes, grid_bytes, substep_duration,
+    MATTER_POOL_FLOOR_TILES, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS,
+    grid_accum_bytes, grid_bytes, substep_duration,
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
@@ -19,6 +19,7 @@ use manifold_node_engine::exec::substeps::{
 };
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
+use manifold_water_liquid::fluid_particles::MatterGridNode;
 use manifold_water_liquid::tile_pool::next_pool;
 use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 

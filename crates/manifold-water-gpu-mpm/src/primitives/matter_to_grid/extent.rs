@@ -3,7 +3,8 @@ use crate::matter::MATTER_REACH;
 use crate::matter::grid_accum_bytes;
 use crate::matter::pool_extent;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
-use manifold_node_engine::scene::world_tiles::table_words;
+use manifold_node_engine::scene::world_tiles::{pool_len, table_words};
+use manifold_water_liquid::fluid_particles::SAND_BULK_BYTES;
 use manifold_water_liquid::primitives::sort_particles_into_cells::{block_keys, key_storage_bytes};
 use manifold_water_liquid::world_tiles::{args_words, held_bytes};
 
@@ -21,6 +22,12 @@ fn matter_to_grid(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.hold(
         held_bytes(pool, MATTER_REACH.ring_max) + key_storage_bytes(block_keys(pool)) + order_bytes,
     );
+    // The bulk, while a reader takes it.
+    if x.feeds("bulk") {
+        let bulk = pool_len(pool) * SAND_BULK_BYTES;
+        x.provide("bulk", bulk);
+        x.hold(bulk);
+    }
     Ok(())
 }
 inventory::submit! {

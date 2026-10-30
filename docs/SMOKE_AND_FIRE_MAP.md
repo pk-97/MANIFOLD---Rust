@@ -76,9 +76,9 @@ the Matter and the water. Each tick reads its own scalars from the domain
    step is read through its own world tiles (`gas_water`: its faces and
    distance at each gas cell, as the Matter's water push reads them): a
    cell the water fills at least half moves with the water. The first
-   Sand's grains (`node.matter_stats`' `grain_view`) spread their bulk and
-   velocity over the eight cells round each (`cs_matter`), and a cell at
-   least half full moves with their mean velocity. So smoke rolls over
+   Sand's grid is read the same way, through its own table (`sand_at`: the
+   bulk its Points to Grid lays on the tick's last substep and its nodes'
+   velocity), and a cell at least half full of sand moves with it. So smoke rolls over
    water and a splash or a sand slide shoves it within the tick. With no
    World the water and sand run their own clocks and the gas reads neither.
    The kernels are built twice, with and without solids: smoke with no

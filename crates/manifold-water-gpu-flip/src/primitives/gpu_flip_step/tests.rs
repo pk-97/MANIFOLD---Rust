@@ -212,7 +212,7 @@ fn step_params_match_the_shader_uniform() {
     assert_eq!(std::mem::offset_of!(StepParams, kill_height), 196);
     assert_eq!(std::mem::offset_of!(StepParams, wall_velocity_lo), 208);
     assert_eq!(std::mem::offset_of!(StepParams, wall_velocity_hi), 224);
-    assert_eq!(std::mem::offset_of!(StepParams, sand_count), 248);
+    assert_eq!(std::mem::offset_of!(StepParams, sand_inv_cell), 248);
     assert_eq!(std::mem::offset_of!(StepParams, sand_drag), 252);
     assert_eq!(
         StepParams::default().kill_height,

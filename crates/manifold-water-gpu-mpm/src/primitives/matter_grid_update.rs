@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use super::matter_common::MATTER_BOUNDS;
-use crate::matter::{MatterGridNode, grid_accum_bytes, grid_bytes, momentum_unit_fits};
+use crate::matter::{grid_accum_bytes, grid_bytes, momentum_unit_fits};
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::mesh::Vec4Vertex;
@@ -17,6 +17,7 @@ use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_words};
 use manifold_nodes_physics::force_lattice::{FORCE_LATTICE, ForceLatticeBinding};
 use manifold_water_liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use manifold_water_liquid::fluid_particles::MatterGridNode;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

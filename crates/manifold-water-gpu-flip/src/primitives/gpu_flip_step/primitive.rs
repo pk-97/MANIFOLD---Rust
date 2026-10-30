@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::primitives::gpu_flip_pressure::max_solve_level;
-use manifold_node_engine::scene::world_tiles::lattice_origin;
+use manifold_node_engine::scene::world_tiles::{lattice_origin, pool_len, table_words};
+use manifold_water_liquid::fluid_particles::SAND_BULK_BYTES;
 use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
 use manifold_water_liquid::substep_history::PooledFaces;
 use manifold_water_liquid::tile_pool::{MAX_POOL_TILES, pool_tiles_wire};
@@ -237,13 +238,29 @@ impl Primitive for GpuFlipStep {
             _ => 0,
         };
         let band = step_band();
-        let sand = ctx.inputs.array("sand");
-        let sand_count = sand.map_or(0, |points| {
-            ctx.scalar_or_param("sand_count", 0.0)
-                .round()
-                .clamp(0.0, (points.size / size_of::<MatterGrain>() as u64) as f32)
-                as u32
-        });
+        // The first Sand's grid as its tick ended, once Matter has stepped
+        // and laid its bulk, covering the pool it names.
+        let sand = (|| {
+            let sand_pool = ctx.scalar_or_param("sand_pool_tiles", 0.0).round();
+            let cell = ctx.scalar_or_param("sand_cell", 0.0);
+            if !((1.0..=MAX_POOL_TILES as f32).contains(&sand_pool)
+                && cell > 0.0
+                && cell.is_finite())
+            {
+                return None;
+            }
+            let sand_pool = sand_pool as u32;
+            let (grid, bulk, tiles) = (
+                ctx.inputs.array("sand_grid")?,
+                ctx.inputs.array("sand_bulk")?,
+                ctx.inputs.array("sand_tiles")?,
+            );
+            let nodes = pool_len(sand_pool);
+            (grid.size >= nodes * size_of::<MatterGridNode>() as u64
+                && bulk.size >= nodes * SAND_BULK_BYTES
+                && tiles.size >= table_words(sand_pool) * 4)
+                .then_some((SandGrid { grid, bulk, tiles }, 1.0 / cell))
+        })();
         // Matter's table, sharing this one's keys: one H sized for both pools.
         let shared_tiles = ctx.inputs.array("shared_tiles");
         let shared_pool = shared_tiles.map_or(0, |_| {
@@ -261,7 +278,6 @@ impl Primitive for GpuFlipStep {
             u64::from(capacity),
             sheet_rate > 0.0,
             narrow_band,
-            sand.is_some(),
             tick_index == 0,
         ) {
             ctx.error(format!(
@@ -449,7 +465,7 @@ impl Primitive for GpuFlipStep {
                 // The encode decides: it knows the buffers it last built from.
                 static_all: 0,
                 tension,
-                sand_count,
+                sand_inv_cell: sand.map_or(0.0, |(_, inv_cell)| inv_cell),
                 sand_drag: manifold_core::liquid_domain::SAND_WATER_DRAG,
             },
             clock_plan: &zeros,
@@ -474,7 +490,7 @@ impl Primitive for GpuFlipStep {
             ghost,
             density: ctx.scalar_or_param("volume_projection", 0.0) > 0.5,
             sheet_rate,
-            sand: sand.filter(|_| sand_count > 0),
+            sand: sand.map(|(grid, _)| grid),
             shared: shared_tiles
                 .filter(|_| shared_pool > 0)
                 .map(|table| SharedTable {
@@ -533,10 +549,10 @@ impl Primitive for GpuFlipStep {
         let gpu = ctx.gpu_encoder();
         if keep_history {
             self.state.history.prepare(gpu.device);
-            if let Err(error) =
-                self.state
-                    .history
-                    .reserve(gpu.device, pool, entries, history_slots)
+            if let Err(error) = self
+                .state
+                .history
+                .reserve(gpu.device, pool, entries, history_slots)
             {
                 ctx.error(format!("{NAME}: {error}"));
                 return;

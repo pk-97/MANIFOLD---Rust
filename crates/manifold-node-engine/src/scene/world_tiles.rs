@@ -45,6 +45,19 @@ pub const HASH_MULTIPLIER: u32 = 2_654_435_769;
 /// and `ts_table_word(i)`; H comes from the table's header.
 pub const READ_SIDE: &str = include_str!("world_tiles_read.wgsl");
 
+/// [`READ_SIDE`] for a second table in a shader that already holds it:
+/// every `ts_` name takes `prefix` instead, so the including shader defines
+/// `{prefix}pool_tiles()` and `{prefix}table_word(i)`, and the `WT_`
+/// constants are the first read side's.
+pub fn read_side_as(prefix: &str) -> String {
+    READ_SIDE
+        .lines()
+        .filter(|line| !line.starts_with("const WT_"))
+        .map(|line| line.replace("ts_", prefix))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Words before the keys: H, P, then zeros. A table carries its own H so a
 /// reader needs only its own P, whatever pools H was sized for; P lets a
 /// build that shares its keys with this table read its slots.

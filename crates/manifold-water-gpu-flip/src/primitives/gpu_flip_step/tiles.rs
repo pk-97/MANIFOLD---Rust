@@ -7,8 +7,8 @@ use manifold_node_engine::scene::world_tiles::tile_of_cell;
 use manifold_water_liquid::tile_pool::{POOL_BUDGET_BYTES, pool_capacity};
 use manifold_water_liquid::tile_storage::{TILE, TILE_CELLS};
 use manifold_water_liquid::world_tiles::{
-    Allocation, PointCount, Reach, SharedTable, TileClip, allocated_args_offset,
-    fresh_args_offset, retired_args_offset, run_tiles,
+    Allocation, PointCount, Reach, SharedTable, TileClip, allocated_args_offset, fresh_args_offset,
+    retired_args_offset, run_tiles,
 };
 
 /// The cell passes' reach from a particle-holding cell, in cells: the cell

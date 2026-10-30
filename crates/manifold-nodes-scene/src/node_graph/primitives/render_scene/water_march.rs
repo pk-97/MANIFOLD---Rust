@@ -175,12 +175,7 @@ pub(super) fn march_uniforms(
         local_to_world: field.model,
         prev_local_to_world: field.prev_model,
         cell: [field.cell_size, view.frame_seconds, 0.0, 0.0],
-        tiles: [
-            field.pool_tiles,
-            0,
-            field.slot + 1,
-            0,
-        ],
+        tiles: [field.pool_tiles, 0, field.slot + 1, 0],
         target_size: [
             view.width as f32,
             view.height as f32,

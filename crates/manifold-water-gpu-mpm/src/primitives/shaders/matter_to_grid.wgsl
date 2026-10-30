@@ -29,6 +29,10 @@
 // table's held tiles only (`held`, 512 threads a tile, dispatched from the
 // table's held-slot triple) and the canonical node, so an empty box costs
 // nothing. Every node the scatter writes is in a held tile or canonical.
+//
+// On the tick's last substep, while a material stepping the same tick reads
+// it (`params.bulk`), the clear zeroes the bulk too and the scatter adds each
+// point's bulk to the same 27 nodes (sand_bulk.wgsl), straight into `bulk`.
 
 struct MatterPoint {
     position: vec3<f32>,
@@ -58,7 +62,8 @@ struct P2gParams {
     substep_in_tick: u32,
     momentum_unit: f32,
     pool_tiles: u32,
-    _pad0: u32,
+    // 1 when this substep lays the bulk.
+    bulk: u32,
     _pad1: u32,
     _pad2: u32,
     _pad3: u32,
@@ -75,6 +80,9 @@ struct P2gParams {
 @group(0) @binding(7) var<storage, read> materials: array<f32>;
 @group(0) @binding(5) var<storage, read> ts_table: array<u32>;
 @group(0) @binding(6) var<storage, read> held: array<u32>;
+// The bulk, SAND_BULK_WORDS a pooled node; bound to the accumulator, and
+// never touched, while `params.bulk` is 0.
+@group(0) @binding(8) var<storage, read_write> bulk: array<atomic<u32>>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
@@ -152,6 +160,10 @@ fn scatter(pt: MatterPoint, use_tile: bool, tile_origin: vec3<i32>) {
     let a1 = mass * pt.affine_y.xyz - s * vec3<f32>(off.x, diag.y, off.z);
     let a2 = mass * pt.affine_z.xyz - s * vec3<f32>(off.y, off.z, diag.z);
     let mv = mass * pt.velocity;
+    // Its rest volume in cells, and the part its grains fill when porous.
+    let volume = v0 * inv_dx * inv_dx * inv_dx * SAND_FIXED;
+    let solid = materials[matter_slot(pt.affine_z.w) * 16u + 13u];
+    let grains = volume * select(0.0, solid, solid < 1.0);
 
     // Both scales are powers of two times one reciprocal, so their ratio is
     // exactly 2^11 / U and the grid update's decode inverts it.
@@ -195,6 +207,11 @@ fn scatter(pt: MatterPoint, use_tile: bool, tile_origin: vec3<i32>) {
                     atomicAdd(&accum[slot + 1u], words.y);
                     atomicAdd(&accum[slot + 2u], words.z);
                     atomicAdd(&accum[slot + 3u], words.w);
+                }
+                if params.bulk != 0u {
+                    let at = SAND_BULK_WORDS * ts_cell_at(node);
+                    atomicAdd(&bulk[at], u32(weight * volume + 0.5));
+                    atomicAdd(&bulk[at + 1u], u32(weight * grains + 0.5));
                 }
             }
         }
@@ -274,10 +291,20 @@ fn clear_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var w = 0u; w < 4u; w = w + 1u) {
         atomicStore(&accum[node * 4u + w], 0);
     }
+    if params.bulk != 0u {
+        for (var w = 0u; w < SAND_BULK_WORDS; w = w + 1u) {
+            atomicStore(&bulk[node * SAND_BULK_WORDS + w], 0u);
+        }
+    }
     if gid.x == 0u {
         let canon = params.pool_tiles * 512u;
         for (var w = 0u; w < 4u; w = w + 1u) {
             atomicStore(&accum[canon * 4u + w], 0);
+        }
+        if params.bulk != 0u {
+            for (var w = 0u; w < SAND_BULK_WORDS; w = w + 1u) {
+                atomicStore(&bulk[canon * SAND_BULK_WORDS + w], 0u);
+            }
         }
     }
 }

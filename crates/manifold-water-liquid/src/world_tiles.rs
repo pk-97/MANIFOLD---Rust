@@ -594,13 +594,7 @@ impl WorldTiles {
             PointCount::Slots(_) => None,
         };
         self.encode_build(
-            enc,
-            &params,
-            job.points,
-            record,
-            job.gate,
-            job.kept,
-            job.shared,
+            enc, &params, job.points, record, job.gate, job.kept, job.shared,
         );
     }
 

@@ -20,10 +20,10 @@ use manifold_core::scene_schema::WORLD_FOLLOWS;
 use manifold_core::scene_world_controls::{WORLD_INPUTS, WorldControlInput};
 use manifold_foundation::ItemId;
 
-use manifold_core::liquid_domain::{SAND_INPUTS, WATER_PUSH_STEP};
+use manifold_core::liquid_domain::WATER_PUSH_STEP;
 
 use super::builder::Builder;
-use super::water::{MatterFrames, follow_cell, items_of};
+use super::water::{MatterFrames, follow_cell, items_of, wire_sand};
 
 /// `node.gas_volume`'s `kind`.
 const SMOKE: f32 = 0.0;
@@ -170,10 +170,8 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, matter: Matter
             b.wire(cell, &port, gas, "water_cell");
         }
     }
-    if let Some(stats) = matter.grains {
-        let [points, count] = SAND_INPUTS;
-        b.wire(stats, "grain_view", gas, points);
-        b.wire(stats, "view_count", gas, count);
+    if let Some(stats) = matter.sand {
+        wire_sand(b, stats, gas);
     }
 
     let object = b.add(owner, "object", "node.scene_object");
@@ -359,8 +357,10 @@ mod tests {
                 (domain, "reset")
             ));
             assert!(
-                def.wires.iter().all(|wire| ![gas.id, domain.id].contains(&wire.to_node)
-                    || wire.to_port != "air_resistance"),
+                def.wires
+                    .iter()
+                    .all(|wire| ![gas.id, domain.id].contains(&wire.to_node)
+                        || wire.to_port != "air_resistance"),
                 "still air does not move a gas"
             );
             assert!(

@@ -56,7 +56,6 @@ use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
-use manifold_water_liquid::fluid_particles::MatterGrain;
 use manifold_node_engine::primitive::Primitive;
 use manifold_nodes_physics::force_lattice::{FORCE_LATTICE, ForceLatticeBinding};
 use manifold_water_liquid::WATER_DENSITY;
@@ -65,6 +64,7 @@ use manifold_water_liquid::bodies::{
 };
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::fluid_particles::FaceSample;
+use manifold_water_liquid::fluid_particles::MatterGridNode;
 use manifold_water_liquid::primitives::liquid_stats::{SOLVER_WORDS, with_stats_layout};
 use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
@@ -146,10 +146,6 @@ pub(crate) struct ParticleAffine {
 
 /// Words of a [`ParticleAffine`]: the sort's companion record.
 const AFFINE_WORDS: u32 = (size_of::<ParticleAffine>() / 4) as u32;
-
-/// A wired Sand's bytes at each pool corner: its share, its momentum along
-/// each axis and its grains' solid share (the shader's `SAND_WORDS` words).
-pub(crate) const SAND_CORNER_BYTES: u64 = 20;
 
 manifold_core::testkit_visible! {
 /// Layers of valid faces the step's face grid holds around the water at
@@ -359,8 +355,8 @@ pub(crate) struct StepParams {
     /// water's pressure at the free surface is this times the surface's
     /// curvature, with ghost fluid on.
     pub(crate) tension: f32,
-    /// A wired Sand's particles this step (`Step::sand`), 0 with none.
-    pub(crate) sand_count: u32,
+    /// One over a wired Sand's cell in metres (`Step::sand`), 0 with none.
+    pub(crate) sand_inv_cell: f32,
     pub(crate) sand_drag: f32,
 }
 
@@ -510,9 +506,6 @@ pub(crate) struct StepState {
     sheet_distance: super::gpu_flip_sheet_distance::SheetDistance,
     sheeting: super::gpu_flip_sheeting::GpuSheeting,
     sheet_order: Option<GpuBuffer>,
-    /// A wired Sand's share at each held cell's low corner (`sand_corners`),
-    /// a pooled cell field; reserved only while a Sand is wired.
-    sand_share: Option<GpuBuffer>,
     /// Narrow Band: its distance and scan, prepared at install; its storage
     /// only while it runs.
     narrow_band: narrow_band::NarrowBand,
@@ -608,15 +601,25 @@ struct Step<'a> {
     /// switching on mid-show does not hitch) and scratch reserved while it was
     /// on stays held.
     sheet_rate: f32,
-    /// A wired Sand's grains, `params.sand_count` of them: porous, they slow
-    /// the water inside them (`sand_corners`, `sand_drag`) and close the
-    /// faces they lie on by their solid share (`sand_porous`).
-    sand: Option<&'a GpuBuffer>,
+    /// A wired Sand's grid as its tick ended: porous, it slows the water
+    /// inside it (`sand_drag`) and closes the faces it lies on by its
+    /// grains' share (`sand_porous`).
+    sand: Option<SandGrid<'a>>,
     /// The World's Matter table this table shares its key set with.
     shared: Option<SharedTable<'a>>,
 }
 
 impl StepState {}
+
+/// The first Sand's grid as its tick ended, read through its own table
+/// (sand_read.wgsl): node.matter_grid_update's nodes and
+/// node.matter_to_grid's bulk.
+#[derive(Clone, Copy)]
+pub(crate) struct SandGrid<'a> {
+    pub(crate) grid: &'a GpuBuffer,
+    pub(crate) bulk: &'a GpuBuffer,
+    pub(crate) tiles: &'a GpuBuffer,
+}
 
 manifold_node_engine::primitive! {
     name: GpuFlipStep,
@@ -668,8 +671,14 @@ manifold_node_engine::primitive! {
         live_hits: Array(f32) optional,
         live_hit_count: ScalarF32 optional,
         narrow_band: ScalarF32 optional,
-        sand: Array(MatterGrain) optional,
-        sand_count: ScalarF32 optional,
+        // The first Sand's grid as its tick ended (Matter's tick runs
+        // first): node.matter_grid_update's grid, node.matter_to_grid's
+        // bulk, its table, pool and cell (`liquid_domain::SAND_GRID`).
+        sand_grid: Array(MatterGridNode) optional,
+        sand_bulk: Array(u32) optional,
+        sand_tiles: Array(u32) optional,
+        sand_pool_tiles: ScalarF32 optional,
+        sand_cell: ScalarF32 optional,
         // The World's Matter table and pool: this table shares its key set
         // (`world_tiles::SharedTable`), Matter's tick having run first.
         shared_tiles: Array(u32) optional,

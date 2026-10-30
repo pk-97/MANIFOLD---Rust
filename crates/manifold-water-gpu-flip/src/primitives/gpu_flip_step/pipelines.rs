@@ -1,8 +1,9 @@
 //! The step's pipelines and the shader text they build from.
 
 use super::*;
-use manifold_node_engine::scene::world_tiles::READ_SIDE;
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, read_side_as};
 use manifold_water_liquid::PARTICLE_WATER;
+use manifold_water_liquid::fluid_particles::{SAND_BULK, SAND_READ};
 use manifold_water_liquid::tile_storage::TILE_GRID;
 
 pub(super) struct Pipelines {
@@ -62,7 +63,6 @@ pub(super) struct Pipelines {
     pub(super) solid_corners: GpuComputePipeline,
     /// A wired Sand: its particles' share at the corners, then its drag on
     /// the water inside it.
-    pub(super) sand_corners: GpuComputePipeline,
     pub(super) sand_drag: GpuComputePipeline,
     pub(super) sand_porous: GpuComputePipeline,
     /// The pool's held share and the particles with no slot.
@@ -92,8 +92,8 @@ pub(super) struct Pipelines {
 
 manifold_core::testkit_visible! {
 /// The step's shader: the poses, the colliders, the force lattice, the dense
-/// grid helpers and the world tiles' read side, then the step's own passes,
-/// with the stats layout ahead.
+/// grid helpers, the world tiles' read side and a Sand's (`ms_`, over its
+/// table), then the step's own passes, with the stats layout ahead.
 pub(crate) fn step_source() -> String {
     step_source_with(STEP_SHADER)
 }
@@ -104,7 +104,8 @@ manifold_core::testkit_visible! {
 /// proof that composes one of them on its own.
 pub(crate) fn step_source_with(body: &str) -> String {
     with_stats_layout(&format!(
-        "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{COLLIDER_BVH}\n{FORCE_LATTICE}\n{TILE_GRID}\n{READ_SIDE}\n{PARTICLE_WATER}\n{body}"
+        "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{COLLIDER_BVH}\n{FORCE_LATTICE}\n{TILE_GRID}\n{READ_SIDE}\n{}\n{SAND_BULK}\n{SAND_READ}\n{PARTICLE_WATER}\n{body}",
+        read_side_as("ms_")
     ))
 }
 }
@@ -170,7 +171,6 @@ impl Pipelines {
             static_args: pipe("static_corners_args"),
             static_held: pipe("static_corners_held"),
             solid_corners: pipe("solid_corners"),
-            sand_corners: pipe("sand_corners"),
             sand_drag: pipe("sand_drag"),
             sand_porous: pipe("sand_porous"),
             tiles_tally: pipe("tiles_tally"),

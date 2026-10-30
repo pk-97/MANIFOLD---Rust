@@ -309,7 +309,10 @@ manifold_node_engine::primitive! {
 
 /// Set every scalar output, so no consumer reads a slot this node left
 /// unwritten; the tick scalars are each tick's, published before it.
-fn publish(ctx: &mut EffectNodeContext<'_, '_>, values: impl IntoIterator<Item = (&'static str, f32)>) {
+fn publish(
+    ctx: &mut EffectNodeContext<'_, '_>,
+    values: impl IntoIterator<Item = (&'static str, f32)>,
+) {
     for (name, value) in values {
         ctx.outputs.set_scalar(name, ParamValue::Float(value));
     }
@@ -383,7 +386,10 @@ impl GasDomain {
                         tick_seconds(&frame, tick).clamp(0.0, MAX_STEP_SECONDS),
                     ),
                     (TICK_SCALARS[1], tick as f32),
-                    (TICK_SCALARS[2], f32::from(u8::from(tick + 1 == frame.ticks))),
+                    (
+                        TICK_SCALARS[2],
+                        f32::from(u8::from(tick + 1 == frame.ticks)),
+                    ),
                     (
                         TICK_SCALARS[3],
                         index(lattices > 0, tick.min(lattices.saturating_sub(1))),
@@ -796,7 +802,9 @@ mod tests {
 
     #[test]
     fn light_sums_decode_to_the_emission_centre_and_temperature() {
-        let encode = |value: f64| (value * f64::from(super::super::gas_volume::LIGHT_FIXED_SCALE)).round() as u32;
+        let encode = |value: f64| {
+            (value * f64::from(super::super::gas_volume::LIGHT_FIXED_SCALE)).round() as u32
+        };
         // Three workgroups' (emission, centre relative to the origin,
         // temperature), summed as the shader's atomics do.
         let groups = [
@@ -869,7 +877,11 @@ mod tests {
             ],
         };
         let domain = GasDomain {
-            schedule: vec![tick(0.02, 0, false), tick(0.015, 1, false), tick(0.01, 2, true)],
+            schedule: vec![
+                tick(0.02, 0, false),
+                tick(0.015, 1, false),
+                tick(0.01, 2, true),
+            ],
             ..GasDomain::default()
         };
         let second = Primitive::substep_clock_interval(&domain, 1).expect("tick 1");
