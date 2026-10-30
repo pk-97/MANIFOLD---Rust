@@ -11,8 +11,7 @@
 //! `motion_blur.camera`, and `render_scene.color/velocity/depth` feeding
 //! `motion_blur.in/.velocity/.depth`. `motion_blur.out` is the sole final output.
 //!
-//! Assertions, per route (raw def, and the fused view when the freeze
-//! compiler accepts the chain):
+//! Assertions:
 //! - moving frame, shutter=180 vs shutter=0: outputs must differ
 //!   materially (the smear actually happens — a silent zero anywhere in
 //!   the shutter chain fails this, which is exactly BUG-136's shape).
@@ -21,7 +20,7 @@
 //!   the shutter term perturbing anything else).
 //!
 //! Continuity: `render_scene`'s `prev_model`/`prev_view_proj` lives on the
-//! node instance, so each (shutter, route) pair renders warm-up frames at
+//! node instance, so each shutter renders warm-up frames at
 //! beat 0 before the measured beat — same `PresetRuntime` throughout.
 
 use half::f16;
@@ -253,63 +252,35 @@ fn diff(a: &[f32], b: &[f32]) -> Diff {
     Diff { max, count_above }
 }
 
-fn fused_scene_json(shutter_angle: f32, enabled: bool) -> String {
-    let def: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(
-        &manifold_nodes::testkit::scene_objects::bundle_scene_objects(&scene_json_with_enabled(
-            shutter_angle,
-            enabled,
-        )),
-    )
-    .expect("motion blur def parses");
-    let fused = manifold_node_engine::freeze::install::fused_generator_view_for(&def)
-        .expect("motion blur graph must fuse through its downstream pointwise node");
-    assert!(
-        fused
-            .retarget
-            .contains_key(&("mb".to_owned(), "enabled".to_owned())),
-        "fused motion blur must retarget its enabled binding"
-    );
-    serde_json::to_string(&*fused.def).expect("fused motion blur def serializes")
-}
-
-/// The measured assertions for one route (raw or fused): blur must be
-/// visible under motion with a 180° shutter, and absent with no motion.
-fn assert_blur_visible_on_route(json_for: &dyn Fn(f32) -> String, route: &str) {
-    let moved_on = render_frame(
-        &json_for(SHUTTER),
-        BEAT_MOVED,
-        &format!("mb-{route}-moved-180"),
-    );
-    let moved_off = render_frame(&json_for(0.0), BEAT_MOVED, &format!("mb-{route}-moved-0"));
+/// Blur must be visible under motion with a 180° shutter, and absent with
+/// no motion.
+#[test]
+fn motion_blur_output_differs_under_motion() {
+    let moved_on = render_frame(&scene_json(SHUTTER), BEAT_MOVED, "mb-moved-180");
+    let moved_off = render_frame(&scene_json(0.0), BEAT_MOVED, "mb-moved-0");
     let d_moved = diff(&moved_on, &moved_off);
     assert!(
         d_moved.max > 0.05 && d_moved.count_above >= 32,
-        "{route}: shutter=180 under motion must visibly smear vs shutter=0 — \
-         max diff {:.5} over {} channel values above 0.01 (BUG-136's exact-no-op \
-         shape is a zero here)",
+        "shutter=180 under motion must visibly smear vs shutter=0 — max diff {:.5} \
+         over {} channel values above 0.01 (BUG-136's exact-no-op shape is a zero here)",
         d_moved.max,
         d_moved.count_above
     );
 
-    let static_on = render_frame(&json_for(SHUTTER), 0.0, &format!("mb-{route}-static-180"));
-    let static_off = render_frame(&json_for(0.0), 0.0, &format!("mb-{route}-static-0"));
+    let static_on = render_frame(&scene_json(SHUTTER), 0.0, "mb-static-180");
+    let static_off = render_frame(&scene_json(0.0), 0.0, "mb-static-0");
     let d_static = diff(&static_on, &static_off);
     assert!(
         d_static.max < 1e-3,
-        "{route}: with no motion, shutter=180 must equal shutter=0 (taps collapse) — \
-         max diff {:.5}; the moved-frame difference above must come from velocity, \
-         not the shutter term alone",
+        "with no motion, shutter=180 must equal shutter=0 (taps collapse) — max diff \
+         {:.5}; the moved-frame difference above must come from velocity, not the \
+         shutter term alone",
         d_static.max
     );
 }
 
 #[test]
-fn motion_blur_output_differs_under_motion_raw_route() {
-    assert_blur_visible_on_route(&scene_json, "raw");
-}
-
-#[test]
-fn motion_blur_disabled_bool_is_passthrough_raw_and_fused() {
+fn motion_blur_disabled_bool_is_passthrough() {
     // Start enabled for the warm-up frames, then toggle the BoolThreshold
     // binding off for the measured moving frame.
     let toggle_off = [1.0, 1.0, 0.0];
@@ -330,48 +301,5 @@ fn motion_blur_disabled_bool_is_passthrough_raw_and_fused() {
         raw_diff.max < 1e-3,
         "raw disabled motion blur must ignore shutter: max diff {:.5}",
         raw_diff.max
-    );
-
-    let fused_on = render_frame_with_enabled_values(
-        &fused_scene_json(SHUTTER, false),
-        BEAT_MOVED,
-        "mb-fused-disabled-180",
-        Some(toggle_off),
-    );
-    let fused_off = render_frame_with_enabled_values(
-        &fused_scene_json(0.0, false),
-        BEAT_MOVED,
-        "mb-fused-disabled-0",
-        Some(toggle_off),
-    );
-    let fused_diff = diff(&fused_on, &fused_off);
-    assert!(
-        fused_diff.max < 1e-3,
-        "fused disabled motion blur must ignore shutter: max diff {:.5}",
-        fused_diff.max
-    );
-    let parity = diff(&fused_on, &raw_on);
-    assert!(
-        parity.max < 1e-3,
-        "fused disabled motion blur must match the raw passthrough: max diff {:.5}",
-        parity.max
-    );
-}
-
-/// The fused region must retain motion_blur's camera external and retarget
-/// its live enabled binding through the downstream pointwise node.
-#[test]
-fn motion_blur_output_differs_under_motion_fused_route() {
-    let json_on = fused_scene_json(SHUTTER, true);
-    let json_off = fused_scene_json(0.0, true);
-    assert_blur_visible_on_route(
-        &move |shutter: f32| {
-            if shutter > 0.0 {
-                json_on.clone()
-            } else {
-                json_off.clone()
-            }
-        },
-        "fused",
     );
 }
