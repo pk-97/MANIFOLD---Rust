@@ -216,8 +216,9 @@ fn build<'a>(
     tracer: &GpuShadowRayTracer,
     objects: &[RtObjectGeometry<'a>],
 ) -> Scene<'a> {
+    let rows = vec![GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
     let plan = tracer
-        .plan_accel(device, None, objects)
+        .plan_accel(device, None, objects, &rows)
         .expect("plan accel");
     let mut slot = None;
     tracer
@@ -227,7 +228,6 @@ fn build<'a>(
     let mut ns_slot = None;
     let mut ns_capacity = 0usize;
     let textures = ensure_normal_sources(&mut ns_slot, &mut ns_capacity, device, objects);
-    let rows = vec![GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
     let changes = vec![RtGeometryChange::Rebuild; objects.len()];
     let mut enc = device.create_encoder("rt-alpha-walk-bound-prepare");
     tracer

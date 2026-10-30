@@ -278,7 +278,7 @@ fn instanced_emissive_object_lights_receiver_both_copies_emit() {
     // own committed encoder so the AS and the light table are ready well
     // before the dispatch below.
     let plan = tracer
-        .plan_accel(device, None, &objects)
+        .plan_accel(device, None, &objects, &materials)
         .expect("plan accel");
     let mut accel_slot = None;
     tracer

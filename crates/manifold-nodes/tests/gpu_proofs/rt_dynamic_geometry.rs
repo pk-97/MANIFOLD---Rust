@@ -272,7 +272,7 @@ mod rt_dynamic_oracle {
         // query's encoder below (built before the ray query on the same
         // command buffer).
         let plan = tracer
-            .plan_accel(device, None, &objects)
+            .plan_accel(device, None, &objects, &[])
             .expect("plan accel");
         let mut accel_slot = None;
         tracer
@@ -585,7 +585,7 @@ fn cs_main() {
         let indexed = index_buffer.is_some();
         let objects = [triangle_object(vertex_buffer, index_buffer, IDENTITY)];
         let plan = tracer
-            .plan_accel(device, None, &objects)
+            .plan_accel(device, None, &objects, &[])
             .expect("plan accel");
         let mut accel_slot = None;
         tracer
@@ -799,7 +799,7 @@ fn cs_main() {
         );
         let normal_sources = normal_sources_slot.unwrap();
         let plan = tracer
-            .plan_accel(device, None, &objects)
+            .plan_accel(device, None, &objects, &[])
             .expect("plan accel");
         let mut accel_slot = None;
         tracer
@@ -900,7 +900,7 @@ fn cs_main() {
             tangent_offset: u32::MAX,
         }];
         let plan = tracer
-            .plan_accel(device, None, &objects)
+            .plan_accel(device, None, &objects, &[])
             .expect("plan accel");
         let mut accel_slot = None;
         tracer
@@ -1029,6 +1029,7 @@ fn cs_main() {
                 device,
                 None,
                 &[triangle_object(&vertex_buffer, None, IDENTITY)],
+                &[],
             )
             .expect("plan uninstanced multiframe accel");
         let mut accel_slot = None;
@@ -1138,7 +1139,7 @@ fn cs_main() {
         let state_a = triangle_at(STATE_LEFT_X);
         let vertex_a = write_vertices(device, &state_a);
         let objects_a = [triangle_object(&vertex_a, None, IDENTITY)];
-        let plan_a = tracer.plan_accel(device, None, &objects_a).expect("plan A");
+        let plan_a = tracer.plan_accel(device, None, &objects_a, &[]).expect("plan A");
         let mut resident = None;
         tracer
             .prepare_accel(device, &mut resident, plan_a)
@@ -1167,7 +1168,7 @@ fn cs_main() {
         let vertex_b = write_vertices(device, &state_b);
         let objects_b = [triangle_object(&vertex_b, None, IDENTITY)];
         let plan_b = tracer
-            .plan_accel(device, Some(&accel_a), &objects_b)
+            .plan_accel(device, Some(&accel_a), &objects_b, &[])
             .expect("plan B");
         assert!(
             plan_b.additional_peak_bytes() > 0,
@@ -1272,7 +1273,7 @@ fn cs_main() {
         let state = triangle_at(STATE_LEFT_X);
         let vertex_buffer = write_vertices(device, &state);
         let objects = [triangle_object(&vertex_buffer, None, IDENTITY)];
-        let plan = tracer.plan_accel(device, None, &objects).expect("plan");
+        let plan = tracer.plan_accel(device, None, &objects, &[]).expect("plan");
         let peak = plan.additional_peak_bytes();
         assert!(peak > 0, "a fresh scene charges a nonzero candidate peak");
 
@@ -1287,7 +1288,7 @@ fn cs_main() {
         drop(plan);
 
         // Exactly the required peak: admitted — prepare and encode run.
-        let plan = tracer.plan_accel(device, None, &objects).expect("re-plan");
+        let plan = tracer.plan_accel(device, None, &objects, &[]).expect("re-plan");
         assert_eq!(
             plan.additional_peak_bytes(),
             peak,
@@ -1348,7 +1349,7 @@ fn cs_main() {
         // against the resident set charges zero additional bytes (the
         // rt_dynamic_ordering half of the plan/prepared agreement gate).
         let replan = tracer
-            .plan_accel(device, Some(&accel), &objects)
+            .plan_accel(device, Some(&accel), &objects, &[])
             .expect("replan resident");
         assert_eq!(
             replan.additional_peak_bytes(),
@@ -1364,6 +1365,7 @@ fn cs_main() {
             device,
             None,
             std::slice::from_ref(&obj),
+            &[],
         ) {
             Err(RtAccelError::InvalidGeometry { object, reason }) => {
                 assert_eq!(
@@ -1433,7 +1435,7 @@ fn cs_main() {
             triangle_object(&verts_b, None, IDENTITY),
         ];
         let plan2 = tracer
-            .plan_accel(device, Some(&accel), &objects2)
+            .plan_accel(device, Some(&accel), &objects2, &[])
             .expect("plan two-object scene");
         let peak2 = plan2.additional_peak_bytes();
         assert!(
@@ -1451,7 +1453,7 @@ fn cs_main() {
             "a rejected admission must leave the resident topology intact"
         );
         let plan2 = tracer
-            .plan_accel(device, Some(&accel), &objects2)
+            .plan_accel(device, Some(&accel), &objects2, &[])
             .expect("re-plan two-object scene");
         let mut resident2 = Some(accel);
         tracer

@@ -149,8 +149,16 @@ fn run_tlc_fixture(
     let tracer = GpuShadowRayTracer::new(device);
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
+    // P4a: the GPU emissive preparation indexes one material row per
+    // object — this fixture has no emissive geometry, so zeroed rows
+    // (luma 0 → zero stats, the old "no emissive table" behavior).
+    let materials =
+        vec![
+            manifold_gpu::raytrace::GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
+            objects.len()
+        ];
     let plan = tracer
-        .plan_accel(device, None, objects)
+        .plan_accel(device, None, objects, &materials)
         .expect("plan accel");
     let mut accel_slot = None;
     tracer
@@ -287,14 +295,6 @@ fn run_tlc_fixture(
         svt_slot,
     );
     let dummy_emissive = harness::dummy_emissive_buffer(device);
-    // P4a: the GPU emissive preparation indexes one material row per
-    // object — this fixture has no emissive geometry, so zeroed rows
-    // (luma 0 → zero stats, the old "no emissive table" behavior).
-    let materials =
-        vec![
-            manifold_gpu::raytrace::GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]);
-            objects.len()
-        ];
 
     let mut encoder = device.create_encoder("tlc-proof");
     let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];

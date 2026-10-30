@@ -363,7 +363,7 @@ fn at() {
     // stats kernels as the shared AS update path), read back through the
     // mapped shared buffers.
     let tracer = GpuShadowRayTracer::new(d);
-    let plan = tracer.plan_accel(d, None, &o).expect("plan");
+    let plan = tracer.plan_accel(d, None, &o, &m).expect("plan");
     let mut slot = None;
     tracer.prepare_accel(d, &mut slot, plan).expect("prepare");
     let mut accel = slot.unwrap();

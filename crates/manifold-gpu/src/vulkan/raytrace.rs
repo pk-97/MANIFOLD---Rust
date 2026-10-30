@@ -205,6 +205,7 @@ impl ShadowRayTracer for GpuShadowRayTracer {
         device: &GpuDevice,
         resident: Option<&Self::Accel>,
         objects: &[RtObjectGeometry<'_>],
+        materials: &[GiMaterial],
     ) -> Result<RtAccelPlan, RtAccelError> {
         match self.never {}
     }

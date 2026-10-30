@@ -687,8 +687,8 @@ pub struct RtAccelPlan {
     instanced: bool,
     total_slots: u32,
     geometry_buffers: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
-    /// P4a (§5.1): Σ (slots × triangles) over ALL objects — the emissive
-    /// candidate workspace capacity prepare allocates.
+    /// Σ (slots × triangles) over the objects that emit — the emissive
+    /// candidate workspace capacity prepare allocates or grows to.
     emissive_candidate_capacity: u32,
     additional_peak: u64,
 }
@@ -848,16 +848,11 @@ pub(crate) fn mesh_vertex_count(o: &RtObjectGeometry) -> u32 {
         / u64::from(o.vertex_stride)) as u32
 }
 
-/// The worst-case emissive table charge (§4.1): the 4096-entry cap over
-/// the triangle (96 B — P4b added the per-corner appearance weights) and
-/// 8-byte alias records, entry scratch and alias stacks. P4a's GPU
-/// candidate/sort workspaces refine this from actual triangle counts; P3
-/// charges the cap unconditionally so admission never under-counts a scene
-/// that gains emission without a topology edit (§5.1's zero→positive
-/// requirement).
+/// The emissive table charge (§4.1): the 4096-entry cap over the triangle
+/// (96 B, with the per-corner appearance weights) and 8-byte alias records,
+/// entry scratch and alias stacks, plus the candidate/sort workspace for
+/// the emitting objects' triangles.
 fn emissive_peak_bytes(candidate_capacity: u32) -> u64 {
-    // P4a: fixed table (triangles + aliases + stats + entry scratch + alias
-    // stacks) plus the candidate/sort workspace sized over ALL objects.
     let cap = u64::from(crate::raytrace_types::MAX_RT_EMISSIVE_TRIANGLES);
     let table = cap * (96 + 8 + 8 + 2 * 4) + 16;
     table + super::emissive::EmissiveScratch::bytes_for(candidate_capacity)
@@ -967,6 +962,7 @@ pub(crate) fn plan_accel(
     device: &GpuDevice,
     resident: Option<&RtAccel>,
     objects: &[RtObjectGeometry],
+    materials: &[GiMaterial],
     tlas_probe: &Retained<ProtocolObject<dyn MTLAccelerationStructure>>,
 ) -> Result<RtAccelPlan, RtAccelError> {
     for (i, o) in objects.iter().enumerate() {
@@ -1049,15 +1045,21 @@ pub(crate) fn plan_accel(
     } else {
         0
     };
-    // P4a (§5.1): the candidate workspace is sized over ALL objects'
-    // (slot × triangle) tuples — emission can appear without a topology
-    // edit, and the capacity must already cover it.
-    let emissive_candidate_capacity: u32 = topology
-        .iter()
-        .map(|t| t.instance_slots.saturating_mul(t.triangle_count))
-        .fold(0u32, u32::saturating_add);
+    // The candidate workspace covers only the objects that emit: a field of
+    // scattered copies that never glows costs one record, not one per
+    // triangle of every copy.
+    let emissive_candidate_capacity = super::emissive::emissive_candidates(objects, materials)?;
     let additional_peak = if reusable {
-        0
+        // A reused set only grows its candidate workspace, when an object
+        // started glowing.
+        let held = resident
+            .and_then(|acc| acc.emissive_scratch.as_ref())
+            .map_or(0, |scratch| scratch.capacity);
+        if held < emissive_candidate_capacity {
+            EmissiveScratch::bytes_for(emissive_candidate_capacity)
+        } else {
+            0
+        }
     } else {
         blas.iter().map(|b| b.struct_bytes + b.build_scratch + b.refit_scratch).sum::<u64>()
             + tlas_sizes.accelerationStructureSize as u64
@@ -1107,6 +1109,21 @@ pub(crate) fn prepare_accel(
             && acc.instance_slot_total == plan.total_slots
             && acc.topology == plan.topology;
         if reusable {
+            let short = acc
+                .emissive_scratch
+                .as_ref()
+                .is_none_or(|scratch| scratch.capacity < plan.emissive_candidate_capacity);
+            if short {
+                let grown = EmissiveScratch::new(
+                    device,
+                    plan.emissive_candidate_capacity,
+                    plan.topology.len(),
+                )?;
+                let acc = resident.as_mut().expect("checked above");
+                if let Some(old) = acc.emissive_scratch.replace(grown) {
+                    device.retire_after_queue(old, "RT emissive scratch");
+                }
+            }
             return Ok(());
         }
     }

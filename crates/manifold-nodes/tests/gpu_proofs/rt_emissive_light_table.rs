@@ -81,7 +81,7 @@ fn gpu_prepare_emissive_table(
 ) -> (GpuShadowRayTracer, RtAccel, EmissiveTableStats) {
     let tracer = GpuShadowRayTracer::new(device);
     let plan = tracer
-        .plan_accel(device, None, objects)
+        .plan_accel(device, None, objects, materials)
         .expect("plan accel");
     let mut accel_slot = None;
     tracer

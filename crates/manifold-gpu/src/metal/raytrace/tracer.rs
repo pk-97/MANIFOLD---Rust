@@ -1485,6 +1485,7 @@ impl ShadowRayTracer for GpuShadowRayTracer {
         device: &GpuDevice,
         resident: Option<&Self::Accel>,
         objects: &[RtObjectGeometry<'_>],
+        materials: &[GiMaterial],
     ) -> Result<RtAccelPlan, RtAccelError> {
         let probe = resident
             .and_then(|acc| acc.blas.first())
@@ -1497,7 +1498,7 @@ impl ShadowRayTracer for GpuShadowRayTracer {
                 probe_storage.1.clone()
             }
         };
-        plan_accel(device, resident, objects, &probe)
+        plan_accel(device, resident, objects, materials, &probe)
     }
 
     fn prepare_accel(

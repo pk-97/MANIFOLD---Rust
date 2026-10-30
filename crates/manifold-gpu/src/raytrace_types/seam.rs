@@ -20,12 +20,15 @@ pub trait ShadowRayTracer {
     /// admission byte count ([`RtAccelPlan::additional_peak_bytes`]), which
     /// the renderer hands to `admit_candidate_bytes` before
     /// [`Self::prepare_accel`]. Never inspects vertex contents, allocates,
-    /// or encodes.
+    /// or encodes. `materials` holds one row per object, or none when
+    /// nothing emits; the emissive workspace is sized for the objects
+    /// whose material emits.
     fn plan_accel(
         &self,
         device: &GpuDevice,
         resident: Option<&Self::Accel>,
         objects: &[RtObjectGeometry<'_>],
+        materials: &[GiMaterial],
     ) -> Result<RtAccelPlan, RtAccelError>;
 
     /// Allocate/reuse capacity for a plan — never commits a GPU command.

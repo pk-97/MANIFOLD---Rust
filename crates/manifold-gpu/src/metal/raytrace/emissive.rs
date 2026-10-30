@@ -108,9 +108,10 @@ fn prepare_buffer(device: &GpuDevice, bytes: u64, shared: bool) -> Result<GpuBuf
     })
 }
 
-/// §5.1 candidate/sort workspace, sized at preparation over ALL objects
-/// (emission can go zero→positive without a topology edit — the capacity
-/// must already cover the newly emissive object's tuples).
+/// §5.1 candidate/sort workspace, sized at preparation over the objects
+/// that emit then ([`emissive_candidates`]). An object that starts glowing
+/// makes the next update ask for preparation, which grows only this
+/// workspace; a scene that never glows holds a one-record workspace.
 pub(crate) struct EmissiveScratch {
     /// Ping-pong candidate records (16 B each): key/obj/desc/tri.
     pub(crate) candidates: [GpuBuffer; 2],
@@ -119,7 +120,7 @@ pub(crate) struct EmissiveScratch {
     /// Ordered GPU snapshot of the header + object table.
     pub(crate) obj_params: GpuBuffer,
     obj_params_scratch: GpuBuffer,
-    capacity: u32,
+    pub(crate) capacity: u32,
 }
 
 impl EmissiveScratch {
@@ -180,9 +181,6 @@ pub(crate) fn validate_emissive_inputs(
     objects: &[RtObjectGeometry<'_>],
     materials: &[GiMaterial],
 ) -> Result<(), RtAccelError> {
-    if !materials.is_empty() && materials.len() != objects.len() {
-        return Err(RtAccelError::Encode("RT emissive material count mismatch"));
-    }
     let scratch = accel
         .emissive_scratch
         .as_ref()
@@ -195,6 +193,22 @@ pub(crate) fn validate_emissive_inputs(
             .is_none_or(|bytes| bytes > scratch.obj_params_scratch.size as usize)
     {
         return Err(RtAccelError::NeedsPreparation);
+    }
+    if emissive_candidates(objects, materials)? > scratch.capacity {
+        return Err(RtAccelError::NeedsPreparation);
+    }
+    Ok(())
+}
+
+/// Candidate records the emissive workspace needs: slots × triangles over
+/// the objects whose material emits. An empty `materials` means nothing
+/// emits.
+pub(crate) fn emissive_candidates(
+    objects: &[RtObjectGeometry<'_>],
+    materials: &[GiMaterial],
+) -> Result<u32, RtAccelError> {
+    if !materials.is_empty() && materials.len() != objects.len() {
+        return Err(RtAccelError::Encode("RT emissive material count mismatch"));
     }
     let mut slots = 0u32;
     let mut candidates = 0u32;
@@ -221,10 +235,7 @@ pub(crate) fn validate_emissive_inputs(
                 .ok_or(RtAccelError::Encode("RT emissive candidate count overflow"))?;
         }
     }
-    if candidates > scratch.capacity {
-        return Err(RtAccelError::NeedsPreparation);
-    }
-    Ok(())
+    Ok(candidates)
 }
 
 pub(crate) fn encode_emissive_table(
@@ -321,8 +332,7 @@ pub(crate) fn encode_emissive_table(
     {
         let scratch = accel.emissive_scratch.as_ref().expect("checked above");
         if active_count > scratch.capacity {
-            // Capacity is sized at preparation over ALL objects — only a
-            // preparation that predates this object set can be short.
+            // An object started glowing since the last preparation.
             return Err(RtAccelError::NeedsPreparation);
         }
         let header = EmissivePrepHeader {

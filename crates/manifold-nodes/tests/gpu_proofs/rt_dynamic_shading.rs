@@ -124,7 +124,7 @@ fn prepare_scene(
     materials: &[GiMaterial],
 ) -> RtAccel {
     let plan = tracer
-        .plan_accel(device, None, objects)
+        .plan_accel(device, None, objects, materials)
         .expect("plan accel");
     let mut slot = None;
     tracer
@@ -781,8 +781,10 @@ fn prepare_query_scene<'a>(
     Option<GpuBuffer>,
     manifold_gpu::raytrace::RtMaterialTextures<'a>,
 ) {
+    let materials =
+        vec![GiMaterial::new([0.8, 0.8, 0.8], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
     let plan = tracer
-        .plan_accel(device, None, objects)
+        .plan_accel(device, None, objects, &materials)
         .expect("plan accel");
     let mut slot = None;
     tracer
@@ -797,8 +799,6 @@ fn prepare_query_scene<'a>(
         device,
         objects,
     );
-    let materials =
-        vec![GiMaterial::new([0.8, 0.8, 0.8], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
     let changes = vec![RtGeometryChange::Rebuild; objects.len()];
     let mut enc = device.create_encoder("rt-p4b-query-prepare");
     tracer
@@ -1254,7 +1254,7 @@ fn rt_dynamic_coverage_and_attributes() {
             appearance_weights: Some(&short_weights),
             ..flat_object(&vb2, 2)
         }];
-        match tracer.plan_accel(device, None, &bad) {
+        match tracer.plan_accel(device, None, &bad, &[]) {
             Err(manifold_gpu::raytrace::RtAccelError::InvalidGeometry { object, reason }) => {
                 assert_eq!(object, 0);
                 assert!(reason.contains("appearance weights"), "reason: {reason}");
@@ -1408,7 +1408,7 @@ fn rt_dynamic_coverage_and_attributes() {
             GiMaterial::new([0.8, 0.8, 0.8], ceil_emissive, [0.0; 4], [0.0; 4]),
         ];
         let plan = tracer
-            .plan_accel(device, None, &objects)
+            .plan_accel(device, None, &objects, &materials)
             .expect("plan accel");
         let mut slot = None;
         tracer

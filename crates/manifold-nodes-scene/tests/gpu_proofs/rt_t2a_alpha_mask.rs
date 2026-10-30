@@ -284,8 +284,12 @@ fn run_fixture_on(
 
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
+    // P4a: the GPU emissive preparation indexes one material row per
+    // object — this fixture has no emissive geometry, so zeroed rows
+    // (luma 0 → zero stats, the old "no emissive table" behavior).
+    let materials = vec![GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
     let plan = tracer
-        .plan_accel(device, None, &objects)
+        .plan_accel(device, None, &objects, &materials)
         .expect("plan accel");
     let mut accel_slot = None;
     tracer
@@ -398,10 +402,6 @@ fn run_fixture_on(
     let dummy_emissive = harness::dummy_emissive_buffer(device);
     let gi_materials_buffer =
         device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
-    // P4a: the GPU emissive preparation indexes one material row per
-    // object — this fixture has no emissive geometry, so zeroed rows
-    // (luma 0 → zero stats, the old "no emissive table" behavior).
-    let materials = vec![GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
 
     let mut encoder = device.create_encoder("rt-t2a-shadow-proof");
     let changes = vec![manifold_gpu::raytrace::RtGeometryChange::Rebuild; objects.len()];

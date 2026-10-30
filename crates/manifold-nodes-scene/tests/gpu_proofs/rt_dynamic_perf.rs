@@ -247,7 +247,7 @@ fn run_configuration(device: &GpuDevice, configuration: Configuration) -> Value 
 
     let tracer = GpuShadowRayTracer::new(device);
     let plan = tracer
-        .plan_accel(device, None, &objects)
+        .plan_accel(device, None, &objects, &[])
         .expect("perf plan");
     let admitted_bytes = plan.additional_peak_bytes();
     let mut resident = None;

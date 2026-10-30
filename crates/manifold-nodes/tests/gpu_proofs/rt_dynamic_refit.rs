@@ -187,7 +187,7 @@ fn fresh_build_hit(
     });
     let objects = [object(&vertices, instances.as_ref())];
     let plan = tracer
-        .plan_accel(device, None, &objects)
+        .plan_accel(device, None, &objects, &[])
         .expect("fresh plan");
     let mut resident = None;
     tracer
@@ -234,7 +234,7 @@ fn rt_dynamic_selective_refit_matches_fresh_build_and_instances() {
     let tracer = GpuShadowRayTracer::new(device);
     let vertices = write_vertices(device, &triangle_at(0.0));
     let objects = [object(&vertices, None)];
-    let plan = tracer.plan_accel(device, None, &objects).expect("plan");
+    let plan = tracer.plan_accel(device, None, &objects, &[]).expect("plan");
     let mut resident = None;
     tracer
         .prepare_accel(device, &mut resident, plan)
@@ -358,7 +358,7 @@ fn rt_dynamic_selective_refit_matches_fresh_build_and_instances() {
     write_instance(&instances, 2.0);
     let instance_objects = [object(&instance_vertices, Some(&instances))];
     let plan = tracer
-        .plan_accel(device, None, &instance_objects)
+        .plan_accel(device, None, &instance_objects, &[])
         .expect("instance plan");
     let mut instance_slot = None;
     tracer
@@ -447,7 +447,7 @@ fn rt_dynamic_refit_atomic_validation_and_retained_lifetime() {
     let tracer = GpuShadowRayTracer::new(device);
     let vertices = write_vertices(device, &triangle_at(0.0));
     let objects = [object(&vertices, None)];
-    let plan = tracer.plan_accel(device, None, &objects).expect("plan");
+    let plan = tracer.plan_accel(device, None, &objects, &[]).expect("plan");
     let mut resident = None;
     tracer
         .prepare_accel(device, &mut resident, plan)

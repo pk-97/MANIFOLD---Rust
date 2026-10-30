@@ -166,8 +166,12 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     }];
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
+    // P4a: the GPU emissive preparation indexes one material row per
+    // object — this fixture has no emissive geometry, so zeroed rows
+    // (luma 0 → zero stats, the old "no emissive table" behavior).
+    let materials = vec![GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
     let plan = tracer
-        .plan_accel(device, None, &objects)
+        .plan_accel(device, None, &objects, &materials)
         .expect("plan accel");
     let mut accel_slot = None;
     tracer
@@ -283,10 +287,6 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
     // discipline as `out_irr` — one zeroed entry.
     let gi_materials_buffer =
         device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
-    // P4a: the GPU emissive preparation indexes one material row per
-    // object — this fixture has no emissive geometry, so zeroed rows
-    // (luma 0 → zero stats, the old "no emissive table" behavior).
-    let materials = vec![GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
     // RT-T1-B: unread by this proof (ao_spp == 0 && gi_spp == 0 above),
     // same ABI-stub discipline as `gi_materials_buffer`.
     let dummy_emissive = harness::dummy_emissive_buffer(device);
@@ -512,8 +512,12 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
     ];
     // P3 seam: plan/prepare allocate, encode rides the dispatch encoder
     // below (built before the trace dispatch on the same command buffer).
+    // P4a: the GPU emissive preparation indexes one material row per
+    // object — this fixture has no emissive geometry, so zeroed rows
+    // (luma 0 → zero stats, the old "no emissive table" behavior).
+    let materials = vec![GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
     let plan = tracer
-        .plan_accel(device, None, &objects)
+        .plan_accel(device, None, &objects, &materials)
         .expect("plan accel");
     let mut accel_slot = None;
     tracer
@@ -629,10 +633,6 @@ fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
     // discipline as `out_irr` — one zeroed entry.
     let gi_materials_buffer =
         device.create_buffer(std::mem::size_of::<GiMaterial>() as u64, BufferUse::Upload);
-    // P4a: the GPU emissive preparation indexes one material row per
-    // object — this fixture has no emissive geometry, so zeroed rows
-    // (luma 0 → zero stats, the old "no emissive table" behavior).
-    let materials = vec![GiMaterial::new([0.0; 3], [0.0; 3], [0.0; 4], [0.0; 4]); objects.len()];
     // RT-T1-B: unread by this proof (ao_spp == 0 && gi_spp == 0 above),
     // same ABI-stub discipline as `gi_materials_buffer`.
     let dummy_emissive = harness::dummy_emissive_buffer(device);
