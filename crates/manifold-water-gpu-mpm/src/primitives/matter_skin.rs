@@ -70,7 +70,7 @@ pub struct SkinPipelines {
 manifold_node_engine::primitive! {
     name: MatterSkin,
     type_id: "node.matter_skin",
-    purpose: "Draw one Matter item as its fill's own mesh carried by its points: each vertex bonds once an epoch to its 8 nearest seeds in the item's fill box (row `slot` of the fill table, whose cells hold their points in cell order) by its offset from each at rest; after every tick a vertex is the kernel-weighted mean over its live bonds of point + F · offset, and its normal and tangent turn as its smoothing group's faces turn. The vertices drawn are the blend of the last two ticks on the display clock. A Box fill (no mesh) carries the box its row seeds, a Sphere fill a 128-segment ball; a coarse mesh is split until its edges are about one point spacing. No transform draws nothing.",
+    purpose: "Draw one Matter item as its fill's own mesh carried by its points: each vertex bonds once an epoch to its 8 nearest seeds in the item's fill box (row `slot` of the fill table, whose cells hold their points in cell order) by its offset from each at rest; after every tick a vertex is where the weighted least-squares affine fit from its bonds' seeds to their points now takes it (positions only, so one point's jitter averages out; the bonds' mean F decides the directions the seeds do not span), and its normal and tangent turn as its smoothing group's faces turn. The vertices drawn are the blend of the last two ticks on the display clock. A Box fill (no mesh) carries the box its row seeds, a Sphere fill a 128-segment ball; a coarse mesh is split until its edges are about one point spacing. No transform draws nothing.",
     inputs: {
         // node.matter_state's out: the live points.
         points: Array(MatterPoint) required,

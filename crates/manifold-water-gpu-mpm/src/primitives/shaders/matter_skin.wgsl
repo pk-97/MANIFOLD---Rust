@@ -7,9 +7,15 @@
 //     the fill table without a search structure. A bond keeps the point and
 //     the vertex's offset from the point's seed, weighted by a kernel that
 //     falls to zero past the farthest bond.
-//   skin_main: after a tick, each vertex is the weighted mean over its live
-//     bonds of point + F · offset (F the point's elastic deformation, rows
-//     f_x, f_y, f_z).
+//   skin_main: after a tick, each vertex is where the affine map fitted to
+//     its live bonds takes it: the weighted least-squares A, t taking the
+//     bonds' seeds (relative to the vertex at rest) to their points now. The
+//     fit reads positions only, so it averages out one point's jitter, and a
+//     corner vertex, all of whose points lie on one side, carries their flat
+//     faces on instead of one point's F bent at the corner. Where the seeds
+//     span fewer than three directions the fit leans on the bonds' mean F
+//     (rows f_x, f_y, f_z), which a cloud of points moved by F reproduces
+//     exactly.
 //   normal_main: each vertex's normal and tangent turn by the rotation that
 //     takes its smoothing group's rest face normal to its deformed one, so
 //     shading follows the carried shape (clay's plastic flow too, which F
@@ -212,28 +218,73 @@ fn skin_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         skinned[v] = held;
         return;
     }
-    var sum = vec3<f32>(0.0);
+    // The weighted means of the seeds' offsets from the vertex (a bond holds
+    // the vertex's offset from its seed, so the seed's is minus it), of the
+    // points and of their F.
     var weight = 0.0;
+    var seed_mean = vec3<f32>(0.0);
+    var point_mean = vec3<f32>(0.0);
+    var f_mean = mat3x3<f32>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
     for (var k = 0u; k < BONDS; k = k + 1u) {
+        let bond = bonds[v * BONDS + k];
         let i = bond_points[v * BONDS + k];
-        if i >= params.point_count {
+        if i >= params.point_count || bond.w <= 0.0 {
             continue;
         }
         let p = points[i];
-        let bond = bonds[v * BONDS + k];
-        if p.id == 0u || bond.w <= 0.0 {
+        if p.id == 0u {
             continue;
         }
-        let o = bond.xyz;
-        let carried = p.position + vec3<f32>(dot(p.f_x.xyz, o), dot(p.f_y.xyz, o), dot(p.f_z.xyz, o));
-        sum = sum + bond.w * carried;
         weight = weight + bond.w;
+        seed_mean = seed_mean - bond.w * bond.xyz;
+        point_mean = point_mean + bond.w * p.position;
+        f_mean = f_mean + transpose(mat3x3<f32>(p.f_x.xyz, p.f_y.xyz, p.f_z.xyz)) * bond.w;
     }
     if weight <= 0.0 {
         skinned[v] = held;
         return;
     }
-    skinned[v] = Skinned(vec4<f32>(sum / weight, 1.0), held.normal, held.tangent);
+    seed_mean = seed_mean / weight;
+    point_mean = point_mean / weight;
+    f_mean = f_mean * (1.0 / weight);
+    // Moments about the means: seeds with seeds, points with seeds.
+    var seeds = mat3x3<f32>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+    var moved = mat3x3<f32>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
+    for (var k = 0u; k < BONDS; k = k + 1u) {
+        let bond = bonds[v * BONDS + k];
+        let i = bond_points[v * BONDS + k];
+        if i >= params.point_count || bond.w <= 0.0 {
+            continue;
+        }
+        let p = points[i];
+        if p.id == 0u {
+            continue;
+        }
+        let d = -bond.xyz - seed_mean;
+        let x = p.position - point_mean;
+        seeds = seeds + outer(d * bond.w, d);
+        moved = moved + outer(x * bond.w, d);
+    }
+    // A = (moved + λ F̄)(seeds + λ I)⁻¹: λ, a tenth of the seeds' mean
+    // spread, decides only the directions the seeds do not span.
+    let lambda = 0.1 * (seeds[0].x + seeds[1].y + seeds[2].z) / 3.0 + 1e-12;
+    let eye = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
+    let a = (moved + f_mean * lambda) * inverse3(seeds + eye * lambda);
+    skinned[v] = Skinned(vec4<f32>(point_mean - a * seed_mean, 1.0), held.normal, held.tangent);
+}
+
+// The outer product a bᵀ.
+fn outer(a: vec3<f32>, b: vec3<f32>) -> mat3x3<f32> {
+    return mat3x3<f32>(a * b.x, a * b.y, a * b.z);
+}
+
+// The inverse of `m`, from its columns' cross products; the fit's matrix is
+// symmetric positive definite, its determinant above zero.
+fn inverse3(m: mat3x3<f32>) -> mat3x3<f32> {
+    let r0 = cross(m[1], m[2]);
+    let r1 = cross(m[2], m[0]);
+    let r2 = cross(m[0], m[1]);
+    return transpose(mat3x3<f32>(r0, r1, r2)) * (1.0 / dot(m[0], r0));
 }
 
 // The face normal of triangle t, its length twice the area, from this tick's
