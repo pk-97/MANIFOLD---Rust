@@ -142,6 +142,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "tree.rs",
+        rust_struct: "TreeUniforms",
+        shader: "shaders/tree.wgsl",
+        shader_struct: "TreeUniforms",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "terrain.rs",
         rust_struct: "TerrainUniforms",
         shader: "shaders/terrain.wgsl",
