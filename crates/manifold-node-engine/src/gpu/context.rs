@@ -23,10 +23,13 @@ impl GpuContext {
     }
 
     /// Headless and test entry points: waits its turn on the machine-wide GPU
-    /// queue first. The live app must use `new()`.
+    /// queue first, then loads the disk shader caches. The live app must use
+    /// `new()`.
     pub fn new_queued(label: &str) -> Self {
+        let device = manifold_gpu::GpuDevice::new_queued(label);
+        manifold_gpu::load_disk_shader_caches(&device);
         Self {
-            device: std::sync::Arc::new(manifold_gpu::GpuDevice::new_queued(label)),
+            device: std::sync::Arc::new(device),
         }
     }
 }
