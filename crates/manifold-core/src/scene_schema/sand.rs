@@ -256,6 +256,22 @@ pub fn sand_look(matter: Matter) -> Vec<(String, f32)> {
     look
 }
 
+/// How a Sand's grains are shaped: a chip (an eight-faced grain) or a pebble
+/// (a smooth stone), squashed along its own axes before it turns.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GrainShape {
+    pub pebble: bool,
+    pub squash: [f32; 3],
+}
+
+/// Every Matter's grains are chips, unsquashed.
+pub fn grain_shape(_matter: Matter) -> GrainShape {
+    GrainShape {
+        pebble: false,
+        squash: [1.0; 3],
+    }
+}
+
 /// The rows a Matter's scanned set gives its Material, which its look
 /// leaves to the file.
 const FROM_SET: [&str; 4] = ["color_r", "color_g", "color_b", "roughness"];

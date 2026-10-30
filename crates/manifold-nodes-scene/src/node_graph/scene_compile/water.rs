@@ -29,7 +29,7 @@ use manifold_core::scene_doc::{
     Item, ItemFields, ItemKind, Quality, SceneDoc, SourceShape,
 };
 use manifold_core::scene_schema::{
-    DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SOLID, SURFACE_DETAIL_NODES,
+    DOMAIN_ROLE, GRAIN_SHAPE_ROLE, GRAIN_SQUASH_ROLE, PHYSICS_VIEW_SWITCHES, SOLID, SURFACE_DETAIL_NODES,
     SURFACE_DETAIL_OFFSET, WATER_MATERIAL_ROLE, WORLD_FOLLOWS, WaterFamily,
     role_index, rows, template_roles, water_family,
 };
@@ -456,6 +456,18 @@ fn emit(
     };
     let frame = group.and_then(|group| b.group_frames.get(group).copied());
     let visible = group.and_then(|group| b.group_visible.get(group).copied());
+    // A Sand's grains take its matter's shape.
+    if let ItemFields::Sand(sand) = &item.fields {
+        let shape = manifold_core::scene_schema::grain_shape(sand.matter);
+        if let Some(switch) = node(GRAIN_SHAPE_ROLE) {
+            b.set_number(switch, "selector", if shape.pebble { 1.0 } else { 0.0 });
+        }
+        if let Some(squash) = node(GRAIN_SQUASH_ROLE) {
+            for (axis, scale) in ["scale_x", "scale_y", "scale_z"].into_iter().zip(shape.squash) {
+                b.set_number(squash, axis, scale);
+            }
+        }
+    }
     if let (ItemFields::Sand(sand), Some(material)) = (&item.fields, node(MATTER_MATERIAL)) {
         b.set(
             material,

@@ -60,6 +60,8 @@ Creative Commons CC0 1.0 Universal License.
 | Ground097 | 1.0 *est.* | kept | <https://ambientcg.com/a/Ground097> |
 | Ground094C | 1.0 *est.* | kept | <https://ambientcg.com/a/Ground094C> |
 | Clay006 | 0.2 | broken | <https://ambientcg.com/a/Clay006> |
+| Gravel022 | 1.5 | broken | <https://ambientcg.com/a/Gravel022> |
+| Rocks022 | 0.5 | broken | <https://ambientcg.com/a/Rocks022> |
 | Leaf001 | one leaf | cut-out | <https://ambientcg.com/a/Leaf001> |
 
 Leaf001 has an opacity picture, so it is a cut-out: one leaf drawn across
@@ -74,7 +76,8 @@ cut-out like Leaf001: give it to a Tree's Leaves for spruces and firs. Far
 away, the tree's detail levels stretch it over whole branches and crowns.
 
 The Poly Haven materials are drone scans of ground tens of metres across,
-for terrain seen from the air. From each 4K download we kept the colour,
+for terrain seen from the air, and dark_rock, a 2.4 m basalt scan that
+lava's crust draws with (its 2K download). From each 4K download we kept the colour,
 OpenGL normal, roughness and displacement pictures as JPG and Poly Haven's
 thumbnail as the preview, and wrote the `.mtlx` in the same shape as the
 ambientCG ones: a `hextiledimage` colour picture sized to the scan's own
@@ -89,6 +92,7 @@ the Creative Commons CC0 1.0 Universal License.
 | aerial_rocks_04 | 80 | broken | 2.0 *est.* | <https://polyhaven.com/a/aerial_rocks_04> |
 | snow_field_aerial | 80 | broken | 0.5 *est.* | <https://polyhaven.com/a/snow_field_aerial> |
 | marble_cliff_05 | 20 | broken | 0.8 *est.* | <https://polyhaven.com/a/marble_cliff_05> |
+| dark_rock | 2.4 | broken | 0.03 *est.* | <https://polyhaven.com/a/dark_rock> |
 
 ## Adding more
 

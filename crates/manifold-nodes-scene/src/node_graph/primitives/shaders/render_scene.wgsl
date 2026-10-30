@@ -309,6 +309,25 @@ struct VsOut {
 const COPY_BRIGHTNESS: f32 = 0.9;
 const COPY_WARMTH: f32 = 0.5;
 
+// A copy with its own texture key (`copy_key`) reads its own patch of a
+// box-mapped texture, up to COPY_TEXTURE_SPAN metres from the others', so
+// copies of one small mesh (a Sand's grains, its pebbles) differ as real
+// stones do: each pebble takes one stone's colour from a photo of many.
+const COPY_TEXTURE_SPAN: f32 = 64.0;
+
+fn copy_texture_shift(marker_w: f32) -> vec3<f32> {
+    let key = copy_key(marker_w);
+    if key == 0u {
+        return vec3<f32>(0.0);
+    }
+    let k = vec2<i32>(i32(key & 2047u), i32(key >> 11u));
+    return vec3<f32>(
+        cover_rule_hash(k),
+        cover_rule_hash(k.yx + vec2<i32>(17, 5)),
+        cover_rule_hash(k + vec2<i32>(3, 29)),
+    ) * COPY_TEXTURE_SPAN;
+}
+
 fn copy_shade(place: vec3<f32>) -> vec3<f32> {
     let key = vec2<i32>(bitcast<i32>(place.x), bitcast<i32>(place.z));
     let bright = cover_rule_hash(key) - 0.5;
@@ -442,7 +461,7 @@ fn scene_vs_body(vid: u32, iid: u32) -> VsOut {
     // axes carry the mirror, so its texture reads as the reflection.
     if u.surface.y > 0.5 {
         let model_scale = vec3<f32>(length(u.model[0].xyz), length(u.model[1].xyz), length(u.model[2].xyz));
-        out.box_pos = local_pos * abs(inst.pos_scale.w) * model_scale;
+        out.box_pos = local_pos * abs(inst.pos_scale.w) * model_scale + copy_texture_shift(inst.rot_pad.w);
         out.box_normal = local_normal / max(model_scale, vec3<f32>(1e-6));
         let axes = mat3x3<f32>(u.model[0].xyz, u.model[1].xyz, u.model[2].xyz) * rot;
         out.box_axis_x = normalize(axes[0] * msign.x);

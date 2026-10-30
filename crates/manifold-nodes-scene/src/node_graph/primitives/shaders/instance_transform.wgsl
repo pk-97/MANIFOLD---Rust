@@ -31,15 +31,20 @@ fn euler_xyz(angles: vec3<f32>) -> mat3x3<f32> {
 }
 
 
-// SCENE_MIRROR (D5, P1-amended): instances minted by node.reflect_array
-// carry the mirror plane marker in rot_pad.w — 0 = original, k > 0 =
-// mirrored across the plane perpendicular to component k-1. Unmarked
-// instances take (1,1,1).
+// rot_pad.w is 4 · key + mirror. The mirror, from node.reflect_array: 0 =
+// original, k > 0 = mirrored across the plane perpendicular to component
+// k-1; unmarked instances take (1,1,1). The key is a copy's own texture
+// key (`copy_key`), 0 for none: node.matter_grains keys each grain.
 fn mirror_sign(marker_w: f32) -> vec3<f32> {
-    let marker = u32(marker_w + 0.5);
+    let marker = u32(marker_w + 0.5) % 4u;
     return vec3<f32>(
         select(1.0, -1.0, marker == 1u),
         select(1.0, -1.0, marker == 2u),
         select(1.0, -1.0, marker == 3u),
     );
+}
+
+// A copy's own texture key from rot_pad.w, 0 for none (`mirror_sign`).
+fn copy_key(marker_w: f32) -> u32 {
+    return u32(marker_w + 0.5) / 4u;
 }

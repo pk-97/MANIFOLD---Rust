@@ -89,6 +89,11 @@ pub fn water_family(fields: &ItemFields) -> Option<Arc<WaterFamily>> {
 /// The template node a water's look is.
 pub const WATER_MATERIAL_ROLE: &str = "water_material";
 
+/// The template node that picks a Sand's grain mesh, a chip (0) or a pebble
+/// (1), and the one that squashes it ([`super::grain_shape`]).
+pub const GRAIN_SHAPE_ROLE: &str = "sand_grain_shape";
+pub const GRAIN_SQUASH_ROLE: &str = "sand_grain_squash";
+
 /// The template node that draws the water itself.
 pub const WATER_OBJECT_ROLE: &str = "water_object";
 

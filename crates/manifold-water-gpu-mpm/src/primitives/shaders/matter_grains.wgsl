@@ -20,8 +20,11 @@
 // place and size on the point it rides. Its turn is a hashed start plus
 // the point's position over the grain's radius, as a grain rolls: moving x
 // turns it about z, moving z about x, falling about both, so still sand stays
-// still and moving sand tumbles at its rolling rate. A point past the live
-// count, with radius 0 or with no id draws holes.
+// still and moving sand tumbles at its rolling rate. Its rot.w carries its
+// own texture key (4 · key, instance_transform.wgsl's copy_key) from the
+// same hash, so each grain reads its own patch of a box-mapped texture and
+// keeps it. A point past the live count, with radius 0 or with no id draws
+// holes.
 // bulk (write_bulk 1) is the particles the surface builds from: a point
 // drawing grains shrinks to UNDER its radius, so the surface sits just under
 // its grains and shows only between them, and the sparsest points shrink
@@ -208,9 +211,10 @@ fn emit_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let offset = (place.xyz * 2.0 - vec3<f32>(1.0)) * params.spread * radius;
         let scale = grain * (0.7 + 0.6 * place.w);
         let rolled = vec3<f32>(x.z + 0.5 * x.y, 0.0, 0.5 * x.y - x.x) / scale;
+        let texture_key = (key & 0x3ffffu) + 1u;
         copies[p * k + j] = Copy(
             vec4<f32>(x + offset, scale),
-            vec4<f32>(turn.xyz * 6.2831853 + rolled, 0.0),
+            vec4<f32>(turn.xyz * 6.2831853 + rolled, f32(4u * texture_key)),
         );
     }
 }

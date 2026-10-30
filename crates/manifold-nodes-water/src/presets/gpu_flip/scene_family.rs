@@ -15,7 +15,9 @@ use std::sync::{Arc, OnceLock};
 
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::scene_doc::{ItemKind, WaterDraw};
-use manifold_core::scene_schema::{PHYSICS_VIEW_SWITCHES, WaterFamily, WaterTemplate};
+use manifold_core::scene_schema::{
+    GRAIN_SHAPE_ROLE, GRAIN_SQUASH_ROLE, PHYSICS_VIEW_SWITCHES, WaterFamily, WaterTemplate,
+};
 use serde_json::json;
 
 use super::{
@@ -25,6 +27,12 @@ use super::{
 
 /// The Platonic shape a drawn particle is, scaled by the particle's radius.
 const ICOSAHEDRON: usize = 3;
+/// A pebble's sphere: smooth at the few dozen pixels a pebble covers, for
+/// under a tenth of a default sphere's triangles.
+const PEBBLE_SEGMENTS: f64 = 10.0;
+const PEBBLE_RINGS: f64 = 6.0;
+/// `node.scene_object`'s Group instance space: world = parent · copy · local.
+const GROUP_SPACE: usize = 1;
 /// A sand grain's shape: eight faces, turned per grain, read as a faceted
 /// grain at a few pixels across for under half an icosahedron's triangles.
 const OCTAHEDRON: usize = 2;
@@ -51,12 +59,30 @@ fn grains_draw(b: &mut Builder) {
     let grains = b.node("sand_grains", "node.matter_grains", json!({}));
     let domain = b.id("domain");
     b.wires(domain, grains, &["cell_size", "points_per_cell"]);
-    let mesh = b.node(
+    // A grain is a chip or a pebble, picked and squashed per Matter by the
+    // scene compiler; the object's transform squashes each copy's mesh
+    // before the copy turns (Group space).
+    let chip = b.node(
         "sand_grain_mesh",
         "node.platonic_solid_mesh",
         json!({"radius": float(1.0), "shape": {"type": "Enum", "value": OCTAHEDRON}}),
     );
-    let object = b.node(SAND_GRAINS_OBJECT, "node.scene_object", json!({}));
+    let pebble = b.node(
+        "sand_pebble_mesh",
+        "node.sphere_mesh",
+        json!({"radius": float(1.0), "segments": float(PEBBLE_SEGMENTS), "rings": float(PEBBLE_RINGS)}),
+    );
+    let mesh = b.node(
+        GRAIN_SHAPE_ROLE,
+        "node.switch_mesh",
+        json!({"selector": float(0.0)}),
+    );
+    let squash = b.node(GRAIN_SQUASH_ROLE, "node.transform_3d", json!({}));
+    let object = b.node(
+        SAND_GRAINS_OBJECT,
+        "node.scene_object",
+        json!({"instances_space": {"type": "Enum", "value": GROUP_SPACE}}),
+    );
     let [frame, particles, material, visible, surface] = [
         "frame",
         "particle_push_out",
@@ -74,7 +100,10 @@ fn grains_draw(b: &mut Builder) {
         ((frame, "count_b"), (grains, "live_count")),
         ((grains, "copies"), (object, "instances")),
         ((grains, "count"), (object, "instance_count")),
-        ((mesh, "vertices"), (object, "vertices")),
+        ((chip, "vertices"), (mesh, "in_0")),
+        ((pebble, "vertices"), (mesh, "in_1")),
+        ((mesh, "out"), (object, "vertices")),
+        ((squash, "transform"), (object, "transform")),
         ((material, "out"), (object, "material")),
         ((visible, "out"), (object, "visible")),
     ] {
