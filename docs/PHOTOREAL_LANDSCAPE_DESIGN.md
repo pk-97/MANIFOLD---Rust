@@ -34,9 +34,9 @@ Six phases, in order: light, air, land, density, motion, camera.
 ## Ownership
 
 - `LIGHT_TRANSPORT_DESIGN.md` (the light session) keeps caustics per light
-  and the HDRI's sun. Its "physical daylight sky" moves here if that session
-  agrees; until it answers, `scene_shading.wgsl`, `frame_setup.rs` and
-  `light.rs` stay untouched.
+  and the HDRI's sun (Follow HDRI, HDRI mode only). Its "physical daylight
+  sky" moves here, replacing the hand-tuned Sun 6 and strips 1.5. The
+  cascades land on top of its caustics phase, once that is committed.
 - `SCENE_GEOMETRY_SCALE_DESIGN.md` (the Lumen session) keeps patches,
   culling, mesh detail levels and terrain tiles by distance (its P6). This
   plan feeds those: trees publish `lods`, the land shape publishes the height
@@ -50,7 +50,11 @@ Six phases, in order: light, air, land, density, motion, camera.
   take six cube faces: one caster entry per cascade (`Light::cascades` beside
   `Light::cube_faces`). Each cascade is a sphere snapped to its own texels so
   shadows don't shimmer as the camera turns, and neighbouring cascades blend.
-  Range goes away for the Sun. Shafts and caustics read the same entries.
+  Range goes away for the Sun. Cascades get their own caster kind with real
+  colour (caustics skip black entries; only the first carries rays, as with
+  cube faces), and shading picks one through `caster_face`, so shafts and
+  caustics follow with no extra work. Only the nearest one or two cascades
+  run caustics, since each costs a view.
 - **Contact shadows.** A short march toward the sun through the depth buffer
   for things smaller than a cascade texel: grass, pebbles, leaves on bark.
 - **Daylight sky.** A sky made by an atmosphere model (Hillaire 2020:
