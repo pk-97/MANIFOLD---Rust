@@ -1202,9 +1202,9 @@ impl GpuEncoder {
         let depth_only = pass.color.is_none();
         let mut cache = BatchRenderCache::new();
         self.encode_draws(&enc, draws, depth_only, &mut cache);
-        if let Some((state, second)) = pass.second_group {
+        for (state, group) in pass.later_groups {
             unsafe { enc.setDepthStencilState(Some(&state.raw)) };
-            self.encode_draws(&enc, second, depth_only, &mut cache);
+            self.encode_draws(&enc, group, depth_only, &mut cache);
         }
         unsafe {
             enc.popDebugGroup();

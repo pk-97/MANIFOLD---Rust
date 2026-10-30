@@ -240,13 +240,15 @@ impl GpuEncoder {
         }
     }
 
-    /// Run `draws` in one render pass described by `pass`, then the pass's
-    /// second group after switching its depth state.
+    /// Run `draws` in one render pass described by `pass`, then each of the
+    /// pass's later groups after switching to its depth state.
     pub fn draw(&mut self, pass: &DrawPass, draws: &[Draw], label: &str) {
-        let second: &[Draw] = pass.second_group.map_or(&[], |(_, d)| d);
         let mut sets = std::mem::take(&mut self.draw_sets);
         sets.clear();
-        for draw in draws.iter().chain(second) {
+        for draw in draws
+            .iter()
+            .chain(pass.later_groups.iter().flat_map(|(_, group)| group.iter()))
+        {
             let set = self.draw_set(draw);
             sets.push(set);
         }
@@ -338,13 +340,15 @@ impl GpuEncoder {
                 self.record_draw(draw, set, depth_only);
             }
         }
-        if let Some((state, _)) = pass.second_group {
+        let mut first = draws.len();
+        for (state, group) in pass.later_groups {
             self.set_depth_state(Some(state));
-            for (draw, set) in second.iter().zip(&sets[draws.len()..]) {
+            for (draw, set) in group.iter().zip(&sets[first..]) {
                 if let Some(set) = *set {
                     self.record_draw(draw, set, depth_only);
                 }
             }
+            first += group.len();
         }
         unsafe { self.core.device.cmd_end_rendering(cmd) };
         self.draw_sets = sets;

@@ -239,8 +239,10 @@ impl RenderScene {
         let prefiltered_sheen = self.prefiltered_sheen.as_ref().unwrap_or(dummy);
         // Each light's light through the clear surfaces; stand-ins that read
         // off when no caustics ran.
-        let (caustic_map, caustic_surface, caustic_fit) =
-            self.caustics.bindings().expect("caustics encode ran this frame");
+        let (caustic_map, caustic_surface, caustic_fit) = self
+            .caustics
+            .bindings()
+            .expect("caustics encode ran this frame");
         let scene_bindings = |opaque_scene_color| {
             [
                 GpuBinding::Texture {
@@ -648,13 +650,16 @@ impl RenderScene {
             Self::fail_frame(ctx, None, error);
             return None;
         }
-        // Split into the existing
-        // opaque/mask group (order unchanged — a zero-Blend scene produces
-        // byte-identical `draw_calls` to before this phase) and the sorted
-        // transparent group, drawn as `second_pass` in the SAME encoder pass
-        // right after (occlusion by opaque geometry falls out of the shared,
-        // still-live MSAA depth buffer; no separate resolve/reclear).
+        // Split into the opaque group and the sorted transparent group,
+        // drawn as a later group in the SAME encoder pass (occlusion by
+        // opaque geometry falls out of the shared, still-live MSAA depth
+        // buffer; no separate resolve/reclear).
         let mut draw_calls: Vec<manifold_gpu::Draw> = Vec::with_capacity(draws.len());
+        // A cut-out's depth draw joins the opaque group after every opaque
+        // draw, so solid surfaces hide it first; its shading follows in a
+        // depth-Equal group.
+        let mut cutout_depth_calls: Vec<manifold_gpu::Draw> = Vec::new();
+        let mut cutout_shade_calls: Vec<manifold_gpu::Draw> = Vec::new();
         let mut blend_entries: Vec<(f32, usize, manifold_gpu::Draw)> =
             Vec::with_capacity(draws.len());
         for (draw_index, (draw, bindings)) in draws.iter().zip(&binding_sets).enumerate() {
@@ -691,6 +696,11 @@ impl RenderScene {
             };
             if draw.routes_to_transparent() {
                 blend_entries.extend(calls.map(|call| (draw.sort_depth, draw_index, call)));
+            } else if let Some(depth_pipeline) = &draw.cutout_depth {
+                for call in calls {
+                    cutout_depth_calls.push(call.with_pipeline(depth_pipeline));
+                    cutout_shade_calls.push(call);
+                }
             } else {
                 draw_calls.extend(calls);
             }
@@ -701,25 +711,28 @@ impl RenderScene {
         blend_entries.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         let blend_draw_calls: Vec<manifold_gpu::Draw> =
             blend_entries.iter().map(|(_, _, call)| *call).collect();
-        // When the scene has a
-        // transmissive object, the Blend group is pulled OUT of Pass A
-        // entirely and drawn as a separate Pass B below (after the opaque-
-        // color snapshot blit) instead of as Pass A's in-pass `second_pass`
-        // group — memoryless `msaa_color`/`msaa_depth` cannot survive past
-        // Pass A's end, so a transmissive fragment can only sample "the
-        // scene behind it" from a real resolved snapshot taken between the
-        // two passes. A zero-transmission scene (`has_transmission ==
-        // false`, the overwhelming common case) takes the exact `second_pass
-        // = Some(...)` path unchanged from before this phase — byte-
-        // identical single pass, same as today.
-        let second_pass = if has_transmission || blend_draw_calls.is_empty() {
-            None
-        } else {
-            Some((
+        // When the scene has a transmissive object, the Blend group is
+        // pulled OUT of Pass A entirely and drawn as a separate Pass B below
+        // (after the opaque-color snapshot blit) — memoryless
+        // `msaa_color`/`msaa_depth` cannot survive past Pass A's end, so a
+        // transmissive fragment can only sample "the scene behind it" from a
+        // real resolved snapshot taken between the two passes. Without
+        // transmission it is Pass A's last group.
+        draw_calls.append(&mut cutout_depth_calls);
+        let mut later_groups: Vec<(&manifold_gpu::GpuDepthStencilState, &[manifold_gpu::Draw])> =
+            Vec::with_capacity(2);
+        if !cutout_shade_calls.is_empty() {
+            later_groups.push((
+                self.cutout_depth_stencil.as_ref().expect("ensured"),
+                cutout_shade_calls.as_slice(),
+            ));
+        }
+        if !has_transmission && !blend_draw_calls.is_empty() {
+            later_groups.push((
                 self.blend_depth_stencil.as_ref().expect("ensured"),
                 blend_draw_calls.as_slice(),
-            ))
-        };
+            ));
+        }
 
         // The aux-MRT slot P1 built but never
         // exercised. `velocity_pair` is `Some` only when BOTH this node's
@@ -891,7 +904,7 @@ impl RenderScene {
         };
         let pass = manifold_gpu::DrawPass {
             aux_color,
-            second_group: second_pass,
+            later_groups: &later_groups,
             ..manifold_gpu::DrawPass::msaa(
                 msaa_color,
                 resolve_target,

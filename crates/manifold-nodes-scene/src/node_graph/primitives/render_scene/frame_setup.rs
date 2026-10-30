@@ -509,20 +509,41 @@ impl RenderScene {
                 && fill_mode == manifold_gpu::GpuTriangleFillMode::Fill
                 && solid_surface(&uniforms);
             let parallax = parallax_surface(material.kind, &uniforms);
-            let pipeline = {
+            // An alpha cut-out writes its depth with the alpha test first,
+            // then shades through the solid-surface pipeline under depth
+            // Equal, so stacked cards are shaded once per sample. Parallax
+            // writes its own carved depth and keeps the one-draw path.
+            let cuts_out = uniforms.alpha_params[0] == 1.0
+                && !is_blend
+                && !is_transmissive
+                && !points
+                && fill_mode == manifold_gpu::GpuTriangleFillMode::Fill
+                && !parallax;
+            let (pipeline, cutout_depth) = {
                 let gpu = ctx.gpu_encoder();
-                self.pipeline_for(
-                    gpu.device,
-                    material.kind,
-                    *velocity_wired,
-                    *ao_mask_wired,
-                    *denoise_aux_ready,
-                    is_blend || is_transmissive,
-                    points,
-                    opaque_fast,
-                    parallax,
-                )
-                .clone()
+                let pipeline = self
+                    .pipeline_for(
+                        gpu.device,
+                        material.kind,
+                        *velocity_wired,
+                        *ao_mask_wired,
+                        *denoise_aux_ready,
+                        is_blend || is_transmissive,
+                        points,
+                        opaque_fast || cuts_out,
+                        parallax,
+                    )
+                    .clone();
+                let cutout_depth = cuts_out.then(|| {
+                    self.cutout_depth_pipeline_for(
+                        gpu.device,
+                        *velocity_wired,
+                        *ao_mask_wired,
+                        *denoise_aux_ready,
+                    )
+                    .clone()
+                });
+                (pipeline, cutout_depth)
             };
 
             let geometry_content_known = [
@@ -571,6 +592,7 @@ impl RenderScene {
                 subsurface: material.subsurface,
                 subsurface_look: Default::default(),
                 pipeline,
+                cutout_depth,
                 base_color_map,
                 normal_map,
                 mr_map,
@@ -1114,8 +1136,13 @@ impl RenderScene {
                             shadow_casters.push(shadow_caster_entry(&view, Some(cascade)));
                             // Later cascades are shadow views only, dark like
                             // a cube's later faces, so caustics run once.
-                            let color = if cascade > 0 { [0.0, 0.0, 0.0, 1.0] } else { view.color };
-                            casters.push(manifold_node_engine::scene::light::Light { color, ..view });
+                            let color = if cascade > 0 {
+                                [0.0, 0.0, 0.0, 1.0]
+                            } else {
+                                view.color
+                            };
+                            casters
+                                .push(manifold_node_engine::scene::light::Light { color, ..view });
                         }
                     } else {
                         shadow_casters.push(shadow_caster_entry(&l, None));

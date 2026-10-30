@@ -259,7 +259,7 @@ fn parity_render_depth_msaa_resolves_and_second_group() {
     let mut enc = device.create_encoder("render parity depth");
     enc.draw(
         &DrawPass {
-            second_group: Some((&read_only, &second)),
+            later_groups: &[(&read_only, &second)],
             ..DrawPass::msaa(&msaa, &resolved, GpuLoadAction::Clear).depth(
                 &msaa_depth,
                 &less,

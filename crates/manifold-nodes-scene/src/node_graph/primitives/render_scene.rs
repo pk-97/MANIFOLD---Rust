@@ -128,6 +128,7 @@ static RENDER_SCENE_WGSL: std::sync::LazyLock<String> = std::sync::LazyLock::new
         include_str!("shaders/look_wet_surface.wgsl"),
         include_str!("shaders/cover_rule.wgsl"),
         include_str!("shaders/render_scene.wgsl"),
+        include_str!("shaders/cutout_depth.wgsl"),
     ]
     .concat()
 });
@@ -1044,9 +1045,15 @@ pub struct RenderScene {
     depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
     /// Depth TEST on (`Greater`, matching
     /// `depth_stencil` above) but WRITE off — the sorted transparent
-    /// group's depth-stencil state, drawn as the pass's `second_group`
-    /// right after the opaque group in the same encoder pass.
+    /// group's depth-stencil state, drawn as the pass's last group right
+    /// after the opaque group in the same encoder pass.
     blend_depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
+    /// Depth Equal, write off: a cut-out's shading, drawn after its alpha
+    /// test wrote its depth (`shaders/cutout_depth.wgsl`).
+    cutout_depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
+    /// The cut-out depth pipelines, by aux outputs (velocity, ao_mask,
+    /// denoise feed).
+    cutout_depth_pipelines: AHashMap<(bool, bool, bool), manifold_gpu::GpuRenderPipeline>,
     /// E2b: transmissive layer colour compares against its nearest-surface
     /// depth while keeping depth writes disabled.
     transmission_depth_stencil: Option<manifold_gpu::GpuDepthStencilState>,
@@ -1954,6 +1961,10 @@ struct ObjectDraw<'ctx> {
     subsurface: manifold_node_engine::scene::material::Subsurface,
     subsurface_look: subsurface::SubsurfaceLook,
     pipeline: manifold_gpu::GpuRenderPipeline,
+    /// An alpha cut-out's depth draw (`shaders/cutout_depth.wgsl`). When
+    /// set, Pass A draws it with the opaque group and `pipeline` is the
+    /// solid-surface one, shading the same triangles under depth Equal.
+    cutout_depth: Option<manifold_gpu::GpuRenderPipeline>,
     base_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
     /// The four new optional
     /// per-object texture ports, same "None = unwired, dummy-bind at

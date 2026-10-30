@@ -13,6 +13,8 @@ impl RenderScene {
             pipelines: AHashMap::new(),
             depth_stencil: None,
             blend_depth_stencil: None,
+            cutout_depth_stencil: None,
+            cutout_depth_pipelines: AHashMap::new(),
             transmission_depth_stencil: None,
             msaa_color: None,
             depth_texture: None,

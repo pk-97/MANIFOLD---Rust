@@ -74,6 +74,14 @@ impl RenderScene {
                     },
                 ));
             }
+            if self.cutout_depth_stencil.is_none() {
+                self.cutout_depth_stencil = Some(gpu.device.create_depth_stencil_state(
+                    &manifold_gpu::GpuDepthStencilDesc {
+                        compare: manifold_gpu::GpuCompareFunction::Equal,
+                        write_enabled: false,
+                    },
+                ));
+            }
             if has_transmission && self.transmission_depth_stencil.is_none() {
                 self.transmission_depth_stencil = Some(gpu.device.create_depth_stencil_state(
                     &manifold_gpu::GpuDepthStencilDesc {

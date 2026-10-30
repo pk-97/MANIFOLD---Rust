@@ -116,6 +116,12 @@ impl<'a> Draw<'a> {
         }
     }
 
+    /// The same draw through `pipeline`, built for the same bindings.
+    pub fn with_pipeline(mut self, pipeline: &'a GpuRenderPipeline) -> Self {
+        self.pipeline = pipeline;
+        self
+    }
+
     /// Rasterise triangles as `fill_mode` (`Lines` is wireframe).
     pub fn fill_mode(mut self, fill_mode: GpuTriangleFillMode) -> Self {
         self.fill_mode = fill_mode;
@@ -262,10 +268,12 @@ pub struct DrawPass<'a> {
     /// The pixel rectangle `(x, y, width, height)` the draws cover. `None`
     /// covers the whole target.
     pub viewport: Option<(f32, f32, f32, f32)>,
-    /// Draws run after the main ones in the same pass with another depth
-    /// state: no clear, no new pass. The sorted transparent group tests
-    /// against the opaque group's depth without writing it.
-    pub second_group: Option<(&'a GpuDepthStencilState, &'a [Draw<'a>])>,
+    /// Groups of draws run after the main ones in the same pass, in order,
+    /// each under its own depth state: no clear, no new pass. A cut-out's
+    /// shading tests Equal against the depth its alpha test wrote; the
+    /// sorted transparent group tests against the opaque depth without
+    /// writing it.
+    pub later_groups: &'a [(&'a GpuDepthStencilState, &'a [Draw<'a>])],
 }
 
 impl<'a> DrawPass<'a> {
@@ -303,7 +311,7 @@ impl<'a> DrawPass<'a> {
                 store: DepthStore::Store,
             }),
             viewport: None,
-            second_group: None,
+            later_groups: &[],
         }
     }
 
@@ -313,7 +321,7 @@ impl<'a> DrawPass<'a> {
             aux_color: &[],
             depth: None,
             viewport: None,
-            second_group: None,
+            later_groups: &[],
         }
     }
 

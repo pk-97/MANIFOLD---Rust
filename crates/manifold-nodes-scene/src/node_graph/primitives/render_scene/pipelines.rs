@@ -168,8 +168,9 @@ impl RenderScene {
     /// appearance-fade and alpha-cutout tests all three share). A fragment
     /// shader that can discard defeats hidden-surface removal on Apple GPUs, so
     /// occluded surfaces behind an opaque panel still get shaded. Only valid
-    /// for a draw where each removed test is provably false; see
-    /// `solid_surface`.
+    /// for a draw where each removed test is provably false (see
+    /// `solid_surface`), or for a cut-out's shading under depth Equal after
+    /// its depth draw ran the tests.
     pub(super) const OPAQUE_FAST_SPECIALIZATIONS: &'static [(&'static str, &'static str)] = &[
         (
             "    if u.volume_optics.x > 0.5 {\n        let nearest = textureLoad(volume_nearest, vec2<i32>(in.clip_pos.xy), 0);\n        if in.clip_pos.z < nearest - max(nearest * 0.00001, 0.0000001) { discard; }\n    }\n",
@@ -548,6 +549,61 @@ impl RenderScene {
         )
     }
 
+    /// A cut-out's depth draw in Pass A (`shaders/cutout_depth.wgsl`), for
+    /// the frame's aux outputs.
+    pub(super) fn cutout_depth_pipeline_for(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        emit_velocity: bool,
+        emit_ao_mask: bool,
+        emit_denoise_feed: bool,
+    ) -> &manifold_gpu::GpuRenderPipeline {
+        self.cutout_depth_pipelines
+            .entry((emit_velocity, emit_ao_mask, emit_denoise_feed))
+            .or_insert_with(|| {
+                Self::create_cutout_depth_pipeline(
+                    device,
+                    emit_velocity,
+                    emit_ao_mask,
+                    emit_denoise_feed,
+                )
+            })
+    }
+
+    /// Compiled from the solid-surface variant's exact source, so its vertex
+    /// stage, and the depth it writes, match the shading draw's under depth
+    /// Equal. Alpha-to-coverage dithers an appearance fade as the cut-out
+    /// pipeline does.
+    fn create_cutout_depth_pipeline(
+        device: &manifold_gpu::GpuDevice,
+        emit_velocity: bool,
+        emit_ao_mask: bool,
+        emit_denoise_feed: bool,
+    ) -> manifold_gpu::GpuRenderPipeline {
+        let (aux_specs, aux_formats, _) = Self::aux_variant(
+            emit_velocity,
+            emit_ao_mask,
+            emit_denoise_feed,
+        )
+        .unwrap_or((&[][..], &[][..], ""));
+        let mut specs = aux_specs.to_vec();
+        specs.extend_from_slice(Self::OPAQUE_FAST_SPECIALIZATIONS);
+        device.create_render_pipeline(
+            &manifold_gpu::RenderPipelineDesc::new(
+                RENDER_SCENE_WGSL.as_str(),
+                "vs_main",
+                "fs_cutout_depth",
+                "node.render_scene cutout depth",
+            )
+            .color(manifold_gpu::GpuTextureFormat::Rgba16Float, None)
+            .depth(manifold_gpu::GpuTextureFormat::Depth32Float)
+            .samples(MSAA_SAMPLES)
+            .alpha_to_coverage(true)
+            .aux_colors(aux_formats)
+            .specialize(&specs),
+        )
+    }
+
     /// The Blend pipeline for the transmissive Pass B: Rgba16Float color and
     /// Depth32Float depth, both 1x, no aux outputs, real blending, no
     /// alpha-to-coverage. Pass A's `MSAA_SAMPLES`x pipelines never bind there.
@@ -658,6 +714,9 @@ impl RenderScene {
                             opaque_fast,
                             parallax,
                         );
+                        if opaque_fast && kind == MaterialKind::Pbr && !parallax {
+                            Self::create_cutout_depth_pipeline(device, velocity, ao_mask, denoise);
+                        }
                         if !opaque_fast {
                             Self::create_variant(
                                 device, kind, velocity, ao_mask, denoise, true, false, parallax,
