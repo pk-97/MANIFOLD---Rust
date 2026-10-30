@@ -415,13 +415,23 @@ pub static LIGHT_FIELDS: [FieldRow; 4] = [
             )
         },
         write: |fields, value| {
-            let (
-                ItemFields::Light(crate::scene_doc::LightFields {
-                    light: LightType::Environment { source },
-                }),
-                FieldValue::Choice(key),
-            ) = (fields, value)
+            let ItemFields::Light(crate::scene_doc::LightFields {
+                light: LightType::Environment { source },
+            }) = fields
             else {
+                return Err(wrong_value("environment_source", value));
+            };
+            // A library HDRI: the sea stays under it in Sea Horizon mode.
+            if let FieldValue::File(file) = value {
+                *source = match source {
+                    EnvironmentSource::SeaHorizon { .. } => {
+                        EnvironmentSource::SeaHorizon { file: file.clone() }
+                    }
+                    _ => EnvironmentSource::Hdri { file: file.clone() },
+                };
+                return Ok(());
+            }
+            let FieldValue::Choice(key) = value else {
                 return Err(wrong_value("environment_source", value));
             };
             *source = match (key.as_str(), &*source) {
@@ -502,7 +512,7 @@ pub static LIGHT_FIELDS: [FieldRow; 4] = [
         label: "HDRI File",
         section: Environment,
         control: FieldControl::File {
-            extensions: &["exr"],
+            extensions: &["exr", "hdr"],
         },
         applies: hdri,
         disabled: enabled,

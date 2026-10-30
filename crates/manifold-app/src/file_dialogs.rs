@@ -31,6 +31,8 @@ pub(crate) enum DialogAction {
     NodeFile,
     /// A Material's texture: a material file or a picture.
     MaterialFile,
+    /// An Environment's HDRI.
+    HdriFile,
     NodeFolder,
 }
 
@@ -152,6 +154,13 @@ impl DialogAction {
                 "Choose Material or Picture",
                 &[],
                 "MANIFOLD_DialogPath_MaterialFile",
+                false,
+                H::None,
+            ),
+            Self::HdriFile => (
+                "Choose HDRI",
+                &[],
+                "MANIFOLD_DialogPath_HdriFile",
                 false,
                 H::None,
             ),
@@ -369,9 +378,11 @@ fn build(action: DialogAction, host: DialogHost, prefs: &UserPrefs) -> rfd::File
     let remembered = Some(prefs.get_string(spec.pref_key, ""))
         .filter(|s| !s.is_empty())
         .map(|s| memory_dir(action, Path::new(&s)));
-    // A material pick with nothing remembered opens the starter library.
+    // A material or HDRI pick with nothing remembered opens its starter
+    // library.
     let remembered = match action {
-        DialogAction::MaterialFile => remembered.or_else(starter_materials),
+        DialogAction::MaterialFile => remembered.or_else(|| starter_folder("materials")),
+        DialogAction::HdriFile => remembered.or_else(|| starter_folder("hdris")),
         _ => remembered,
     };
     let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -418,14 +429,15 @@ fn memory_dir(action: DialogAction, dir: &Path) -> PathBuf {
     dir.to_path_buf()
 }
 
-/// The starter material library, `assets/materials`: beside the app, in the
-/// repository a cargo build runs from, or in the working folder.
-fn starter_materials() -> Option<PathBuf> {
+/// A starter library, `assets/<name>`: beside the app, in the repository a
+/// cargo build runs from, or in the working folder.
+fn starter_folder(name: &str) -> Option<PathBuf> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let assets = Path::new("assets").join(name);
     [
-        exe_dir.join("assets/materials"),
-        exe_dir.join("../../assets/materials"),
-        PathBuf::from("assets/materials"),
+        exe_dir.join(&assets),
+        exe_dir.join("../..").join(&assets),
+        assets,
     ]
     .into_iter()
     .find_map(|dir| dir.canonicalize().ok().filter(|dir| dir.is_dir()))
@@ -437,7 +449,8 @@ fn starter_materials() -> Option<PathBuf> {
 pub(crate) fn starter_library() -> &'static [(String, PathBuf)] {
     static LIBRARY: std::sync::OnceLock<Vec<(String, PathBuf)>> = std::sync::OnceLock::new();
     LIBRARY.get_or_init(|| {
-        let Some(entries) = starter_materials().and_then(|dir| std::fs::read_dir(dir).ok()) else {
+        let Some(entries) = starter_folder("materials").and_then(|dir| std::fs::read_dir(dir).ok())
+        else {
             return Vec::new();
         };
         let mut library: Vec<_> = entries
@@ -447,6 +460,29 @@ pub(crate) fn starter_library() -> &'static [(String, PathBuf)] {
                     return None;
                 };
                 Some((material_name(&folder.file_name()?.to_string_lossy()), file))
+            })
+            .collect();
+        library.sort();
+        library
+    })
+}
+
+/// The starter HDRIs, read once: each file's name and path, sorted by name.
+pub(crate) fn starter_hdris() -> &'static [(String, PathBuf)] {
+    static LIBRARY: std::sync::OnceLock<Vec<(String, PathBuf)>> = std::sync::OnceLock::new();
+    LIBRARY.get_or_init(|| {
+        let Some(entries) = starter_folder("hdris").and_then(|dir| std::fs::read_dir(dir).ok())
+        else {
+            return Vec::new();
+        };
+        let mut library: Vec<_> = entries
+            .filter_map(|entry| {
+                let file = entry.ok()?.path();
+                let hdri = file
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("hdr") || ext.eq_ignore_ascii_case("exr"));
+                let name = file.file_stem()?.to_string_lossy().into_owned();
+                hdri.then_some((name, file))
             })
             .collect();
         library.sort();
@@ -515,7 +551,7 @@ fn start_dir(
 mod tests {
     use super::*;
 
-    const ALL: [DialogAction; 13] = [
+    const ALL: [DialogAction; 14] = [
         DialogAction::OpenProject,
         DialogAction::SaveProjectAs,
         DialogAction::ExportVideo,
@@ -528,6 +564,7 @@ mod tests {
         DialogAction::ReplaceAudio,
         DialogAction::NodeFile,
         DialogAction::MaterialFile,
+        DialogAction::HdriFile,
         DialogAction::NodeFolder,
     ];
 

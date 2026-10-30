@@ -351,6 +351,26 @@ fn field_rows(doc: &SceneDoc, item: &Item, layers: &[(LayerId, String)]) -> Vec<
         .collect()
 }
 
+/// A starter library as one submenu of files; none when it is empty.
+fn library_menu(library: &[(String, std::path::PathBuf)]) -> Option<FieldOptionVm> {
+    (!library.is_empty()).then(|| FieldOptionVm {
+        label: "Library \u{203a}".to_owned(),
+        pick: FieldPick::Choice(String::new()),
+        checked: false,
+        disabled: None,
+        children: library
+            .iter()
+            .map(|(name, file)| FieldOptionVm {
+                label: name.clone(),
+                pick: FieldPick::File(file.to_string_lossy().into_owned()),
+                checked: false,
+                disabled: None,
+                children: Vec::new(),
+            })
+            .collect(),
+    })
+}
+
 fn closed(choices: &[Choice], held: &FieldValue) -> Vec<FieldOptionVm> {
     choices
         .iter()
@@ -421,6 +441,11 @@ fn control(
             for (option, choice) in options.iter_mut().zip(choices) {
                 option.disabled = choice_disabled(doc, item, row.id, choice.key).map(str::to_owned);
             }
+            // An Environment's Source offers the starter HDRIs as their own
+            // menu.
+            if row.id == "environment_source" {
+                options.extend(library_menu(crate::file_dialogs::starter_hdris()));
+            }
             pick(options)
         }
         FieldControl::ClosedOrItem {
@@ -479,24 +504,8 @@ fn control(
         FieldControl::ClosedOrLayer(choices) => {
             let mut options = closed(choices, &held);
             // A Material's Texture offers the starter library as its own menu.
-            let library = crate::file_dialogs::starter_library();
-            if item.kind() == ItemKind::Material && row.id == "texture" && !library.is_empty() {
-                options.push(FieldOptionVm {
-                    label: "Library \u{203a}".to_owned(),
-                    pick: FieldPick::Choice(String::new()),
-                    checked: false,
-                    disabled: None,
-                    children: library
-                        .iter()
-                        .map(|(name, file)| FieldOptionVm {
-                            label: name.clone(),
-                            pick: FieldPick::File(file.to_string_lossy().into_owned()),
-                            checked: false,
-                            disabled: None,
-                            children: Vec::new(),
-                        })
-                        .collect(),
-                });
+            if item.kind() == ItemKind::Material && row.id == "texture" {
+                options.extend(library_menu(crate::file_dialogs::starter_library()));
             }
             options.extend(layers.iter().map(|(id, name)| FieldOptionVm {
                 label: name.clone(),

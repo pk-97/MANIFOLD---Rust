@@ -319,10 +319,10 @@ pub fn dispatch(action: &PanelAction, ctx: &mut DispatchCtx) -> DispatchResult {
                     );
                     return DispatchResult::handled();
                 }
-                let action = if field == "texture_file" {
-                    crate::file_dialogs::DialogAction::MaterialFile
-                } else {
-                    crate::file_dialogs::DialogAction::NodeFile
+                let action = match field.as_str() {
+                    "texture_file" => crate::file_dialogs::DialogAction::MaterialFile,
+                    "hdri_file" => crate::file_dialogs::DialogAction::HdriFile,
+                    _ => crate::file_dialogs::DialogAction::NodeFile,
                 };
                 let picked = crate::file_dialogs::pick_file_of(
                     action,

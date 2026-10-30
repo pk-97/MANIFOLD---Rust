@@ -1,3 +1,4 @@
 *.onnx filter=lfs diff=lfs merge=lfs -text
 assets/materials/**/*.jpg filter=lfs diff=lfs merge=lfs -text
 assets/materials/**/*.png filter=lfs diff=lfs merge=lfs -text
+assets/hdris/*.hdr filter=lfs diff=lfs merge=lfs -text
