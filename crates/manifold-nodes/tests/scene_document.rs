@@ -730,7 +730,7 @@ mod every_param_has_a_row {
                         Reach::Own(r) => item.id.as_str() == owner && r == role,
                         Reach::Scene(r) => owner == "scene" && r == role,
                         Reach::OwnAndScene(own, scene) => {
-                            (item.id.as_str() == owner && own == role)
+                            (item.id.as_str() == owner && own.iter().any(|r| *r == role))
                                 || (owner == "scene" && scene == role)
                         }
                         Reach::EveryCameraLens => role == "lens",

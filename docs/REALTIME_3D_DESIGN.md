@@ -399,7 +399,7 @@ use focused tests per the scope rule.
 3. **[AMENDED 2026-07-10 (F2)]** Object count = `OBJECT_SLIDER_MAX` (shipped 64); light
    count is owned by UNBOUNDED_LIGHTS, not this doc. Every `cast_shadows` light gets
    shadow maps, with no cap: one layer each, six for a point light (one per cube face,
-   `docs/LIGHT_TRANSPORT_DESIGN.md`).
+   `Light::cube_faces`).
 4. Fog/atmosphere is v1, as a port type (D5). Huge scenes are v2.
 5. Gizmos are v1 and are `EditingService` param edits; wired params lock (D8).
 6. Viewport = promoted graph-editor preview; show state/output stay isolated (D7/D9).

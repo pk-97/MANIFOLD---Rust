@@ -19,7 +19,6 @@ fn item(id: &str, kind: ItemKind, name: &str, depth: usize, parent: Option<&str>
         plane: false,
         environment: false,
         copy_view: false,
-        aim_sun_file: None,
         draw_again: false,
         add_loop_camera: false,
         make_active_camera: None,

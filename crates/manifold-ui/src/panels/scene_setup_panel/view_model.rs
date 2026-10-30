@@ -115,8 +115,6 @@ pub struct SceneItemVm {
     pub copy_view: bool,
     /// The Environment light: Lighting lists it before the other lights.
     pub environment: bool,
-    /// An Environment light in HDRI mode: the file "Aim Sun at HDRI" aims at.
-    pub aim_sun_file: Option<String>,
     /// The World of a layer that stopped drawing after runaway GPU frames:
     /// its header offers Draw Again.
     pub draw_again: bool,

@@ -25,7 +25,7 @@
 
 ## Work in progress
 - Water: `GPU_FLIP_END_GAME_DESIGN.md`, `GPU_FLIP_SPARSE_BLOCKS_DESIGN.md`, `GPU_FLUID_SURFACE_DESIGN.md`, `LIVE_SIM_CLOCK_DESIGN.md`, `WATER_COLLIDERS_DESIGN.md`, `WATER_FINE_BLOCKS_DESIGN.md`, `WATER_SHARED_GRID_DESIGN.md`
-- 3D scene: `SCENE_DOCUMENT_DESIGN.md`, `REALTIME_3D_DESIGN.md`, `RAYTRACING_DESIGN.md`, `SCENE_GEOMETRY_SCALE_DESIGN.md` (patches, culling and detail levels), `LIGHT_TRANSPORT_DESIGN.md` (shadows and caustics from every light and the HDRI), `PHOTOREAL_LANDSCAPE_DESIGN.md` (raster light, air, land, density, wind and camera for terrain scenes)
+- 3D scene: `SCENE_DOCUMENT_DESIGN.md`, `REALTIME_3D_DESIGN.md`, `RAYTRACING_DESIGN.md`, `SCENE_GEOMETRY_SCALE_DESIGN.md` (patches, culling and detail levels), `PHOTOREAL_LANDSCAPE_DESIGN.md` (raster light, air, land, density, wind and camera for terrain scenes)
 - Audio detectors: `DETECTOR_LABEL_REVIEW_DESIGN.md`, `ROLL_DETECTOR_DESIGN.md`
 - Matter: `MATTER_SAND_DESIGN.md` (sand and soil on the MPM solver), `MATTER_DRAW_DESIGN.md` (how each material is drawn)
 - Transport: `FRAME_EXACT_TRANSPORT_DESIGN.md`

@@ -35,9 +35,30 @@ use half::f16;
 use manifold_gpu::{GpuBinding, GpuSamplerDesc};
 
 use crate::node_graph::decode_cache::cached_load_hdri;
+use crate::node_graph::hdri_sun::{self, HdriSun};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+
+/// A decoded map, `Rgba16Float` bytes row 0 at the nadir, and its sun.
+type Decoded = (u32, u32, Vec<u8>, Option<HdriSun>);
+
+/// Decode `path` through the shared cache and find its sun, on the decode
+/// thread.
+fn decode_and_measure(path: &Path) -> Result<Decoded, String> {
+    let (w, h, texels) = cached_load_hdri(path)?;
+    let sun = hdri_sun::measure(w as usize, h as usize, &texels);
+    match sun {
+        Some(found) => log::info!(
+            "node.hdri_source: {} has a sun {:.1} degrees up, {:.2} degrees wide",
+            path.display(),
+            found.toward[1].clamp(-1.0, 1.0).asin().to_degrees(),
+            2.0 * found.radius.to_degrees(),
+        ),
+        None => log::info!("node.hdri_source: {} has no distinct sun", path.display()),
+    }
+    Ok((w, h, texels, sun))
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -114,6 +135,9 @@ manifold_node_engine::primitive! {
     inputs: {},
     outputs: {
         out: Texture2D,
+        // The file's sun as a Sun light in the file's own frame, black when
+        // it has none (`hdri_sun::HdriSun::light`).
+        sun: Light,
     },
     params: [
         ParamDef {
@@ -164,11 +188,14 @@ manifold_node_engine::primitive! {
         src_h: u32 = 0,
         // Background loader channel. `Some` means a decode is in flight; we
         // don't spawn another until it returns.
-        pending_load: Option<mpsc::Receiver<Result<(u32, u32, Vec<u8>), String>>> = None,
+        pending_load: Option<mpsc::Receiver<Result<Decoded, String>>> = None,
         // A decoded-but-not-yet-uploaded result, handed off from the drain
         // step to the upload step (texture creation needs the GPU device,
         // which only `run()`'s `ctx` has).
-        pending_upload: Option<(u32, u32, Vec<u8>)> = None,
+        pending_upload: Option<Decoded> = None,
+        // The uploaded file's sun, `None` until a file lands or when it has
+        // no distinct sun.
+        found_sun: Option<HdriSun> = None,
         // Whether `source_texture` currently reflects the last decode.
         uploaded: bool = false,
         // Identity of the `out` texture the level-0 blit + mip chain were
@@ -215,7 +242,7 @@ impl Primitive for HdriSource {
         // IMPORT_FIDELITY F-P6 mip contract, mirrored here per D6: the
         // envmap is sampled under heavy minification by render_scene's IBL
         // irradiance/prefilter convolution — the output slot carries a full
-        // mip chain, filled by `generate_mipmaps` in `run()` step 8.
+        // mip chain, filled by `generate_mipmaps` in `run()` step 9.
         port == "out"
     }
 
@@ -254,12 +281,13 @@ impl Primitive for HdriSource {
             self.src_h = 0;
             self.uploaded = false;
             self.pending_upload = None;
+            self.found_sun = None;
             self.published_content = false;
             if !path.is_empty() {
                 let path_buf = PathBuf::from(&path);
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
-                    let _ = tx.send(cached_load_hdri(&path_buf));
+                    let _ = tx.send(decode_and_measure(&path_buf));
                 });
                 self.pending_load = Some(rx);
             }
@@ -269,8 +297,8 @@ impl Primitive for HdriSource {
         if self.pending_load.is_some() {
             let rx = self.pending_load.take().unwrap();
             match rx.try_recv() {
-                Ok(Ok((w, h, rgba16f))) => {
-                    self.pending_upload = Some((w, h, rgba16f));
+                Ok(Ok(decoded)) => {
+                    self.pending_upload = Some(decoded);
                     self.uploaded = false;
                 }
                 Ok(Err(e)) => {
@@ -292,8 +320,9 @@ impl Primitive for HdriSource {
         // The decoded image waits for a GPU-bound frame; a CPU-only frame never
         // reaches the encoder, whatever the decode thread timing.
         if ctx.gpu.is_some()
-            && let Some((w, h, rgba16f)) = self.pending_upload.take()
+            && let Some((w, h, rgba16f, sun)) = self.pending_upload.take()
         {
+            self.found_sun = sun;
             self.ensure_texture(ctx, w, h);
             if let Some(tex) = &self.source_texture {
                 ctx.gpu_encoder()
@@ -307,7 +336,10 @@ impl Primitive for HdriSource {
             fresh_upload = true;
         }
 
-        // 5. Output buffer.
+        // 5. The sun, every frame: a light slot keeps whatever was set last.
+        ctx.outputs.set_light("sun", HdriSun::light(self.found_sun));
+
+        // 6. Output buffer.
         let Some(out) = ctx.outputs.texture_2d("out") else {
             return;
         };
@@ -316,7 +348,7 @@ impl Primitive for HdriSource {
             return;
         }
 
-        // 6. Nothing decoded yet (first-frame race, empty path, or a decode
+        // 7. Nothing decoded yet (first-frame race, empty path, or a decode
         // error) — emit black rather than whatever pool leftover is sitting
         // in the output slot.
         let Some(source_texture) = self.source_texture.as_ref() else {
@@ -332,7 +364,7 @@ impl Primitive for HdriSource {
             return;
         };
 
-        // 7+8. Level-0 blit + mip regen, gated together
+        // 8+9. Level-0 blit + mip regen, gated together
         // Mirroring
         // node.gltf_texture_source's gate): both rewrite `out`'s content,
         // so both are skipped together whenever nothing that determines
@@ -600,7 +632,7 @@ mod tests {
         assert!(node.io_pending(), "in-flight decode must report pending");
 
         prim.pending_load = None;
-        prim.pending_upload = Some((1, 1, vec![0u8; 8]));
+        prim.pending_upload = Some((1, 1, vec![0u8; 8], None));
         let node: &dyn EffectNode = &prim;
         assert!(
             node.io_pending(),

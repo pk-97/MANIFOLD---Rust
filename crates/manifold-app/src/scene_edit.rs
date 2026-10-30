@@ -7,8 +7,8 @@ use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 use manifold_core::scene_doc::{
     CameraFields, CameraRig, FeatureSetting, ForceFields, ForceTargets, ForceType, Item,
-    ItemFields, ItemId, ItemKind, LightType, MaterialFields, MaterialType, SandFields, SceneDoc,
-    Shape, SourceRole, TextureFeeds, TextureSource, WaterFields, WaterSourceFields, param_id,
+    ItemFields, ItemId, ItemKind, MaterialFields, MaterialType, SandFields, SceneDoc, Shape,
+    SourceRole, TextureFeeds, TextureSource, WaterFields, WaterSourceFields, param_id,
 };
 use manifold_core::scene_schema::{
     self, FieldControl, FieldValue, add_entry, field_for, unique_name,
@@ -1238,60 +1238,6 @@ pub(crate) fn rename(
         )),
         select: None,
     }))
-}
-
-/// Point the first Sun at the brightest part of the HDRI `file`, keeping its
-/// distance from the point it aims at.
-pub(crate) fn aim_sun_at_hdri(
-    project: &Project,
-    layer: &LayerId,
-    file: &str,
-) -> Result<SceneEdit, String> {
-    let doc = doc(project, layer)?;
-    let inst = instance(project, layer).ok_or("There is no scene to aim")?;
-    let (mut sun, mut environment) = (None, None);
-    doc.walk(|item, _| match &item.fields {
-        ItemFields::Light(light) if light.light == LightType::Sun && sun.is_none() => {
-            sun = Some(item.id.clone())
-        }
-        ItemFields::Light(light)
-            if matches!(light.light, LightType::Environment { .. }) && environment.is_none() =>
-        {
-            environment = Some(item.id.clone());
-        }
-        _ => {}
-    });
-    let sun = sun.ok_or("This scene has no Sun light to aim")?;
-    let [x, y, z] =
-        manifold_nodes_scene::node_graph::hdri_sun::hdri_sun_direction(std::path::Path::new(file))
-            .map_err(|reason| format!("Could not aim the Sun: {reason}"))?;
-    // The HDRI as drawn: turned counter-clockwise about the up axis, seen
-    // from above, by the Environment's Rotation.
-    let turn = environment
-        .and_then(|environment| base(inst, &environment, "hdri_rotation"))
-        .unwrap_or(0.0);
-    let (sin, cos) = turn.sin_cos();
-    let toward = [x * cos + z * sin, y, z * cos - x * sin];
-    let read = |property: &str| base(inst, &sun, property).unwrap_or(0.0);
-    let aim = ["aim_x", "aim_y", "aim_z"].map(read);
-    let pos = ["pos_x", "pos_y", "pos_z"].map(read);
-    let apart = (0..3)
-        .map(|k| (pos[k] - aim[k]).powi(2))
-        .sum::<f32>()
-        .sqrt();
-    let distance = if apart > 1e-3 { apart } else { 5.0 };
-    let writes: Vec<Box<dyn Command>> = ["pos_x", "pos_y", "pos_z"]
-        .into_iter()
-        .enumerate()
-        .filter_map(|(k, property)| {
-            let (old, new) = (pos[k], aim[k] + toward[k] * distance);
-            ((old - new).abs() > f32::EPSILON).then(|| write(layer, &sun, property, old, new))
-        })
-        .collect();
-    if writes.is_empty() {
-        return Err("The Sun already points at the brightest part of the HDRI".to_owned());
-    }
-    Ok(batch(writes, "Aim Sun at HDRI", None))
 }
 
 /// "Add Loop Camera" on the Scene Loop card: a camera on the Loop rig, after

@@ -26,7 +26,7 @@ mod deformers;
 mod forces;
 mod gas;
 mod group;
-mod light;
+pub(crate) mod light;
 mod material;
 mod mesh;
 mod model_material;

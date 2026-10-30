@@ -8,6 +8,13 @@
 //! through the air. One Mode (Gradient, Softbox, HDRI, Daylight) picks what
 //! lights the scene.
 //!
+//! In `HDRI` mode with Sun From HDRI on, the wired Sun becomes the HDRI's
+//! own sun (`hdri_sun`, measured by `node.hdri_source`), turned with the
+//! HDRI, and leaves on `sun`. The `lighting` output is the HDRI with that
+//! sun painted out from the sky around it, so the sun lights the scene once,
+//! through the Sun, with its shadow; `envmap`, the picture behind the scene,
+//! keeps it.
+//!
 //! The studio aesthetic — ambient floor + bright horizon band + overhead
 //! softbox + floor fill + two strip lights + azimuthal modulation — is
 //! the default look; defaults match the legacy MetallicGlass envmap
@@ -26,6 +33,8 @@ use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::light::{Light, LightMode};
 
 use super::daylight::{self, Atmosphere};
+use crate::node_graph::hdri_sun::HdriSun;
+use crate::node_graph::scene_compile::light::SUN_INTENSITY;
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -138,6 +147,56 @@ struct HdriCopyUniforms {
     _pad0: f32,
     _pad1: f32,
     _pad2: f32,
+    /// The sun to paint out: direction toward it in the file's frame and the
+    /// angular radius filled, radians. A zero radius copies as it is.
+    fill: [f32; 4],
+}
+
+/// How far past the measured sun the fill reaches: the stretch to the
+/// lighting map's size spreads the sun's edge, and the glow just outside
+/// the measured region still lights.
+const FILL_SCALE: f32 = 1.5;
+
+/// The region `lighting` paints out: the found sun's direction and its
+/// radius widened by `FILL_SCALE` and one texel of a `height`-row map. Zero
+/// (no fill) unless the Sun follows an HDRI that has a sun.
+fn sun_fill(found: Option<HdriSun>, height: u32) -> [f32; 4] {
+    match found {
+        Some(sun) => {
+            let [x, y, z] = sun.toward;
+            let texel = std::f32::consts::PI / height.max(1) as f32;
+            [x, y, z, sun.radius * FILL_SCALE + texel]
+        }
+        None => [0.0; 4],
+    }
+}
+
+/// The wired Sun as the HDRI's sun. Its direction turns with the HDRI as
+/// every lookup turns (`env_lookup_uv` adds `rotation` to the azimuth, so
+/// the sky shows the file's azimuth less the turn). Its colour is the sun's
+/// irradiance times the lighting `intensity` and the Sun's own colour over
+/// a new Sun's intensity, so a new white Sun gives the sun as captured. Its
+/// shadow settings and its framing (aim and distance) stay its own.
+fn followed_sun(sun: Light, found: HdriSun, rotation: f32, intensity: f32) -> Light {
+    let (sin, cos) = rotation.sin_cos();
+    let [x, y, z] = found.toward;
+    let toward = [x * cos + z * sin, y, z * cos - x * sin];
+    let offset = [0, 1, 2].map(|k| sun.pos[k] - sun.aim[k]);
+    let distance = offset.iter().map(|c| c * c).sum::<f32>().sqrt();
+    let distance = if distance > 0.0 { distance } else { sun.range };
+    let scale = intensity / SUN_INTENSITY;
+    let [r, g, b] = found.irradiance;
+    Light {
+        pos: [0, 1, 2].map(|k| sun.aim[k] + toward[k] * distance),
+        dir: toward.map(|c| -c),
+        color: [
+            r * sun.color[0] * scale,
+            g * sun.color[1] * scale,
+            b * sun.color[2] * scale,
+            sun.color[3],
+        ],
+        ..sun
+    }
 }
 
 /// What the disc reads from the wired light: the direction toward the sun
@@ -189,10 +248,15 @@ manifold_node_engine::primitive! {
     inputs: {
         sun: Light optional,
         hdri: Texture2D optional,
+        // The HDRI's measured sun (`node.hdri_source`'s `sun`).
+        hdri_sun: Light optional,
     },
     outputs: {
         envmap: Texture2D,
         sun: Light,
+        // HDRI mode: the HDRI with a followed sun painted out, for the
+        // scene's image-based lighting. 1x1 and unwritten in other modes.
+        lighting: Texture2D,
     },
     params: [
         ParamDef {
@@ -334,6 +398,27 @@ manifold_node_engine::primitive! {
             range: None,
             enum_values: &[],
         },
+        ParamDef {
+            name: Cow::Borrowed("follow_sun"),
+            label: "Sun From HDRI",
+            ty: ParamType::Bool,
+            // HDRI mode: the wired Sun takes the HDRI's own sun, and the
+            // lighting map loses it. Off, the Sun stays where it was placed
+            // and the lighting keeps the whole HDRI.
+            default: ParamValue::Bool(true),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("env_rotation"),
+            label: "Environment Rotation",
+            ty: ParamType::Angle,
+            // The HDRI's turn, the same param `node.render_scene` and
+            // `node.camera_sky` read; here it only turns the followed Sun.
+            default: ParamValue::Float(0.0),
+            range: Some((-std::f32::consts::PI, std::f32::consts::PI)),
+            enum_values: &[],
+        },
     ],
     // depth_rule: procedural HDR envmap bake (no texture input, math-defined, not a file load) — used as a Material/PBR side-channel rather than the main color chain, but structurally a procedural producer like noise/gradient
     depth_rule: SourceHeight,
@@ -365,7 +450,10 @@ manifold_node_engine::primitive! {
         // `render_scene`'s consumption-side gate (which trusts this node's
         // declaration) can never observe a stale envmap.
         last_uniforms: Option<EnvmapUniforms> = None,
-        last_output_identity: Option<usize> = None,
+        // `envmap`'s identity and, in HDRI mode, `lighting`'s.
+        last_output_identity: Option<(usize, Option<usize>)> = None,
+        // The sun region `lighting` was last painted without.
+        last_fill: [f32; 4] = [0.0; 4],
     },
 }
 
@@ -377,14 +465,18 @@ impl Primitive for BakeEquirectEnvmap {
         input_dims: &[(&str, (u32, u32))],
         params: &ParamValues,
     ) -> Option<(u32, u32)> {
-        if port != "envmap" {
-            return None;
-        }
         // HDRI mode keeps the file's own resolution: the copy is 1:1.
-        if mode_index(params) == MODE_HDRI
-            && let Some((_, dims)) = input_dims.iter().find(|(name, _)| *name == "hdri")
-        {
-            return Some(*dims);
+        let hdri_dims = (mode_index(params) == MODE_HDRI)
+            .then(|| input_dims.iter().find(|(name, _)| *name == "hdri"))
+            .flatten()
+            .map(|(_, dims)| *dims);
+        match port {
+            "envmap" => {}
+            "lighting" => return Some(hdri_dims.unwrap_or((1, 1))),
+            _ => return None,
+        }
+        if let Some(dims) = hdri_dims {
+            return Some(dims);
         }
         let w = match params.get("width") {
             Some(ParamValue::Float(f)) => f.round().max(64.0) as u32,
@@ -451,6 +543,31 @@ impl Primitive for BakeEquirectEnvmap {
         } else {
             None
         };
+        // Following, the Sun is the HDRI's sun. It turns live with the HDRI
+        // and leaves the maps alone, so turning never re-bakes.
+        let wired_sun = ctx
+            .inputs
+            .light("sun")
+            .filter(|l| matches!(l.mode, LightMode::Sun));
+        let follow = mode == MODE_HDRI
+            && matches!(ctx.params.get("follow_sun"), Some(ParamValue::Bool(true)));
+        let followed = HdriSun::from_light(ctx.inputs.light("hdri_sun"))
+            .filter(|_| follow && wired_sun.is_some());
+        if mode == MODE_HDRI
+            && let Some(sun) = wired_sun
+        {
+            let emitted = match followed {
+                Some(found) => followed_sun(sun, found, read_float("env_rotation", 0.0), intensity),
+                None => sun,
+            };
+            ctx.outputs.set_light("sun", emitted);
+        }
+        let lighting = if hdri.is_some() {
+            ctx.outputs.texture_2d("lighting")
+        } else {
+            None
+        };
+        let fill = sun_fill(followed, lighting.map_or(1, |t| t.height));
         let Some(envmap) = ctx.outputs.texture_2d("envmap") else {
             return;
         };
@@ -490,25 +607,27 @@ impl Primitive for BakeEquirectEnvmap {
         // checked in addition to params — a pool-recycled/resized output
         // slot must be re-baked even with identical params, the same
         // precedent `gltf_texture_source`'s `last_mip_identity` established.
-        let output_identity = envmap.identity_key();
+        let output_identity = (envmap.identity_key(), lighting.map(|t| t.identity_key()));
         let hdri_unchanged =
             hdri.is_none() || (hdri_version.is_some() && self.last_hdri_version == hdri_version);
-        let content_unchanged = self.last_uniforms == Some(uniforms) && hdri_unchanged;
+        let content_unchanged =
+            self.last_uniforms == Some(uniforms) && hdri_unchanged && self.last_fill == fill;
         let unchanged = content_unchanged && self.last_output_identity == Some(output_identity);
 
         if unchanged && ctx.outputs_retained() {
-            ctx.mark_outputs_unchanged();
+            // The maps hold. A followed Sun is a value read each frame, not
+            // content anyone versions, so a turn alone keeps the maps' content
+            // version and the render's lighting convolution with it.
+            if follow {
+                ctx.mark_output_content_unchanged();
+            } else {
+                ctx.mark_outputs_unchanged();
+            }
             return;
         }
 
         let gpu = ctx.gpu_encoder();
         if let Some(hdri) = hdri {
-            let copy = HdriCopyUniforms {
-                intensity,
-                _pad0: 0.0,
-                _pad1: 0.0,
-                _pad2: 0.0,
-            };
             let pipeline = self.hdri_pipeline.get_or_insert_with(|| {
                 gpu.device.create_compute_pipeline(
                     include_str!("shaders/bake_environment_hdri.wgsl"),
@@ -516,25 +635,37 @@ impl Primitive for BakeEquirectEnvmap {
                     "node.bake_environment.hdri",
                 )
             });
-            gpu.native_enc.dispatch_compute(
-                pipeline,
-                &[
-                    GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&copy),
-                    },
-                    GpuBinding::Texture {
-                        binding: 1,
-                        texture: envmap,
-                    },
-                    GpuBinding::Texture {
-                        binding: 2,
-                        texture: hdri,
-                    },
-                ],
-                [tex_width.div_ceil(16), tex_height.div_ceil(16), 1],
-                "node.bake_environment.hdri",
-            );
+            let targets = [(envmap, [0.0; 4])]
+                .into_iter()
+                .chain(lighting.map(|target| (target, fill)));
+            for (target, fill) in targets {
+                let copy = HdriCopyUniforms {
+                    intensity,
+                    _pad0: 0.0,
+                    _pad1: 0.0,
+                    _pad2: 0.0,
+                    fill,
+                };
+                gpu.native_enc.dispatch_compute(
+                    pipeline,
+                    &[
+                        GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&copy),
+                        },
+                        GpuBinding::Texture {
+                            binding: 1,
+                            texture: target,
+                        },
+                        GpuBinding::Texture {
+                            binding: 2,
+                            texture: hdri,
+                        },
+                    ],
+                    [target.width.div_ceil(16), target.height.div_ceil(16), 1],
+                    "node.bake_environment.hdri",
+                );
+            }
         } else {
             let pipeline = self.pipeline.get_or_insert_with(|| {
                 gpu.device.create_compute_pipeline(
@@ -567,6 +698,7 @@ impl Primitive for BakeEquirectEnvmap {
         self.last_uniforms = Some(uniforms);
         self.last_output_identity = Some(output_identity);
         self.last_hdri_version = hdri_version;
+        self.last_fill = fill;
     }
 }
 
@@ -612,7 +744,7 @@ impl BakeEquirectEnvmap {
             sun: [toward[0], toward[1], toward[2], disc_size],
             sun_light: [above_air[0], above_air[1], above_air[2], 0.0],
         };
-        let output_identity = envmap.identity_key();
+        let output_identity = (envmap.identity_key(), None);
         let content_unchanged = self.last_daylight == Some((uniforms, sun));
         if content_unchanged
             && self.last_output_identity == Some(output_identity)
@@ -723,6 +855,42 @@ mod tests {
             dir: aim_from_pos,
             color,
             ..Light::default_sun()
+        }
+    }
+
+    /// A followed Sun shines from where the turned sky shows the sun: a
+    /// lookup toward it (`env_lookup_uv`, azimuth plus the turn) lands on the
+    /// file's sun. A new white Sun gives the sun's irradiance times the
+    /// lighting Intensity, and keeps its aim, distance and shadows.
+    #[test]
+    fn a_followed_sun_turns_with_the_sky() {
+        let found = HdriSun {
+            toward: [0.6, 0.48, 0.64],
+            irradiance: [30.0, 25.0, 20.0],
+            radius: 0.01,
+        };
+        let mut sun = light(LightMode::Sun, [0.0, -1.0, 0.0], [6.0, 6.0, 6.0, 1.0]);
+        sun.aim = [1.0, 0.0, 2.0];
+        sun.pos = [1.0, 5.0, 2.0];
+        sun.cast_shadows = true;
+        for rotation in [0.0f32, 0.7, -2.4, 3.1] {
+            let followed = followed_sun(sun, found, rotation, 2.0);
+            let [x, y, z] = followed.dir.map(|c| -c);
+            let lon = z.atan2(x) + rotation;
+            let looked_up = [y.asin().cos() * lon.cos(), y, y.asin().cos() * lon.sin()];
+            for k in 0..3 {
+                assert!(
+                    (looked_up[k] - found.toward[k]).abs() < 1e-5,
+                    "turn {rotation}: {looked_up:?} vs {:?}",
+                    found.toward
+                );
+            }
+            let offset = [0, 1, 2].map(|k| followed.pos[k] - followed.aim[k]);
+            let distance = offset.iter().map(|c| c * c).sum::<f32>().sqrt();
+            assert!((distance - 5.0).abs() < 1e-4, "distance {distance}");
+            assert_eq!(followed.aim, sun.aim);
+            assert!(followed.cast_shadows);
+            assert_eq!(followed.color, [60.0, 50.0, 40.0, 1.0]);
         }
     }
 
@@ -1639,6 +1807,7 @@ mod hdri_gpu_tests {
             _pad0: 0.0,
             _pad1: 0.0,
             _pad2: 0.0,
+            fill: [0.0; 4],
         };
         let mut enc = device.create_encoder("bake-env-hdri");
         enc.dispatch_compute(

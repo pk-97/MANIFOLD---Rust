@@ -19,6 +19,10 @@
 //! the same runtime, including scene modifiers applied by editing commands.
 //! Source file paths in saved graphs must already resolve from the working directory.
 //!
+//! `--hdri FILE` lights an imported model with that HDRI the way the Scene
+//! tab does: the Environment set to HDRI mode with that file before the
+//! scene compiles.
+//!
 //! `--param id=value` overrides an outer-card param by id (same mechanism
 //! `render-generator-preset` uses — the import graph's own
 //! `preset_metadata.params`, e.g. `cam_dist`, `7_intensity`, `1_intensity`).
@@ -92,7 +96,9 @@ use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::runtime::preset_context::PresetContext;
-use manifold_nodes_scene::node_graph::gltf_import::compile_model_scene;
+use manifold_nodes_scene::node_graph::gltf_import::{
+    compile_model_scene, compile_model_scene_with,
+};
 
 struct Args {
     glb: PathBuf,
@@ -130,6 +136,8 @@ struct Args {
     /// Route the imported scene through the production app compositor and
     /// presentation pipeline before encoding the PNG.
     app_presentation: bool,
+    /// Light the model with this HDRI file (the Environment's HDRI mode).
+    hdri: Option<PathBuf>,
 }
 
 /// The opt-in app capture seam: imported generator output is treated as one
@@ -310,7 +318,7 @@ where
     let mut argv = argv.into_iter();
     let glb = argv
         .next()
-        .ok_or("usage: render-import <file.glb> [--size WxH] [--out PATH] [--param id=value ...] [--orbit R] [--tilt R] [--frames-max N] [--non-black-floor F] [--time SECONDS] [--trace] [--app-presentation] [--benchmark-frames N] [--anim-param ID --anim-start F --anim-end F --anim-frames N]")?;
+        .ok_or("usage: render-import <file.glb> [--size WxH] [--out PATH] [--param id=value ...] [--orbit R] [--tilt R] [--frames-max N] [--non-black-floor F] [--time SECONDS] [--trace] [--app-presentation] [--hdri FILE] [--benchmark-frames N] [--anim-param ID --anim-start F --anim-end F --anim-frames N]")?;
     let mut args = Args {
         glb: PathBuf::from(glb),
         width: 1280,
@@ -330,6 +338,7 @@ where
         benchmark_frames: None,
         passes: false,
         app_presentation: false,
+        hdri: None,
     };
     while let Some(flag) = argv.next() {
         match flag.as_str() {
@@ -359,6 +368,7 @@ where
                 args.height = h.parse().map_err(|e| format!("bad height: {e}"))?;
             }
             "--out" => args.out = PathBuf::from(value),
+            "--hdri" => args.hdri = Some(PathBuf::from(value)),
             "--frames-max" => {
                 args.frames_max = value.parse().map_err(|e| format!("bad frames-max: {e}"))?;
             }
@@ -503,7 +513,7 @@ fn main() {
         std::process::exit(2);
     }
 
-    let (def, report) = match load_render_input(&args.glb) {
+    let (def, report) = match load_render_input(&args.glb, args.hdri.as_deref()) {
         Ok(pair) => pair,
         Err(e) => {
             eprintln!(
@@ -1252,17 +1262,47 @@ fn render_single_frame(
 
 fn load_render_input(
     path: &std::path::Path,
+    hdri: Option<&std::path::Path>,
 ) -> Result<(manifold_core::effect_graph_def::EffectGraphDef, String), String> {
     if matches!(
         path.extension().and_then(|s| s.to_str()),
         Some("json" | "manifoldpreset")
     ) {
+        if hdri.is_some() {
+            return Err("--hdri lights a model file; a saved graph keeps its own".to_string());
+        }
         let bytes = std::fs::read(path).map_err(|e| format!("read saved graph: {e}"))?;
         let def = serde_json::from_slice(&bytes).map_err(|e| format!("parse saved graph: {e}"))?;
         Ok((def, "saved graph".to_string()))
     } else {
-        compile_model_scene(path)
-            .map(|(def, model)| (def, format!("{} part(s)", model.roots.len())))
+        compile_model_scene_with(path, false, |doc, _| {
+            if let Some(file) = hdri {
+                light_with_hdri(doc, file);
+            }
+        })
+        .map(|(def, model)| (def, format!("{} part(s)", model.roots.len())))
+    }
+}
+
+/// Set the scene's Environment to HDRI mode with `file`.
+fn light_with_hdri(doc: &mut manifold_core::scene_doc::SceneDoc, file: &std::path::Path) {
+    use manifold_core::scene_doc::{EnvironmentSource, ItemFields, LightType};
+    let mut environment = None;
+    doc.walk(|item, _| {
+        if let ItemFields::Light(light) = &item.fields
+            && matches!(light.light, LightType::Environment { .. })
+            && environment.is_none()
+        {
+            environment = Some(item.id.clone());
+        }
+    });
+    let item = environment.and_then(|id| doc.find_mut(&id));
+    if let Some(ItemFields::Light(light)) = item.map(|item| &mut item.fields) {
+        light.light = LightType::Environment {
+            source: EnvironmentSource::Hdri {
+                file: file.to_string_lossy().into_owned(),
+            },
+        };
     }
 }
 

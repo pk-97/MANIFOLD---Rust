@@ -8,9 +8,8 @@ use manifold_core::effects::PresetInstance;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::scene_doc::{
-    DrawAs, EnvironmentSource, Item, ItemFields, ItemId, ItemKind, LightType, MaterialType,
-    PhysicsSetting, SceneDoc, Shape, draws_with_material, import_placement_id, param_id,
-    split_param_id,
+    DrawAs, Item, ItemFields, ItemId, ItemKind, LightType, MaterialType, PhysicsSetting, SceneDoc,
+    Shape, draws_with_material, import_placement_id, param_id, split_param_id,
 };
 use manifold_core::scene_schema::{
     ADD_ENTRIES, Choice, FieldControl, FieldRow, FieldValue, MODIFIER_HEADER_FIELDS,
@@ -171,23 +170,10 @@ fn item_vm(
             materials.users.get(&mat.id).copied().unwrap_or(0),
         )
     });
-    let (environment, aim_sun_file) = match &item.fields {
-        ItemFields::Light(light) => match &light.light {
-            LightType::Environment { source } => (
-                true,
-                match source {
-                    EnvironmentSource::Hdri { file } | EnvironmentSource::SeaHorizon { file }
-                        if !file.is_empty() =>
-                    {
-                        Some(file.clone())
-                    }
-                    _ => None,
-                },
-            ),
-            _ => (false, None),
-        },
-        _ => (false, None),
-    };
+    let environment = matches!(
+        &item.fields,
+        ItemFields::Light(light) if matches!(light.light, LightType::Environment { .. })
+    );
     let row_reasons = row_reasons(doc, inst, item, material.as_ref());
     SceneItemVm {
         id: item.id.clone(),
@@ -210,7 +196,6 @@ fn item_vm(
         plane: matches!(&item.fields, ItemFields::Object(object) if object.shape == Shape::Plane),
         copy_view: matches!(&item.fields, ItemFields::Camera(_)),
         environment,
-        aim_sun_file,
         draw_again: false,
         add_loop_camera: is_scene_loop(item) && !has_loop_camera(doc),
         make_active_camera: match &item.fields {

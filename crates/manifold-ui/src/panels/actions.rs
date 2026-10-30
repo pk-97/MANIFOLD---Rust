@@ -261,9 +261,6 @@ pub enum ProjectAction {
         material: ItemId,
         look: crate::param_surface::MaterialLook,
     },
-    /// "Aim Sun at HDRI": turn the scene's Sun toward the brightest region of
-    /// the HDRI file at the given path. `(layer_id, hdri_file)`.
-    SceneSetupAimSunAtHdri(LayerId, String),
     /// "Add Loop Camera" on the Scene Loop card: a camera on the Loop rig,
     /// made the World's camera. One undo step.
     SceneAddLoopCamera(LayerId),

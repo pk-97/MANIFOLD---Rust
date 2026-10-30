@@ -544,9 +544,9 @@ impl<'d> Builder<'d> {
             let targets: Vec<u32> = match row.reach {
                 Reach::Own(role) => self.id(item.id.as_str(), role).into_iter().collect(),
                 Reach::Scene(role) => self.id(SCENE, role).into_iter().collect(),
-                Reach::OwnAndScene(own, scene) => self
-                    .id(item.id.as_str(), own)
-                    .into_iter()
+                Reach::OwnAndScene(own, scene) => own
+                    .iter()
+                    .filter_map(|role| self.id(item.id.as_str(), role))
                     .chain(self.id(SCENE, scene))
                     .collect(),
                 Reach::EveryCameraLens => self.lenses.clone(),

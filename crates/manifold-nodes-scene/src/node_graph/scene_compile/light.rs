@@ -4,8 +4,10 @@
 //! scene's Exposure on every camera lens. The first Sun in compile order
 //! (item id order) lights the softbox sky's sun disc; the sky takes one Sun
 //! (BUG-u3gco, sky sun disc from every Sun). Under the Daylight sky that Sun
-//! reaches the render through the sky, tinted by the air it crosses. A
-//! scene takes one Environment: a second compiles to nothing.
+//! reaches the render through the sky, tinted by the air it crosses; under
+//! an HDRI it reaches it through the environment too, which can make it the
+//! HDRI's own sun (Sun From HDRI). A scene takes one Environment: a second
+//! compiles to nothing.
 
 use std::collections::BTreeMap;
 
@@ -18,7 +20,8 @@ use crate::node_graph::scene_graph::float;
 /// A Sun's starting intensity. Under the default Softbox sky (fill 0.3,
 /// strips 1.5) it gives about 70% of the light on open ground from 45
 /// degrees up, so it is the scene's main light and its shadows read.
-const SUN_INTENSITY: f32 = 6.0;
+/// Following an HDRI's sun, this intensity gives the sun as captured.
+pub(crate) const SUN_INTENSITY: f32 = 6.0;
 
 /// A new lamp: about 45 degrees up, white, casting shadows. `mode` is the
 /// light type (`node.light`'s Sun 0, Point 1, Spot 2).
@@ -123,6 +126,7 @@ fn emit_environment(b: &mut Builder<'_>, item: &Item, sun: Option<u32>) {
                 value: file.clone(),
             },
         );
+        b.wire(hdri, "sun", environment, "hdri_sun");
         if matches!(source, EnvironmentSource::SeaHorizon { .. }) {
             // The photo's lower half is whatever stood under its camera; the sea
             // replaces it before the bake, so lighting, reflections and the
@@ -140,14 +144,17 @@ fn emit_environment(b: &mut Builder<'_>, item: &Item, sun: Option<u32>) {
     }
     if let Some(sun) = sun {
         b.wire(sun, "out", environment, "sun");
-        if mode == 3
+        if (mode == 2 || mode == 3)
             && let Some(entry) = b.lights.iter_mut().find(|(light, _)| *light == sun)
         {
             *entry = (environment, "sun");
         }
     }
+    // An HDRI lights the scene from `lighting`, which loses the sun when the
+    // Sun follows it; the background keeps `envmap`, sun and all.
     let render = b.scene("render");
-    b.wire(environment, "envmap", render, "envmap");
+    let lighting = if mode == 2 { "lighting" } else { "envmap" };
+    b.wire(environment, lighting, render, "envmap");
     b.rows(item);
 }
 

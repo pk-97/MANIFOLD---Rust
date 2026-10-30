@@ -23,7 +23,6 @@ pub(super) struct HeaderButtons {
     duplicate: Vec<(NodeId, ItemId)>,
     frame: Vec<(NodeId, ItemId)>,
     use_view: Option<(NodeId, ItemId)>,
-    aim_sun: Option<(NodeId, String)>,
     draw_again: Option<NodeId>,
     add_loop_camera: Option<NodeId>,
     make_active_camera: Option<(NodeId, f32)>,
@@ -40,7 +39,6 @@ impl HeaderButtons {
         self.duplicate.clear();
         self.frame.clear();
         self.use_view = None;
-        self.aim_sun = None;
         self.draw_again = None;
         self.add_loop_camera = None;
         self.make_active_camera = None;
@@ -290,7 +288,7 @@ impl ScenePanel {
     }
 
     /// One light's header inside Lighting: its name (click to rename) and
-    /// kind, copy and delete, then "Aim Sun at HDRI" for an HDRI environment.
+    /// kind, copy and delete.
     pub(super) fn build_light_header(
         &mut self,
         tree: &mut UITree,
@@ -338,21 +336,6 @@ impl ScenePanel {
         tree.set_name(remove, "scene_setup.properties.remove");
         self.header_buttons.remove.push((remove, item.id.clone()));
         cy += ROW_H + ROW_GAP;
-        if let Some(file) = item.aim_sun_file.as_ref().filter(|file| !file.is_empty()) {
-            let id = tree.add_button_keyed(
-                Some(self.content_parent),
-                inner_x,
-                cy,
-                inner_w,
-                ROW_H,
-                btn_style(),
-                "Aim Sun at HDRI",
-                item_key(&item.id, "aim_sun"),
-            );
-            tree.set_name(id, "scene_setup.lighting.aim_sun");
-            self.header_buttons.aim_sun = Some((id, file.clone()));
-            cy += ROW_H + ROW_GAP;
-        }
         cy
     }
 
@@ -458,17 +441,6 @@ impl ScenePanel {
             let param = manifold_foundation::ParamId::from(format!("{}.camera", world.id));
             return Some(PanelAction::Params(ParamsAction::ParamEnumSet(
                 target, param, cut,
-            )));
-        }
-        if let Some((_, file)) = self
-            .header_buttons
-            .aim_sun
-            .as_ref()
-            .filter(|(button, _)| *button == node_id)
-        {
-            return Some(PanelAction::Project(ProjectAction::SceneSetupAimSunAtHdri(
-                layer(),
-                file.clone(),
             )));
         }
         if let Some((_, item)) = self

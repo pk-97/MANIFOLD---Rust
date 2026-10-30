@@ -321,7 +321,7 @@ One table keyed by (kind, property), one file per kind under `manifold-core/src/
 | Kind | Card |
 |---|---|
 | Camera | Rig (Orbit, Free, Look At; Loop, which rides the scene's Scene Loop, from L21); the rig's rows (section 7.13); Use this view; Depth of Field (with Aperture Shape); Motion Blur; Shake (Amount, Speed, Position strength, Rotation strength; L8) |
-| Lighting (one card) | Environment source (Sky, HDRI File, None, and Sea Horizon from L16); in HDRI mode: File picker (always present), Rotation (L13), Intensity, Background (Blur, Brightness), Aim Sun at HDRI; in Sky mode: Gradient or Softbox rows; Exposure; then every light |
+| Lighting (one card) | Environment source (Sky, HDRI File, None, and Sea Horizon from L16); in HDRI mode: File picker (always present), Rotation (L13), Intensity, Background (Blur, Brightness), Sun From HDRI; in Sky mode: Gradient or Softbox rows; Exposure; then every light |
 | Light | Type, Colour, Intensity, Position, Target, Range, Size, Shadows (rows by type) |
 | Object | Shape (built-in solids; Ocean from L16; Extrude, Revolve and Tube from L20); Model File (a single imported Object only); Transform (with the Scale link toggle); Material (inline: look, colour and surface rows, used by N, Make Unique); Look (Visible, Cast Shadows, Emission); Physics; Copies |
 | Group | Transform (with the Scale link toggle); Visible; Material (applies to children with none); Physics (Body here is one compound body); Copies; when Source is a file: Model File, Combine Meshes, Clip, Rate, Loop Mode, Retrigger |
@@ -853,7 +853,7 @@ Every scene feature a performer could use on main (origin/main), its state on th
 | Motion blur | Camera card | Rows work; invisible while orbiting in Peter's test | Camera | F2 |
 | Exposure | Lighting card | Works | Environment | built |
 | Sun, Point, Spot; shadows | Lighting card | Works | Light | built |
-| Sky Gradient, Softbox; HDRI file, intensity, background, Aim Sun at HDRI | Lighting card | Works | Environment | built |
+| Sky Gradient, Softbox; HDRI file, intensity, background, Sun From HDRI | Lighting card | Works | Environment | built |
 | HDRI Rotation | Not on main | Missing | Environment row (new) | L13 |
 | Sea horizon environment (`sea_horizon_env`) | Ocean starters | Missing | Environment source | L16 |
 | Render mode: Rendered, Solid, Wireframe, Points | World card | Works | World Render | built |

@@ -104,7 +104,7 @@ const fn softbox_row(property: &'static str) -> PropertyRow {
     row(property, ENV, Environment, setup()).when(softbox)
 }
 
-pub static LIGHT_ROWS: [PropertyRow; 48] = [
+pub static LIGHT_ROWS: [PropertyRow; 49] = [
     // Sun, Point, Spot. A new light starts where the compiler's lamp body
     // puts it (`scene_compile::light::lamp_params`).
     row(
@@ -222,17 +222,27 @@ pub static LIGHT_ROWS: [PropertyRow; 48] = [
     .param("path")
     .when(hdri),
     // Turns the HDRI about the up axis: its lighting, reflections and the
-    // background behind the scene together. Each lookup turns, so the baked
-    // map and its lighting convolution never rebuild for it.
+    // background behind the scene together, and the Sun following the HDRI.
+    // Each lookup turns, so the baked map and its lighting convolution never
+    // rebuild for it.
     row(
         "hdri_rotation",
-        Reach::OwnAndScene("bg_sky", "render"),
+        Reach::OwnAndScene(&["bg_sky", "environment"], "render"),
         Environment,
         perform(CardBand::Lighting, 3),
     )
     .param("env_rotation")
     .limit(HardLimit::Unlimited)
     .when(hdri),
+    // The first Sun becomes the HDRI's own sun, with its shadow, and the
+    // HDRI's lighting loses it so it lights once. Off for an HDRI whose sun
+    // should not lead, or a Sun placed by hand; an HDRI with no distinct sun
+    // leaves the Sun where it is either way.
+    row("sun_from_hdri", ENV, Environment, setup())
+        .param("follow_sun")
+        .toggle()
+        .default(1.0)
+        .when(hdri),
     row(
         "hdri_width",
         HDRI,

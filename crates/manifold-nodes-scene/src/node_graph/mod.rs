@@ -3,7 +3,7 @@ pub mod gizmo_pass;
 mod gltf_anim_cache;
 mod gltf_anim_identity;
 pub mod gltf_import;
-pub mod hdri_sun;
+pub(crate) mod hdri_sun;
 pub mod material_inspector;
 pub mod node_param_source;
 pub mod scene_surface;
