@@ -74,6 +74,7 @@ mod item_pick;
 mod live_draw_args;
 mod material_covers;
 mod pass2_draw;
+pub(super) mod patch_cull;
 mod post_passes;
 mod prepasses;
 mod prev_positions;
@@ -1424,6 +1425,8 @@ pub struct RenderScene {
     /// Per-object-slot, per-caster instance records that survived a shadow
     /// light's cull. Grown when too small, never shrunk.
     culled_shadow_instances: Vec<Vec<Option<manifold_gpu::GpuBuffer>>>,
+    /// Patch boxes and per-view index buffers of the meshes culled by patch.
+    patch_cull: patch_cull::PatchCull,
     /// E2b: per-layer camera depth scratch, seeded from the opaque snapshot
     /// before each transmissive draw. Allocated only when transmission is
     /// present.
@@ -2048,6 +2051,9 @@ struct ObjectDraw<'ctx> {
     /// The arguments block of this draw's cull for shadow caster 0, when it
     /// culls its copies; caster `c` uses the block `c` after it.
     shadow_block: Option<u64>,
+    /// The arguments and camera index buffer of this draw's patch cull, when
+    /// it culls by patch.
+    patches: Option<PatchDraw>,
     /// False when `bounds` lies wholly outside the camera's clip volume,
     /// jitter included. Only the main pass and the camera depth snapshot skip
     /// such a draw; every other pass still sees it.
@@ -2100,6 +2106,15 @@ struct ObjectDraw<'ctx> {
     points: bool,
 }
 
+/// A patch-culled draw's arguments: block `first_block` counts the camera's
+/// kept indices, the next one per shadow caster theirs.
+struct PatchDraw {
+    args: manifold_gpu::GpuBuffer,
+    first_block: u64,
+    /// The camera's kept indices, once culled this frame.
+    camera: Option<manifold_gpu::GpuBuffer>,
+}
+
 /// What a camera pass reads in place of the full instance array.
 struct CameraCull {
     /// Byte offset of the draw's view block in the arguments buffer.
@@ -2130,6 +2145,17 @@ impl ObjectDraw<'_> {
             && self.copy_bounds.is_some()
     }
 
+    /// Whether this draw culls by patch: a single opaque indexed triangle mesh
+    /// of a fixed size, big enough to pay for the cull.
+    fn culls_patches(&self) -> bool {
+        self.indices.is_some()
+            && self.instances.is_none()
+            && !self.points
+            && !self.routes_to_transparent()
+            && self.live_extent.is_none()
+            && patch_cull::worth_culling(self.vertex_count)
+    }
+
     /// Transmission is a separate raster route even when authored alpha stays
     /// Opaque. The shader still receives the authored alpha mode unchanged.
     fn routes_to_transparent(&self) -> bool {
@@ -2156,12 +2182,21 @@ impl ObjectDraw<'_> {
             .live_args
             .as_ref()
             .map(|(args, offset)| (args, *offset));
-        self.with_args(draw, args)
+        self.with_args(draw, self.indices, args)
     }
 
     /// [`Self::live`] for a camera pass: the view block counts only the
     /// copies that survived the cull.
     fn camera_live<'a>(&'a self, draw: manifold_gpu::Draw<'a>) -> manifold_gpu::Draw<'a> {
+        if let Some(PatchDraw {
+            args,
+            first_block,
+            camera: Some(kept),
+        }) = &self.patches
+        {
+            let offset = first_block * live_draw_args::ARGS_BYTES;
+            return self.with_args(draw, Some(kept), Some((args, offset)));
+        }
         let args = self.live_args.as_ref().map(|(args, offset)| {
             let offset = self
                 .camera_cull
@@ -2169,16 +2204,19 @@ impl ObjectDraw<'_> {
                 .map_or(*offset, |cull| cull.offset);
             (args, offset)
         });
-        self.with_args(draw, args)
+        self.with_args(draw, self.indices, args)
     }
 
+    /// `draw` with this object's back-face rule, drawn from `indices` when
+    /// given and from the arguments at `args` when given.
     fn with_args<'a>(
         &'a self,
         draw: manifold_gpu::Draw<'a>,
+        indices: Option<&'a manifold_gpu::GpuBuffer>,
         args: Option<(&'a manifold_gpu::GpuBuffer, u64)>,
     ) -> manifold_gpu::Draw<'a> {
         let draw = draw.cull_back_faces(self.culls_back_faces());
-        let draw = match self.indices {
+        let draw = match indices {
             Some(indices) => draw.indexed(indices),
             None => draw,
         };
@@ -3170,6 +3208,7 @@ impl RenderScene {
             self.author_rt_flags(ctx, &pre, &rt_ready, &mut draws, has_transmission);
         self.plan_prev_positions(ctx, &mut draws, pre.velocity_wired, has_transmission);
         self.encode_copy_cull(ctx, &mut draws);
+        self.encode_patch_cull(ctx, &mut draws);
 
         // ---- Ensure cached GPU resources (mutable phase) — BUG-trh7 stage 2,
         // `ensure_gpu_resources`; the E2a format peek moved inside it, ahead

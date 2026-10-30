@@ -686,6 +686,13 @@ impl Primitive for GltfMeshSource {
                                 let verts = apply_vertex_color_compat(verts, vertex_colors);
                                 let verts = apply_mesh_fit(verts, fit_unit_box, recenter);
                                 let verts = apply_translate(verts, translate);
+                                // Runs of 128 triangles become compact patches
+                                // render_scene can skip when out of sight.
+                                let positions: Vec<[f32; 3]> =
+                                    verts.iter().map(|v| v.position).collect();
+                                let indices = super::render_scene::patch_cull::patch_order(
+                                    &positions, &indices,
+                                );
                                 let identity = mesh_identity(&verts);
                                 let bounds =
                                     MeshBounds::of_positions(verts.iter().map(|v| v.position));

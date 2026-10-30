@@ -237,6 +237,43 @@ impl RenderScene {
                     }
                     culls
                 };
+                // A patch-culled draw keeps only the patches this light can
+                // reach, in an index buffer of its own for this caster.
+                let shadow_patches: Vec<Option<(manifold_gpu::GpuBuffer, u64)>> = {
+                    let gpu = ctx.gpu_encoder();
+                    let mut culled_any = false;
+                    let kept = lit
+                        .iter()
+                        .map(|d| {
+                            let (Some(patches), Some(indices)) = (d.patches.as_ref(), d.indices)
+                            else {
+                                return None;
+                            };
+                            let block = patches.first_block + 1 + slot as u64;
+                            let kept = self.patch_cull.cull(
+                                gpu.device,
+                                gpu.native_enc,
+                                d.slot as usize,
+                                1 + slot,
+                                indices,
+                                d.vertex_count,
+                                &patch_cull::PatchView {
+                                    clip: &vp,
+                                    model: &d.uniforms.model,
+                                    eye: None,
+                                    args: &patches.args,
+                                    block,
+                                },
+                            )?;
+                            culled_any = true;
+                            Some((kept, block * live_draw_args::ARGS_BYTES))
+                        })
+                        .collect();
+                    if culled_any {
+                        gpu.native_enc.compute_memory_barrier_buffers();
+                    }
+                    kept
+                };
                 let shadow_uniforms: Vec<ShadowUniforms> = lit
                     .iter()
                     .map(|d| ShadowUniforms::for_draw(vp, d))
@@ -288,7 +325,8 @@ impl RenderScene {
                     .zip(&shadow_uniforms)
                     .zip(&shadow_bindings)
                     .zip(&shadow_culls)
-                    .map(|(((d, su), b), cull)| {
+                    .zip(&shadow_patches)
+                    .map(|((((d, su), b), cull), kept)| {
                         let draw = manifold_gpu::Draw::new(
                             if su.discard_free() {
                                 solid_pipeline
@@ -299,9 +337,12 @@ impl RenderScene {
                             d.vertex_count,
                             d.instance_count,
                         );
-                        match (cull, &d.live_args) {
-                            (Some((_, offset)), Some((args, _))) => {
-                                d.with_args(draw, Some((args, *offset)))
+                        match (cull, kept, &d.live_args, &d.patches) {
+                            (Some((_, offset)), _, Some((args, _)), _) => {
+                                d.with_args(draw, d.indices, Some((args, *offset)))
+                            }
+                            (_, Some((kept, offset)), _, Some(patches)) => {
+                                d.with_args(draw, Some(kept), Some((&patches.args, *offset)))
                             }
                             _ => d.live(draw),
                         }

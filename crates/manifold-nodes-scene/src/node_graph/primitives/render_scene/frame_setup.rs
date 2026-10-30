@@ -678,6 +678,7 @@ impl RenderScene {
                 copy_bounds,
                 camera_cull: None,
                 shadow_block: None,
+                patches: None,
                 in_view,
             });
         }
@@ -690,15 +691,18 @@ impl RenderScene {
             .iter()
             .filter(|f| f.mesh.as_ref().is_some_and(|m| m.live_extent.is_some()))
             .count();
-        if live + live_meshes > 0 {
+        let patched = draws.iter().filter(|d| d.culls_patches()).count();
+        if live + live_meshes + patched > 0 {
             let culled = draws.iter().filter(|d| d.culls_copies()).count();
             // Each culled draw also gets one block per shadow caster, after
-            // the water meshes' blocks.
+            // the water meshes' blocks; then each patch-culled draw one for
+            // the camera and one per caster.
             let casters = pre.casters.len();
             let gpu = ctx.gpu_encoder();
-            let args = self
-                .live_draw_args
-                .prepare(gpu.device, live + culled + live_meshes + culled * casters);
+            let args = self.live_draw_args.prepare(
+                gpu.device,
+                live + culled + live_meshes + culled * casters + patched * (1 + casters),
+            );
             for (slot, draw) in draws
                 .iter_mut()
                 .filter(|d| d.live_extent.is_some() || d.trims_instances())
@@ -784,6 +788,15 @@ impl RenderScene {
                 draw.shadow_block = Some(shadow_block);
                 shadow_block += casters as u64;
             }
+            let mut patch_block = shadow_block;
+            for draw in draws.iter_mut().filter(|d| d.culls_patches()) {
+                draw.patches = Some(PatchDraw {
+                    args: args.clone(),
+                    first_block: patch_block,
+                    camera: None,
+                });
+                patch_block += 1 + casters as u64;
+            }
         }
         // A field draws in Pass B, so it needs every resource the glass gate
         // ensures: the opaque depth snapshot, the scene-colour snapshot and
@@ -840,6 +853,65 @@ impl RenderScene {
                     instances: source,
                     out_instances: &cull.instances,
                     prev: prev_source.zip(cull.prev.as_ref()),
+                },
+            );
+        }
+        gpu.native_enc.compute_memory_barrier_buffers();
+    }
+
+    /// Work out the patch boxes of each patch-culled draw whose mesh changed,
+    /// then cull its patches against the camera into its camera index
+    /// buffer. Runs before any pass draws.
+    pub(super) fn encode_patch_cull(
+        &mut self,
+        ctx: &mut EffectNodeContext<'_, '_>,
+        draws: &mut [ObjectDraw<'_>],
+    ) {
+        if draws.iter().all(|d| d.patches.is_none()) {
+            return;
+        }
+        let epoch = ctx.rebuild_epoch;
+        let gpu = ctx.gpu_encoder();
+        for draw in draws.iter().filter(|d| d.patches.is_some()) {
+            let Some(indices) = draw.indices else {
+                continue;
+            };
+            self.patch_cull.bounds(
+                gpu.device,
+                gpu.native_enc,
+                draw.slot as usize,
+                draw.vertices,
+                indices,
+                draw.vertex_count,
+                (draw.vertices_content, draw.indices_content),
+                epoch,
+            );
+        }
+        gpu.native_enc.compute_memory_barrier_buffers();
+        for draw in draws.iter_mut() {
+            // Facing away only culls what the raster would skip anyway.
+            let eye = draw.culls_back_faces().then(|| {
+                let p = draw.uniforms.camera_pos;
+                [p[0], p[1], p[2]]
+            });
+            let (slot, count) = (draw.slot as usize, draw.vertex_count);
+            let (clip, model) = (draw.uniforms.view_proj, draw.uniforms.model);
+            let (Some(patches), Some(indices)) = (draw.patches.as_mut(), draw.indices) else {
+                continue;
+            };
+            patches.camera = self.patch_cull.cull(
+                gpu.device,
+                gpu.native_enc,
+                slot,
+                0,
+                indices,
+                count,
+                &patch_cull::PatchView {
+                    clip: &clip,
+                    model: &model,
+                    eye,
+                    args: &patches.args,
+                    block: patches.first_block,
                 },
             );
         }

@@ -2,7 +2,7 @@
 
 <!-- index: How render_scene stops paying for triangles nobody sees: indexed terrain, culled copies in shadows, small patches culled on the GPU, detail levels by screen size, terrain tiles by distance, and NVIDIA cluster ray tracing with the Vulkan port. -->
 
-**Status:** IN PROGRESS. P1 and P2 landed 2026-10-30; P3 is next. P3 to P7 are specified at their phase start, against the code as it stands then.
+**Status:** IN PROGRESS. P1, P2 and P3 landed 2026-10-30; what comes next is Peter's call (see Findings). P4 to P7 are specified at their phase start, against the code as it stands then.
 **Companions:** [RAYTRACING_DESIGN.md](RAYTRACING_DESIGN.md) (acceleration structures), [VULKAN_BACKEND_DESIGN.md](VULKAN_BACKEND_DESIGN.md) (P7 ray tracing), [GLB_IMPORT_OPTIMIZATION_GUIDE.md](GLB_IMPORT_OPTIMIZATION_GUIDE.md) (the manual decimation this replaces).
 
 ## The claim
@@ -62,9 +62,11 @@ Measured: swarmTestv3 shadows 3.7 to 3.0 ms, with the cull itself 0.5 ms dearer,
 
 `cull_instances` also runs for each shadow light's view, against that light's clip volume. The 1024-copy threshold (`CULL_MIN_INSTANCES`) becomes a work threshold, copies × triangles, so a Scene Loop corridor of a few dozen cells of a heavy scan is culled too. Same look. Spec at phase start.
 
-### P3 Patches and GPU frustum and cone culling
+### P3 Patches and GPU frustum and cone culling (landed)
 
-Static indexed meshes (imports) get patches at load. A compute pass per view writes visible patches' triangles into the view's index buffer and the draw's indirect arguments. It covers the camera depth snapshot, Pass A, subsurface and each shadow light. The CPU per-object frustum test stays as the first reject. Instanced draws (copies, swarms, Scene Loop cells) cull each patch of each instance, so a corridor cell half in view draws only its visible half.
+As built, without new graph ports: a patch is a run of 128 consecutive triangles of an object's index buffer. Imports reorder their triangles at load (`render_scene/patch_cull.rs` `patch_order`: meshoptimizer's spatial sort, then a vertex-cache pass per run) and `node.grid_indices` writes Terrain in 8 x 8 quad tiles, so each run is compact. `shaders/cull_patches.wgsl` works out each patch's box and normal cone on the GPU once per mesh content, and per view copies the visible patches' indices into that view's index buffer, drawn indexed-indirect. Single opaque indexed meshes of 8 patches or more take this path; instanced draws keep P2's copy cull. The cull costs about 0.02 ms on the 2.4 km terrain.
+
+Each view gets its own cull: the camera (frustum and back-face cone, for meshes that skip back faces) and each shadow light (its own frustum). The CPU per-object frustum test stays as the first reject. Not yet covered: per-patch culling inside instanced draws (copies, swarms, Scene Loop cells), and meshes a modifier deforms (see Findings).
 
 ### P4 Occlusion culling
 
@@ -82,6 +84,12 @@ D5's quadtree reads the height map (`node.terrain` gains the height output in th
 
 With the Vulkan ray tracing port: per-patch acceleration structures and a partitioned top level for large changing scenes.
 
+## Findings (2026-10-30, after P3)
+
+- Imported parts with any mesh modifier, morph or fragment cut are flattened to non-indexed triangles at compile (`scene_compile/mesh.rs` `use_indexed`): three vertices per triangle, the vertex waste P1 removed from Terrain, and outside every patch phase. Peter's audio-reactive scans are this case.
+- MeshAudio (full quality, RT on) spends 83 ms in RT AO+GI and 56 ms in RT reflections against 13 ms of raster a frame. In Peter's scan scenes the ray tracer, not triangle count, is the cost.
+- The b1 terrain's 50 ms main pass is fragment work (the covers' material shading), not geometry; patch culling cannot reach it with the whole terrain in view.
+
 ## Open
 
-- The meshoptimizer Rust binding must expose meshlet building, meshlet bounds and border-locked simplification at a version that builds on macOS and Linux. Check at P3 start.
+- `meshopt` 0.7 (meshoptimizer 1.3) is in. Its `clod` module builds the patch hierarchy D4 needs; P5 checks it on a real scan.

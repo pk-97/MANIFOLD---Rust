@@ -149,6 +149,20 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "grid_indices.rs",
+        rust_struct: "GridUniforms",
+        shader: "shaders/grid_indices.wgsl",
+        shader_struct: "GridUniforms",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "render_scene/patch_cull.rs",
+        rust_struct: "PatchArgs",
+        shader: "shaders/cull_patches.wgsl",
+        shader_struct: "PatchArgs",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "scatter_on_mesh.rs",
         rust_struct: "ScatterOnMeshUniforms",
         shader: "shaders/scatter_on_mesh.wgsl",

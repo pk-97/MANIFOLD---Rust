@@ -545,6 +545,29 @@ fn cull_instances_wgsl_validates_with_the_instance_transform_prelude() {
     }
 }
 
+/// The patch cull compiles, with its three entry points.
+#[test]
+fn cull_patches_wgsl_validates() {
+    let src = include_str!("../shaders/cull_patches.wgsl");
+    let module = naga::front::wgsl::parse_str(src).expect("cull_patches.wgsl must naga-parse");
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    );
+    if let Err(e) = validator.validate(&module) {
+        panic!(
+            "cull_patches.wgsl validation failed:\n{}",
+            e.emit_to_string(src)
+        );
+    }
+    for entry in ["patch_bounds", "patch_args", "cull_patches"] {
+        assert!(
+            module.entry_points.iter().any(|ep| ep.name == entry),
+            "cull_patches.wgsl must expose {entry}"
+        );
+    }
+}
+
 /// The solid-surface variants are text edits of the shader, so a shader edit
 /// that stops matching a pattern would silently keep the discards (and the
 /// tile-based hidden-surface removal they defeat). Every variant — plain and

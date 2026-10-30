@@ -14,6 +14,7 @@ half = "2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "exr", "hdr", "tga"] }
 inventory = "0.3"
 log = { workspace = true }
+meshopt = "0.7"
 manifold-core = { path = "../manifold-core" }
 manifold-foundation = { path = "../manifold-foundation" }
 manifold-gpu = { path = "../manifold-gpu" }

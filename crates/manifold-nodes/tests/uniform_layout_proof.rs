@@ -637,6 +637,9 @@ const NON_STANDALONE: &[&str] = &[
     // kept across frames; its TerrainUniforms reflected in
     // uniform_layout_extended.
     "node.terrain",
+    // Grid indices: one hand shader writing a grid's triangle indices once
+    // per size; its GridUniforms reflected in uniform_layout_extended.
+    "node.grid_indices",
     // CPU-only piece cutter: the piece is written to shared memory, no GPU kernel or uniforms.
     "node.mesh_fragment",
 ];

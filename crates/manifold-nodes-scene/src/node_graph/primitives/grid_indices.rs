@@ -4,6 +4,10 @@
 //! in the corner order `node.make_triangles` writes. A grid drawn through
 //! these shades each vertex once instead of once per triangle corner.
 //!
+//! Quads come in tiles of 8 × 8 (128 triangles, one render_scene patch),
+//! tiles row-major and quads row-major inside each, so the renderer can
+//! skip a tile it cannot see. Edge tiles are narrower or shorter.
+//!
 //! The indices are written once per grid size into a buffer the node owns.
 //! Every other frame declares the output unchanged, so its content version
 //! holds and a draw over it keeps its ray-tracing topology while the grid's
@@ -17,32 +21,7 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 
-const SHADER: &str = "
-struct GridUniforms {
-    cols: u32,
-    rows: u32,
-    count: u32,
-    pad: u32,
-}
-
-@group(0) @binding(0) var<uniform> u: GridUniforms;
-@group(0) @binding(1) var<storage, read_write> indices: array<u32>;
-
-// Quad (c, r) writes (c,r) (c,r+1) (c+1,r), then (c,r+1) (c+1,r+1) (c+1,r).
-@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let i = id.x;
-    if i >= u.count {
-        return;
-    }
-    let quad = i / 6u;
-    let corner = i % 6u;
-    let quads_x = u.cols - 1u;
-    let col = quad % quads_x + select(0u, 1u, corner == 2u || corner >= 4u);
-    let row = quad / quads_x + select(0u, 1u, corner == 1u || corner == 3u || corner == 4u);
-    indices[i] = row * u.cols + col;
-}
-";
+const SHADER: &str = include_str!("shaders/grid_indices.wgsl");
 const THREADS: u32 = 256;
 const DEFAULT_SIDE: u32 = 256;
 
@@ -208,11 +187,7 @@ impl Primitive for GridIndices {
 mod gpu_tests {
     use super::*;
 
-    /// A 3-column, 4-row grid: each quad's six indices in make_triangles'
-    /// corner order, and the first triangle on a flat grid faces +Y.
-    #[test]
-    fn three_by_four_grid_matches_make_triangles_order() {
-        let (cols, rows) = (3, 4);
+    fn indices(cols: u32, rows: u32) -> Vec<u32> {
         let count = index_count(cols, rows);
         let device = manifold_gpu::testkit::test_device();
         let pipeline = device.create_compute_pipeline(SHADER, "main", "grid-indices-test");
@@ -237,12 +212,22 @@ mod gpu_tests {
                     offset: 0,
                 },
             ],
-            [1, 1, 1],
+            [count.div_ceil(THREADS), 1, 1],
             "grid-indices-test",
         );
         enc.commit_and_wait().expect("GPU work completes");
         let ptr = out.mapped_ptr().expect("readback buffer");
-        let got = unsafe { std::slice::from_raw_parts(ptr as *const u32, count as usize) };
+        unsafe { std::slice::from_raw_parts(ptr as *const u32, count as usize) }.to_vec()
+    }
+
+    /// A 3-column, 4-row grid fits one tile: each quad's six indices in
+    /// make_triangles' corner order, and the first triangle on a flat grid
+    /// faces +Y. An 11 x 10 grid (10 x 9 quads, edge tiles 2 wide and 1 tall)
+    /// draws every quad once, its first 128 triangles the 8 x 8 corner tile.
+    #[test]
+    fn grid_triangles_come_in_tiles_in_make_triangles_order() {
+        let cols = 3;
+        let got = indices(cols, 4);
         #[rustfmt::skip]
         let want: [u32; 36] = [
             0, 3, 1, 3, 4, 1,   1, 4, 2, 4, 5, 2,
@@ -258,5 +243,17 @@ mod gpu_tests {
             u[1] * v[0] - u[0] * v[1] > 0.0,
             "counter-clockwise seen from +Y"
         );
+
+        let (cols, rows) = (11, 10);
+        let got = indices(cols, rows);
+        // Each quad by its first corner (c, r), as row * cols + col.
+        let mut quads: Vec<u32> = got.chunks(6).map(|q| q[0]).collect();
+        let first_tile: Vec<u32> = quads[..64].to_vec();
+        quads.sort_unstable();
+        let every: Vec<u32> = (0..rows - 1)
+            .flat_map(|r| (0..cols - 1).map(move |c| r * cols + c))
+            .collect();
+        assert_eq!(quads, every);
+        assert!(first_tile.iter().all(|&q| q % cols < 8 && q / cols < 8));
     }
 }
