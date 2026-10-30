@@ -186,7 +186,9 @@ pub static LIGHT_ROWS: [PropertyRow; 48] = [
     row("horizon_strength", ENV, Environment, setup()).when(gradient),
     row("azimuth_variation", ENV, Environment, setup()).when(gradient),
     softbox_row("emitter_count"),
-    softbox_row("emitter_intensity"),
+    // Studio strips for reflections; dim enough that the Sun stays the main
+    // light (`scene_compile::light::SUN_INTENSITY`).
+    softbox_row("emitter_intensity").default(1.5),
     softbox_row("emitter_elevation"),
     softbox_row("emitter_width"),
     softbox_row("sun_disc_intensity"),

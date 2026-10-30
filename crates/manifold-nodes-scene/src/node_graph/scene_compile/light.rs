@@ -14,6 +14,11 @@ use manifold_core::scene_doc::{EnvironmentSource, Item, ItemFields, LightType, S
 use super::builder::Builder;
 use crate::node_graph::scene_graph::float;
 
+/// A Sun's starting intensity. Under the default Softbox sky (fill 0.3,
+/// strips 1.5) it gives about 70% of the light on open ground from 45
+/// degrees up, so it is the scene's main light and its shadows read.
+const SUN_INTENSITY: f32 = 6.0;
+
 /// A new lamp: about 45 degrees up, white, casting shadows. `mode` is the
 /// light type (`node.light`'s Sun 0, Point 1, Spot 2).
 pub(crate) fn lamp_params(mode: u32) -> BTreeMap<String, SerializedParamValue> {
@@ -28,7 +33,10 @@ pub(crate) fn lamp_params(mode: u32) -> BTreeMap<String, SerializedParamValue> {
         ("color_r".to_owned(), float(1.0)),
         ("color_g".to_owned(), float(1.0)),
         ("color_b".to_owned(), float(1.0)),
-        ("intensity".to_owned(), float(1.0)),
+        (
+            "intensity".to_owned(),
+            float(if mode == 0 { SUN_INTENSITY } else { 1.0 }),
+        ),
         ("cast_shadows".to_owned(), float(1.0)),
     ])
 }

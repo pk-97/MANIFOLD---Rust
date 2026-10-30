@@ -56,6 +56,17 @@ counts it a second time.
   and the IBL uses the whole HDRI, as today.
 - "Aim Sun at HDRI" is deleted; the switch replaces it.
 
+## Later: a physical daylight sky
+
+New scenes start with the Sun at intensity 6 against a Softbox sky with
+strips at 1.5 (`scene_compile::light::SUN_INTENSITY`, the `emitter_intensity`
+row default). That gives about 70% of the light on open ground from the Sun:
+the right balance, tuned by hand, in relative units. The physical version
+does what realtime engines do: one Sun drives both its direct light and a
+sky from an atmosphere model, in real units (lux) with camera exposure in
+EV. The sun-to-sky balance and colour then follow the sun's height on their
+own. Not scheduled yet.
+
 ## Not in this design
 
 - Shadows from the rest of the sky stay with AO, or with traced GI.
