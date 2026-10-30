@@ -64,10 +64,11 @@ manifold_core::testkit_visible! {
 /// only the chunks the GPU-written ranges name.
 pub const MAX_ITERATIONS: u32 = 900;
 }
-/// The stop's relative tolerance on |r|∞ / |f|∞, FLIP Fluids'
-/// `_pressureSolveTolerance` unchanged
+/// The stop's relative tolerance on |r|∞ / |f|∞: near where an f32
+/// pressure's own residual floors, so further iterations would only lower
+/// the recursive residual the stop reads, not the pressure's error
 /// (`pressure_module_converges_on_the_engine_tolerance`).
-pub(crate) const TOLERANCE: f32 = 1e-9;
+pub(crate) const TOLERANCE: f32 = 1e-5;
 /// Red-black rounds before and after the coarse correction on every level
 /// but the coarsest.
 const SMOOTH_ROUNDS: usize = 2;

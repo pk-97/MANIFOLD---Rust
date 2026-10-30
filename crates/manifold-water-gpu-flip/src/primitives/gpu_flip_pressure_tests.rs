@@ -1801,7 +1801,7 @@ fn resting_pool_problem(m: usize) -> Problem {
 /// do not change that, so the bar of 26 catches a broken V-cycle, not a slow
 /// one. The counts print beside the dense ones. The stop reads the recursive
 /// residual, as the engine's PCG does, and f32 carries it below
-/// 1e-9 · |f|∞ on all of them.
+/// `TOLERANCE` · |f|∞ on all of them.
 #[test]
 fn pressure_module_converges_on_the_engine_tolerance() {
     let mut failures = Vec::new();
@@ -1856,9 +1856,9 @@ fn pressure_module_converges_on_the_engine_tolerance() {
 /// The warm start: a solve starts from the pooled pressure its buffer
 /// holds. A Dam Break problem solved again from its own converged pressure
 /// stops on the tolerance in fewer iterations than cold. It need not stop at
-/// the start: the stop reads the recursive residual down to 1e-9 of |f|∞,
-/// and the converged f32 pressure's own residual (printed) sits far above
-/// that. Each later saved frame from the frame before's converged pressure,
+/// the start: the stop reads the recursive residual down to `TOLERANCE` of
+/// |f|∞, and the converged f32 pressure's own residual (printed) may sit
+/// above that. Each later saved frame from the frame before's converged pressure,
 /// beside cold, printed; over the run warm takes at most cold's iterations.
 #[test]
 fn pressure_module_warm_start_stops_sooner() {
