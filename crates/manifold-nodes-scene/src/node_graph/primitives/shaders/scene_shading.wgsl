@@ -696,7 +696,29 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
 // fragment stays transparent and keys downstream. fog_density 0 → factor 0
 // → identity, so an unwired atmosphere is byte-identical to no atmosphere.
 fn apply_fog(rgb: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
-    return mix(rgb, u.fog_color.rgb, fog_amount(world_pos));
+    return mix(rgb, fog_colour(world_pos), fog_amount(world_pos));
+}
+
+// How blurred a sky the fog takes its colour from, as a roughness, and how
+// far above the horizon it looks (the sine of the angle), clear of the
+// ground below it.
+const SKY_FOG_ROUGHNESS: f32 = 0.4;
+const SKY_FOG_LIFT: f32 = 0.05;
+
+// The colour the fog fades `world_pos` toward: Fog Colour, mixed by Sky Fog
+// (`fog_color.w`) toward the sky's own light at the horizon the same way.
+// Air between the eye and far land glows with the light the horizon sky
+// shows, so under a daylight sky distance hazes blue away from the sun and
+// warm toward it, and the haze always matches the sky behind the land.
+fn fog_colour(world_pos: vec3<f32>) -> vec3<f32> {
+    if u.fog_color.w <= 0.0 {
+        return u.fog_color.rgb;
+    }
+    let d = world_pos - u.camera_pos.xyz;
+    let flat = normalize(vec3<f32>(d.x, 0.0, d.z) + vec3<f32>(1e-6, 0.0, 0.0));
+    let level = normalize(flat + vec3<f32>(0.0, SKY_FOG_LIFT, 0.0));
+    let sky = textureSampleLevel(prefiltered_specular, envmap_sampler, env_lookup_uv(level), SKY_FOG_ROUGHNESS * PREFILTER_MAX_MIP).rgb;
+    return mix(u.fog_color.rgb, sky, u.fog_color.w);
 }
 
 // The share of the fog colour between the camera and `world_pos`.

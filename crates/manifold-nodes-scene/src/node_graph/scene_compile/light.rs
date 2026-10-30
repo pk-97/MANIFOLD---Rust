@@ -12,7 +12,9 @@
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::SerializedParamValue;
-use manifold_core::scene_doc::{EnvironmentSource, Item, ItemFields, LightType, SkyStyle};
+use manifold_core::scene_doc::{
+    EnvironmentSource, Item, ItemFields, LightType, SceneDoc, SkyStyle,
+};
 
 use super::builder::Builder;
 use crate::node_graph::scene_graph::float;
@@ -83,6 +85,26 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) {
     if let Some(item) = environment {
         emit_environment(b, &item, sun);
     }
+}
+
+/// Whether the scene's environment (its first, as `emit_all` takes it) is
+/// the Daylight sky, whose fog takes the sky's own colour.
+pub(crate) fn daylight(doc: &SceneDoc) -> bool {
+    let mut first = None;
+    doc.walk(|item, _| {
+        if first.is_none()
+            && let ItemFields::Light(fields) = &item.fields
+            && let LightType::Environment { source } = &fields.light
+        {
+            first = Some(matches!(
+                source,
+                EnvironmentSource::Sky {
+                    style: SkyStyle::Daylight
+                }
+            ));
+        }
+    });
+    first == Some(true)
 }
 
 fn emit_environment(b: &mut Builder<'_>, item: &Item, sun: Option<u32>) {

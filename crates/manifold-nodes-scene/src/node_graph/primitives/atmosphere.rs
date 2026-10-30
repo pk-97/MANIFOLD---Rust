@@ -28,7 +28,7 @@ const SHAFT_QUALITIES: &[&str] = &["Low", "Med", "High"];
 manifold_node_engine::primitive! {
     name: AtmosphereNode,
     type_id: "node.atmosphere",
-    purpose: "Scene-wide atmosphere producer: exponential depth fog (colour + density + height falloff) plus an ambient/sky tint, emitted as a single Atmosphere struct consumed by render_scene's optional `atmosphere` input. Fog fades distant geometry toward fog_color by 1 - exp(-density·distance); height_falloff concentrates it near the ground (y=0) for a haze look; ambient_tint multiplies each object's ambient term. Every param is port-shadowed by a same-named optional scalar input, so fog density on a fader or beat_ramp is a live depth-mood knob. Unwired into render_scene = fog off (density 0), byte-identical to no atmosphere.",
+    purpose: "Scene-wide atmosphere producer: exponential depth fog (colour + density + height falloff) plus an ambient/sky tint, emitted as a single Atmosphere struct consumed by render_scene's optional `atmosphere` input. Fog fades distant geometry toward fog_color by 1 - exp(-density·distance), or with sky_fog toward the sky's own light at the horizon along each view, so haze matches the sky; height_falloff concentrates it near the ground (y=0) for a haze look; ambient_tint multiplies each object's ambient term. Every param is port-shadowed by a same-named optional scalar input, so fog density on a fader or beat_ramp is a live depth-mood knob. Unwired into render_scene = fog off (density 0), byte-identical to no atmosphere.",
     inputs: {
         fog_color_r: ScalarF32 optional,
         fog_color_g: ScalarF32 optional,
@@ -66,6 +66,14 @@ manifold_node_engine::primitive! {
             label: "Fog Color B",
             ty: ParamType::Float,
             default: ParamValue::Float(0.65),
+            range: Some((0.0, 1.0)),
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("sky_fog"),
+            label: "Sky Fog",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
             range: Some((0.0, 1.0)),
             enum_values: &[],
         },
@@ -151,7 +159,7 @@ impl Primitive for AtmosphereNode {
             ctx.scalar_or_param("fog_color_r", 0.5),
             ctx.scalar_or_param("fog_color_g", 0.55),
             ctx.scalar_or_param("fog_color_b", 0.65),
-            1.0,
+            ctx.scalar_or_param("sky_fog", 0.0).clamp(0.0, 1.0),
         ];
         let ambient_tint = [
             ctx.scalar_or_param("ambient_tint_r", 1.0),
@@ -278,11 +286,12 @@ mod tests {
             ("fog_color_r", 0.1),
             ("fog_color_g", 0.2),
             ("fog_color_b", 0.3),
+            ("sky_fog", 0.75),
             ("fog_density", 0.25),
             ("height_falloff", 0.5),
             ("ambient_tint_r", 1.5),
         ]);
-        assert_eq!(a.fog_color, [0.1, 0.2, 0.3, 1.0]);
+        assert_eq!(a.fog_color, [0.1, 0.2, 0.3, 0.75]);
         assert_eq!(a.fog_density, 0.25);
         assert_eq!(a.height_falloff, 0.5);
         assert_eq!(a.ambient_tint, [1.5, 1.0, 1.0, 1.0]);

@@ -48,6 +48,14 @@ pub(crate) fn emit(b: &mut Builder<'_>) {
     if *fog {
         let atmosphere = b.add(owner, "fog", "node.atmosphere");
         b.wire(atmosphere, "atmosphere", render, "atmosphere");
+        // Under the Daylight sky, haze is the sky's own light.
+        if super::light::daylight(b.doc) {
+            b.set(
+                atmosphere,
+                "sky_fog",
+                crate::node_graph::scene_graph::float(1.0),
+            );
+        }
     }
     let mode = b.add(owner, "render_mode", "node.render_mode");
     b.wire(mode, "render_mode", render, "render_mode_in");

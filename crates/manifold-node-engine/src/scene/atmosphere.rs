@@ -21,8 +21,9 @@
 /// wire value (`PortType::Atmosphere`). `fog_density == 0` means no fog.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Atmosphere {
-    /// Fog colour (rgb; a reserved, currently unused). The colour distant
-    /// geometry fades toward.
+    /// Fog colour (rgb), the colour distant geometry fades toward; `a` is
+    /// Sky Fog, how far that colour moves to the sky's own light at the
+    /// horizon along each view (0 none, 1 all).
     pub fog_color: [f32; 4],
     /// Exponential depth-fog density. `0` = off (unwired default). Fog factor
     /// at distance `d` is `1 - exp(-density * d)`.
@@ -53,7 +54,7 @@ impl Default for Atmosphere {
     /// input at all.
     fn default() -> Self {
         Self {
-            fog_color: [0.5, 0.55, 0.65, 1.0],
+            fog_color: [0.5, 0.55, 0.65, 0.0],
             fog_density: 0.0,
             height_falloff: 0.0,
             ambient_tint: [1.0, 1.0, 1.0, 1.0],
