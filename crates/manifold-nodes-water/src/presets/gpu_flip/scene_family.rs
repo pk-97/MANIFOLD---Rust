@@ -60,15 +60,20 @@ fn grains_draw(b: &mut Builder) {
         json!({"radius": float(1.0), "shape": {"type": "Enum", "value": OCTAHEDRON}}),
     );
     let object = b.node(SAND_GRAINS_OBJECT, "node.scene_object", json!({}));
-    let [frame, particles, material, visible] = [
+    let [frame, particles, material, visible, surface] = [
         "frame",
         "particle_push_out",
         "water_material",
         PHYSICS_VIEW_SWITCHES[4],
+        "surface",
     ]
     .map(|name| b.id(name));
+    // The surface builds from the packed points alone: loose ones are grains.
+    b.wires
+        .retain(|w| !(w.to_node == surface as u32 && w.to_port == "particles"));
     for (from, to) in [
         ((particles, "out"), (grains, "particles")),
+        ((grains, "bulk"), (surface, "particles")),
         ((frame, "count_b"), (grains, "live_count")),
         ((grains, "copies"), (object, "instances")),
         ((grains, "count"), (object, "instance_count")),

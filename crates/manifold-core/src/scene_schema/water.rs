@@ -213,9 +213,15 @@ fn bounded(fields: &ItemFields) -> bool {
     domain(fields).is_some_and(|(bounds, _)| bounds)
 }
 
-/// The item draws the surface build: a surface that is not carried.
+/// The item draws the surface build: a Water drawn as a surface, or a Sand
+/// that is not carried (its grains draw only its loose part, beside the
+/// surface).
 pub(super) fn surface(fields: &ItemFields) -> bool {
-    domain(fields).is_some_and(|(_, draw)| draw == WaterDraw::Surface) && !carried(fields)
+    match fields {
+        ItemFields::Water(w) => w.draw == WaterDraw::Surface,
+        ItemFields::Sand(_) => !carried(fields),
+        _ => false,
+    }
 }
 
 // The rows a Water and a Sand share: the box, its walls, the Cell Size, the

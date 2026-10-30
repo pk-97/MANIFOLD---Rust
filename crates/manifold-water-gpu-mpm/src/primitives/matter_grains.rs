@@ -31,7 +31,8 @@ struct GrainParams {
     spread: f32,
     points: u32,
     entries: u32,
-    _pad0: u32,
+    // 1: write `bulk`.
+    write_bulk: u32,
     _pad1: u32,
 }
 
@@ -43,7 +44,7 @@ pub struct GrainPipelines {
 manifold_node_engine::primitive! {
     name: MatterGrains,
     type_id: "node.matter_grains",
-    purpose: "Draw a matter frame as sand grains at its surface: each point carries up to Grains copy transforms, grain j at a hashed offset within Spread times the point's radius, turned by hashed angles and its rolling, Grain Size metres across (varied 0.7 to 1.3), all keyed on the point's id so a grain stays with its point. A surface point draws ceil(2 r² / Grain Size²) grains, r its radius; every point gets that many slots, K, from the rest radius RADIUS_SCALE · cell_size / cbrt(points_per_cell), at most MAX_GRAINS (1024) and at most what the slots hold (GRAIN_BUDGET, 4M, over the points), the grains growing past that cap rather than leaving gaps. So the grains cost follows Grain Size and the surface's area, not the Cell Size. Occupancy cells are two point spacings: a point with an empty cell within two steps along an axis is near the surface, one with an empty cell three steps away draws one filler grain the point's size, and a deeper point only holes. Points past live_count, with radius 0 or with no id are holes. count publishes live_count × K, the instance count to draw.",
+    purpose: "Draw a matter frame as sand grains at its surface: each point carries up to Grains copy transforms, grain j at a hashed offset within Spread times the point's radius, turned by hashed angles and its rolling, Grain Size metres across (varied 0.7 to 1.3), all keyed on the point's id so a grain stays with its point. A surface point draws ceil(2 r² / Grain Size²) grains, r its radius; every point gets that many slots, K, from the rest radius RADIUS_SCALE · cell_size / cbrt(points_per_cell), at most MAX_GRAINS (1024) and at most what the slots hold (GRAIN_BUDGET, 4M, over the points), the grains growing past that cap rather than leaving gaps. So the grains cost follows Grain Size and the surface's area, not the Cell Size. Occupancy cells are two point spacings: a point with an empty cell within two steps along an axis is near the surface, one with an empty cell three steps away draws one filler grain the point's size, and a deeper point only holes. Points past live_count, with radius 0 or with no id are holes. count publishes live_count × K, the instance count to draw. bulk is the particles with the sparsest points' radius shrunk to 0 (6 points in the block, full at 18), so a surface built from it leaves spray and lone grains to the grains while a sheet one point thick keeps its surface under its grains.",
     inputs: {
         particles: Array(FluidParticle) required,
         live_count: ScalarF32 optional,
@@ -53,6 +54,7 @@ manifold_node_engine::primitive! {
     outputs: {
         copies: Array(InstanceTransform),
         count: ScalarF32,
+        bulk: Array(FluidParticle),
     },
     params: [
         ParamDef { name: Cow::Borrowed("live_count"), label: "Live Count", ty: ParamType::Float, default: ParamValue::Float(-1.0), range: Some((-1.0, 1.0e9)), enum_values: &[] },
@@ -62,7 +64,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("spread"), label: "Spread", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 2.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire particles and live_count from node.matter_frame (or the display's pushed-out particles and the frame's count_b); wire cell_size and points_per_cell from node.matter_domain; wire copies into a scene object's instances and count into its instance_count, with a small grain mesh as the vertices. A point's grains keep their slots, so the previous frame's copies line up for motion; the draw skips the holes. Output capacity is the particles' capacity times MAX_GRAINS, at most GRAIN_BUDGET slots.",
+    composition_notes: "Wire particles and live_count from node.matter_frame (or the display's pushed-out particles and the frame's count_b); wire cell_size and points_per_cell from node.matter_domain; wire copies into a scene object's instances and count into its instance_count, with a small grain mesh as the vertices; wire bulk into the surface's particles in place of the particles themselves. A point's grains keep their slots, so the previous frame's copies line up for motion; the draw skips the holes. Output capacity is the particles' capacity times MAX_GRAINS, at most GRAIN_BUDGET slots.",
     examples: [],
     picker: { label: "Matter Grains", category: Atom },
     summary: "Turns each sand point at the surface into a handful of small turned grains to draw.",
@@ -97,15 +99,19 @@ impl Primitive for MatterGrains {
         _params: &ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        (port_name == "copies").then(|| {
-            input_capacities
-                .iter()
-                .find(|(port, _)| *port == "particles")
-                .map_or(1, |&(_, n)| {
-                    let n = n.max(1);
-                    n.saturating_mul(MAX_GRAINS).min(GRAIN_BUDGET.max(n))
-                })
-        })
+        let particles = input_capacities
+            .iter()
+            .find(|(port, _)| *port == "particles")
+            .map_or(1, |&(_, n)| n.max(1));
+        match port_name {
+            "copies" => Some(
+                particles
+                    .saturating_mul(MAX_GRAINS)
+                    .min(GRAIN_BUDGET.max(particles)),
+            ),
+            "bulk" => Some(particles),
+            _ => None,
+        }
     }
 
     fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
@@ -137,6 +143,10 @@ impl Primitive for MatterGrains {
             return;
         };
         let points = (particles.size / std::mem::size_of::<FluidParticle>() as u64) as u32;
+        let bulk = ctx
+            .outputs
+            .array("bulk")
+            .filter(|bulk| bulk.size >= particles.size);
         let live = ctx.scalar_or_param("live_count", -1.0);
         let slots = (copies.size / std::mem::size_of::<InstanceTransform>() as u64) as u32;
         let live_points = if live >= 0.0 {
@@ -181,7 +191,7 @@ impl Primitive for MatterGrains {
             spread,
             points: live_points,
             entries,
-            _pad0: 0,
+            write_bulk: u32::from(bulk.is_some()),
             _pad1: 0,
         };
         let bindings = [
@@ -202,6 +212,12 @@ impl Primitive for MatterGrains {
             GpuBinding::Buffer {
                 binding: 3,
                 buffer: table,
+                offset: 0,
+            },
+            // Unwritten (write_bulk 0) when nothing reads bulk.
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: bulk.unwrap_or(particles),
                 offset: 0,
             },
         ];

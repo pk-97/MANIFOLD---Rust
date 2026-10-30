@@ -218,7 +218,7 @@ pub static ADD_ENTRIES: [AddEntry; 68] = [
         "Snow",
         ItemKind::Sand,
         "Snow",
-        || matter(Matter::Snow, WaterDraw::Surface),
+        || matter(Matter::Snow, WaterDraw::Particles),
     ),
     entry(
         "matter.clay",
@@ -630,22 +630,27 @@ pub const FORCE_STARTS: [(&str, &[(&str, f32)]); 3] = [
     ),
 ];
 
-/// Each Matter's surface: built at half the cell for edges a few
-/// centimetres sharp, and smoothed as the material is. Snow keeps its
-/// crumbs and mud its lumps; goo settles glassy smooth. Jelly and clay carry
-/// their fill's own mesh and build no surface.
+/// Each Matter's surface, built at the simulation's cell (bumps smaller than
+/// a cell are single points jittering, which boil) and smoothed as the
+/// material is. Snow's loose snow breaks off as crumbs a few centimetres
+/// across; mud keeps its lumps and goo settles glassy smooth. Jelly and clay
+/// carry their fill's own mesh and build no surface.
 pub const MATTER_STARTS: [(&str, &[(&str, f32)]); 3] = [
     (
         "matter.snow",
-        &[("surface_detail", 1.0), ("surface_smoothness", 0.5)],
+        &[
+            ("surface_detail", 0.0),
+            ("surface_smoothness", 1.0),
+            ("grain_size", 0.03),
+        ],
     ),
     (
         "matter.mud",
-        &[("surface_detail", 1.0), ("surface_smoothness", 1.0)],
+        &[("surface_detail", 0.0), ("surface_smoothness", 1.0)],
     ),
     (
         "matter.goo",
-        &[("surface_detail", 1.0), ("surface_smoothness", 2.0)],
+        &[("surface_detail", 0.0), ("surface_smoothness", 2.0)],
     ),
 ];
 

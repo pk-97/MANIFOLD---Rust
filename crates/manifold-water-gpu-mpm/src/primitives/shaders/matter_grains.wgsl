@@ -22,6 +22,10 @@
 // turns it about z, moving z about x, falling about both, so still sand stays
 // still and moving sand tumbles at its rolling rate. A point past the live
 // count, with radius 0 or with no id draws holes.
+// bulk (write_bulk 1) is the particles with only the sparsest points shrunk
+// away, from BULK_KEPT points in the block down to none at BULK_GONE: spray
+// and lone grains leave the surface, while a sheet one point thick keeps it
+// under its grains, so thin flows do not tear into holes.
 
 struct GrainParams {
     // Below 0: every point.
@@ -34,7 +38,8 @@ struct GrainParams {
     points: u32,
     // Table pairs, a power of two.
     entries: u32,
-    _pad0: u32,
+    // 1: write bulk.
+    write_bulk: u32,
     _pad1: u32,
 }
 
@@ -54,6 +59,7 @@ struct Copy {
 @group(0) @binding(2) var<storage, read_write> copies: array<Copy>;
 // Pair e is (key, count) at words 2e and 2e + 1; key 0 is an empty pair.
 @group(0) @binding(3) var<storage, read_write> table: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read_write> bulk: array<FluidParticle>;
 
 // A point's radius over its spacing (matter.rs RADIUS_SCALE): an occupancy
 // cell of two spacings is radius · 2 / RADIUS_SCALE on a side.
@@ -64,6 +70,8 @@ const RADIUS_SCALE: f32 = 0.6203505;
 // a sixth and a lone grain one.
 const LOOSE_FULL: f32 = 12.0;
 const LOOSE: f32 = 36.0;
+const BULK_GONE: f32 = 6.0;
+const BULK_KEPT: f32 = 18.0;
 // Probes before a lookup or insert gives up: a full table reads as empty
 // cells, which draws grains (never a hole where loose sand flies).
 const MAX_PROBES: u32 = 64u;
@@ -159,6 +167,9 @@ fn emit_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let k = max(params.grains, 1u);
     let hole = Copy(vec4<f32>(0.0), vec4<f32>(0.0));
     if !mg_live(p) {
+        if params.write_bulk == 1u {
+            bulk[p] = particles[p];
+        }
         for (var j = 0u; j < k; j = j + 1u) {
             copies[p * k + j] = hole;
         }
@@ -175,6 +186,11 @@ fn emit_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         block = block + mg_count(c + vec3<i32>(n % 3 - 1, (n / 3) % 3 - 1, n / 9 - 1));
     }
     let fade = 1.0 - smoothstep(LOOSE_FULL, LOOSE, f32(block));
+    if params.write_bulk == 1u {
+        var kept = q;
+        kept.position_radius.w = radius * smoothstep(BULK_GONE, BULK_KEPT, f32(block));
+        bulk[p] = kept;
+    }
     let drawn = select(0u, cover, fade > 0.0);
     for (var j = drawn; j < k; j = j + 1u) {
         copies[p * k + j] = hole;

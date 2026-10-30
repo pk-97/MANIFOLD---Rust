@@ -219,8 +219,9 @@ const MATTER_FIELD: FieldRow = FieldRow {
             .position(|choice| choice.key == key)
             .ok_or_else(|| wrong_value("matter", value))?;
         s.matter = Matter::ALL[at];
-        // Sand draws as grains, the rest as their surface.
-        s.draw = if s.matter == Matter::Sand {
+        // Sand and snow draw their loose part as grains and crumbs, the rest
+        // as their surface.
+        s.draw = if matches!(s.matter, Matter::Sand | Matter::Snow) {
             WaterDraw::Particles
         } else {
             WaterDraw::Surface
@@ -253,9 +254,10 @@ pub fn sand_look(matter: Matter) -> Vec<(String, f32)> {
 /// What a Sand of `matter` looks like over the Sand template's look, each
 /// from what the material is made of:
 /// - Snow: ice grains (IOR 1.31) a fraction of a millimetre across at about
-///   0.9 albedo, glinting. Light runs millimetres to a centimetre inside,
-///   blue the furthest, so creases and thin edges glow faintly blue; a
-///   little light stays at the surface for its crust.
+///   0.9 albedo, matte as a whole (rough) with single grains glinting.
+///   Light runs millimetres to a centimetre inside, blue the furthest, so
+///   creases and thin edges glow faintly blue; a little light stays at the
+///   surface for its crust.
 /// - Clay: terracotta, satin, its light spreading a few millimetres and red
 ///   the furthest.
 /// - Mud: dark wet soil under a film of water (a clear coat at water's
@@ -270,7 +272,7 @@ fn matter_look(matter: Matter) -> &'static [(&'static str, f32)] {
             ("color_r", 0.9),
             ("color_g", 0.92),
             ("color_b", 0.95),
-            ("roughness", 0.35),
+            ("roughness", 0.75),
             ("specular", 0.5),
             ("ior", 1.31),
             ("grain", 0.4),
