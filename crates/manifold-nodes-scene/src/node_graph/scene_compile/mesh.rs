@@ -204,7 +204,7 @@ fn emit_part_in(
             );
         }
         let use_indexed = morph.is_none()
-            && !b.mesh_modified.contains(&item.id)
+            && !b.flat_meshes.contains(&item.id)
             && unique_vertex_count > 0
             && unique_vertex_count < vertex_count;
         if use_indexed {

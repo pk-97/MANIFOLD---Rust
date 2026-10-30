@@ -94,8 +94,8 @@ With the Vulkan ray tracing port: per-patch acceleration structures and a partit
 
 ## Findings (2026-10-30, after P3)
 
-- Imported parts with any mesh modifier, morph or fragment cut are flattened to non-indexed triangles at compile (`scene_compile/mesh.rs` `use_indexed`): three vertices per triangle, the vertex waste P1 removed from Terrain, and outside every patch phase. Peter's audio-reactive scans are this case.
-- MeshAudio (full quality, RT on) spends 83 ms in RT AO+GI and 56 ms in RT reflections against 13 ms of raster a frame. In Peter's scan scenes the ray tracer, not triangle count, is the cost.
+- Imported parts stay indexed under the per-vertex modifier types (`ModifierTypeEntry::per_vertex`: Bend, Twist, Taper, Rotate, Morph, Boil, Ripple, Melt, Slice, Voxelize, Fold, Wave Shear, Shake, Spatial Echoes, Elastic Sculpture, Math View). Types whose stages read whole triangles or hash the vertex index (Inflate, Displace by Texture, Surface Waves, Facet Normals, Shatter Mesh, Cut Out Box, Glitch Jitter, the fragment types), morphs and fragment cuts still flatten them (`scene_compile/mesh.rs` `use_indexed`).
+- In an RT scan scene the ray tracer, not triangle count, was the cost (83 ms AO+GI, 56 ms reflections, 13 ms raster); RT reuse waits for the 5080.
 - The b1 terrain's 50 ms main pass is fragment work (the covers' material shading), not geometry; patch culling cannot reach it with the whole terrain in view.
 
 ## Open

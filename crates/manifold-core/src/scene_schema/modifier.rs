@@ -219,6 +219,11 @@ pub struct ModifierTypeEntry {
     /// It bends surfaces smoothly, so a built-in shape it reaches is split
     /// fine enough to curve. Cuts, snaps and breaks keep the shape as it is.
     pub smooth_detail: bool,
+    /// Its stages move each vertex from that vertex alone, so a mesh it
+    /// reaches keeps its shared corners and draws indexed. A type whose
+    /// stages read whole triangles, or hash the vertex index, needs every
+    /// triangle's corners apart.
+    pub per_vertex: bool,
     pub rows: &'static [PropertyRow],
 }
 
@@ -237,6 +242,7 @@ pub(super) const fn entry(
         recipe,
         deforms,
         smooth_detail: false,
+        per_vertex: false,
         rows,
     }
 }
@@ -246,6 +252,14 @@ impl ModifierTypeEntry {
     pub(super) const fn smooth(self) -> Self {
         Self {
             smooth_detail: true,
+            ..self
+        }
+    }
+
+    /// Marks a type whose stages move each vertex on its own.
+    pub(super) const fn per_vertex(self) -> Self {
+        Self {
+            per_vertex: true,
             ..self
         }
     }
@@ -285,7 +299,7 @@ const CORE_TYPES: [ModifierTypeEntry; 7] = [
         "SpatialEchoes",
         false,
         &SPATIAL_ECHOES_ROWS,
-    ),
+    ).per_vertex(),
     entry(
         ModifierType::ElasticSculpture,
         "elastic_sculpture",
@@ -294,7 +308,7 @@ const CORE_TYPES: [ModifierTypeEntry; 7] = [
         true,
         &ELASTIC_SCULPTURE_ROWS,
     )
-    .smooth(),
+    .smooth().per_vertex(),
     entry(
         ModifierType::VortexFragments,
         "vortex_fragments",
@@ -330,7 +344,7 @@ const SCENE_WIDE_TYPES: [ModifierTypeEntry; 3] = [
         "MathView",
         false,
         &super::scene_wide::MATH_VIEW_ROWS,
-    ),
+    ).per_vertex(),
     entry(
         ModifierType::SceneMirror,
         "scene_mirror",

@@ -98,9 +98,11 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> Result<(), String> {
     Ok(())
 }
 
-/// The Objects a smoothly bending card that is on reaches, directly, through a
-/// Group target, or as the whole scene.
-pub(crate) fn mesh_modified_items(doc: &SceneDoc) -> BTreeSet<ItemId> {
+/// The Objects a card that is on reaches, directly, through a Group target,
+/// or as the whole scene, whose stages need each triangle's corners apart
+/// (they read whole triangles or hash the vertex index): their imported
+/// meshes draw as flat triangle lists.
+pub(crate) fn flat_mesh_items(doc: &SceneDoc) -> BTreeSet<ItemId> {
     let cards: Vec<&ModifierTargets> = doc
         .items
         .iter()
@@ -108,6 +110,7 @@ pub(crate) fn mesh_modified_items(doc: &SceneDoc) -> BTreeSet<ItemId> {
             ItemFields::Modifier(card)
                 if card.on
                     && !acts_on_copies(card.modifier)
+                    && !modifier_type(card.modifier).per_vertex
                     && !matches!(
                         card.modifier,
                         ModifierType::SceneLoop | ModifierType::SceneMirror
