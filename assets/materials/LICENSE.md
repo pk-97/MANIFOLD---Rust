@@ -1,17 +1,18 @@
 # Starter materials: licence
 
 Every material in this folder comes from [ambientCG](https://ambientcg.com)
-and is released under the
+or [Poly Haven](https://polyhaven.com) and is released under the
 [Creative Commons CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
 licence. That covers the pictures, the `.mtlx` files and the preview renders.
 
 What CC0 allows, from ambientCG's licence page
-(<https://docs.ambientcg.com/license/>):
+(<https://docs.ambientcg.com/license/>) and Poly Haven's
+(<https://polyhaven.com/license>):
 
 - Copy, change, share and use the files for any purpose, commercial
   included, without asking.
 - Ship the raw files inside an app, as MANIFOLD does here.
-- No credit is required. ambientCG asks for it as a courtesy, so we give it
+- No credit is required. Both ask for it as a courtesy, so we give it
   below.
 
 Nothing here limits how MANIFOLD, its shows or its renders are used.
@@ -55,6 +56,23 @@ Creative Commons CC0 1.0 Universal License.
 | Marble012 | 1.5 *est.* | broken | <https://ambientcg.com/a/Marble012> |
 | Plaster007 | 2.0 *est.* | broken | <https://ambientcg.com/a/Plaster007> |
 | Snow010A | 2.0 *est.* | broken | <https://ambientcg.com/a/Snow010A> |
+
+The Poly Haven materials are drone scans of ground tens of metres across,
+for terrain seen from the air. From each 4K download we kept the colour,
+OpenGL normal, roughness and displacement pictures as JPG and Poly Haven's
+thumbnail as the preview, and wrote the `.mtlx` in the same shape as the
+ambientCG ones: a `hextiledimage` colour picture sized to the scan's own
+width, and a displacement depth in metres (our estimate, *est.*).
+
+Created using the following materials from polyhaven.com, licensed under
+the Creative Commons CC0 1.0 Universal License.
+
+| Material | Size (m) | Repeats | Depth (m) | Source |
+|---|---|---|---|---|
+| rocky_terrain_02 | 90 | broken | 1.0 *est.* | <https://polyhaven.com/a/rocky_terrain_02> |
+| aerial_rocks_04 | 80 | broken | 2.0 *est.* | <https://polyhaven.com/a/aerial_rocks_04> |
+| snow_field_aerial | 80 | broken | 0.5 *est.* | <https://polyhaven.com/a/snow_field_aerial> |
+| marble_cliff_05 | 20 | broken | 0.8 *est.* | <https://polyhaven.com/a/marble_cliff_05> |
 
 ## Adding more
 
