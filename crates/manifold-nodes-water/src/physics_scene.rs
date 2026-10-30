@@ -123,10 +123,13 @@ impl NodePairBehavior for SharedSolidsPair {
     }
 
     fn after_first(&self, owner: &dyn EffectNode, water: &mut dyn EffectNode) {
-        let owner = shares_solids(owner).and_then(SharesSolids::rigid_owner);
+        let lead = shares_solids(owner);
         if let Some(water) = shares_solids_mut(water) {
             let pushes = water.pushes_bodies();
-            water.shared_solids_mut().copy_from(owner, pushes);
+            let solids = water.shared_solids_mut();
+            solids.copy_from(lead.and_then(SharesSolids::rigid_owner), pushes);
+            // The lead has advanced the World's clock: the taker runs its ticks.
+            solids.follow_clock(lead.and_then(SharesSolids::world_clock));
         }
     }
 }
@@ -159,6 +162,8 @@ impl NodePairBehavior for WorldSolidsPair {
             }
             None => solids.copy_from(None, false),
         }
+        // With no liquid, the free-running World leads the clock.
+        solids.follow_clock(world.and_then(|world| world.simulation.world_clock()));
     }
 }
 

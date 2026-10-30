@@ -42,7 +42,7 @@ use manifold_water_liquid::bodies::{
     BodiesStatus, COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBodies, LiquidBody, LiquidShape,
 };
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
-use manifold_water_liquid::coupling::{LiquidRigidOwner, SharedSolids, SharesSolids};
+use manifold_water_liquid::coupling::{Followed, LiquidRigidOwner, SharedSolids, SharesSolids};
 
 /// Most cells along one axis of the box.
 const MAX_AXIS_CELLS: u32 = 512;
@@ -1162,14 +1162,25 @@ impl GasVolume {
         // The air itself: no still air of its own (Air Resistance is the
         // air), wind felt at the full drag rate.
         let field = felt_field(ctx, "Gas Volume")?;
-        let frame = self.clock.advance(
-            ctx.played(),
-            ctx.sim_step.interval.0,
-            settings.speed,
-            ctx.scalar_or_param("reset", 0.0),
-            false,
-            ctx.sim_step.offline(),
-        );
+        // The gas runs the ticks of the World's lead; alone, it advances its
+        // own clock.
+        let frame = match self.solids.followed_frame(&mut self.clock, false) {
+            Followed::Own => self.clock.advance(
+                ctx.played(),
+                ctx.sim_step.interval.0,
+                settings.speed,
+                ctx.scalar_or_param("reset", 0.0),
+                false,
+                ctx.sim_step.offline(),
+            ),
+            Followed::Hold => {
+                // The lead advanced nothing this frame, so no tick runs.
+                self.solids.used();
+                self.steps.clear();
+                return Ok(false);
+            }
+            Followed::Frame(frame) => frame,
+        };
         // Hits follow the clock before anything else can fail, so a refused
         // frame never leaves them a frame behind it.
         self.hits.observe_frame(ctx.played(), &frame)?;
@@ -1839,6 +1850,7 @@ impl Primitive for GasVolume {
 
     fn clear_state(&mut self) {
         self.clock.restart();
+        self.solids.reseed();
     }
 
     fn acceleration_input(&self) -> Option<&'static str> {

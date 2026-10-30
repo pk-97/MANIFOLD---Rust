@@ -645,6 +645,8 @@ impl<'a> SceneRef<'a> {
 
 pub struct RigidSimulation {
     clock: manifold_physics::clock::SimulationClock,
+    /// This frame's plan when the World ran free and advanced its clock.
+    world_frame: Option<manifold_physics::clock::ClockFrame>,
     world: Option<PhysicsWorld>,
     // One entry per body port, sized when the world is built with a new
     // body count.
@@ -770,6 +772,7 @@ impl Default for RigidSimulation {
             impulse_discarded_beyond: 0,
             accepted_observation: None,
             clock: Default::default(),
+            world_frame: None,
             held: HeldClock::default(),
             dropped_time: Default::default(),
             held_non_finite: false,
@@ -932,6 +935,17 @@ impl RigidSimulation {
         )
     }
 
+    /// The World's clock and this frame's plan, when it ran free and advanced
+    /// this frame: a gas with no liquid to lead it follows the World.
+    pub fn world_clock(
+        &self,
+    ) -> Option<(
+        &manifold_physics::clock::SimulationClock,
+        &manifold_physics::clock::ClockFrame,
+    )> {
+        self.world_frame.as_ref().map(|frame| (&self.clock, frame))
+    }
+
     /// Size every per-body and per-group vector for a world of `bodies`
     /// bodies and `groups` copy groups, once, when the world is built with
     /// new counts.
@@ -971,6 +985,7 @@ impl RigidSimulation {
         coupling: &mut C,
     ) -> Result<(), String> {
         self.accepted_observation = None;
+        self.world_frame = None;
         self.follow_ports(scene.bodies, scene.groups);
         self.admission.admit(scene.bodies, scene.groups);
         let (bodies, groups) = self.admission.take_admitted();
@@ -1200,6 +1215,7 @@ impl RigidSimulation {
         } else {
             None
         };
+        self.world_frame.clone_from(&clock_frame);
         let authored_time = if self.advancement_policy.is_worker() {
             now.0
         } else {

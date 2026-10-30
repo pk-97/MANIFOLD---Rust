@@ -59,8 +59,8 @@ use manifold_water_liquid::bounds::{
 };
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{
-    DomainWalls, LiquidRigidOwner, ObservedPush, PendingTick, REACTION_FLOATS, SharedSolids,
-    SharesSolids, decode_reaction, takes_reaction,
+    DomainWalls, Followed, LiquidRigidOwner, ObservedPush, PendingTick, REACTION_FLOATS,
+    SharedSolids, SharesSolids, decode_reaction, takes_reaction,
 };
 use manifold_water_liquid::fluid_role::{
     FluidRole, FluidRoleKind, InitialFills, PreparedFluidGeometry, take_initial_fills,
@@ -789,6 +789,7 @@ impl Primitive for GpuFlipDomain {
     fn clear_state(&mut self) {
         self.coupled.reset();
         self.clock.restart();
+        self.observed.reseed();
     }
 
     // While an input is pending the liquid holds its last good frame.
@@ -967,6 +968,17 @@ impl SharesSolids for GpuFlipDomain {
 
     fn shared_solids_mut(&mut self) -> &mut SharedSolids {
         &mut self.observed
+    }
+
+    fn world_clock(
+        &self,
+    ) -> Option<(
+        &manifold_physics::clock::SimulationClock,
+        &manifold_physics::clock::ClockFrame,
+    )> {
+        self.scheduled_frame
+            .as_ref()
+            .map(|frame| (&self.clock, frame))
     }
 
     fn pushes_bodies(&self) -> bool {
@@ -1326,14 +1338,20 @@ impl GpuFlipDomain {
         self.fill_shapes = fill_shapes;
         self.layout = Some(geometry.layout);
         self.fill_sites = (geometry.pool_sites, geometry.box_sites);
-        let frame = self.clock.advance(
-            ctx.played(),
-            ctx.sim_step.interval.0,
-            speed,
-            ctx.scalar_or_param("reset", 0.0),
-            restart,
-            offline,
-        );
+        // A taker runs the ticks of the World's lead; the lead, or a liquid
+        // alone, advances the clock.
+        let frame = match self.observed.followed_frame(&mut self.clock, restart) {
+            Followed::Own => self.clock.advance(
+                ctx.played(),
+                ctx.sim_step.interval.0,
+                speed,
+                ctx.scalar_or_param("reset", 0.0),
+                restart,
+                offline,
+            ),
+            Followed::Hold => return Ok(None),
+            Followed::Frame(frame) => frame,
+        };
         self.scheduled_frame = Some(frame.clone());
         if frame.numerical_error {
             ctx.sim_metrics.record_simulation(0.0, 0.0, false, true);

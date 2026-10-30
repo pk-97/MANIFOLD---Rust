@@ -55,8 +55,8 @@ use manifold_water_liquid::bounds::{
 };
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{
-    DomainWalls, LiquidRigidOwner, ObservedPush, PendingTick, SharedSolids, SharesSolids,
-    takes_reaction,
+    DomainWalls, Followed, LiquidRigidOwner, ObservedPush, PendingTick, SharedSolids,
+    SharesSolids, takes_reaction,
 };
 use manifold_water_liquid::fluid_role::{FluidRole, FluidRoleKind, InitialFill, take_initial_fills};
 use manifold_water_liquid::gizmos::SetupReport;
@@ -627,6 +627,9 @@ manifold_node_engine::primitive! {
         role_ports: manifold_water_liquid::RolePorts = manifold_water_liquid::RolePorts::default(),
         // Another water's solids, when this one does not own the world.
         observed: SharedSolids = SharedSolids::default(),
+        // This frame's plan when this Matter leads the World and advanced
+        // the clock: every taker follows it.
+        led_frame: Option<manifold_physics::clock::ClockFrame> = None,
         role_pending: bool = false,
         body_buffers: LiquidBodyBuffers = LiquidBodyBuffers::default(),
         body_rows: f32 = 0.0,
@@ -1019,6 +1022,7 @@ impl Primitive for MatterDomain {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        self.led_frame = None;
         self.clock
             .set_live_load(manifold_water_rigid::physics::live_load(ctx.sim_step));
         self.clock.set_played_target(ctx.sim_step.played_target);
@@ -1159,6 +1163,7 @@ impl Primitive for MatterDomain {
         self.schedule.clear();
         self.coupled.reset();
         self.clock.restart();
+        self.observed.reseed();
     }
 }
 
@@ -1173,6 +1178,15 @@ impl SharesSolids for MatterDomain {
 
     fn shared_solids_mut(&mut self) -> &mut SharedSolids {
         &mut self.observed
+    }
+
+    fn world_clock(
+        &self,
+    ) -> Option<(
+        &manifold_physics::clock::SimulationClock,
+        &manifold_physics::clock::ClockFrame,
+    )> {
+        self.led_frame.as_ref().map(|frame| (&self.clock, frame))
     }
 
     fn pushes_bodies(&self) -> bool {
@@ -1647,14 +1661,24 @@ impl MatterDomain {
             regions,
             setup.points_per_cell,
         );
-        let frame = self.clock.advance(
-            ctx.played(),
-            ctx.sim_step.interval.0,
-            speed,
-            ctx.scalar_or_param("reset", 0.0),
-            restart,
-            offline,
-        );
+        // A taker runs the ticks of the World's lead; the lead, or a Matter
+        // alone, advances the clock.
+        let frame = match self.observed.followed_frame(&mut self.clock, restart) {
+            Followed::Own => {
+                let frame = self.clock.advance(
+                    ctx.played(),
+                    ctx.sim_step.interval.0,
+                    speed,
+                    ctx.scalar_or_param("reset", 0.0),
+                    restart,
+                    offline,
+                );
+                self.led_frame = Some(frame.clone());
+                frame
+            }
+            Followed::Hold => return Ok(None),
+            Followed::Frame(frame) => frame,
+        };
         if frame.numerical_error {
             ctx.sim_metrics.record_simulation(0.0, 0.0, false, true);
         }

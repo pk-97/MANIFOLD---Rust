@@ -27,6 +27,7 @@ use crate::fluid_role::PreparedFluidGeometry;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_node_engine::scene::transform::Transform;
+use manifold_physics::clock::{ClockFrame, SimulationClock};
 #[cfg(test)]
 use manifold_physics::clock::TICK;
 use manifold_physics::collision_shape::scaled_mesh;
@@ -1167,6 +1168,36 @@ pub struct SharedSolids {
     refused: Option<String>,
     /// Scratch for a later tick's rows.
     advanced: Vec<LiquidBody>,
+    /// The World's clock as the lead handed it this frame.
+    lead: LeadClock,
+}
+
+/// A taker's copy of the World's one clock. Only the lead (the liquid that
+/// owns the World, or the free-running World itself) advances a clock; every
+/// taker takes its state and frame once the lead has advanced it, so every
+/// solver in the World runs the same ticks.
+#[derive(Default)]
+struct LeadClock {
+    clock: SimulationClock,
+    frame: Option<ClockFrame>,
+    /// Whether a lead handed this frame's clock (`Some(false)`: it handed
+    /// none); `None` until a lead hands one.
+    given: Option<bool>,
+    /// The taker's own epoch, and the World's epoch it last followed.
+    epoch: u32,
+    world_epoch: Option<u32>,
+    reseed: bool,
+}
+
+/// What a taker steps this frame.
+#[derive(Debug)]
+pub enum Followed {
+    /// No lead hands it a clock: it advances its own.
+    Own,
+    /// The lead advanced nothing this frame, so neither does it.
+    Hold,
+    /// The World's frame, under the taker's own epoch.
+    Frame(ClockFrame),
 }
 
 /// A body held to its motion: no inverse mass or inertia, so nothing that
@@ -1337,6 +1368,53 @@ impl SharedSolids {
     pub fn used(&mut self) {
         self.fresh = false;
     }
+
+    /// Take the World's clock for this frame once the lead has advanced it,
+    /// or none when it did not: the taker then holds.
+    pub fn follow_clock(&mut self, lead: Option<(&SimulationClock, &ClockFrame)>) {
+        let held = &mut self.lead;
+        held.given = Some(lead.is_some());
+        if let Some((clock, frame)) = lead {
+            held.clock.clone_from(clock);
+            match &mut held.frame {
+                Some(own) => own.clone_from(frame),
+                slot => *slot = Some(frame.clone()),
+            }
+        }
+    }
+
+    /// The taker starts over at its next followed frame (its state was
+    /// cleared); World time runs on.
+    pub fn reseed(&mut self) {
+        self.lead.reseed = true;
+    }
+
+    /// This frame's ticks for a taker, taken once: `clock` takes the World's
+    /// state. A followed frame carries the taker's own epoch, a new one (and
+    /// a restart) when the World restarted or the taker `reseed`s because its
+    /// own setup changed; World time runs on either way.
+    pub fn followed_frame(&mut self, clock: &mut SimulationClock, reseed: bool) -> Followed {
+        let held = &mut self.lead;
+        match held.given.take() {
+            None => Followed::Own,
+            Some(false) => Followed::Hold,
+            Some(true) => {
+                let mut frame = held
+                    .frame
+                    .clone()
+                    .expect("a lead that hands its clock hands its frame");
+                clock.clone_from(&held.clock);
+                let world_restart = frame.restarted || held.world_epoch != Some(frame.epoch);
+                if world_restart || reseed || std::mem::take(&mut held.reseed) {
+                    held.epoch += 1;
+                    frame.restarted = true;
+                }
+                held.world_epoch = Some(frame.epoch);
+                frame.epoch = held.epoch;
+                Followed::Frame(frame)
+            }
+        }
+    }
 }
 
 /// A liquid domain that owns a rigid world or takes another's solids.
@@ -1348,6 +1426,11 @@ pub trait SharesSolids {
     }
     /// Where this water takes another water's solids.
     fn shared_solids_mut(&mut self) -> &mut SharedSolids;
+    /// The World's clock and this frame, when this solver leads the World
+    /// and advanced it this frame: every taker follows it.
+    fn world_clock(&self) -> Option<(&SimulationClock, &ClockFrame)> {
+        None
+    }
     /// Whether it pushes the bodies it takes (a liquid), or only flows round
     /// them (a gas).
     fn pushes_bodies(&self) -> bool {
@@ -1364,6 +1447,60 @@ pub trait SharesSolids {
 mod tests {
     use super::*;
     use manifold_physics::PlayedTime;
+
+    /// A taker steps the lead's ticks under its own epoch: a new one when the
+    /// World restarts or the taker reseeds, with World time running on. With
+    /// no lead it runs its own clock; with a lead that advanced nothing it
+    /// holds.
+    #[test]
+    fn a_taker_follows_the_worlds_clock_under_its_own_epoch() {
+        fn step(lead: &mut SimulationClock, played: f64, restart: bool) -> ClockFrame {
+            lead.advance(PlayedTime::from_played(played), 1.0 / 50.0, 1.0, 0.0, restart, true)
+        }
+        fn follow(
+            taker: &mut SharedSolids,
+            lead: &SimulationClock,
+            frame: &ClockFrame,
+            own: &mut SimulationClock,
+            reseed: bool,
+        ) -> ClockFrame {
+            taker.follow_clock(Some((lead, frame)));
+            match taker.followed_frame(own, reseed) {
+                Followed::Frame(frame) => frame,
+                other => panic!("followed {other:?}"),
+            }
+        }
+        let (mut lead, mut own, mut taker) = (
+            SimulationClock::default(),
+            SimulationClock::default(),
+            SharedSolids::default(),
+        );
+        assert!(matches!(taker.followed_frame(&mut own, false), Followed::Own));
+        taker.follow_clock(None);
+        assert!(matches!(taker.followed_frame(&mut own, false), Followed::Hold));
+
+        let first = step(&mut lead, 0.1, false);
+        let frame = follow(&mut taker, &lead, &first, &mut own, false);
+        assert!(frame.restarted && frame.epoch == 1);
+        let second = step(&mut lead, 0.37, false);
+        let frame = follow(&mut taker, &lead, &second, &mut own, false);
+        assert!(!frame.restarted && frame.epoch == 1);
+        assert!(second.ticks > 1);
+        assert_eq!(
+            (frame.ticks, frame.simulation_time, own.ticks_done()),
+            (second.ticks, second.simulation_time, lead.ticks_done())
+        );
+        // The taker's own setup changed: it starts over, the World runs on.
+        let third = step(&mut lead, 0.61, false);
+        let frame = follow(&mut taker, &lead, &third, &mut own, true);
+        assert!(frame.restarted && frame.epoch == 2);
+        assert!(frame.simulation_time == third.simulation_time);
+        assert!(third.simulation_time > second.simulation_time);
+        // The World restarts: every taker does.
+        let fourth = step(&mut lead, 0.8, true);
+        let frame = follow(&mut taker, &lead, &fourth, &mut own, false);
+        assert!(frame.restarted && frame.epoch == 3);
+    }
 
     /// A Collider moved 0.3 m along x and turned a quarter turn about y over
     /// a tick moves at 0.3 / dt and turns at (pi/2) / dt, whichever sign its
