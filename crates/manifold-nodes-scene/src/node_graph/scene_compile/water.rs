@@ -67,7 +67,8 @@ pub(crate) fn items_of(
 
 /// The Sand template's particle frame, state and domain, and the Water
 /// template's step and wet map: sand reaches the water from the one to the
-/// others, and the water pushes the sand back through the state.
+/// others, and the water pushes the sand back through the state. The step
+/// reads the sand of the same tick from `MATTER_TICK_STATS`.
 const SAND_FRAME: &str = "frame";
 const SAND_STATE: &str = "state";
 const SAND_DOMAIN: &str = "domain";
@@ -82,7 +83,7 @@ const MATTER_SOLVER: [&str; 10] = [
     "matter_points_to_grid",
     "matter_grid_update",
     "matter_grid_to_points",
-    "matter_tick_stats",
+    MATTER_TICK_STATS,
     "matter_move_bodies",
     "matter_body_reaction",
     "matter_static_solid",
@@ -168,8 +169,10 @@ struct MatterSlot<'a> {
     per_slot: usize,
     solver: Option<&'a BTreeMap<String, u32>>,
 }
-const WATER_SAND_READERS: [&str; 2] = ["step", "water_wetness"];
 const WATER_WETNESS: &str = "water_wetness";
+/// The Sand template's tick-end node (`node.matter_stats`), whose
+/// `fluid_view` holds every grain at the end of each tick.
+const MATTER_TICK_STATS: &str = "matter_tick_stats";
 
 /// The particle frames of the first Water and the first Sand, which Smoke
 /// and Fire flow round (`gas::emit_all`).
@@ -291,13 +294,17 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
         return frames;
     };
     let [points, count] = manifold_core::liquid_domain::SAND_INPUTS;
+    let tick_end = solver.ids.get(MATTER_TICK_STATS).copied();
     for (_, ids) in &water_ids {
-        for reader in WATER_SAND_READERS
-            .iter()
-            .filter_map(|n| ids.get(*n).copied())
-        {
-            b.wire(frame, "particles_b", reader, points);
-            b.wire(frame, "count_b", reader, count);
+        // The water steps each tick against the grains at the end of the
+        // same tick: the World runs Matter's tick, then the water's.
+        if let (Some(&step), Some(tick_end)) = (ids.get("step"), tick_end) {
+            b.wire(tick_end, "fluid_view", step, points);
+            b.wire(tick_end, "view_count", step, count);
+        }
+        if let Some(&wetness) = ids.get(WATER_WETNESS) {
+            b.wire(frame, "particles_b", wetness, points);
+            b.wire(frame, "count_b", wetness, count);
         }
     }
     if let (Some((owner, ids)), Some(&state), Some(&domain)) = (

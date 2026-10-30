@@ -138,6 +138,9 @@ pub struct SubstepRegion {
     pub clock: Option<NodeInstanceId>,
     pub publishers: Vec<usize>,
     pub overlaps: bool,
+    /// The co-iterated group this region steps in, tick by tick with the
+    /// others ([`crate::exec::execution_plan::ExecutionPlan::region_groups`]).
+    pub group: Option<usize>,
 }
 
 /// Node-level result of region derivation: the boundary first, then its body
@@ -147,7 +150,13 @@ pub(crate) struct RegionNodes {
     pub boundary: NodeInstanceId,
     pub nodes: Vec<NodeInstanceId>,
     pub clock: Option<NodeInstanceId>,
+    pub group: Option<usize>,
 }
+
+/// The regions that step together tick by tick: those whose clock owners a
+/// co-iterating node pair joins ([`crate::exec::node_pairs::NodePairBehavior::co_iterates`]),
+/// each group's regions in the order they read each other within a tick.
+pub(crate) type RegionGroups = Vec<Vec<usize>>;
 
 /// Derive and validate the substep regions of the live graph.
 ///
@@ -167,7 +176,7 @@ pub(crate) struct RegionNodes {
 pub(crate) fn derive_regions(
     graph: &Graph,
     active_order: &[NodeInstanceId],
-) -> Result<Vec<RegionNodes>, GraphError> {
+) -> Result<(Vec<RegionNodes>, RegionGroups), GraphError> {
     // Sorted by id: `Graph::nodes` walks a hash map, and region order decides
     // step order and ResourceIds in multi-region graphs.
     let mut boundaries: Vec<(NodeInstanceId, SubstepBoundaryPorts)> = graph
@@ -175,7 +184,7 @@ pub(crate) fn derive_regions(
         .filter_map(|inst| inst.node.substep_boundary().map(|p| (inst.id, p)))
         .collect();
     if boundaries.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     boundaries.sort_by_key(|(id, _)| id.0);
 
@@ -270,6 +279,9 @@ pub(crate) fn derive_regions(
 
     let mut regions: Vec<RegionNodes> = Vec::with_capacity(declared.len());
     let mut claimed: AHashSet<NodeInstanceId> = AHashSet::default();
+    // Body wires read outside their region, checked once the groups are
+    // known: one may reach a region stepped in the same tick.
+    let mut escapes: Vec<(NodeInstanceId, NodeInstanceId, NodeInstanceId)> = Vec::new();
     for (boundary, ports, producers) in &declared {
         let (boundary, ports) = (*boundary, *ports);
         let in_body = region_body(boundary, producers, &fwd, &rev);
@@ -326,20 +338,13 @@ pub(crate) fn derive_regions(
                     "coupled-scene participant inside a substep region".to_string(),
                 ));
             }
-            if let Some(&target) = fwd.get(&node).and_then(|targets| {
-                targets
-                    .iter()
-                    .find(|t| **t != boundary && !members.contains(t))
-            }) {
-                return Err(malformed(
-                    boundary,
-                    node,
-                    format!(
-                        "region intermediate wire escapes to outside reader {target:?} — \
-                         only the boundary's outputs may leave the region"
-                    ),
-                ));
-            }
+            escapes.extend(
+                fwd.get(&node)
+                    .into_iter()
+                    .flatten()
+                    .filter(|t| **t != boundary && !members.contains(t))
+                    .map(|&target| (boundary, node, target)),
+            );
             if !claimed.insert(node) {
                 return Err(malformed(
                     boundary,
@@ -383,23 +388,45 @@ pub(crate) fn derive_regions(
             boundary,
             nodes,
             clock,
+            group: None,
         });
     }
 
-    // One region feeding another (chaining) is not supported: a member whose
-    // forward predecessor belongs to a different region.
-    let mut region_of: AHashMap<NodeInstanceId, NodeInstanceId> = AHashMap::default();
-    for region in &regions {
-        region_of.extend(region.nodes.iter().map(|&n| (n, region.boundary)));
+    let mut region_of: AHashMap<NodeInstanceId, usize> = AHashMap::default();
+    for (index, region) in regions.iter().enumerate() {
+        region_of.extend(region.nodes.iter().map(|&n| (n, index)));
     }
-    for region in &regions {
+    let groups = co_iterated_groups(graph, &mut regions, &region_of, &rev)?;
+    let same_group = |a: usize, b: usize| a != b && regions[a].group.is_some() && regions[a].group == regions[b].group;
+    for (boundary, node, target) in escapes {
+        let from = region_of[&boundary];
+        if !region_of.get(&target).is_some_and(|&to| same_group(from, to)) {
+            return Err(malformed(
+                boundary,
+                node,
+                format!(
+                    "region intermediate wire escapes to outside reader {target:?} — \
+                     only the boundary's outputs may leave the region, or reach a region \
+                     stepped in the same tick"
+                ),
+            ));
+        }
+    }
+    // One region feeding another (chaining) is supported only inside a
+    // co-iterated group: a member whose forward predecessor belongs to a
+    // region outside its group.
+    for (index, region) in regions.iter().enumerate() {
         for &node in &region.nodes {
             for &pred in rev.get(&node).map(Vec::as_slice).unwrap_or(&[]) {
-                if region_of.get(&pred).is_some_and(|&b| b != region.boundary) {
+                if region_of
+                    .get(&pred)
+                    .is_some_and(|&from| from != index && !same_group(from, index))
+                {
                     return Err(malformed(
                         region.boundary,
                         pred,
-                        "one substep region feeds another — region chaining is not supported"
+                        "one substep region feeds another outside a co-iterated group — \
+                         region chaining is not supported"
                             .to_string(),
                     ));
                 }
@@ -407,7 +434,79 @@ pub(crate) fn derive_regions(
         }
     }
 
-    Ok(regions)
+    Ok((regions, groups))
+}
+
+/// Join the regions whose clock owners a co-iterating pair links into
+/// groups, and order each group so a region runs after every region it
+/// reads within the tick. Two regions that read each other within the tick
+/// are refused: one must read the other's last tick through its capture.
+fn co_iterated_groups(
+    graph: &Graph,
+    regions: &mut [RegionNodes],
+    region_of: &AHashMap<NodeInstanceId, usize>,
+    rev: &AHashMap<NodeInstanceId, Vec<NodeInstanceId>>,
+) -> Result<RegionGroups, GraphError> {
+    let by_clock = |clock: NodeInstanceId| regions.iter().position(|r| r.clock == Some(clock));
+    let mut root: Vec<usize> = (0..regions.len()).collect();
+    fn find(root: &mut [usize], mut i: usize) -> usize {
+        while root[i] != i {
+            root[i] = root[root[i]];
+            i = root[i];
+        }
+        i
+    }
+    for pair in graph.node_pairs() {
+        if !pair.behavior.co_iterates() {
+            continue;
+        }
+        if let (Some(a), Some(b)) = (by_clock(pair.first), by_clock(pair.second)) {
+            let (a, b) = (find(&mut root, a), find(&mut root, b));
+            root[b.max(a)] = a.min(b);
+        }
+    }
+    let mut groups: RegionGroups = Vec::new();
+    for index in 0..regions.len() {
+        let top = find(&mut root, index);
+        let members: Vec<usize> = (0..regions.len())
+            .filter(|&i| find(&mut root, i) == top)
+            .collect();
+        if top != index || members.len() < 2 {
+            continue;
+        }
+        // Each member after every member it reads within the tick.
+        let reads = |reader: usize, read: usize| {
+            regions[reader].nodes.iter().any(|node| {
+                rev.get(node)
+                    .into_iter()
+                    .flatten()
+                    .any(|pred| region_of.get(pred) == Some(&read))
+            })
+        };
+        let mut ordered: Vec<usize> = Vec::with_capacity(members.len());
+        let mut left = members.clone();
+        while !left.is_empty() {
+            let Some(at) = left
+                .iter()
+                .position(|&m| left.iter().all(|&other| other == m || !reads(m, other)))
+            else {
+                let boundary = regions[left[0]].boundary;
+                return Err(malformed(
+                    boundary,
+                    boundary,
+                    "regions stepped in the same tick read each other within the tick — \
+                     one must read the other's last tick through its capture"
+                        .to_string(),
+                ));
+            };
+            ordered.push(left.remove(at));
+        }
+        for &member in &ordered {
+            regions[member].group = Some(groups.len());
+        }
+        groups.push(ordered);
+    }
+    Ok(groups)
 }
 
 fn malformed(boundary: NodeInstanceId, node: NodeInstanceId, reason: String) -> GraphError {
@@ -1832,6 +1931,130 @@ mod tests {
         fx.log.lock().unwrap().clear();
         exec.execute_frame(&mut fx.graph, &fx.plan, frame_time());
         fx.log.lock().unwrap().clone()
+    }
+
+    /// A clock owner whose iteration i falls in the frame's tick `ticks[i]`.
+    struct TickClock {
+        type_id: EffectNodeType,
+        outputs: Vec<NodeOutput>,
+        ticks: &'static [u32],
+    }
+
+    impl EffectNode for TickClock {
+        fn depth_rule(&self) -> crate::scene::depth_rule::DepthRule {
+            crate::scene::depth_rule::DepthRule::Terminal
+        }
+        fn type_id(&self) -> &EffectNodeType {
+            &self.type_id
+        }
+        fn inputs(&self) -> &[NodeInput] {
+            &[]
+        }
+        fn outputs(&self) -> &[NodeOutput] {
+            &self.outputs
+        }
+        fn parameters(&self) -> &[ParamDef] {
+            &[]
+        }
+        fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+            ctx.outputs.set_scalar("out", ParamValue::Float(0.0));
+        }
+        fn substep_clock_interval(&self, iteration: u32) -> Option<SubstepClockOutput<'_>> {
+            self.ticks.get(iteration as usize).map(|&tick| {
+                let start = Seconds(f64::from(iteration));
+                SubstepClockOutput::single("out", start, Seconds(start.0 + 1.0), tick, 2)
+            })
+        }
+    }
+
+    struct CoIterating;
+
+    impl crate::exec::node_pairs::NodePairBehavior for CoIterating {
+        fn set_enabled(&self, _node: &mut dyn EffectNode, _enabled: bool) {}
+        fn before_first(
+            &self,
+            _first: &mut dyn EffectNode,
+            _second: &mut dyn EffectNode,
+            _second_inputs: Option<&mut EffectNodeContext<'_, '_>>,
+            _step: crate::exec::effect_node::SimStep,
+        ) {
+        }
+        fn after_first(&self, _first: &dyn EffectNode, _second: &mut dyn EffectNode) {}
+        fn co_iterates(&self) -> bool {
+            true
+        }
+    }
+
+    /// Two regions on one clock step tick by tick: the one stepping two
+    /// substeps a tick runs both before the one reading it runs that tick,
+    /// which reads the state at the end of the same tick.
+    #[test]
+    fn substeps_co_iterated_regions_interleave_by_tick() {
+        let log: Log = Arc::default();
+        let mut graph = Graph::new();
+        let f32_ty = PortType::Scalar(ScalarType::F32);
+        let clock = |graph: &mut Graph, ticks| {
+            graph.add_node(Box::new(TickClock {
+                type_id: EffectNodeType::new("test.tick_clock"),
+                outputs: vec![output("out", f32_ty)],
+                ticks,
+            }))
+        };
+        let water_clock = clock(&mut graph, &[0, 1]);
+        let sand_clock = clock(&mut graph, &[0, 0, 1, 1]);
+        let src = graph.add_node(Box::new(Adder::constant("src", log.clone(), 1.0)));
+        let boundary = |graph: &mut Graph, iterations| {
+            let mut sim = SimBoundary::new(log.clone(), Arc::new(Mutex::new(iterations)));
+            sim.ports = SIM_CLOCK_PORTS;
+            graph.add_node(Box::new(sim))
+        };
+        let water = boundary(&mut graph, 2);
+        let sand = boundary(&mut graph, 4);
+        let water_body = graph.add_node(Box::new(Adder::new("water", log.clone())));
+        let sand_body = graph.add_node(Box::new(Adder::new("sand", log.clone())));
+        let consumer = graph.add_node(Box::new(Adder::root("consumer", log.clone())));
+        for (clock, boundary, body) in [
+            (water_clock, water, water_body),
+            (sand_clock, sand, sand_body),
+        ] {
+            graph.connect((src, "out"), (boundary, "seed")).unwrap();
+            graph.connect((clock, "out"), (boundary, "clock")).unwrap();
+            graph.connect((boundary, "out"), (body, "a")).unwrap();
+            graph.connect((boundary, "step_index"), (body, "b")).unwrap();
+            graph.connect((body, "out"), (boundary, "in")).unwrap();
+        }
+        graph.connect((sand_body, "out"), (water_body, "c")).unwrap();
+        graph.connect((water, "out"), (consumer, "a")).unwrap();
+        graph.connect((sand, "out"), (consumer, "b")).unwrap();
+        graph
+            .add_node_pair(water_clock, sand_clock, Box::new(CoIterating))
+            .unwrap();
+
+        let plan = compile(&graph).unwrap();
+        assert_eq!(plan.region_groups().len(), 1);
+        let mut exec = Executor::with_mock();
+        exec.execute_frame(&mut graph, &plan, frame_time());
+        let bodies: Vec<String> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.starts_with("water") || entry.starts_with("sand"))
+            .cloned()
+            .collect();
+        // Sand: 1 + 0, then 1 + 1 = 2 ends tick 0; 2 + 2, then 4 + 3 = 7
+        // ends tick 1. The water reads 2 (its state becomes 1 + 0 + 2),
+        // then 7.
+        assert_eq!(
+            bodies,
+            [
+                "sand a=1 b=0 c=none",
+                "sand a=1 b=1 c=none",
+                "water a=1 b=0 c=2",
+                "sand a=2 b=2 c=none",
+                "sand a=4 b=3 c=none",
+                "water a=3 b=1 c=7",
+            ]
+        );
     }
 
     #[test]

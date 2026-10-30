@@ -195,6 +195,10 @@ pub struct ExecutionPlan {
     /// Substep repeat regions, one per
     /// boundary node. Empty for every graph without one.
     substep_regions: Vec<crate::exec::substeps::SubstepRegion>,
+    /// The regions that step together tick by tick, as indices into
+    /// `substep_regions` in the order each tick runs them; their steps are
+    /// one contiguous block.
+    region_groups: Vec<Vec<usize>>,
 }
 
 /// A [`crate::node_graph::mesh_change::MeshRevisionRule`] with its named
@@ -338,6 +342,12 @@ impl ExecutionPlan {
         &self.substep_regions
     }
 
+    /// The co-iterated region groups ([`Self::substep_regions`] indices, in
+    /// tick order).
+    pub fn region_groups(&self) -> &[Vec<usize>] {
+        &self.region_groups
+    }
+
     /// Profiling-only: a sub-plan containing just the first `k` execution
     /// steps. Steps are topologically ordered, so `[0..k]` is always a valid
     /// executable prefix — every dependency of a kept step is also kept.
@@ -372,6 +382,20 @@ impl ExecutionPlan {
         p.substep_regions.retain(|r| r.steps.iter().all(|&i| i < k));
         for region in &mut p.substep_regions {
             region.publishers.retain(|&i| i < k);
+        }
+        // A group keeps the members the prefix kept; one left runs alone.
+        p.region_groups.clear();
+        let mut groups: Vec<Option<usize>> = p.substep_regions.iter().map(|r| r.group).collect();
+        for at in 0..groups.len() {
+            let Some(group) = groups[at] else { continue };
+            let members: Vec<usize> = (at..groups.len()).filter(|&i| groups[i] == Some(group)).collect();
+            for &member in &members {
+                groups[member] = None;
+                p.substep_regions[member].group = (members.len() > 1).then_some(p.region_groups.len());
+            }
+            if members.len() > 1 {
+                p.region_groups.push(members);
+            }
         }
         p
     }
@@ -432,9 +456,22 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
     let active_order = active_execution_order(graph, &full_order, has_root);
     // Substep regions contract to one vertex each, like coupled scenes, so
     // every region's steps are one contiguous block (boundary first).
-    let region_nodes = crate::exec::substeps::derive_regions(graph, &active_order)?;
-    let region_blocks: Vec<Vec<NodeInstanceId>> =
-        region_nodes.iter().map(|r| r.nodes.clone()).collect();
+    let (region_nodes, region_groups) =
+        crate::exec::substeps::derive_regions(graph, &active_order)?;
+    // A co-iterated group contracts to one block, its regions in tick order.
+    let mut region_blocks: Vec<Vec<NodeInstanceId>> = Vec::with_capacity(region_nodes.len());
+    for (index, region) in region_nodes.iter().enumerate() {
+        match region.group {
+            None => region_blocks.push(region.nodes.clone()),
+            Some(group) if region_groups[group][0] == index => region_blocks.push(
+                region_groups[group]
+                    .iter()
+                    .flat_map(|&member| region_nodes[member].nodes.iter().copied())
+                    .collect(),
+            ),
+            Some(_) => {}
+        }
+    }
     let (order, node_pairs) = contracted_execution_order(graph, &active_order, &region_blocks)?;
 
     // Index wires by their target (input) port for O(1) lookup during
@@ -1158,7 +1195,9 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             held_resources,
             clock: region.clock,
             publishers,
-            overlaps,
+            // A group's members interleave on the main lane.
+            overlaps: overlaps && region.group.is_none(),
+            group: region.group,
         });
     }
 
@@ -1203,6 +1242,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         node_pairs,
         mesh_rules,
         substep_regions,
+        region_groups,
     })
 }
 

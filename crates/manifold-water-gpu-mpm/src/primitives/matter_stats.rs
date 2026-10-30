@@ -16,8 +16,11 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 use crate::matter::{MatterGridNode, MatterPoint, STATS_WORDS, grid_accum_bytes, grid_bytes};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_words};
+
+use super::matter_frame::FrameParams;
 
 static SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
@@ -52,6 +55,7 @@ pub struct StatsPipelines {
     points: GpuComputePipeline,
     grid: GpuComputePipeline,
     finish: GpuComputePipeline,
+    view: GpuComputePipeline,
 }
 
 impl StatsPipelines {
@@ -71,6 +75,11 @@ impl StatsPipelines {
                 SHADER.as_str(),
                 "finish_main",
                 "node.matter_stats.finish",
+            ),
+            view: device.create_compute_pipeline(
+                super::matter_frame::SHADER,
+                "cs_main",
+                "node.matter_stats.view",
             ),
         }
     }
@@ -96,6 +105,11 @@ manifold_node_engine::primitive! {
     },
     outputs: {
         stats_out: Array(u32),
+        // Every point as an id-sorted FluidParticle at the end of each tick,
+        // for a liquid stepping the same tick (node.gpu_flip_step's sand);
+        // written only while read. A non-finite tick keeps the last view.
+        fluid_view: Array(FluidParticle),
+        view_count: ScalarF32,
     },
     params: [
         ParamDef { name: Cow::Borrowed("field_min_x"), label: "Field Min X", ty: ParamType::Float, default: ParamValue::Float(-2.1875), range: Some((-1.0e4, 1.0e4)), enum_values: &[] },
@@ -110,7 +124,7 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("tick_index"), label: "Tick Index", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0e9)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Last atom of the Live Matter region body. stats/stats_out alias node.matter_state's stats array, whose final value escapes the region to node.matter_frame (which refuses to publish a non-finite tick) and to matter_state's readback (live count, fault). Gate it with the boundary's tick_end so it runs once per tick; a skipped substep leaves the array as it was. Words: 0 non-finite, 1 clamped nodes, 2 live, 3 max speed, 4 min J, 5 max J, 6 volume, 7 max |accumulator|, 8 mass, 9-11 momentum, 12 kinetic, 13 potential, 14 elastic, 15 tick, 16 points removed because their tile had no pool slot (id 0 with volume ratio 0), 17 held pool tiles, 18 the largest hardening a snow point's packing asks for (0 with no snow). The grid and accum cover 512 * pool_tiles + 1 nodes; the canonical last node is not reduced.",
+    composition_notes: "Last atom of the Live Matter region body. fluid_view and view_count feed a Water's node.gpu_flip_step sand and sand_count, which steps each World tick after Matter's (the two regions co-iterate). stats/stats_out alias node.matter_state's stats array, whose final value escapes the region to node.matter_frame (which refuses to publish a non-finite tick) and to matter_state's readback (live count, fault). Gate it with the boundary's tick_end so it runs once per tick; a skipped substep leaves the array as it was. Words: 0 non-finite, 1 clamped nodes, 2 live, 3 max speed, 4 min J, 5 max J, 6 volume, 7 max |accumulator|, 8 mass, 9-11 momentum, 12 kinetic, 13 potential, 14 elastic, 15 tick, 16 points removed because their tile had no pool slot (id 0 with volume ratio 0), 17 held pool tiles, 18 the largest hardening a snow point's packing asks for (0 with no snow). The grid and accum cover 512 * pool_tiles + 1 nodes; the canonical last node is not reduced.",
     examples: ["SandColumn"],
     picker: { label: "Matter Stats", category: Atom },
     summary: "Measures the liquid once per tick: how much there is, how fast it moves, its energy, and whether anything went wrong.",
@@ -121,6 +135,8 @@ manifold_node_engine::primitive! {
     extra_fields: {
         pipelines: Option<StatsPipelines> = None,
         partials: Option<GpuBuffer> = None,
+        view: Option<GpuBuffer> = None,
+        view_count: u32 = 0,
     },
 }
 
@@ -131,12 +147,24 @@ impl Primitive for MatterStats {
         }
     }
 
+    fn provides_array_output(&self, port: &str) -> bool {
+        port == "fluid_view"
+    }
+
+    fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
+        (port == "fluid_view").then_some(self.view.as_ref()).flatten()
+    }
+
     fn array_output_capacity(
         &self,
         port_name: &str,
         _params: &manifold_node_engine::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
+        if port_name == "fluid_view" {
+            // Provided storage: a one-record hint, grown at run time.
+            return Some(1);
+        }
         (port_name == "stats_out")
             .then(|| {
                 input_capacities
@@ -173,9 +201,12 @@ impl Primitive for MatterStats {
         let tiles = ctx.inputs.array("tiles");
         let stats = ctx.inputs.array("stats");
         let materials = ctx.inputs.array("materials");
+        let wants_view = ctx.outputs.slot("fluid_view").is_some();
         // In place on the stats input; a gated substep leaves it untouched.
         ctx.mark_gpu_accessed();
         if !run_now {
+            ctx.outputs
+                .set_scalar("view_count", ParamValue::Float(self.view_count as f32));
             return;
         }
         let (Some(points), Some(grid), Some(accum), Some(tiles), Some(stats), Some(materials)) =
@@ -295,6 +326,56 @@ impl Primitive for MatterStats {
             [1, 1, 1],
             "node.matter_stats.finish",
         );
+        if wants_view && point_count > 0 {
+            let bytes = u64::from(point_count) * std::mem::size_of::<FluidParticle>() as u64;
+            let mut previous_count = self.view_count;
+            if self.view.as_ref().is_none_or(|view| view.size < bytes) {
+                self.view = Some(gpu.device.create_buffer(bytes, BufferUse::Gpu));
+                previous_count = 0;
+            }
+            let view = self.view.as_ref().expect("view prepared");
+            let params = FrameParams {
+                count: point_count,
+                previous_count,
+                radius_scale: crate::matter::RADIUS_SCALE,
+                first: 0,
+            };
+            // The view is its own previous frame: a non-finite tick keeps it.
+            gpu.native_enc.dispatch_compute(
+                &pipelines.view,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&params),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: points,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: stats,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: view,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 4,
+                        buffer: view,
+                        offset: 0,
+                    },
+                ],
+                [point_count.div_ceil(256), 1, 1],
+                "node.matter_stats.view",
+            );
+            self.view_count = point_count;
+        }
+        ctx.outputs
+            .set_scalar("view_count", ParamValue::Float(self.view_count as f32));
     }
 }
 

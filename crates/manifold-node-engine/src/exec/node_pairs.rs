@@ -22,6 +22,12 @@ pub trait NodePairBehavior: AsAny + Send {
         step: crate::exec::effect_node::SimStep,
     );
     fn after_first(&self, first: &dyn EffectNode, second: &mut dyn EffectNode);
+    /// Whether the two nodes run one clock, so the substep regions they own
+    /// as clock owners step together tick by tick
+    /// ([`crate::exec::substeps::SubstepRegion::group`]).
+    fn co_iterates(&self) -> bool {
+        false
+    }
 }
 
 /// One ordered pair of graph nodes that must be evaluated as one unit.

@@ -13,15 +13,16 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_water_liquid::frame_ring::FrameRing;
 
-const SHADER: &str = include_str!("shaders/matter_frame.wgsl");
+/// Matter points to FluidParticles, also node.matter_stats' per-tick view.
+pub(crate) const SHADER: &str = include_str!("shaders/matter_frame.wgsl");
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct FrameParams {
-    count: u32,
-    previous_count: u32,
-    radius_scale: f32,
-    first: u32,
+pub(crate) struct FrameParams {
+    pub(crate) count: u32,
+    pub(crate) previous_count: u32,
+    pub(crate) radius_scale: f32,
+    pub(crate) first: u32,
 }
 
 manifold_node_engine::primitive! {

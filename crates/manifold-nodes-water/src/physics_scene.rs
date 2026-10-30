@@ -132,6 +132,11 @@ impl NodePairBehavior for SharedSolidsPair {
             solids.follow_clock(lead.and_then(SharesSolids::world_clock));
         }
     }
+
+    /// One clock: the lead's and the taker's regions step tick by tick.
+    fn co_iterates(&self) -> bool {
+        true
+    }
 }
 
 /// A free-running World's solids handed to a Smoke or Fire right after the

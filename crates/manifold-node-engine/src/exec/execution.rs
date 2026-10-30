@@ -170,10 +170,9 @@ pub struct Executor {
     output_scratch: Vec<(&'static str, Slot)>,
     growing_arrays: Vec<bool>,
     array_capacity_scratch: Vec<(&'static str, u32)>,
-    /// A running substep region's per-iteration scalar output slots and the
-    /// values the boundary serves for the next iteration (reused scratch).
-    substep_scalar_slots: Vec<Option<Slot>>,
-    substep_scalar_values: Vec<f32>,
+    /// Running substep regions' iterations and per-iteration scalars, one
+    /// per member of the group running (reused scratch).
+    region_runs: Vec<substep_region::RegionRun>,
     /// Host syncs run inside substep regions since this executor was built.
     substep_host_syncs: u64,
     /// The event the main and async lanes hand off on, made when the first
@@ -612,8 +611,7 @@ impl Executor {
             output_scratch: Vec::new(),
             growing_arrays: Vec::new(),
             array_capacity_scratch: Vec::with_capacity(8),
-            substep_scalar_slots: Default::default(),
-            substep_scalar_values: Default::default(),
+            region_runs: Vec::new(),
             substep_host_syncs: 0,
             tick_event: None,
             lane: Default::default(),
@@ -2120,15 +2118,27 @@ impl Executor {
                 .enumerate()
                 .find(|(_, region)| region.steps[0] == idx)
             {
-                idx = region.steps[region.steps.len() - 1] + 1;
+                // A group is one block from its first member's boundary to
+                // its last member's last step.
+                let last = region.group.map_or(region, |group| {
+                    let members = &plan.region_groups()[group];
+                    &plan.substep_regions()[members[members.len() - 1]]
+                });
+                idx = last.steps[last.steps.len() - 1] + 1;
                 if partial_sample {
                     StepFlow::Next
                 } else {
                     // The boundary's own run stays on the main lane.
                     self.leave_tick_lane(&mut gpu);
-                    self.run_substep_region(
-                        graph, plan, region_idx, region, env, &mut tally, &mut gpu, &mut state,
-                    )
+                    match region.group {
+                        Some(group) => self.run_region_group(
+                            graph, plan, group, env, &mut tally, &mut gpu, &mut state,
+                        ),
+                        None => self.run_substep_region(
+                            graph, plan, region_idx, region, env, &mut tally, &mut gpu,
+                            &mut state,
+                        ),
+                    }
                 }
             } else {
                 idx += 1;

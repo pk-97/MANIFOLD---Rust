@@ -40,6 +40,30 @@ Each phase compiles, runs and commits on its own; a still sheet ends each phase.
 
 Then review, then optimise.
 
+## Phase 2 in code
+
+Phase 1 landed: the lead's clock reaches every taker through `SharedSolids::follow_clock` / `followed_frame` (`water-liquid/src/coupling.rs`), called from `SharedSolidsPair` and `WorldSolidsPair` (`nodes-water/src/physics_scene.rs`).
+
+- **Groups.** `NodePairBehavior::co_iterates()`, true for `SharedSolidsPair`. Regions whose clock owners such pairs link form one group (`co_iterated_groups`, `exec/substeps.rs`), ordered so a member runs after every member it reads; two members reading each other within the tick is a compile error. The plan contracts a group as one block (`ExecutionPlan::region_groups`).
+- **Rules inside a group.** A member's body may read another member's body or boundary outputs; outside a group a body wire still may not leave its region, and one region still may not feed another.
+- **Runner.** `run_substep_region` is split into open (boundary frame run, restart, pending), one iteration (begin, finish) and release. `run_region_group` opens every member, then for each tick runs each member's iterations whose clock interval `ordinal` is that tick, in group order, then releases every member's held resources together. The interleaved run is one replay span; the async lane is off inside a group until the optimise pass.
+- **Matter to water inside the tick.** The water step's `sand` reads `node.matter_stats`' `fluid_view`: every grain as a FluidParticle at the end of each tick, written only while read (the `matter_frame` conversion shader). `water_wetness`, `water_on_sand` and gas still read `matter_frame` once a frame; phase 4 replaces them.
+- **Gas** keeps encoding all its ticks in one run after the group; it joins the loop when it moves onto the table (phase 5).
+
+## Phase 3 in code: what one table needs
+
+Read from code after phase 2. Three things make it more than a build change:
+
+- **A table's size is a function of its own pool.** `table_entries(pool_tiles)` sizes the hash (H = the power of two at or above 4P) and every slot and neighbour row sits at an offset from it. 115 Rust sites and about 30 shaders (the whitewater family's `ww_pool_tiles` formula, Matter's stats, grid update and body reaction, the step's sheeting) derive H from their own P. A shared key space has one H for the World, sized for the union of every material's tiles, so each reader must take H as an input instead.
+- **Two builds at two rates write one key set.** FLIP rebuilds every substep (reach rings, the cell set C) and Matter every 6th of up to 128 substeps a tick. Ordered linear probing rebuilds the keys from scratch, so each build inserts the other material's held tiles too, and afterwards re-points the other material's entry column and slot-row entries (its slots and neighbour rows stay). Two passes per build, over the other's held slots.
+- **One owner.** The step and Matter's Points to Grid each own a `WorldTiles` today. The shared table needs one owner both builds write in place: the lead domain, which hands the taker the buffers through the pair hook, as it hands the solids.
+
+Plan, each stage compiling and bit-identical until 3c:
+1. **3a.** Every table reader takes H from its uniform or the World, never from its own P. Mechanical.
+2. **3b.** `WorldTiles` builds into layers it does not own: a World table object in the lead domain with one key set and a layer per material (entry column, slot rows, neighbour rows), each build inserting the other layers' held tiles and re-pointing them.
+3. **3c.** Matter's Points to Grid builds its layer of the World table; its own table goes.
+4. **3d.** Phase 4's exchanges read the other material's slot through the shared entry instead of rescattering particles.
+
 ## Risks
 
 - W2 changes the executor's region contract: replay caches and the async lane are per region today (`substep_region.rs:150-200`); a co-iterated group must keep both or the frame gets slower.
