@@ -10,7 +10,8 @@
 // slows or climbs (Hans Beyer, "Implementation of a method for hydraulic
 // erosion", 2015, as Sebastian Lague's Coding Adventure tuned it, 2019). The
 // soil it moves is summed into `erosion` with integer atomics, so drops on
-// every thread write at once. Drops running at once can all fill the same
+// every thread write at once, and each batch reads the land from a snapshot
+// taken before it, so every run carves alike. Drops running at once can all fill the same
 // hollow, so after each batch the loose soil slides (`snapshot_main`, then
 // `slide_main`): soil left steeper than its angle of repose moves down to
 // the neighbours below it. Each drop also adds its water to `flow` on every
@@ -339,12 +340,13 @@ fn fade_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 }
 
-// Height in Height units at cell `c`, clamped to the map.
+// Height in Height units at cell `c`, clamped to the map, as the batch's
+// snapshot holds it: drops running at once never read each other's changes,
+// so the carving is the same on every run.
 fn cell_height(c: vec2<i32>) -> f32 {
     let last = i32(u.res) - 1;
     let k = clamp(c, vec2<i32>(0), vec2<i32>(last));
-    let i = u32(k.y) * u.res + u32(k.x);
-    return base[i] + f32(atomicLoad(&erosion[i])) / EROSION_FIX;
+    return snapshot[u32(k.y) * u.res + u32(k.x)];
 }
 
 // Height and gradient (per cell) at `p` in cells, bilinear.
@@ -480,12 +482,14 @@ fn slide_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if i >= u.res * u.res {
         return;
     }
-    let soil = f32(atomicLoad(&erosion[i])) / EROSION_FIX;
+    // The soil as the snapshot found it, not as neighbours sliding at once
+    // leave it.
+    let h = snapshot[i];
+    let soil = h - base[i];
     if soil <= 0.0 {
         return;
     }
     let c = vec2<i32>(i32(i % u.res), i32(i / u.res));
-    let h = snapshot[i];
     var excess: array<f32, 8>;
     var total = 0.0;
     var steepest = 0.0;

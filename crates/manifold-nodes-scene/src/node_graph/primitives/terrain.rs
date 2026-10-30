@@ -225,10 +225,18 @@ manifold_node_engine::primitive! {
         spawned: u32 = 0,
         // The Height and executor epoch the vertices were last written at.
         drawn: Option<(f32, u64)> = None,
+        // Rain still to fall into the carving: the land is not settled yet.
+        raining: bool = true,
     },
 }
 
 impl Primitive for Terrain {
+    /// The land settles once all its rain has fallen, so a still taken after
+    /// the load's warm-up shows the finished carving.
+    fn warmup_pending(&self) -> bool {
+        self.raining
+    }
+
     fn prepare_pipelines(&mut self, device: &GpuDevice) {
         self.pipelines
             .get_or_insert_with(|| Pipelines::build(device));
@@ -305,6 +313,7 @@ impl Primitive for Terrain {
             .ceil()
             .min(f64::from(DROPLETS_PER_BATCH * BATCHES_PER_FRAME)) as u32;
         let changed = reshaped || keep < 1.0 || droplets > 0;
+        self.raining = done + f64::from(droplets) < budget;
         let drawn = (height, ctx.rebuild_epoch);
         // Settled and drawn at this Height: the vertices hold, so the shadow
         // cache and ray-tracing structure keep. A state-carrying rebuild
@@ -369,6 +378,15 @@ impl Primitive for Terrain {
                 ..uniforms
             };
             let groups = [batch.droplets.div_ceil(THREADS), 1, 1];
+            // Drops read the land as the batch found it, so no drop sees
+            // another's change mid-batch and every run carves alike.
+            dispatch(
+                enc,
+                &pipelines.snapshot,
+                &uniforms,
+                cells,
+                "node.terrain snapshot",
+            );
             dispatch(enc, &pipelines.erode, &batch, groups, "node.terrain erode");
             for _ in 0..SLIDES_PER_BATCH {
                 dispatch(
