@@ -15,7 +15,10 @@
 // live_rule 2 when it is a whitewater kind below 3 or dust (4; 3 is empty) and the
 // position is finite.
 // `sorted` is only bound for liquid particle records, so it copies whole
-// records word for word.
+// records word for word. A companion (`companion_words` > 0) is a record of
+// that many words beside each slot, which moves with its slot: `stabilise`
+// writes slot i's companion where it writes slot i (GPU FLIP's affine
+// velocities beside its particles).
 //
 // The slots covered are the first `params.count`, or (`count_word` not
 // 0xffffffff) the first `counts[count_word]` of them, the slots in use a GPU
@@ -58,6 +61,11 @@ struct SortParams {
     // 1 when a point keyed to the last, canonical, bin (its tile has no slot)
     // is left out of the sort instead of counted there.
     drop_absent: u32,
+    // Words of each slot's companion record (bindings 11 and 12); 0: none.
+    companion_words: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: SortParams;
@@ -75,6 +83,9 @@ struct SortParams {
 @group(0) @binding(8) var<storage, read> gate: array<u32>;
 // A GPU record of the slots in use; unread unless `count_word` names a word.
 @group(0) @binding(10) var<storage, read> counts: array<u32>;
+// Each input slot's companion record, and the sorted slots' (`companion_words`).
+@group(0) @binding(11) var<storage, read> companion: array<u32>;
+@group(0) @binding(12) var<storage, read_write> companion_sorted: array<u32>;
 
 fn gated_off() -> bool {
     return gate[11] != 0u && !(bitcast<f32>(gate[0]) > 0.0);
@@ -170,6 +181,9 @@ fn clear_tail(@builtin(global_invocation_id) gid: vec3<u32>) {
         if params.write_order != 0u {
             order[i] = NO_RANK;
         }
+        for (var w = 0u; w < params.companion_words; w = w + 1u) {
+            companion_sorted[i * params.companion_words + w] = 0u;
+        }
     }
 }
 
@@ -191,7 +205,7 @@ fn scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(256)
 fn stabilise(@builtin(global_invocation_id) gid: vec3<u32>) {
     let s = gid.x;
-    if gated_off() || (params.write_sorted == 0u && params.write_order == 0u) {
+    if gated_off() || (params.write_sorted == 0u && params.write_order == 0u && params.companion_words == 0u) {
         return;
     }
     if s >= atomicLoad(&cell_counts[params.bin_total - 1u]) {
@@ -213,5 +227,9 @@ fn stabilise(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     if params.write_order != 0u {
         order[place] = i;
+    }
+    let words = params.companion_words;
+    for (var w = 0u; w < words; w = w + 1u) {
+        companion_sorted[place * words + w] = companion[i * words + w];
     }
 }

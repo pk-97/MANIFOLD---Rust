@@ -580,7 +580,6 @@ pub(super) fn gpu_flip_outflow_kills_the_particles_it_holds() {
     let faces = vec![FaceSample::default(); face_len()];
     let step = StepParams {
         step_dt: 0.02,
-        flip: 1.0,
         particles: particles.len() as u32,
         ..region_params()
     };
@@ -590,9 +589,9 @@ pub(super) fn gpu_flip_outflow_kills_the_particles_it_holds() {
         .bind(2, &particles, Layout::Dense)
         .bind(3, &faces, Layout::Records)
         .bind(9, &solid, Layout::Dense)
-        .bind(17, &faces, Layout::Records)
         .bind(18, &faces, Layout::Records)
         .bind(22, &vec![0u32; 2 * particles.len()], Layout::Dense)
+        .bind(75, &no_affines(particles.len()), Layout::Dense)
         .bind(15, &[shape], Layout::Dense)
         .bind(16, &atlas, Layout::Dense)
         .bind(36, &[row], Layout::Dense)

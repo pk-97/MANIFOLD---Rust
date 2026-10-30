@@ -105,8 +105,6 @@ pub(crate) struct WaterScene {
     pub size: f64,
     /// Water substeps per tick: the step node's Steps.
     pub steps: usize,
-    /// The FLIP share kept per step, the FLIP Fluids engine's 0.95.
-    pub flip: f64,
     pub fill_height: f64,
     pub column: [[f64; 2]; 3],
     /// Mesh the liquid with the shipped GPU liquid surface.
@@ -164,7 +162,6 @@ impl WaterScene {
             pressure: PressureShape::at(n),
             size: DAM_BREAK_METRES,
             steps: STEPS_PER_TICK,
-            flip: 0.95,
             fill_height: DAM_FILL_HEIGHT,
             column: DAM_COLUMN,
             surface: false,
@@ -1540,7 +1537,6 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
             &POOL_WIRES,
             &[
                 ("steps", int(scene.steps)),
-                ("flip", float(scene.flip)),
                 (
                     "iterations",
                     iterations(scene.pressure.iterations, PRESSURE_ITERATIONS as u32),

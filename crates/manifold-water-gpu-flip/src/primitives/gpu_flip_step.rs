@@ -125,6 +125,27 @@ manifold_core::testkit_visible! { pub(crate) const STEP_SHADER: &str = concat!(
 ); }
 const NAME: &str = "GPU FLIP Step";
 
+manifold_core::testkit_visible! {
+/// One particle's APIC affine velocity (Jiang et al. 2015, as FLIP Fluids'
+/// AFFINEX/Y/Z): row a is the gradient of its velocity's a component, per
+/// metre, as the move took it from the new faces. `id` is its particle's: a
+/// slot whose id is not its particle's (a birth where an older particle was)
+/// holds none. The shader's `ParticleAffine`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct ParticleAffine {
+    pub(crate) x: [f32; 3],
+    pub(crate) id: u32,
+    pub(crate) y: [f32; 3],
+    pub(crate) _pad0: u32,
+    pub(crate) z: [f32; 3],
+    pub(crate) _pad1: u32,
+}
+}
+
+/// Words of a [`ParticleAffine`]: the sort's companion record.
+const AFFINE_WORDS: u32 = (size_of::<ParticleAffine>() / 4) as u32;
+
 /// A wired Sand's bytes at each pool corner: its share and its momentum
 /// along each axis (the shader's `SAND_WORDS` words).
 pub(crate) const SAND_CORNER_BYTES: u64 = 16;
@@ -285,7 +306,7 @@ pub(crate) struct StepParams {
     pub(crate) body_count: i32,
     pub(crate) rows: i32,
     pub(crate) tick_seconds: f32,
-    pub(crate) flip: f32,
+    pub(crate) _pad0: u32,
     pub(crate) ghost: u32,
     pub(crate) particles: u32,
     pub(crate) shapes_len: u32,
@@ -455,6 +476,12 @@ pub(crate) struct StepState {
     /// No-body solid scratch stays zero until a body pass writes it.
     solid_velocity_is_zero: bool,
     sorted: Option<GpuBuffer>,
+    /// Each particle slot's [`ParticleAffine`], beside the particles the step
+    /// writes (`out`, and the state's copy of it the next tick reads); kept
+    /// across ticks, cleared at an epoch's first.
+    affine: Option<GpuBuffer>,
+    /// The affines beside `sorted`, which every sort writes with it.
+    affine_sorted: Option<GpuBuffer>,
     /// The emission flags' scan, one word a site of the tick's enumeration.
     emit_scan: PrefixScan,
     /// The slot's record `[groups, 1, 1, n]` (`count.wgsl`): written on the GPU
@@ -590,7 +617,7 @@ impl StepState {}
 manifold_node_engine::primitive! {
     name: GpuFlipStep,
     type_id: "node.gpu_flip_step",
-    purpose: "Advance GPU FLIP water through the accepted clock interval with CFL 5 and Steps minimum substeps (1 by default); each substep sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the Bounds walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together to reduce marker density error (a density projection, position only, when Volume Projection is 1), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and resolves its move against the walls and solid bodies (a particle still inside a solid is pushed out, never removed). The Bounds box is bounds_lo to bounds_hi in metres as authored: each face Closed Faces names (bit 2d the low face of axis d, bit 2d + 1 the high one) is a wall, a solid like a body; each face Open Faces names removes the water that ends a substep beyond its plane; water that ends a substep below Kill Height is removed too. With no wall, no open face and no kill height the water falls through free space. Water a moving solid seals off from air does not take that solid's push, unless the bodies are in the solve.When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Extrapolates projected velocity by 12 layers before constraining solids. Removes markers above 250 per cell and extreme velocities using the accepted interval, compacts survivors without changing their ids, then emits inflow for the next step. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
+    purpose: "Advance GPU FLIP water through the accepted clock interval with CFL 5 and Steps minimum substeps (1 by default); each substep sorts the particles into the lattice's cells, gathers their velocity and its gradient onto the cell faces (APIC: each particle carries its affine velocity beside it), adds gravity and the scene's forces and impulses, makes the water incompressible against the Bounds walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together to reduce marker density error (a density projection, position only, when Volume Projection is 1), then gives every particle the new velocity and its gradient at its place, moves it through the new velocity and resolves its move against the walls and solid bodies (a particle still inside a solid is pushed out, never removed). The Bounds box is bounds_lo to bounds_hi in metres as authored: each face Closed Faces names (bit 2d the low face of axis d, bit 2d + 1 the high one) is a wall, a solid like a body; each face Open Faces names removes the water that ends a substep beyond its plane; water that ends a substep below Kill Height is removed too. With no wall, no open face and no kill height the water falls through free space. Water a moving solid seals off from air does not take that solid's push, unless the bodies are in the solve.When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Extrapolates projected velocity by 12 layers before constraining solids. Removes markers above 250 per cell and extreme velocities using the accepted interval, compacts survivors without changing their ids, then emits inflow for the next step. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
     inputs: {
         particles: Array(FluidParticle) required,
         identity: Array(u32) required,
@@ -681,7 +708,6 @@ manifold_node_engine::primitive! {
         int_param!("region_count", "Regions", 0.0, 0.0, i32::MAX as f32),
         float_param!("inflow_jitter", "Inflow Jitter", 0.0, 0.0, 1.0),
         int_param!("steps", "Steps", 1.0, 1.0, 64.0),
-        float_param!("flip", "Flip Share", 0.95, 0.0, 1.0),
         int_param!("iterations", "Iterations (0 = Auto)", 0.0, 0.0, MAX_ITERATIONS as f32),
         int_param!("max_iterations", "Max Iterations", MAX_ITERATIONS as f32, 1.0, MAX_ITERATIONS as f32),
         int_param!("ghost_fluid", "Ghost Fluid", 1.0, 0.0, 1.0),
@@ -708,7 +734,7 @@ manifold_node_engine::primitive! {
         int_param!("narrow_band", "Narrow Band", 0.0, 0.0, 1.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Inside node.liquid_state's tick region, once per tick: particles from the state's out, Steps substeps of 1/(60·Steps) s run inside the node, each moving the last one's particles, and the bodies see every substep. The cell size and pool_tiles, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and reaction, which every substep adds to in place; tick_index from node.liquid_state. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. faces, distance, tiles and pool_tiles feed the whitewater stage; out keeps the particles slots. regions and region_count also come from node.gpu_flip_domain: each step an inflow seeds particles at its empty half-cell sites into free pool slots (a full pool emits nothing) and holds the velocity inside it, and an outflow kills the particles it holds; the live count rides the cell ranges. A pool the device cannot hold is a named error. Narrow Band 1 keeps particles only in a band under the surface as deep as the velocity extension (12 cells); the deeper water is the grid's, carried from step to step, and leaves as interior on tiles: wire it with tiles through node.liquid_state into node.surface_tiles and node.interior_fill, or the drawn water is hollow. Switching it off refills the grid's water with particles on the next tick, and so does a change of pool, after which the band starts over on the new one.",
+    composition_notes: "Inside node.liquid_state's tick region, once per tick: particles from the state's out, Steps substeps of 1/(60·Steps) s run inside the node, each moving the last one's particles, and the bodies see every substep. The cell size and pool_tiles, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and reaction, which every substep adds to in place; tick_index from node.liquid_state. faces, distance, tiles and pool_tiles feed the whitewater stage; out keeps the particles slots. regions and region_count also come from node.gpu_flip_domain: each step an inflow seeds particles at its empty half-cell sites into free pool slots (a full pool emits nothing) and holds the velocity inside it, and an outflow kills the particles it holds; the live count rides the cell ranges. A pool the device cannot hold is a named error. Narrow Band 1 keeps particles only in a band under the surface as deep as the velocity extension (12 cells); the deeper water is the grid's, carried from step to step, and leaves as interior on tiles: wire it with tiles through node.liquid_state into node.surface_tiles and node.interior_fill, or the drawn water is hollow. Switching it off refills the grid's water with particles on the next tick, and so does a change of pool, after which the band starts over on the new one.",
     examples: ["WaterDamBreakGpuFlip"],
     picker: { label: "GPU FLIP Step", category: Atom },
     summary: "Moves the water forward one tick, in Steps substeps: gravity, solids, incompressibility and the particles' motion.",

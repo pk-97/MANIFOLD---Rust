@@ -128,6 +128,7 @@ pub(super) fn gpu_flip_step_order_cell_cap_compacts_preserving_ids() {
                 bins: N.map(|n| n as u32),
                 sorted: Some(&output),
                 order: None,
+                companion: None,
                 gate: None,
             },
             &labels,
@@ -197,7 +198,6 @@ impl InflowStep {
                     ("region_count", 1.0),
                     ("region_site_total", site_total),
                     ("iterations", 0.0),
-                    ("flip", 1.0),
                 ],
             ]
             .concat(),

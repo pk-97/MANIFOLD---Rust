@@ -150,6 +150,11 @@ struct SortParams {
     table_entries: u32,
     /// 1 when a point whose tile the table does not hold is not counted.
     drop_absent: u32,
+    /// Words of each slot's companion record; 0 when the job has none.
+    companion_words: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 /// `SortParams::count_word` for a sort over a CPU slot count.
@@ -230,9 +235,21 @@ pub struct SortJob<'a> {
     /// Liquid particle records only; `None` leaves it unwritten.
     pub sorted: Option<&'a GpuBuffer>,
     pub order: Option<&'a GpuBuffer>,
+    /// A record beside each slot that moves with it; `None` moves none.
+    pub companion: Option<Companion<'a>>,
     /// A GPU FLIP clock plan: an inactive slot's (live, no time to step)
     /// sort runs no pass and leaves every output as it was. `None` always sorts.
     pub gate: Option<&'a GpuBuffer>,
+}
+
+/// `words` u32s beside each slot of the particles, in `from`: the sort writes
+/// slot i's to `to` where it puts slot i, and (a [`SortCount::Slots`] sort)
+/// zeroes the slots past the live total, as it does `sorted`'s.
+#[derive(Clone, Copy)]
+pub struct Companion<'a> {
+    pub from: &'a GpuBuffer,
+    pub to: &'a GpuBuffer,
+    pub words: u32,
 }
 
 manifold_core::testkit_visible! {
@@ -398,6 +415,7 @@ impl ParticleSorter {
         let sorted_capacity = [
             job.sorted.map(|b| b.size / particle_size),
             job.order.map(|b| b.size / 4),
+            job.companion.map(|c| c.to.size / (u64::from(c.words.max(1)) * 4)),
         ]
         .into_iter()
         .flatten()
@@ -455,6 +473,10 @@ impl ParticleSorter {
             count_word,
             table_entries: pool.map_or(0, |(_, pool_tiles)| table_entries(pool_tiles)),
             drop_absent: u32::from(self.rule == KeyRule::PooledCellsHeld),
+            companion_words: job.companion.map_or(0, |c| c.words),
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         let mut bindings = vec![
             GpuBinding::Bytes {
@@ -505,6 +527,16 @@ impl ParticleSorter {
             GpuBinding::Buffer {
                 binding: 10,
                 buffer: counts,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 11,
+                buffer: job.companion.map_or(job.particles, |c| c.from),
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 12,
+                buffer: job.companion.map_or(rank, |c| c.to),
                 offset: 0,
             },
         ];
@@ -775,6 +807,7 @@ impl Primitive for SortParticlesIntoCells {
             bins: [0; 3],
             sorted,
             order,
+            companion: None,
             gate: None,
         };
         let gpu = ctx.gpu_encoder();

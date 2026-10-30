@@ -1,4 +1,4 @@
-//! Particle motion: sampling, the FLIP blend, RK3 and collisions.
+//! Particle motion: sampling, APIC's velocity and affine, RK3 and collisions.
 
 use super::*;
 
@@ -33,6 +33,54 @@ pub(crate) fn cpu_sample_on(q: [f64; 3], field: &[FaceSample], n: [usize; 3]) ->
         }
         sum
     })
+}
+
+/// [`cpu_sample`]'s gradient per cell: row a is the gradient of the a
+/// component, the trilinear weights' gradients over the same corners
+/// (fluidsimulation.cpp _getIndicesAndGradientWeights), a corner past the
+/// padded array contributing zero.
+pub(super) fn cpu_gradient(q: [f64; 3], field: &[FaceSample]) -> [[f64; 3]; 3] {
+    if q.iter().any(|value| !value.is_finite()) {
+        return [[0.0; 3]; 3];
+    }
+    std::array::from_fn(|a| {
+        let s: [f64; 3] = std::array::from_fn(|b| q[b] - if b == a { 0.0 } else { 0.5 });
+        let base: [i64; 3] = std::array::from_fn(|b| s[b].floor() as i64);
+        let t: [f64; 3] = std::array::from_fn(|b| s[b] - base[b] as f64);
+        let mut gradient = [0.0; 3];
+        for corner in 0..8 {
+            let bit = [corner & 1, (corner >> 1) & 1, (corner >> 2) & 1];
+            let c: [i64; 3] = std::array::from_fn(|b| base[b] + bit[b] as i64);
+            if (0..3).all(|b| c[b] >= 0 && c[b] <= N[b] as i64) {
+                let c: [usize; 3] = c.map(|value| value as usize);
+                let v = f64::from(field[c[0] + (N[0] + 1) * (c[1] + (N[1] + 1) * c[2])].velocity[a]);
+                let w: [f64; 3] = std::array::from_fn(|b| if bit[b] == 1 { t[b] } else { 1.0 - t[b] });
+                let d: [f64; 3] = std::array::from_fn(|b| if bit[b] == 1 { 1.0 } else { -1.0 });
+                for (g, slope) in gradient.iter_mut().enumerate() {
+                    let product: f64 = (0..3).map(|b| if b == g { d[b] } else { w[b] }).product();
+                    *slope += product * v;
+                }
+            }
+        }
+        gradient
+    })
+}
+
+/// Zeroed affines for a move over `n` particles to write.
+pub(super) fn no_affines(n: usize) -> Vec<ParticleAffine> {
+    vec![ParticleAffine::default(); n]
+}
+
+/// Checks a particle's affine against the field's gradient at q0 (cells
+/// from MIN), per metre, and its id.
+fn check_affine(got: &ParticleAffine, q0: [f64; 3], field: &[FaceSample], id: u32, what: &str) {
+    let want = cpu_gradient(q0, field);
+    for (a, row) in [got.x, got.y, got.z].into_iter().enumerate() {
+        for b in 0..3 {
+            close(row[b], want[a][b] / f64::from(H), 10.0 / f64::from(H), &format!("{what} affine {a}/{b}"));
+        }
+    }
+    assert_eq!(got.id, id, "{what}: the affine is tagged with its particle's id");
 }
 
 #[test]
@@ -130,70 +178,71 @@ pub(super) fn gpu_flip_faces_to_particles_reads_native_stored_face_values() {
         };
         face_len()
     ];
-    let mut affine = stored.clone();
-    for (i, face) in affine.iter_mut().enumerate() {
+    // A linear field: velocity a is 10(a + 1) + c0 + 2 c1 + 3 c2 at record c,
+    // so away from the box's edge every gradient row is (1, 2, 3) per cell.
+    let mut linear = stored.clone();
+    for (i, face) in linear.iter_mut().enumerate() {
         let c = pad_coords(i);
         for a in 0..3 {
             face.velocity[a] = (10 * (a + 1) + c[0] + 2 * c[1] + 3 * c[2]) as f32;
         }
     }
-    let zero = vec![FaceSample::default(); face_len()];
-    let run = |flip: f32, faces: &[FaceSample], old: &[FaceSample]| {
+    let run = |faces: &[FaceSample]| {
         let mut pass = Pass::new();
         let solid = pass.wall_corners(MIN, box_hi(), 63);
-        pass.bind(2, &particles, Layout::Dense)
+        let moved = pass
+            .bind(2, &particles, Layout::Dense)
             .bind(3, faces, Layout::Records)
             .bind(9, &solid, Layout::Dense)
             .bind(15, &[LiquidShape::default()], Layout::Dense)
             .bind(16, &[0_u32; 4], Layout::Dense)
-            .bind(17, old, Layout::Records)
             .bind(18, faces, Layout::Records)
             .bind(22, &vec![0_u32; 2 * particles.len()], Layout::Dense)
             .bind(36, &[LiquidBody::default()], Layout::Dense)
+            .bind(75, &no_affines(particles.len()), Layout::Dense)
             .run::<FluidParticle>(
                 "faces_to_particles",
                 &StepParams {
                     step_dt: 0.0,
-                    flip,
                     particles: particles.len() as u32,
                     ..lattice()
                 },
                 19,
                 particles.len(),
                 particles.len(),
-            )
+            );
+        (moved, pass.bound::<ParticleAffine>(75, particles.len()))
     };
-    for field in [&stored, &affine] {
-        let fresh = run(0.0, field, &zero);
-        let old_grid = run(1.0, &zero, field);
+    for field in [&stored, &linear] {
+        let (moved, affines) = run(field);
         for (i, q) in points.into_iter().enumerate() {
             let want = cpu_sample(q, field);
             for (a, want) in want.into_iter().enumerate() {
-                close(fresh[i].velocity[a], want, 10.0, "new-grid stored sample");
-                close(
-                    old_grid[i].velocity[a],
-                    -want,
-                    10.0,
-                    "old-grid stored sample",
-                );
+                close(moved[i].velocity[a], want, 10.0, "stored sample");
             }
-            assert_eq!(fresh[i].id, particles[i].id);
+            assert_eq!(moved[i].id, particles[i].id);
+            check_affine(&affines[i], q, field, particles[i].id, "stored");
         }
         assert_eq!(
-            fresh[0].position_radius, particles[0].position_radius,
+            moved[0].position_radius, particles[0].position_radius,
             "dt=0 keeps the interior position"
         );
-        assert_eq!(
-            old_grid[0].position_radius, particles[0].position_radius,
-            "dt=0 keeps the old-grid interior position"
-        );
+    }
+    // The linear field's slope, in closed form, at the interior points.
+    let (_, affines) = run(&linear);
+    for i in [0, 2, 8] {
+        for (a, row) in [affines[i].x, affines[i].y, affines[i].z].into_iter().enumerate() {
+            let want = [1.0, 2.0, 3.0].map(|slope: f64| slope / f64::from(H));
+            for b in 0..3 {
+                close(row[b], want[b], 10.0, &format!("point {i} slope {a}/{b}"));
+            }
+        }
     }
 }
 
 #[test]
-pub(super) fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
+pub(super) fn gpu_flip_faces_to_particles_takes_apic_velocity_and_moves_by_rk3() {
     let faces = random_faces(0xf1a5, true);
-    let old = random_faces(0x01d5, false);
     let mut particles = random_particles(0x2b3, 300);
     // Keep the random draw away from wall corners so the f64 wall oracle
     // compares the same one-axis lattice gradient as the shader.
@@ -214,14 +263,15 @@ pub(super) fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
         MIN[1] + (N[1] as f32 - 0.15) * H,
         MIN[2] + 2.5 * H,
     ]);
-    // Two broken particles: the move must leave them non-finite, never clamp
-    // or zero them, so the tick's stats see them.
+    // A broken position: the move must leave it non-finite, never clamp or
+    // zero it, so the tick's stats see it. A broken velocity is the grid's
+    // problem: the gather spreads it to the faces, and the move takes the
+    // faces' velocity, never the particle's own.
     particles[2].position_radius[0] = f32::NAN;
     particles[3].velocity[1] = f32::INFINITY;
-    let (dt, flip) = (0.07f32, 0.9f32);
+    let dt = 0.07f32;
     let step = StepParams {
         step_dt: dt,
-        flip,
         particles: particles.len() as u32,
         ..lattice()
     };
@@ -235,10 +285,10 @@ pub(super) fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
         .bind(15, &[LiquidShape::default()], Layout::Dense)
         .bind(16, &[0_u32; 4], Layout::Dense)
         .bind(36, &[LiquidBody::default()], Layout::Dense)
-        .bind(17, &old, Layout::Records)
         // Spread equal to the new faces: no density move.
         .bind(18, &faces, Layout::Records)
         .bind(22, &vec![7u32; 2 * particles.len()], Layout::Dense)
+        .bind(75, &no_affines(particles.len()), Layout::Dense)
         .run(
             "faces_to_particles",
             &step,
@@ -248,6 +298,7 @@ pub(super) fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
         );
     // Step 0 of the tick starts the counts over the stale 7s.
     let capped: Vec<u32> = pass.bound(22, 2 * particles.len());
+    let affines: Vec<ParticleAffine> = pass.bound(75, particles.len());
     let per_cell = f64::from(dt) / f64::from(H);
     for (i, (g, p)) in got.iter().zip(&particles).enumerate() {
         if p.position_radius[3] <= 0.0 {
@@ -259,14 +310,6 @@ pub(super) fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
                 !g.position_radius[0].is_finite(),
                 "a non-finite position stays non-finite: {:?}",
                 g.position_radius
-            );
-            continue;
-        }
-        if i == 3 {
-            assert!(
-                !g.velocity[1].is_finite(),
-                "a non-finite velocity stays non-finite: {:?}",
-                g.velocity
             );
             continue;
         }
@@ -283,7 +326,7 @@ pub(super) fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
             std::array::from_fn(|a| q0[a] + 0.75 * per_cell * k2[a]),
             &faces,
         );
-        let before = cpu_sample(q0, &old);
+        check_affine(&affines[i], q0, &faces, p.id, &format!("particle {i}"));
         assert_eq!(
             capped[2 * i],
             0,
@@ -300,8 +343,7 @@ pub(super) fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
         let q1 = native_wall_move(q0, reached, N, f64::from(H));
         for a in 0..3 {
             let position = f64::from(MIN[a]) + q1[a] * f64::from(H);
-            let velocity = f64::from(flip) * (f64::from(p.velocity[a]) + after[a] - before[a])
-                + (1.0 - f64::from(flip)) * after[a];
+            let velocity = after[a];
             assert!(
                 (f64::from(g.position_radius[a]) - position).abs() < 2e-5,
                 "particle {i} position {a}: {} vs {position}",
@@ -395,9 +437,9 @@ pub(super) fn gpu_flip_rk3_stage_velocity_is_not_truncated() {
                 .bind(9, &solid, Layout::Dense)
                 .bind(15, &[LiquidShape::default()], Layout::Dense)
                 .bind(16, &[0_u32; 4], Layout::Dense)
-                .bind(17, &faces, Layout::Records)
                 .bind(18, &faces, Layout::Records)
                 .bind(22, &[91u32; 2], Layout::Dense)
+                .bind(75, &no_affines(1), Layout::Dense)
                 .bind(36, &[LiquidBody::default()], Layout::Dense)
                 .bind(46, &clock, Layout::Dense)
                 .run(
@@ -483,9 +525,9 @@ pub(super) fn gpu_flip_marker_motion_matches_native_wall_sequence_without_bodies
             .bind(9, &solid, Layout::Dense)
             .bind(15, &[LiquidShape::default()], Layout::Dense)
             .bind(16, &[0_u32; 4], Layout::Dense)
-            .bind(17, &faces, Layout::Records)
             .bind(18, &faces, Layout::Records)
             .bind(22, &[0_u32; 2], Layout::Dense)
+            .bind(75, &no_affines(1), Layout::Dense)
             .bind(36, &[LiquidBody::default()], Layout::Dense)
             .run(entry, &step, 19, 1, 1);
         if name == "nonfinite" {
@@ -554,9 +596,9 @@ fn move_at_rest(
         .bind(9, &solid, Layout::Dense)
         .bind(15, &[LiquidShape::default()], Layout::Dense)
         .bind(16, &[0_u32; 4], Layout::Dense)
-        .bind(17, &faces, Layout::Records)
         .bind(18, &faces, Layout::Records)
         .bind(22, &vec![0_u32; 2 * particles.len()], Layout::Dense)
+        .bind(75, &no_affines(particles.len()), Layout::Dense)
         .bind(36, &[LiquidBody::default()], Layout::Dense)
         .run(
             "faces_to_particles",
@@ -742,9 +784,9 @@ pub(super) fn gpu_flip_collision_refuses_excessive_push_and_keeps_the_particle()
         .bind(9, &solid, Layout::Records)
         .bind(15, &[LiquidShape::default()], Layout::Dense)
         .bind(16, &[0_u32; 4], Layout::Dense)
-        .bind(17, &faces, Layout::Records)
         .bind(18, &faces, Layout::Records)
         .bind(22, &[0_u32; 2], Layout::Dense)
+        .bind(75, &no_affines(1), Layout::Dense)
         .bind(36, &[LiquidBody::default()], Layout::Dense)
         .run(entry, &step, 19, 1, 1);
     assert_eq!(

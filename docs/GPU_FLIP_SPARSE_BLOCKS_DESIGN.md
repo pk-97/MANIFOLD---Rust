@@ -85,8 +85,8 @@ The gather maps a C cell to its own record (`c_face_index`). The records past th
 
 The three face centres are computed once per record. Each particle contributes
 through explicit x/y/z blocks, avoiding dynamic component indexing in the hot
-loop. The Wyvill support test, arithmetic and per-component accumulation order
-are unchanged. A test-only copy of the original loop checks every output word,
+loop. The tent support test (APIC), arithmetic and per-component accumulation
+order are unchanged. A test-only copy of the original loop checks every output word,
 including walls, support boundaries, invalid markers and inactive/resumed slots.
 
 The reach rule, per pass in Phase 1 scope:

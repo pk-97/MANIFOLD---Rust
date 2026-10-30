@@ -443,6 +443,7 @@ fn sort_and_check(
                 bins: input.grid.bins,
                 sorted: sorted.as_ref(),
                 order: order.as_ref(),
+                companion: None,
                 gate: gate.as_ref(),
             },
             &LABELS,
@@ -735,6 +736,14 @@ fn sort_particles_into_cells_through_a_count_record_ignores_the_slots_past_it() 
     };
     let sorted = untouched_buffer(&device, slots * stride);
     let order = untouched_buffer(&device, slots);
+    // Three words beside each slot, distinct per slot (GPU FLIP's affines are
+    // twelve): each must land beside its particle, past the live end untouched.
+    const COMPANION: usize = 3;
+    let beside: Vec<u32> = (0..slots * COMPANION).map(|j| 0x1000_0000 + j as u32).collect();
+    let companion = device.create_buffer(beside.len() as u64 * 4, BufferUse::Upload);
+    // SAFETY: a shared buffer of exactly these words; no GPU work in flight.
+    unsafe { companion.write(0, bytemuck::cast_slice(&beside)) };
+    let companion_sorted = untouched_buffer(&device, slots * COMPANION);
     let mut sorter = prepared_sorter(&device);
     sorter
         .reserve_ranges(&device, grid.bins)
@@ -759,6 +768,11 @@ fn sort_particles_into_cells_through_a_count_record_ignores_the_slots_past_it() 
                 bins: grid.bins,
                 sorted: Some(&sorted),
                 order: Some(&order),
+                companion: Some(Companion {
+                    from: &companion,
+                    to: &companion_sorted,
+                    words: COMPANION as u32,
+                }),
                 gate: None,
             },
             &LABELS,
@@ -774,13 +788,18 @@ fn sort_particles_into_cells_through_a_count_record_ignores_the_slots_past_it() 
     );
     let mut want_sorted: Vec<u32> = (0..slots * stride).map(untouched).collect();
     let mut want_order: Vec<u32> = (0..slots).map(untouched).collect();
+    let mut want_companion: Vec<u32> = (0..slots * COMPANION).map(untouched).collect();
     for (slot, &input) in members.iter().enumerate() {
         want_sorted[slot * stride..(slot + 1) * stride]
             .copy_from_slice(clean.record(input as usize));
         want_order[slot] = input;
+        let input = input as usize;
+        want_companion[slot * COMPANION..(slot + 1) * COMPANION]
+            .copy_from_slice(&beside[input * COMPANION..(input + 1) * COMPANION]);
     }
     assert_words("sorted", &read_words(&sorted), &want_sorted, stride);
     assert_words("order", &read_words(&order), &want_order, 1);
+    assert_words("companion", &read_words(&companion_sorted), &want_companion, COMPANION);
 }
 
 /// The pooled sort keys each live particle on the pool index of its world
@@ -855,6 +874,7 @@ fn sort_particles_into_cells_pooled_keys_world_cells_through_the_table() {
                     bins: [0; 3],
                     sorted: None,
                     order: Some(&order),
+                    companion: None,
                     gate: None,
                 },
                 &table,

@@ -11,13 +11,10 @@ fn finite(v: vec3<f32>) -> bool {
     return all(bits != vec3<u32>(0x7f800000u));
 }
 
-// grid: 0 the new faces, 1 `old`, 2 `spread`.
+// grid: 0 the new faces, 2 `spread`.
 fn face_record(index: u32, grid: u32) -> FaceSample {
     if grid == 0u {
         return faces_in[index];
-    }
-    if grid == 1u {
-        return old[index];
     }
     return spread[index];
 }
@@ -49,6 +46,47 @@ fn sample(q: vec3<f32>, lo: vec3<i32>, grid: u32) -> vec3<f32> {
     }
     return v;
 }
+
+// The new faces' velocity at q, as `sample` takes it, and its gradient per
+// cell: row a of `rows` is the gradient of the velocity's a component, the
+// trilinear weights' gradients over the same eight faces
+// (FluidSimulation::_getIndicesAndGradientWeights). Non-finite positions
+// fail to zero.
+struct Sampled {
+    velocity: vec3<f32>,
+    rows: array<vec3<f32>, 3>,
+};
+
+fn sample_gradient(q: vec3<f32>, lo: vec3<i32>) -> Sampled {
+    var out = Sampled(vec3<f32>(0.0), array<vec3<f32>, 3>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0)));
+    if !finite(q) {
+        return out;
+    }
+    for (var a = 0; a < 3; a = a + 1) {
+        var offset = vec3<f32>(0.5);
+        offset[a] = 0.0;
+        let s = q - offset;
+        let base = vec3<i32>(floor(s));
+        let t = s - vec3<f32>(base);
+        var sum = 0.0;
+        var gradient = vec3<f32>(0.0);
+        for (var corner = 0; corner < 8; corner = corner + 1) {
+            let bit = vec3<i32>(corner & 1, (corner >> 1u) & 1, (corner >> 2u) & 1);
+            let v = faces_in[ts_face(base + bit + lo)].face_velocity[a];
+            let high = bit != vec3<i32>(0);
+            let w3 = select(vec3<f32>(1.0) - t, t, high);
+            let d3 = select(vec3<f32>(-1.0), vec3<f32>(1.0), high);
+            sum = sum + w3.x * w3.y * w3.z * v;
+            gradient = gradient + vec3<f32>(d3.x * w3.y * w3.z, w3.x * d3.y * w3.z, w3.x * w3.y * d3.z) * v;
+        }
+        out.velocity[a] = sum;
+        out.rows[a] = gradient;
+    }
+    return out;
+}
+
+// The affines beside `particles_out`: the move writes each particle's.
+@group(0) @binding(75) var<storage, read_write> affine_out: array<ParticleAffine>;
 
 // The march along a particle's move, in cells
 // (_markerParticleStepDistanceFactor).
@@ -222,8 +260,12 @@ fn lost_reach(lo: vec3<i32>) -> bool {
 // One thread per slot in use (`slot_record`), `sorted` to `particles_out`. A
 // live particle (radius > 0) whose own tile has no slot (an exhausted pool;
 // `tiles_tally` counts them) is removed, and so is one that has lost the
-// water's reach (`lost_reach`, counted in its first `capped` word). Any other at q blends FLIP and PIC, flip · (v + new(q) − old(q)) +
-// (1 − flip) · new(q), then moves by RK3 through the new faces (stages at ½
+// water's reach (`lost_reach`, counted in its first `capped` word). Any other
+// at q takes APIC's velocity and affine (as FluidSimulation::
+// _updatePICAPICMarkerParticleVelocitiesThread): the new faces' velocity at q
+// and its gradient per metre, into `affine_out`, which the next step's
+// particles to faces carries to the grid. Then it moves by RK3 through the
+// new faces (stages at ½
 // and ¾ of step_dt, weights 2/9, 3/9, 4/9), plus the density
 // projection's move. The solid collision sequence is shared by wall-only and
 // body scenes; a particle still inside a solid, where a moving solid swept
@@ -268,7 +310,16 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let per_cell = adaptive_step_dt() / u.cell_size;
     let q0 = (x0 - u.origin) * u.inv_cell - vec3<f32>(lo);
-    let after = sample(q0, lo, 0u);
+    let start = sample_gradient(q0, lo);
+    let after = start.velocity;
+    affine_out[idx] = ParticleAffine(
+        start.rows[0] * u.inv_cell,
+        particle.id,
+        start.rows[1] * u.inv_cell,
+        0u,
+        start.rows[2] * u.inv_cell,
+        0u,
+    );
     let k1 = after;
     let k2 = sample(q0 + 0.5 * per_cell * k1, lo, 0u);
     let k3 = sample(q0 + 0.75 * per_cell * k2, lo, 0u);
@@ -291,11 +342,7 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     if finite(q1) && (beyond_open(x1) || x1.y < u.kill_height) {
         radius = 0.0;
     }
-    let before = sample(q0, lo, 1u);
-    out.velocity = u.flip * (particle.velocity + after - before) + (1.0 - u.flip) * after;
-    if nb_grid_moves(q0, lo) {
-        out.velocity = after;
-    }
+    out.velocity = after;
     if u.region_count > 0 {
         // An inflow sets the velocity of the water it holds
         // (_constrainMarkerParticleVelocities); an outflow removes the water

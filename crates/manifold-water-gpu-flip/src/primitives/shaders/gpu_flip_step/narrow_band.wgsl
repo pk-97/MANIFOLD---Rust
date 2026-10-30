@@ -84,13 +84,6 @@ fn nb_deep_cell(idx: u32, p: vec3<i32>) -> bool {
     return u.narrow_band != 0u && nb_deep(nb_cell(0u, idx), vec3<f32>(0.5), p);
 }
 
-// A particle at q is deep enough for the grid's velocity: it moves with the
-// field there (PIC), since its own velocity never reaches the gather.
-fn nb_grid_moves(q: vec3<f32>, lo: vec3<i32>) -> bool {
-    return u.narrow_band != 0u && nb_sample(0u, q, lo) < -nb_face_cells() * u.cell_size
-        && solid_at(q, lo) > nb_face_cells();
-}
-
 // The RK4 backtrace of q (cells from lo) through the new faces over this
 // substep's dt, the paper's surface tracking order.
 fn nb_backtrace(q: vec3<f32>, lo: vec3<i32>) -> vec3<f32> {

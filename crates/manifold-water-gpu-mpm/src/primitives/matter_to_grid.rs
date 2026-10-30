@@ -318,6 +318,7 @@ impl Primitive for MatterToGrid {
                             bins: [0; 3],
                             sorted: None,
                             order: Some(order),
+                            companion: None,
                             gate: None,
                         },
                         tiles.table(),

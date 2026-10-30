@@ -72,8 +72,7 @@ struct Params {
     // Body rows, at most what `bodies` holds.
     rows: i32,
     tick_seconds: f32,
-    // The FLIP share for this step.
-    flip: f32,
+    _pad0: u32,
     // subtract: 1 reads `phi` for the free surface, 0 keeps air at zero.
     ghost: u32,
     // Particle slots the pool holds: the births' bound.
@@ -159,6 +158,19 @@ struct FaceSample {
     face_weight: vec4<f32>,
 };
 
+// One particle's APIC affine velocity (gpu_flip_step.rs ParticleAffine): x,
+// y and z are the gradients of its velocity's x, y and z, per metre, as the
+// move took them from the new faces. `id` is its particle's; a slot whose id
+// is not its particle's holds none (`particle_affine`).
+struct ParticleAffine {
+    x: vec3<f32>,
+    id: u32,
+    y: vec3<f32>,
+    _pad0: u32,
+    z: vec3<f32>,
+    _pad1: u32,
+};
+
 struct LiquidBody {
     position_inv_mass: vec4<f32>,
     rotation: vec4<f32>,
@@ -234,8 +246,6 @@ struct ClockPlan {
 @group(0) @binding(15) var<storage, read> shapes: array<LiquidShape>;
 
 @group(0) @binding(16) var<storage, read> atlas: array<u32>;
-
-@group(0) @binding(17) var<storage, read> old: array<FaceSample>;
 
 @group(0) @binding(18) var<storage, read> spread: array<FaceSample>;
 

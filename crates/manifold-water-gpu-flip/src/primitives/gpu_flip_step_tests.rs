@@ -4,7 +4,7 @@
 //!
 //! The CPU references port FLIP Fluids rules (MIT, Copyright (C) 2026 Ryan L.
 //! Guy & Dennis Fassbaender; see THIRD_PARTY_NOTICES.md): velocityadvector.cpp
-//! (the Wyvill sum), particlelevelset.cpp (the particle distance),
+//! (the APIC sum), particlelevelset.cpp (the particle distance),
 //! levelsetutils.cpp and meshlevelset.cpp (open fractions),
 //! fluidsimulation.cpp (solid face velocity, the constraint),
 //! pressuresolver.cpp (the pressure subtraction).
@@ -13,7 +13,7 @@ use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuDevice};
 
 use super::gpu_flip_step::{
-    StepParams, dispatch_pass, fill_unbound, pool_tiles, zeros_for_unbound,
+    ParticleAffine, StepParams, dispatch_pass, fill_unbound, pool_tiles, zeros_for_unbound,
 };
 use super::liquid_fill::LiquidFill;
 use manifold_node_engine::particles::FluidParticle;
@@ -316,7 +316,7 @@ enum Layout {
 /// binding numbers.
 fn output_layout(binding: u32) -> Layout {
     match binding {
-        3 | 4 | 9 | 10 | 11 | 17 | 18 | 20 | 43 => Layout::Records,
+        3 | 4 | 9 | 10 | 11 | 18 | 20 | 43 => Layout::Records,
         5..=8 | 23 | 25 | 33..=35 | 41 => Layout::Cells,
         _ => Layout::Dense,
     }

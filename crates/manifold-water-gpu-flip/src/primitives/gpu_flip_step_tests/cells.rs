@@ -23,27 +23,64 @@ pub(super) fn gpu_flip_water_is_negative_phi() {
     }
 }
 
+/// `particles`' affines in their own order: row a of each a random gradient
+/// (per metre), or, with `flow`, the flow's own; one in seven tagged with
+/// another particle's id, as a birth finds the slot an older particle left.
+fn particle_affines(
+    particles: &[FluidParticle],
+    seed: u64,
+    flow: Option<[[f64; 3]; 3]>,
+) -> Vec<ParticleAffine> {
+    let mut rng = Stream::new(seed);
+    particles
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let mut row = |a: usize| -> [f32; 3] {
+                std::array::from_fn(|b| match flow {
+                    Some(slope) => slope[a][b] as f32,
+                    None => rng.signed(3.0),
+                })
+            };
+            ParticleAffine {
+                x: row(0),
+                id: if flow.is_none() && i % 7 == 3 { p.id + 1 } else { p.id },
+                y: row(1),
+                z: row(2),
+                ..ParticleAffine::default()
+            }
+        })
+        .collect()
+}
+
+/// The APIC gather over `sorted` (its affines beside it) into every record's
+/// faces.
+fn particles_to_faces(sorted: &[FluidParticle], ranges: &[CellRange], affines: &[ParticleAffine]) -> Vec<FaceSample> {
+    let step = StepParams {
+        capacity: sorted.len() as u32,
+        ..lattice()
+    };
+    // The pass owns every record of the held tiles, the box's far edge
+    // records among them.
+    let mut pass = Pass::new();
+    let threads = pass.every_tile();
+    let filled = vec![FaceSample::default(); face_len()];
+    pass.bind_ranges(ranges)
+        .bind(2, sorted, Layout::Dense)
+        .bind(4, &filled, Layout::Records)
+        .bind(74, affines, Layout::Dense)
+        .run("particles_to_faces", &step, 4, face_len(), threads)
+}
+
 #[test]
-pub(super) fn gpu_flip_particles_to_faces_matches_the_wyvill_sum() {
+pub(super) fn gpu_flip_particles_to_faces_matches_the_apic_sum() {
     // Dense covers most faces; sparse leaves faces no particle reaches.
     for (name, count) in [("dense", 400), ("sparse", 12)] {
         let particles = random_particles(0x9261, count);
         let (sorted, ranges) = cpu_sort(&particles);
-        let step = StepParams {
-            capacity: sorted.len() as u32,
-            ..lattice()
-        };
-        // The pass owns every record of the held tiles, the box's far edge
-        // records among them.
-        let mut pass = Pass::new();
-        let threads = pass.every_tile();
-        let filled = vec![FaceSample::default(); face_len()];
-        let got: Vec<FaceSample> = pass
-            .bind_ranges(&ranges)
-            .bind(2, &sorted, Layout::Dense)
-            .bind(4, &filled, Layout::Records)
-            .run("particles_to_faces", &step, 4, face_len(), threads);
-        let (checked, invalid) = check_wyvill_faces(&particles, &got);
+        let affines = particle_affines(&sorted, 0xa71c, None);
+        let got = particles_to_faces(&sorted, &ranges, &affines);
+        let (checked, invalid) = check_apic_faces(&sorted, &affines, &got);
         if name == "dense" {
             assert!(
                 checked > 200,
@@ -58,23 +95,52 @@ pub(super) fn gpu_flip_particles_to_faces_matches_the_wyvill_sum() {
     }
 }
 
-/// Checks the particles to faces pass against the engine's kernel
-/// (velocityadvector.cpp, in cells: r = √3/2). Every record has its three
-/// faces and a face at the box's edge is gathered like any other. Returns
-/// the faces whose velocity was checked and the faces no particle reaches.
-pub(super) fn check_wyvill_faces(
-    particles: &[FluidParticle],
+/// APIC's point: particles that sample a linear flow v(x) = b + A x, each
+/// carrying A, give every face they reach that flow exactly, whatever the
+/// weights. Plain PIC (the affine ignored) smears it wherever the
+/// particles crowd one side of a face.
+#[test]
+pub(super) fn gpu_flip_particles_to_faces_carries_a_linear_flow_exactly() {
+    let slope = [[0.8, -1.3, 0.4], [2.1, 0.3, -0.7], [-0.5, 1.6, -1.1]];
+    let offset = [0.6, -0.9, 1.4];
+    let flow = |x: [f64; 3], a: usize| offset[a] + (0..3).map(|b| slope[a][b] * x[b]).sum::<f64>();
+    let mut particles = random_particles(0x51e7, 300);
+    for p in &mut particles {
+        let x = p.position_radius.map(f64::from);
+        p.velocity = std::array::from_fn(|a| flow([x[0], x[1], x[2]], a) as f32);
+    }
+    let (sorted, ranges) = cpu_sort(&particles);
+    let affines = particle_affines(&sorted, 0, Some(slope));
+    let got = particles_to_faces(&sorted, &ranges, &affines);
+    let mut checked = 0;
+    for (i, face) in got.iter().enumerate() {
+        let p = pad_coords(i);
+        for a in 0..3 {
+            if face.weight[a] < 0.05 {
+                continue;
+            }
+            let x: [f64; 3] = std::array::from_fn(|b| {
+                f64::from(MIN[b]) + (p[b] as f64 + if b == a { 0.0 } else { 0.5 }) * f64::from(H)
+            });
+            close(face.velocity[a], flow(x, a), 10.0, &format!("flow {p:?}/{a}"));
+            checked += 1;
+        }
+    }
+    assert!(checked > 200, "the fixture reaches most faces, got {checked}");
+}
+
+/// Checks the particles to faces pass against the APIC sum
+/// (velocityadvector.cpp _advectionAPICProducerThread, in cells): the tent
+/// weight of each live particle and its velocity plus its affine row times
+/// the face's offset, an affine tagged with another particle's id counting
+/// as none. Every record has its three faces and a face at the box's edge is
+/// gathered like any other. Returns the faces whose velocity was checked and
+/// the faces no particle reaches.
+pub(super) fn check_apic_faces(
+    sorted: &[FluidParticle],
+    affines: &[ParticleAffine],
     got: &[FaceSample],
 ) -> (usize, usize) {
-    let rsq = 0.75f64;
-    let wyvill = |d2: f64| {
-        if d2 < rsq {
-            1.0 - 4.0 / 9.0 * d2.powi(3) / rsq.powi(3) + 17.0 / 9.0 * d2 * d2 / (rsq * rsq)
-                - 22.0 / 9.0 * d2 / rsq
-        } else {
-            0.0
-        }
-    };
     let (mut checked, mut invalid) = (0, 0);
     for (i, face) in got.iter().enumerate() {
         let p = pad_coords(i);
@@ -82,25 +148,31 @@ pub(super) fn check_wyvill_faces(
             let centre: [f64; 3] =
                 std::array::from_fn(|b| p[b] as f64 + if b == a { 0.0 } else { 0.5 });
             let (mut weight, mut momentum) = (0.0f64, 0.0f64);
-            for particle in particles.iter().filter(|q| q.position_radius[3] > 0.0) {
-                let d2: f64 = (0..3)
-                    .map(|b| {
-                        let q = (f64::from(particle.position_radius[b]) - f64::from(MIN[b]))
-                            / f64::from(H);
-                        (q - centre[b]).powi(2)
-                    })
-                    .sum();
-                let w = wyvill(d2);
+            for (particle, affine) in sorted
+                .iter()
+                .zip(affines)
+                .filter(|(q, _)| q.position_radius[3] > 0.0)
+            {
+                let d: [f64; 3] = std::array::from_fn(|b| {
+                    centre[b]
+                        - (f64::from(particle.position_radius[b]) - f64::from(MIN[b])) / f64::from(H)
+                });
+                let w: f64 = d.iter().map(|d| (1.0 - d.abs()).max(0.0)).product();
+                let row = [affine.x, affine.y, affine.z][a];
+                let own = affine.id == particle.id;
+                let lift: f64 = if own {
+                    (0..3).map(|b| f64::from(row[b]) * d[b] * f64::from(H)).sum()
+                } else {
+                    0.0
+                };
                 weight += w;
-                momentum += w * f64::from(particle.velocity[a]);
+                momentum += w * (f64::from(particle.velocity[a]) + lift);
             }
             // A sum near the 1e-6 validity line can land on either side in f32.
             if (1e-7..1e-5).contains(&weight) {
                 continue;
             }
-            let valid = weight > 1e-6;
-            let velocity = if valid { momentum / weight } else { 0.0 };
-            if !valid {
+            if weight <= 1e-6 {
                 // Too little weight to trust: extension fills the face.
                 assert_eq!(
                     (face.velocity[a], face.weight[a]),
@@ -111,14 +183,11 @@ pub(super) fn check_wyvill_faces(
                 continue;
             }
             close(face.weight[a], weight, weight, &format!("weight {p:?}/{a}"));
-            // Near the rim the kernel is 1 minus terms summing to about 1, so
-            // each particle's f32 weight is off by ~1e-7 absolute; a ratio is
-            // held to 1e-5 only where the weight dwarfs that.
             if weight > 0.05 {
                 close(
                     face.velocity[a],
-                    velocity,
-                    1.0,
+                    momentum / weight,
+                    10.0,
                     &format!("velocity {p:?}/{a}"),
                 );
                 checked += 1;

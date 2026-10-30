@@ -1,7 +1,7 @@
 //! One step's passes, in order (module doc of `gpu_flip_step`).
 
 use super::*;
-use manifold_water_liquid::primitives::sort_particles_into_cells::SortCount;
+use manifold_water_liquid::primitives::sort_particles_into_cells::{Companion, SortCount};
 use manifold_water_liquid::tile_storage::pool_len;
 use manifold_water_liquid::world_tiles::{allocated_args_offset, exhausted_word, list_args_offset};
 
@@ -34,11 +34,13 @@ impl StepState {
             .pipelines
             .as_ref()
             .expect("step pipelines built by prepare_pipelines at install");
-        let (Some(l), Some(tiles), Some(sorted), Some(record)) = (
+        let (Some(l), Some(tiles), Some(sorted), Some(record), Some(affine), Some(affine_sorted)) = (
             self.lattice.as_ref(),
             self.tiles.as_ref(),
             self.sorted.as_ref(),
             self.slot_record.as_ref(),
+            self.affine.as_ref(),
+            self.affine_sorted.as_ref(),
         ) else {
             return Err("the step's storage was not reserved".into());
         };
@@ -58,8 +60,11 @@ impl StepState {
         self.static_built = Some(shapes_key);
         let capacity = p.capacity;
         // Every sort covers the slots in use, from the slot record, and keys
-        // each particle on its world cell's pool index.
-        let sort_job = |particles, sorted| SortJob {
+        // each particle on its world cell's pool index. The particles' affines
+        // move with them: `affine` beside `out` (and the particles the tick
+        // starts from, the state's copy of `out`), `affine_sorted` beside
+        // `sorted`.
+        let sort_job = |particles, sorted, (from, to)| SortJob {
             particles,
             read: LIQUID_PARTICLE_READ,
             capacity,
@@ -72,6 +77,11 @@ impl StepState {
             bins: [0; 3],
             sorted: Some(sorted),
             order: None,
+            companion: Some(Companion {
+                from,
+                to,
+                words: AFFINE_WORDS,
+            }),
             gate: Some(step.clock_plan),
         };
         // A copy of the params, so each Bytes binding borrows a value that
@@ -172,7 +182,7 @@ impl StepState {
             enc,
             &SortJob {
                 order: sheet_order,
-                ..sort_job(step.particles, sorted)
+                ..sort_job(step.particles, sorted, (affine, affine_sorted))
             },
             table,
             pool,
@@ -234,15 +244,19 @@ impl StepState {
             enc,
             &pipes.gather,
             c,
-            &[buffer(1, ranges), buffer(2, sorted), buffer(4, &l.g)],
+            &[
+                buffer(1, ranges),
+                buffer(2, sorted),
+                buffer(4, &l.g),
+                buffer(74, affine_sorted),
+            ],
             "gpu_flip.step.particles_to_faces",
         );
         if let Some(band) = &band {
             self.narrow_band
                 .encode_combine(enc, pipes, &base, tiles, step, band, &l.g, &l.corners);
         }
-        // The saved faces: the particles' own, extended so FLIP's change is
-        // measured wherever a particle samples.
+        // The particles' own faces, extended past the water for the forces.
         extend(
             enc,
             pipes,
@@ -577,21 +591,15 @@ impl StepState {
             "gpu_flip.step.extend_new",
         );
         enc.compute_memory_barrier_buffers();
-        // The engine constrains its velocity and its saved velocity to the
-        // solids after the pressure solve, so FLIP's change is measured
-        // between two constrained fields.
-        for (faces, label) in [
-            (out_faces, "gpu_flip.step.constrain"),
-            (&l.a, "gpu_flip.step.constrain_old"),
-        ] {
-            over(
-                enc,
-                &pipes.constrain,
-                held,
-                &[buffer(20, faces), buffer(10, &l.s), buffer(11, &l.v)],
-                label,
-            );
-        }
+        // The engine constrains its velocity to the solids after the pressure
+        // solve.
+        over(
+            enc,
+            &pipes.constrain,
+            held,
+            &[buffer(20, out_faces), buffer(10, &l.s), buffer(11, &l.v)],
+            "gpu_flip.step.constrain",
+        );
         // The density projection (module doc): its pressure's gradient is
         // taken off a copy of the new faces in `l.f`, and the move reads the
         // difference as a displacement. Air sits at zero at its centres.
@@ -752,9 +760,9 @@ impl StepState {
                 buffer(2, sorted),
                 buffer(9, &l.corners),
                 buffer(3, out_faces),
-                buffer(17, &l.a),
                 buffer(18, spread),
                 buffer(19, step.out),
+                buffer(75, affine),
                 buffer(22, step.capped),
                 buffer(15, step.shapes),
                 buffer(16, step.atlas),
@@ -782,7 +790,7 @@ impl StepState {
         self.sorter.encode_pooled(
             device,
             enc,
-            &sort_job(step.out, sorted),
+            &sort_job(step.out, sorted, (affine, affine_sorted)),
             table,
             pool,
             &SORT_LABELS,
@@ -866,7 +874,7 @@ impl StepState {
         self.sorter.encode_pooled(
             device,
             enc,
-            &sort_job(sorted, step.out),
+            &sort_job(sorted, step.out, (affine_sorted, affine)),
             table,
             pool,
             &SORT_LABELS,

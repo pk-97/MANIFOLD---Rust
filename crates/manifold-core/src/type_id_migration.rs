@@ -279,6 +279,9 @@ pub static RETIRED_PARAMS: &[(&str, &str)] = &[
     ("node.gpu_flip_step", "count"),
     ("node.gpu_flip_step", "retired_max_speed"),
     ("node.gpu_flip_step", "initial_obstacle_speed"),
+    // GPU FLIP transfers by APIC: the particles carry their affine velocity,
+    // so there is no FLIP share to keep.
+    ("node.gpu_flip_step", "flip"),
     ("node.liquid_stats", "count"),
     ("node.liquid_frame", "count"),
     ("node.whitewater_step", "count"),

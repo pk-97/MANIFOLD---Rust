@@ -1989,6 +1989,7 @@ impl Step {
             bins: [0; 3],
             sorted: None,
             order: Some(&f.order),
+            companion: None,
             gate: None,
         };
         self.sort

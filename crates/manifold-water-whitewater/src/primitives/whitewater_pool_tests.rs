@@ -775,6 +775,7 @@ fn sort_into_world<T: KnownItem + bytemuck::Pod>(
                 bins: [0; 3],
                 sorted: None,
                 order: Some(&order.1),
+                companion: None,
                 gate: None,
             },
             &tiles.1,

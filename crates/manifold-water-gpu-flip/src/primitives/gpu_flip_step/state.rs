@@ -74,14 +74,19 @@ impl StepState {
     /// Size every array for a pool of `pool` tiles and `slots` before anything is encoded;
     /// removal reuses the sorted array. The emission scan is sized by the
     /// encode from the tick's sites. `narrow_band` is the run's band mode.
+    /// `epoch_start` (the epoch's first tick: the particles are the fill's)
+    /// clears the affines.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn reserve(
         &mut self,
         device: &GpuDevice,
+        enc: &mut GpuEncoder,
         pool: u32,
         slots: u64,
         sheeting: bool,
         narrow_band: u32,
         sand: bool,
+        epoch_start: bool,
     ) -> Result<(), String> {
         if self.zeros.is_none() {
             let zeros = device.try_create_buffer(ZERO_BYTES, BufferUse::Upload)?;
@@ -122,6 +127,34 @@ impl StepState {
         {
             self.sorted = None;
             self.sorted = Some(allocate(device, sorted)?);
+        }
+        // The affines move with the particles and outlive the tick: grown
+        // storage keeps every slot's, and a slot no particle has written
+        // holds zero, an id no particle has.
+        let affine = slots.max(1) * size_of::<ParticleAffine>() as u64;
+        self.affine = Some(match self.affine.take() {
+            Some(kept) if kept.size >= affine => {
+                if epoch_start {
+                    enc.clear_buffer(&kept);
+                }
+                kept
+            }
+            kept => {
+                let grown = allocate(device, affine)?;
+                enc.clear_buffer(&grown);
+                if let Some(kept) = kept.filter(|_| !epoch_start) {
+                    enc.copy_buffer_to_buffer(&kept, &grown, kept.size);
+                }
+                grown
+            }
+        });
+        if self
+            .affine_sorted
+            .as_ref()
+            .is_none_or(|buffer| buffer.size < affine)
+        {
+            self.affine_sorted = None;
+            self.affine_sorted = Some(allocate(device, affine)?);
         }
         self.narrow_band.reserve(device, pool, narrow_band)?;
         // Every share is taken in the step that adds it, so a fresh zeroed

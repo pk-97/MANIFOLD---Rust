@@ -155,7 +155,6 @@ impl Primitive for GpuFlipStep {
         let limit_interval = Some(ctx.scalar_or_param("limit_interval", 0.0))
             .filter(|limit| limit.is_finite() && *limit > 0.0)
             .unwrap_or(0.0);
-        let flip = ctx.scalar_or_param("flip", 0.95).clamp(0.0, 1.0);
         let gravity = [("gravity_x", 0.0), ("gravity_y", -9.81), ("gravity_z", 0.0)]
             .map(|(name, default)| ctx.scalar_or_param(name, default));
         let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as i32;
@@ -244,13 +243,16 @@ impl Primitive for GpuFlipStep {
                 (points.size / size_of::<FluidParticle>() as u64) as f32,
             ) as u32
         });
+        let gpu = ctx.gpu_encoder();
         if let Err(error) = self.state.reserve(
-            ctx.gpu_encoder().device,
+            gpu.device,
+            gpu.native_enc,
             pool,
             u64::from(capacity),
             sheet_rate > 0.0,
             narrow_band,
             sand.is_some(),
+            tick_index == 0,
         ) {
             ctx.error(format!(
                 "{NAME}: a pool of {pool} tiles with {capacity} particle slots needs storage the device cannot give: {error}. Raise Cell Size."
@@ -396,9 +398,7 @@ impl Primitive for GpuFlipStep {
                 body_count,
                 rows,
                 tick_seconds: step_dt,
-                // The share is per step, as the engine's `_ratioPICFLIP`, whatever
-                // the step count.
-                flip,
+                _pad0: 0,
                 ghost: u32::from(ghost),
                 particles: out_slots,
                 shapes_len,

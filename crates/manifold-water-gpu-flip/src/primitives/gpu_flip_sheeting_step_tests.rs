@@ -218,7 +218,6 @@ impl Splash {
             ("gravity_y", -9.81),
             ("interval_duration", DT * steps as f32),
             ("steps", steps as f32),
-            ("flip", 0.95),
             ("iterations", 0.0),
             ("volume_projection", 0.0),
             ("sheet_fill_rate", rate),
