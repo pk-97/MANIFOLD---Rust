@@ -206,7 +206,12 @@ fn gully_octave(q: vec2<f32>, down: vec2<f32>, seed: u32) -> vec3<f32> {
 const GULLY_DEPTH: f32 = 0.5;
 // The slope, in Height units per Feature Size, past which gullies cut at
 // full depth; flat ground keeps none.
-const GULLY_SLOPE: f32 = 1.5;
+const GULLY_SLOPE: f32 = 1.0;
+// Along a range's crest gullies fade out, from this share of the ridge
+// octave's height to the top, so they start below it as channels do and
+// the crest stays one line instead of a row of notches.
+const CREST_START: f32 = 0.6;
+const CREST_END: f32 = 0.85;
 // The widest gullies, as a share of Feature Size; each octave after is half
 // as wide, down to what the grid can hold.
 const GULLY_WIDTH: f32 = 0.5;
@@ -221,6 +226,8 @@ const GULLY_WIDTH: f32 = 0.5;
 // height and the floors sink, so no fins or spikes rise above the land.
 fn terrain_gullies(xz: vec2<f32>, spacing: f32, slope: vec2<f32>) -> vec2<f32> {
     let feature_size = max(u.feature_size, 1e-3);
+    let ridge = terrain_noise(xz / feature_size, u.seed).x;
+    let open = 1.0 - smoothstep(CREST_START, CREST_END, 1.0 - sqrt(ridge * ridge + 0.01));
     var gradient = slope;
     var carved = 0.0;
     var floor_depth = 0.0;
@@ -236,7 +243,7 @@ fn terrain_gullies(xz: vec2<f32>, spacing: f32, slope: vec2<f32>) -> vec2<f32> {
         let reach = 1.0 - (1.0 - t) * (1.0 - t);
         let down = -gradient / max(length(gradient), 1e-9);
         let g = gully_octave(xz / wavelength, down, u.seed + 0x51ed270bu + octave);
-        let amplitude = fade * reach * GULLY_DEPTH * wavelength / feature_size;
+        let amplitude = fade * reach * open * GULLY_DEPTH * wavelength / feature_size;
         carved += 0.5 * amplitude * (g.x - 1.0);
         gradient += 0.5 * amplitude * g.yz / wavelength;
         floor_depth += amplitude * 0.5 * (1.0 - g.x);
