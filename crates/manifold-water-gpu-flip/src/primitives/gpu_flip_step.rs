@@ -70,7 +70,7 @@ use manifold_water_liquid::primitives::prefix_scan::ScanLabels;
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
     LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels, int_param,
 };
-use manifold_water_liquid::world_tiles::WorldTiles;
+use manifold_water_liquid::world_tiles::{SharedTable, WorldTiles};
 use read_params::read_iterations;
 pub(crate) use read_params::{
     read_closed_faces, read_max_iterations, read_open_faces, read_sheet_fill_rate, read_solve_level,
@@ -612,6 +612,8 @@ struct Step<'a> {
     /// the water inside them (`sand_corners`, `sand_drag`) and close the
     /// faces they lie on by their solid share (`sand_porous`).
     sand: Option<&'a GpuBuffer>,
+    /// The World's Matter table this table shares its key set with.
+    shared: Option<SharedTable<'a>>,
 }
 
 impl StepState {}
@@ -668,6 +670,10 @@ manifold_node_engine::primitive! {
         narrow_band: ScalarF32 optional,
         sand: Array(MatterGrain) optional,
         sand_count: ScalarF32 optional,
+        // The World's Matter table and pool: this table shares its key set
+        // (`world_tiles::SharedTable`), Matter's tick having run first.
+        shared_tiles: Array(u32) optional,
+        shared_pool_tiles: ScalarF32 optional,
     },
     outputs: {
         out: Array(FluidParticle),
@@ -676,7 +682,8 @@ manifold_node_engine::primitive! {
         faces: Array(FaceSample),
         // The pooled distance (`pool_len(pool_tiles)` values).
         distance: Array(f32),
-        // The world tile table of both pooled outputs (`table_words(pool_tiles)` words).
+        // The world tile table of both pooled outputs (at least
+        // `table_words(pool_tiles)` words: more when it shares its keys).
         tiles: Array(u32),
         // The pool's capacity in tiles, `P`.
         pool_tiles: ScalarF32,

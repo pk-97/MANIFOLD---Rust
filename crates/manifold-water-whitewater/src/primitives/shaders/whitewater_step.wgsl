@@ -300,14 +300,15 @@ fn publish_counts() {
 
 // Influence belongs to world tiles but lives in pool slots, and the table may
 // give a slot to another tile between frames. `restart_table` is this frame's
-// table: its slot rows start at word 4 + 2 * entries (past the header), a tile
-// (x, y, z) and an entry per slot. `restart_rows` is the same rows as last
-// frame left them.
+// table: its slot rows start past the header (H at word 0, which may be sized
+// for a key set shared with another material), the keys and the entries, a
+// tile (x, y, z) and an entry per slot. `restart_rows` is the same rows as
+// last frame left them (`save_slot_rows`).
 // A slot that is free now is never read and keeps its value; a slot that was
 // free or held a different tile last frame starts over at the base level.
 struct RestartParams {
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     count: u32,
     base_level: f32,
 }
@@ -316,6 +317,12 @@ struct RestartParams {
 @group(0) @binding(13) var<storage, read> restart_table: array<u32>;
 @group(0) @binding(14) var<storage, read> restart_rows: array<u32>;
 @group(0) @binding(15) var<storage, read_write> restart_values: array<f32>;
+@group(0) @binding(16) var<storage, read_write> saved_rows: array<u32>;
+
+// Word 0 of the slot rows in `restart_table`.
+fn restart_rows_start() -> u32 {
+    return 4u + 2u * restart_table[0];
+}
 
 const RESTART_NONE: u32 = 0xffffffffu;
 
@@ -326,7 +333,7 @@ fn restart_moved_influence(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let slot = i >> 9u;
-    let now = 4u + 2u * restart.entries + 4u * slot;
+    let now = restart_rows_start() + 4u * slot;
     if restart_table[now + 3u] == RESTART_NONE {
         return;
     }
@@ -338,4 +345,15 @@ fn restart_moved_influence(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !same {
         restart_values[i] = restart.base_level;
     }
+}
+
+// The slot rows of `restart_table` into `saved_rows`, one thread a word
+// (`count` = 4P): next frame's `restart_rows`.
+@compute @workgroup_size(256)
+fn save_slot_rows(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if i >= restart.count {
+        return;
+    }
+    saved_rows[i] = restart_table[restart_rows_start() + i];
 }

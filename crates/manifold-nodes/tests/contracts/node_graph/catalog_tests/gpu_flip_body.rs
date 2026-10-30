@@ -394,6 +394,7 @@ impl Lattice {
                 gate: &gate,
                 clip: None,
                 kept: None,
+                shared: None,
             },
         );
         enc.commit_and_wait().expect("GPU work completes");

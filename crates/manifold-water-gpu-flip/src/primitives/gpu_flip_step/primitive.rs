@@ -5,7 +5,8 @@ use crate::primitives::gpu_flip_pressure::max_solve_level;
 use manifold_node_engine::scene::world_tiles::lattice_origin;
 use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
 use manifold_water_liquid::substep_history::PooledFaces;
-use manifold_water_liquid::tile_pool::pool_tiles_wire;
+use manifold_water_liquid::tile_pool::{MAX_POOL_TILES, pool_tiles_wire};
+use manifold_water_liquid::world_tiles::shared_table_entries;
 
 impl Primitive for GpuFlipStep {
     fn prepare_pipelines(&mut self, device: &GpuDevice) {
@@ -243,11 +244,20 @@ impl Primitive for GpuFlipStep {
                 .clamp(0.0, (points.size / size_of::<MatterGrain>() as u64) as f32)
                 as u32
         });
+        // Matter's table, sharing this one's keys: one H sized for both pools.
+        let shared_tiles = ctx.inputs.array("shared_tiles");
+        let shared_pool = shared_tiles.map_or(0, |_| {
+            ctx.scalar_or_param("shared_pool_tiles", 0.0)
+                .round()
+                .clamp(0.0, MAX_POOL_TILES as f32) as u32
+        });
+        let entries = shared_table_entries(pool, shared_pool);
         let gpu = ctx.gpu_encoder();
         if let Err(error) = self.state.reserve(
             gpu.device,
             gpu.native_enc,
             pool,
+            entries,
             u64::from(capacity),
             sheet_rate > 0.0,
             narrow_band,
@@ -465,6 +475,12 @@ impl Primitive for GpuFlipStep {
             density: ctx.scalar_or_param("volume_projection", 0.0) > 0.5,
             sheet_rate,
             sand: sand.filter(|_| sand_count > 0),
+            shared: shared_tiles
+                .filter(|_| shared_pool > 0)
+                .map(|table| SharedTable {
+                    table,
+                    pool_tiles: shared_pool,
+                }),
         };
         let clock_status = ctx.outputs.array("clock_status").cloned();
         let body_row_offset = u64::try_from(rows.saturating_sub(body_count).max(0))
@@ -517,7 +533,11 @@ impl Primitive for GpuFlipStep {
         let gpu = ctx.gpu_encoder();
         if keep_history {
             self.state.history.prepare(gpu.device);
-            if let Err(error) = self.state.history.reserve(gpu.device, pool, history_slots) {
+            if let Err(error) =
+                self.state
+                    .history
+                    .reserve(gpu.device, pool, entries, history_slots)
+            {
                 ctx.error(format!("{NAME}: {error}"));
                 return;
             }
@@ -625,6 +645,7 @@ impl Primitive for GpuFlipStep {
                             faces: &self.state.lattice.as_ref().expect("lattice prepared").faces,
                             table: self.state.tiles.as_ref().expect("tiles prepared").table(),
                             pool_tiles: pool,
+                            entries,
                         },
                     );
                 }

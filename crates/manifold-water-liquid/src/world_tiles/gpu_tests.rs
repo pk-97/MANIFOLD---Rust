@@ -7,7 +7,8 @@ use std::collections::BTreeSet;
 use manifold_gpu::testkit::test_device;
 use manifold_node_engine::scene::world_tiles::{
     NEIGHBOURS, entry_slot_word, find, key_hash, lattice_origin, local_index, neighbour_index,
-    neighbour_row_word, slot_row_word, table_entries, table_keys, tile_key, tile_of_cell,
+    neighbour_row_word, slot_row_word, table_entries, table_keys, table_words, table_words_at,
+    tile_key, tile_of_cell,
 };
 
 use super::mirror::{Built, Mirror};
@@ -70,7 +71,7 @@ fn build(
     replay: u32,
     clip: Option<TileClip>,
 ) {
-    build_kept(device, tiles, cells, gate, replay, clip, None);
+    build_with(device, tiles, cells, gate, replay, clip, None, None);
 }
 
 /// [`build`] with each slot's kept word (`kept`) joining the points.
@@ -82,6 +83,29 @@ fn build_kept(
     replay: u32,
     clip: Option<TileClip>,
     kept: Option<&GpuBuffer>,
+) {
+    build_with(device, tiles, cells, gate, replay, clip, kept, None);
+}
+
+/// [`build`] sharing its key set with `shared`.
+fn build_shared(device: &GpuDevice, tiles: &WorldTiles, cells: &[[i32; 3]], other: &WorldTiles) {
+    let sharing = SharedTable {
+        table: other.table(),
+        pool_tiles: other.pool_tiles(),
+    };
+    build_with(device, tiles, cells, &plan(device, true), 0, None, None, Some(sharing));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_with(
+    device: &GpuDevice,
+    tiles: &WorldTiles,
+    cells: &[[i32; 3]],
+    gate: &GpuBuffer,
+    replay: u32,
+    clip: Option<TileClip>,
+    kept: Option<&GpuBuffer>,
+    sharing: Option<SharedTable<'_>>,
 ) {
     let (records, count) = particles(device, cells);
     // The slots in use, as the step's slot record holds them.
@@ -100,6 +124,7 @@ fn build_kept(
             gate,
             clip,
             kept,
+            shared: sharing,
         },
     );
     enc.commit_and_wait().expect("GPU work completes");
@@ -733,4 +758,87 @@ fn cell_lookup_paths_agree_over_a_block_of_tiles() {
     // neighbour row; a corner tile's home reaches the far corner by hash.
     assert_ne!(homes[13], NONE);
     assert_ne!(homes[neighbour_index([1, 1, 0]) as usize], NONE);
+}
+
+/// Each table's held slots as (tile, slot, entry), read from its words.
+fn held(tiles: &WorldTiles) -> Vec<([i32; 3], u32, u32)> {
+    let h = tiles.table_entries();
+    let words = read(tiles.table(), table_words_at(h, tiles.pool_tiles()) as usize);
+    (0..tiles.pool_tiles())
+        .filter_map(|s| {
+            let row = slot_row_word(h, s) as usize;
+            let entry = words[row + 3];
+            (entry != NONE).then(|| {
+                let tile = [words[row] as i32, words[row + 1] as i32, words[row + 2] as i32];
+                (tile, s, entry)
+            })
+        })
+        .collect()
+}
+
+/// Both tables hold the same keys, and each finds every slot it holds
+/// through them at the entry its row names.
+fn assert_shared(a: &WorldTiles, b: &WorldTiles, step: &str) {
+    let h = a.table_entries();
+    let words_a = read(a.table(), table_words_at(h, a.pool_tiles()) as usize);
+    let words_b = read(b.table(), table_words_at(h, b.pool_tiles()) as usize);
+    assert_eq!(table_keys(&words_a), table_keys(&words_b), "{step}: one key set");
+    for (name, tiles, words) in [("a", a, &words_a), ("b", b, &words_b)] {
+        let slots = held(tiles);
+        assert!(!slots.is_empty(), "{step}: {name} holds tiles");
+        for (tile, slot, entry) in slots {
+            assert_eq!(
+                find(table_keys(words), tile_key(tile)),
+                Some(entry),
+                "{step}: {name}'s tile {tile:?} at its row's entry"
+            );
+            assert_eq!(
+                words[entry_slot_word(h, entry) as usize],
+                slot,
+                "{step}: {name}'s entry {entry} names slot {slot}"
+            );
+        }
+    }
+}
+
+/// Two tables sharing one key set, as a World's water and Matter do: a
+/// build puts the other's held tiles in its keys without giving them a slot,
+/// then hands its keys over and re-points the other's slots. After each
+/// build both tables hold the same keys and each still finds its own tiles,
+/// while the water moves and the pile stays.
+#[test]
+fn two_tables_share_one_key_set() {
+    let device = test_device();
+    let reach = Reach {
+        ring_max: 1,
+        alloc_ring: 1,
+        cell_reach: 2,
+    };
+    let (pool_a, pool_b) = (96, 48);
+    let entries = shared_table_entries(pool_a, pool_b);
+    let mut a = WorldTiles::with_entries(&device, pool_a, entries, reach, LIQUID_POINTS)
+        .expect("world tiles");
+    let mut b = WorldTiles::with_entries(&device, pool_b, entries, reach, LIQUID_POINTS)
+        .expect("world tiles");
+    a.prepare(&device);
+    b.prepare(&device);
+    // Water in tiles x 0..1 and a pile in tiles x 4..5: apart beyond either
+    // table's ring, so each holds tiles the other does not.
+    let water = cells_of([0, 0, 0], [16, 8, 8]);
+    let pile = cells_of([32, 0, 0], [16, 4, 8]);
+    build_shared(&device, &a, &water, &b);
+    build_shared(&device, &b, &pile, &a);
+    assert_shared(&a, &b, "after the pile's build");
+    let pile_tiles: BTreeSet<[i32; 3]> = held(&b).into_iter().map(|(t, _, _)| t).collect();
+    // The water moves on a tile; the pile's tiles keep their keys and slots.
+    let moved = cells_of([8, 0, 0], [16, 8, 8]);
+    build_shared(&device, &a, &moved, &b);
+    assert_shared(&a, &b, "after the water moves");
+    let after: BTreeSet<[i32; 3]> = held(&b).into_iter().map(|(t, _, _)| t).collect();
+    assert_eq!(after, pile_tiles, "the pile holds the same tiles");
+    // A tile only the pile reaches holds no water slot.
+    let h = a.table_entries();
+    let words = read(a.table(), table_words_at(h, pool_a) as usize);
+    let entry = find(table_keys(&words), tile_key([6, 0, 0])).expect("the pile's tile is a key");
+    assert_eq!(words[entry_slot_word(h, entry) as usize], NONE, "no water slot there");
 }

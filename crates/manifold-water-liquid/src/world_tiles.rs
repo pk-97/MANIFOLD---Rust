@@ -23,13 +23,21 @@
 //! arrive in (ordered linear probing, frees in slot order, handout in table
 //! order through a prefix scan); list order is free, so readers index their
 //! partials by slot.
+//!
+//! Two materials of a World share one key set ([`Allocation::shared`]): each
+//! keeps its own table (its pool's slots, entry column and rows) with the same
+//! H ([`shared_table_entries`]), and a build puts the other table's held tiles
+//! in its keys, then hands the other table its keys and re-points the other's
+//! held slots. An entry then names the same tile in both tables.
 
 use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::scene::world_tiles::{
-    EMPTY, HEADER_WORDS, NONE, READ_SIDE, TILE, table_entries, table_header, table_words,
+    EMPTY, HEADER_WORDS, NONE, READ_SIDE, TILE, table_entries, table_header, table_words_at,
 };
+
+pub use manifold_node_engine::scene::world_tiles::shared_table_entries;
 
 use crate::primitives::prefix_scan::{PrefixScan, ScanLabels, storage_words};
 
@@ -64,6 +72,9 @@ const CHILD_ROWS_BINDING: u32 = 14;
 
 /// Where a particle build binds its slot record (`world_tiles_liquid.wgsl`).
 const RECORD_BINDING: u32 = 15;
+
+/// Where a build binds the table it shares its key set with.
+const SHARED_BINDING: u32 = 16;
 
 // LIQUID_POINTS reads a record as two vec4s.
 const _: () = assert!(std::mem::size_of::<FluidParticle>() == 32);
@@ -173,9 +184,13 @@ fn build_words(ring_max: u32) -> u64 {
 /// and the build's scratch and scan. For a memory check before the table
 /// exists; [`WorldTiles::bytes`] reads the buffers themselves.
 pub fn held_bytes(pool_tiles: u32, ring_max: u32) -> u64 {
-    let entries = table_entries(pool_tiles);
+    held_bytes_at(table_entries(pool_tiles), pool_tiles, ring_max)
+}
+
+/// [`held_bytes`] of a table of `entries` ([`WorldTiles::with_entries`]).
+pub fn held_bytes_at(entries: u32, pool_tiles: u32, ring_max: u32) -> u64 {
     let p = u64::from(pool_tiles);
-    let words = table_words(pool_tiles)
+    let words = table_words_at(entries, pool_tiles)
         + count_words(ring_max)
         + args_words(ring_max)
         + 3 * p
@@ -252,6 +267,9 @@ struct Pipelines {
     slots: GpuComputePipeline,
     finish: GpuComputePipeline,
     children: Option<GpuComputePipeline>,
+    foreign: GpuComputePipeline,
+    share: GpuComputePipeline,
+    repoint: GpuComputePipeline,
 }
 
 /// The point passes over kept words ([`KEPT_POINTS`]): seed, seeds, near.
@@ -296,6 +314,21 @@ pub struct Allocation<'a> {
     /// tile holding water no particle marks stays in the table.
     /// [`WorldTiles::prepare_kept`] first.
     pub kept: Option<&'a GpuBuffer>,
+    /// The other material's table of the World, of the same H: its held
+    /// tiles join this build's keys (without wanting a slot here), and after
+    /// the build it takes these keys and its held slots are re-pointed. A
+    /// table whose header holds another H (a pool that just changed) is left
+    /// alone until both sides agree again.
+    pub shared: Option<SharedTable<'a>>,
+}
+
+/// The other material's table a build shares its key set with: its words
+/// and the pool its slot passes are dispatched for (the table's header holds
+/// the pool it has; slots past it are skipped).
+#[derive(Clone, Copy)]
+pub struct SharedTable<'a> {
+    pub table: &'a GpuBuffer,
+    pub pool_tiles: u32,
 }
 
 /// A box of world tiles, its first and last tile per axis.
@@ -375,6 +408,24 @@ impl WorldTiles {
         reach: Reach,
         points: &'static str,
     ) -> Result<Self, String> {
+        Self::with_entries(device, pool_tiles, table_entries(pool_tiles), reach, points)
+    }
+
+    /// [`Self::new`] with `entries` keys, at least the pool's own H: a table
+    /// that shares its key set with another material's
+    /// ([`shared_table_entries`]).
+    pub fn with_entries(
+        device: &GpuDevice,
+        pool_tiles: u32,
+        entries: u32,
+        reach: Reach,
+        points: &'static str,
+    ) -> Result<Self, String> {
+        if !entries.is_power_of_two() || entries < table_entries(pool_tiles) {
+            return Err(format!(
+                "world tiles: {entries} entries cannot hold a pool of {pool_tiles} tiles"
+            ));
+        }
         if reach.alloc_ring > reach.ring_max {
             return Err(format!(
                 "world tiles: alloc ring {} is past ring max {}",
@@ -387,7 +438,7 @@ impl WorldTiles {
                 reach.cell_reach
             ));
         }
-        Self::with_points(device, pool_tiles, reach, points, false)
+        Self::with_points(device, pool_tiles, entries, reach, points, false)
     }
 
     /// A coarse level's table, built from the level below
@@ -398,12 +449,20 @@ impl WorldTiles {
             alloc_ring: 0,
             cell_reach: 0,
         };
-        Self::with_points(device, pool_tiles, reach, PARENT_POINTS, true)
+        Self::with_points(
+            device,
+            pool_tiles,
+            table_entries(pool_tiles),
+            reach,
+            PARENT_POINTS,
+            true,
+        )
     }
 
     fn with_points(
         device: &GpuDevice,
         pool_tiles: u32,
+        entries: u32,
         reach: Reach,
         points: &'static str,
         parents: bool,
@@ -411,12 +470,11 @@ impl WorldTiles {
         if pool_tiles == 0 {
             return Err("world tiles: a pool needs at least one tile".into());
         }
-        let entries = table_entries(pool_tiles);
         let p = pool_tiles as usize;
         let h = entries as usize;
-        let mut table = vec![NONE; table_words(pool_tiles) as usize];
+        let mut table = vec![NONE; table_words_at(entries, pool_tiles) as usize];
         let keys = HEADER_WORDS as usize;
-        table[..keys].copy_from_slice(&table_header(entries));
+        table[..keys].copy_from_slice(&table_header(entries, pool_tiles));
         table[keys..keys + h].fill(EMPTY);
         let mut counts = vec![0; count_words(reach.ring_max) as usize];
         counts[free_top_word(reach.ring_max)] = pool_tiles;
@@ -481,6 +539,9 @@ impl WorldTiles {
             slots: make("wt_slots"),
             finish: make("wt_finish"),
             children: self.child_rows.is_some().then(|| make("wt_children")),
+            foreign: make("wt_foreign"),
+            share: make("wt_share"),
+            repoint: make("wt_repoint"),
         });
     }
 
@@ -532,7 +593,15 @@ impl WorldTiles {
             PointCount::Record(record) => Some(record),
             PointCount::Slots(_) => None,
         };
-        self.encode_build(enc, &params, job.points, record, job.gate, job.kept);
+        self.encode_build(
+            enc,
+            &params,
+            job.points,
+            record,
+            job.gate,
+            job.kept,
+            job.shared,
+        );
     }
 
     /// Build a coarse level from `child`, the level below, encoded earlier
@@ -560,7 +629,7 @@ impl WorldTiles {
             clip_hi: NO_CLIP[1],
             pad: [0; 3],
         };
-        self.encode_build(enc, &params, &child.table, None, gate, None);
+        self.encode_build(enc, &params, &child.table, None, gate, None, None);
     }
 
     fn encode_build(
@@ -571,6 +640,7 @@ impl WorldTiles {
         record: Option<&GpuBuffer>,
         gate: &GpuBuffer,
         kept: Option<&GpuBuffer>,
+        shared: Option<SharedTable<'_>>,
     ) {
         let pipes = self.pipelines.as_ref().expect("world tiles prepared");
         let fixed = [
@@ -602,8 +672,9 @@ impl WorldTiles {
             )
         });
         // Room after the fixed bindings for the slot record (a particle
-        // build) or the children rows (the parents' last pass).
-        let mut bound = [fixed[0]; 15];
+        // build) or the children rows (the parents' last pass), and the
+        // shared table.
+        let mut bound = [fixed[0]; 16];
         bound[..14].copy_from_slice(&fixed);
         let mut len = 14;
         if let Some(record) = record {
@@ -611,6 +682,12 @@ impl WorldTiles {
             len += 1;
         }
         let bindings = &bound[..len];
+        // The shared table beside the fixed bindings, for its own passes.
+        let shared = shared.map(|shared| {
+            let mut with_shared = bound;
+            with_shared[len] = buffer(SHARED_BINDING, shared.table);
+            (with_shared, groups(u64::from(shared.pool_tiles)))
+        });
         let per_entry = groups(u64::from(self.entries));
         let per_slot = groups(u64::from(self.pool_tiles));
         let pass = |enc: &mut GpuEncoder, pipeline: &GpuComputePipeline, grid, label| {
@@ -642,6 +719,15 @@ impl WorldTiles {
         pass(enc, &pipes.clear, per_entry, "world_tiles.clear");
         per_point(enc, &pipes.seed, "world_tiles.seed");
         per_kept(enc, |k| &k.seed, "world_tiles.kept_seed");
+        if let Some((with_shared, per_shared)) = &shared {
+            enc.dispatch_compute(
+                &pipes.foreign,
+                &with_shared[..=len],
+                *per_shared,
+                "world_tiles.foreign",
+            );
+            enc.compute_memory_barrier_buffers();
+        }
         per_point(enc, &pipes.seeds, "world_tiles.seeds");
         per_kept(enc, |k| &k.seeds, "world_tiles.kept_seeds");
         if self.reach.ring_max > 0 {
@@ -673,6 +759,15 @@ impl WorldTiles {
             enc.compute_memory_barrier_buffers();
         }
         pass(enc, &pipes.finish, [1, 1, 1], "world_tiles.finish");
+        if let Some((with_shared, per_shared)) = &shared {
+            for (pipeline, grid, label) in [
+                (&pipes.share, per_entry, "world_tiles.share"),
+                (&pipes.repoint, *per_shared, "world_tiles.repoint"),
+            ] {
+                enc.dispatch_compute(pipeline, &with_shared[..=len], grid, label);
+                enc.compute_memory_barrier_buffers();
+            }
+        }
     }
 
     /// The table ([`table_words`] words), published to every reader.

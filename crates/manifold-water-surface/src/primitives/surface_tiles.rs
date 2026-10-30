@@ -293,6 +293,7 @@ impl Held {
                 gate: &self.gate,
                 clip: None,
                 kept: None,
+                shared: None,
             },
         );
         pass(

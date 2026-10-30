@@ -14,7 +14,9 @@ use manifold_water_liquid::fluid_particles::FaceSample;
 use manifold_water_liquid::primitives::particle_identity::IDENTITY_BYTES;
 use manifold_water_liquid::primitives::sort_particles_into_cells::key_storage_bytes;
 use manifold_water_liquid::tile_pool::pool_tiles_wire;
-use manifold_water_liquid::tile_storage::{pool_len, table_words};
+use manifold_water_liquid::tile_storage::pool_len;
+use manifold_water_liquid::world_tiles::shared_table_entries;
+use manifold_node_engine::scene::world_tiles::table_words_at;
 use std::mem::size_of;
 
 fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -26,9 +28,17 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let open = read_open_faces(x.scalar("open_faces", 0.0)).map_err(refused)?;
     // The most the pool can grow to.
     let pool = growth_ceiling(start, walls, open);
+    // A table sharing its keys with the World's Matter is sized for both
+    // pools (Matter's, a forward wire, is known here).
+    let shared = if x.bytes("shared_tiles").is_some() {
+        whole(x, "shared_pool_tiles", 0.0)
+    } else {
+        0
+    };
+    let entries = shared_table_entries(pool, shared);
     x.provide("faces", pool_len(pool) * size_of::<FaceSample>() as u64);
     x.provide("distance", pool_len(pool) * 4);
-    x.provide("tiles", table_words(pool) * 4);
+    x.provide("tiles", table_words_at(entries, pool) * 4);
     x.publish("pool_tiles", pool as f32);
     let history = history_slots(whole(x, "live_hit_count", 0.0));
     x.publish("substep_count", history as f32);
@@ -37,7 +47,7 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.provide("substep_schedule", u64::from(history) * 16);
         x.provide("substep_faces", u64::from(history) * pool_len(pool) * 16);
         x.hold(manifold_water_liquid::substep_history::history_bytes(
-            pool, history,
+            pool, entries, history,
         ));
     }
     let slots = x.items("particles").unwrap_or(0);

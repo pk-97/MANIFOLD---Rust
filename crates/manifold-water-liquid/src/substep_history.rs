@@ -17,7 +17,7 @@
 use crate::fluid_particles::FaceSample;
 use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_entries, table_words};
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_words_at};
 
 /// Indirect dispatch words per row: the table copy's groups, then the
 /// faces', each three words.
@@ -150,11 +150,12 @@ fn history_source() -> String {
 
 manifold_core::testkit_visible! {
 /// Bytes the history holds for `slots` rows over a pool of `pool_tiles`
-/// tiles: per row its schedule words, indirect arguments, table copy and
-/// faces, and one row of scratch for the remap.
-pub(crate) fn history_bytes(pool_tiles: u32, slots: u32) -> u64 {
+/// tiles and a table of `entries`: per row its schedule words, indirect
+/// arguments, table copy and faces, and one row of scratch for the remap.
+pub(crate) fn history_bytes(pool_tiles: u32, entries: u32, slots: u32) -> u64 {
     let row = pool_len(pool_tiles) * 16;
-    row + u64::from(slots) * (16 + ROW_ARGUMENT_BYTES + table_words(pool_tiles) * 4 + row)
+    let table = table_words_at(entries, pool_tiles) * 4;
+    row + u64::from(slots) * (16 + ROW_ARGUMENT_BYTES + table + row)
 }
 }
 
@@ -162,9 +163,10 @@ pub(crate) fn history_bytes(pool_tiles: u32, slots: u32) -> u64 {
 #[derive(Clone, Copy)]
 pub struct PooledFaces<'a> {
     pub faces: &'a GpuBuffer,
-    /// The step's world-tile table over `pool_tiles` tiles.
+    /// The step's world-tile table over `pool_tiles` tiles, of `entries`.
     pub table: &'a GpuBuffer,
     pub pool_tiles: u32,
+    pub entries: u32,
 }
 
 #[derive(Default)]
@@ -175,14 +177,14 @@ pub struct SubstepHistory {
     /// [`SubstepHistory::remap`] every active row lies on the final table.
     pub faces: Option<GpuBuffer>,
     pipelines: Vec<GpuComputePipeline>,
-    /// Each captured row's table words, `table_words(P)` a row.
+    /// Each captured row's table words, `table_words_at(H, P)` a row.
     tables: Option<GpuBuffer>,
     /// One row of faces: the remap's source while it rewrites a row.
     stash: Option<GpuBuffer>,
     arguments: Option<GpuBuffer>,
     clear_faces: bool,
-    /// The pool's tiles, and the rows reserved.
-    shape: Option<(u32, u32)>,
+    /// The pool's tiles, the table's entries, and the rows reserved.
+    shape: Option<(u32, u32, u32)>,
 }
 impl SubstepHistory {
     pub fn prepare(&mut self, device: &GpuDevice) {
@@ -201,17 +203,17 @@ impl SubstepHistory {
         &mut self,
         device: &GpuDevice,
         pool_tiles: u32,
+        entries: u32,
         slots: u32,
     ) -> Result<(), String> {
-        if self
-            .shape
-            .is_some_and(|(old, capacity)| old == pool_tiles && slots <= capacity)
-        {
+        if self.shape.is_some_and(|(old, old_entries, capacity)| {
+            old == pool_tiles && old_entries == entries && slots <= capacity
+        }) {
             return Ok(());
         }
         manifold_node_engine::load::expand::admit_world_bytes(
             device.modifier_memory_snapshot(),
-            history_bytes(pool_tiles, slots),
+            history_bytes(pool_tiles, entries, slots),
         )
         .map_err(|e| e.to_string())?;
         let rows = u64::from(slots);
@@ -219,8 +221,10 @@ impl SubstepHistory {
         let schedule = device.try_create_buffer(rows * 16, BufferUse::Upload)?;
         schedule.zero_fill();
         let faces = device.try_create_buffer(rows * row_bytes, BufferUse::Gpu)?;
-        let tables =
-            device.try_create_buffer(rows * table_words(pool_tiles) * 4, BufferUse::Gpu)?;
+        let tables = device.try_create_buffer(
+            rows * table_words_at(entries, pool_tiles) * 4,
+            BufferUse::Gpu,
+        )?;
         let stash = device.try_create_buffer(row_bytes, BufferUse::Gpu)?;
         let arguments = device.try_create_buffer(rows * ROW_ARGUMENT_BYTES, BufferUse::Gpu)?;
         self.faces = Some(faces);
@@ -229,13 +233,13 @@ impl SubstepHistory {
         self.stash = Some(stash);
         self.arguments = Some(arguments);
         self.clear_faces = true;
-        self.shape = Some((pool_tiles, slots));
+        self.shape = Some((pool_tiles, entries, slots));
         Ok(())
     }
 
     /// The uniform of the passes over row `row`.
-    fn params(row: u32, pool_tiles: u32) -> [u32; PARAM_WORDS] {
-        let words = table_words(pool_tiles) as u32;
+    fn params(row: u32, pool_tiles: u32, entries: u32) -> [u32; PARAM_WORDS] {
+        let words = table_words_at(entries, pool_tiles) as u32;
         [
             row,
             words.div_ceil(256),
@@ -243,7 +247,7 @@ impl SubstepHistory {
             pool_tiles,
             pool_len(pool_tiles) as u32,
             words,
-            table_entries(pool_tiles),
+            entries,
             0,
         ]
     }
@@ -260,11 +264,12 @@ impl SubstepHistory {
         plan: &GpuBuffer,
         pooled: &PooledFaces<'_>,
     ) {
-        let (pool_tiles, slots) = self.shape.expect("history reserved");
+        let (pool_tiles, entries, slots) = self.shape.expect("history reserved");
         assert!(index < slots);
         assert_eq!(
-            pooled.pool_tiles, pool_tiles,
-            "history reserved for this pool"
+            (pooled.pool_tiles, pooled.entries),
+            (pool_tiles, entries),
+            "history reserved for this table"
         );
         let schedule = self.schedule.as_ref().expect("schedule reserved");
         let arguments = self.arguments.as_ref().expect("arguments reserved");
@@ -277,7 +282,7 @@ impl SubstepHistory {
         let [capture_schedule, capture_table, capture_faces, ..] = &self.pipelines[..] else {
             panic!("history prepared");
         };
-        let words = Self::params(index, pool_tiles);
+        let words = Self::params(index, pool_tiles, entries);
         let uniform = GpuBinding::Bytes {
             binding: 0,
             data: bytemuck::cast_slice(&words),
@@ -360,7 +365,7 @@ impl SubstepHistory {
     /// and a tile the row lacked reads the row's canonical element. An
     /// inactive row dispatches nothing.
     pub fn remap(&self, enc: &mut GpuEncoder, table: &GpuBuffer, rows: u32) {
-        let (pool_tiles, slots) = self.shape.expect("history reserved");
+        let (pool_tiles, entries, slots) = self.shape.expect("history reserved");
         assert!(rows <= slots);
         let arguments = self.arguments.as_ref().expect("arguments reserved");
         let tables = self.tables.as_ref().expect("tables reserved");
@@ -370,7 +375,7 @@ impl SubstepHistory {
             panic!("history prepared");
         };
         for row in 0..rows {
-            let words = Self::params(row, pool_tiles);
+            let words = Self::params(row, pool_tiles, entries);
             let uniform = GpuBinding::Bytes {
                 binding: 0,
                 data: bytemuck::cast_slice(&words),
@@ -435,6 +440,7 @@ const _: () = assert!(size_of::<FaceSample>() == 32);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_node_engine::scene::world_tiles::table_entries;
 
     #[test]
     fn liquid_substep_history_shader_validates() {
@@ -461,13 +467,17 @@ mod tests {
     fn liquid_substep_history_bytes_count_every_buffer() {
         for pool in [1, 3, 8, 4096] {
             let row = pool_len(pool) * 16;
-            let per_slot = 16 + ROW_ARGUMENT_BYTES + table_words(pool) * 4 + row;
-            for slots in [1, 6, 7, 262] {
-                assert_eq!(
-                    history_bytes(pool, slots),
-                    row + u64::from(slots) * per_slot,
-                    "{pool} tiles, {slots} slots"
-                );
+            // Its own H, and one sized for a shared key set.
+            for entries in [table_entries(pool), table_entries(4 * pool)] {
+                let per_slot =
+                    16 + ROW_ARGUMENT_BYTES + table_words_at(entries, pool) * 4 + row;
+                for slots in [1, 6, 7, 262] {
+                    assert_eq!(
+                        history_bytes(pool, entries, slots),
+                        row + u64::from(slots) * per_slot,
+                        "{pool} tiles, {entries} entries, {slots} slots"
+                    );
+                }
             }
         }
     }

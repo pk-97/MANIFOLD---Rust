@@ -34,7 +34,7 @@ impl FieldTable {
             assert!(insert(&mut keys, tile_key(tile)), "the table is full");
         }
         let first = HEADER_WORDS as usize;
-        words[..first].copy_from_slice(&table_header(entries));
+        words[..first].copy_from_slice(&table_header(entries, pool_tiles));
         words[first..first + h].copy_from_slice(&keys);
         for (slot, &tile) in held.iter().enumerate() {
             let slot = slot as u32;

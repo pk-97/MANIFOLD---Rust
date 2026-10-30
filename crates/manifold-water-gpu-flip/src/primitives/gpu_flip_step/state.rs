@@ -82,6 +82,7 @@ impl StepState {
         device: &GpuDevice,
         enc: &mut GpuEncoder,
         pool: u32,
+        entries: u32,
         slots: u64,
         sheeting: bool,
         narrow_band: u32,
@@ -112,9 +113,17 @@ impl StepState {
                 self.lattice = Some(LatticeBuffers::new(device, pool)?);
             }
         }
-        if self.tiles.as_ref().is_none_or(|t| t.pool_tiles() != pool) {
+        // A table of new H (a pool here or in the table sharing its keys
+        // changed) starts empty too; the pooled arrays keep their slots' values
+        // until the build hands the slots out again as fresh.
+        if self
+            .tiles
+            .as_ref()
+            .is_none_or(|t| t.pool_tiles() != pool || t.table_entries() != entries)
+        {
             self.tiles = None;
-            let mut tiles = WorldTiles::new(device, pool, step_reach(), LIQUID_POINTS)?;
+            let mut tiles =
+                WorldTiles::with_entries(device, pool, entries, step_reach(), LIQUID_POINTS)?;
             tiles.prepare(device);
             tiles.prepare_kept(device);
             self.tiles = Some(tiles);

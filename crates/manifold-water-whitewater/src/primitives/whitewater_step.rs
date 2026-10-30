@@ -27,7 +27,7 @@ use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_node_engine::scene::world_tiles::{
-    READ_SIDE, SLOT_WORDS, lattice_origin, slot_row_word, table_entries,
+    READ_SIDE, SLOT_WORDS, lattice_origin,
 };
 use manifold_nodes_physics::force_lattice::ForceLatticeBinding;
 use manifold_physics::clock::TICK;
@@ -60,6 +60,9 @@ const RESTART_ENTRY: (&str, &str) = (
     "restart_moved_influence",
     "node.whitewater_step.restart_influence",
 );
+
+/// Keeps the table's slot rows for next frame's restart.
+const SAVE_ROWS_ENTRY: (&str, &str) = ("save_slot_rows", "node.whitewater_step.save_rows");
 
 #[derive(Clone, Copy)]
 enum Fused {
@@ -117,14 +120,15 @@ macro_rules! emitter_path {
     }};
 }
 
-/// `whitewater_step.wgsl`'s influence restart uniform: the pool, the table's
-/// entries, the elements to visit (a slot's worth each) and the level a
-/// restarted element takes, padded to 16 bytes.
+/// `whitewater_step.wgsl`'s influence restart uniform: the pool, the
+/// elements to visit (a slot's worth each, or a slot row's word each when
+/// saving the rows) and the level a restarted element takes, padded to 16
+/// bytes. The table's H is in its header.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct RestartParams {
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     count: u32,
     base_level: f32,
 }
@@ -930,8 +934,10 @@ struct Pipelines {
     extend: Option<GpuComputePipeline>,
     preserve: Option<GpuComputePipeline>,
     keep: Option<GpuComputePipeline>,
-    /// `whitewater_step.wgsl`'s influence restart.
+    /// `whitewater_step.wgsl`'s influence restart and its saving of the
+    /// slot rows.
     restart: Option<GpuComputePipeline>,
+    save_rows: Option<GpuComputePipeline>,
     /// `whitewater_step.wgsl`, in [`Hand`] order.
     hand: Vec<GpuComputePipeline>,
     /// `whitewater_fused.wgsl` in [`FUSED_ENTRIES`] order.
@@ -1006,6 +1012,13 @@ impl Pipelines {
         standalone_pipeline::<KeepWhitewater>(&mut self.keep, device);
         self.restart.get_or_insert_with(|| {
             device.create_compute_pipeline(WHITEWATER_STEP_SHADER, RESTART_ENTRY.0, RESTART_ENTRY.1)
+        });
+        self.save_rows.get_or_insert_with(|| {
+            device.create_compute_pipeline(
+                WHITEWATER_STEP_SHADER,
+                SAVE_ROWS_ENTRY.0,
+                SAVE_ROWS_ENTRY.1,
+            )
         });
         if self.fused.is_empty() {
             let source = fused_source();
@@ -1435,7 +1448,7 @@ impl Step {
         let pool_tiles = frame.shape.pool.pool_tiles;
         let params = RestartParams {
             pool_tiles,
-            entries: table_entries(pool_tiles),
+            _pad_h: 0,
             count: pool_tiles * 512,
             base_level: frame.influence_base,
         };
@@ -1523,12 +1536,32 @@ impl Step {
             elements,
             "node.whitewater_step.influence",
         );
-        enc.copy_buffer_range(
-            inputs.tiles,
-            slot_row_word(table_entries(pool_tiles), 0) * 4,
-            &f.slot_rows,
-            0,
-            s.slot_row_bytes(),
+        let save = RestartParams {
+            pool_tiles,
+            _pad_h: 0,
+            count: SLOT_WORDS * pool_tiles,
+            base_level: 0.0,
+        };
+        enc.dispatch_compute(
+            get(&self.pipelines.save_rows),
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&save),
+                },
+                GpuBinding::Buffer {
+                    binding: 13,
+                    buffer: inputs.tiles,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 16,
+                    buffer: &f.slot_rows,
+                    offset: 0,
+                },
+            ],
+            [save.count.div_ceil(256), 1, 1],
+            SAVE_ROWS_ENTRY.1,
         );
         // Liquid cells and curvature both read the distance; neither reads
         // the other, so one barrier after the pair.

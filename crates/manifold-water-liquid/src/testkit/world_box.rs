@@ -29,7 +29,7 @@ pub fn table_words_of(pool_tiles: u32, held: &[([i32; 3], u32)]) -> Vec<u32> {
         assert!(insert(&mut keys, tile_key(tile)), "the table is full");
     }
     let first = HEADER_WORDS as usize;
-    words[..first].copy_from_slice(&table_header(entries));
+    words[..first].copy_from_slice(&table_header(entries, pool_tiles));
     words[first..first + h].copy_from_slice(&keys);
     for &(tile, slot) in held {
         let entry = find(&keys, tile_key(tile)).expect("an inserted key is found");

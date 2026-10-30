@@ -44,6 +44,12 @@ pub const MAX_WATERS: u32 = 8;
 pub const WATER_PUSH_NODE: &str = "node.matter_water_push";
 pub const WATER_PUSH_STEP: [&str; 4] = ["faces", "distance", "tiles", "pool_tiles"];
 
+/// The ports a World's water step and Matter's Points to Grid read each
+/// other's world-tile table through, so both tables share one key set
+/// (`world_tiles::SharedTable`): the table and its pool. The other material
+/// is not part of this one's surface.
+pub const SHARED_TABLE: [&str; 2] = ["shared_tiles", "shared_pool_tiles"];
+
 /// How fast sand slows the water inside it, per second at a full cell of
 /// sand: water seeps through packed sand at about g / 40 (0.25 m/s), so it
 /// soaks into a pile over seconds instead of passing through it. The sand
@@ -97,7 +103,8 @@ pub fn liquid_domains_in(nodes: &[EffectGraphNode]) -> Vec<NestedLiquidDomain> {
 /// smoothing), a mesh drawn from the particles, and particles or grains drawn
 /// as copies of a fixed mesh all reach their domain. A Sand wired into a
 /// Water's step ([`SAND_INPUTS`]) is not the water's, nor a Water pushing a
-/// Sand ([`WATER_PUSH_NODE`]) the sand's.
+/// Sand ([`WATER_PUSH_NODE`]) the sand's, nor the other material's table a
+/// solver shares its keys with ([`SHARED_TABLE`]).
 pub fn liquid_domain_of(
     index: &FlatSceneIndex,
     object: &NodeId,
@@ -142,6 +149,7 @@ pub fn liquid_domain_of(
         for wire in index.flat.wires.iter().filter(|wire| {
             wire.to_node == id
                 && !SAND_INPUTS.contains(&wire.to_port.as_str())
+                && !SHARED_TABLE.contains(&wire.to_port.as_str())
                 && !(node.type_id == WATER_PUSH_NODE
                     && (WATER_PUSH_STEP.contains(&wire.to_port.as_str())
                         || wire.to_port == "cell_size"))

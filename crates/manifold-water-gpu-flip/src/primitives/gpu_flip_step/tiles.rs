@@ -7,8 +7,8 @@ use manifold_node_engine::scene::world_tiles::tile_of_cell;
 use manifold_water_liquid::tile_pool::{POOL_BUDGET_BYTES, pool_capacity};
 use manifold_water_liquid::tile_storage::{TILE, TILE_CELLS};
 use manifold_water_liquid::world_tiles::{
-    Allocation, PointCount, Reach, TileClip, allocated_args_offset, fresh_args_offset,
-    retired_args_offset, run_tiles,
+    Allocation, PointCount, Reach, SharedTable, TileClip, allocated_args_offset,
+    fresh_args_offset, retired_args_offset, run_tiles,
 };
 
 /// The cell passes' reach from a particle-holding cell, in cells: the cell
@@ -278,10 +278,12 @@ pub(super) fn pooled<'a>(
 /// The step's tiles for this step, before the sort: the shared build from
 /// `particles` (the slots in use `record` names) and Narrow Band's `kept`
 /// words, or under
-/// [`set_all_tiles`] from one point per box tile; then the fresh slots set to
+/// [`set_all_tiles`] from one point per box tile, sharing its key set with
+/// the World's Matter table (`shared`); then the fresh slots set to
 /// their canonical values and the slots that left C retired. The sort keys
 /// on the table this leaves. An inactive slot of `plan` keeps the last
 /// active step's table and runs none of it.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn encode_tiles(
     enc: &mut GpuEncoder,
     pipes: &Pipelines,
@@ -290,6 +292,7 @@ pub(super) fn encode_tiles(
     tiles: &WorldTiles,
     points: (&GpuBuffer, &GpuBuffer),
     kept: Option<&GpuBuffer>,
+    shared: Option<SharedTable<'_>>,
     plan: &GpuBuffer,
 ) {
     let (points, record) = points;
@@ -304,6 +307,7 @@ pub(super) fn encode_tiles(
             gate: plan,
             clip: wall_clip(params),
             kept,
+            shared,
         },
     );
     let ring = tiles.reach().ring_max;

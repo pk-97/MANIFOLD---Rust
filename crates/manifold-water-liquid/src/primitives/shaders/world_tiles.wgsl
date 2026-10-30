@@ -98,6 +98,10 @@ struct WtParams {
 // A GPU FLIP clock plan (gpu_flip_clock.wgsl Plan; word 0 step_dt, word 11
 // live_mode). Zeros run.
 @group(0) @binding(12) var<storage, read> wt_gate: array<u32>;
+// The other material's table this build shares its key set with (bound only
+// for wt_foreign, wt_share and wt_repoint): the same layout and H, its own
+// pool of shared_pool_tiles slots.
+@group(0) @binding(16) var<storage, read_write> wt_shared: array<atomic<u32>>;
 
 fn ts_pool_tiles() -> u32 {
     return wt.pool_tiles;
@@ -719,4 +723,68 @@ fn wt_finish() {
     }
     wt_triple(3u * (r + 1u), retired);
     wt_triple(fresh, fresh_count);
+}
+
+// Whether the shared table has this table's H. A table whose pool just
+// changed is rebuilt at a new H; until both sides have it, neither shares.
+fn wt_sharing() -> bool {
+    return atomicLoad(&wt_shared[0]) == wt.entries;
+}
+
+// Whether slot s of the shared table is held: a slot of its pool (P from its
+// header, whatever the dispatch was sized for) whose row has an entry.
+fn wt_shared_held(s: u32) -> bool {
+    return s < atomicLoad(&wt_shared[1]) && atomicLoad(&wt_shared[wt_slot_row(s) + 3u]) != WT_NONE;
+}
+
+fn wt_shared_tile(s: u32) -> vec3<i32> {
+    let row = wt_slot_row(s);
+    return bitcast<vec3<i32>>(vec3<u32>(
+        atomicLoad(&wt_shared[row]),
+        atomicLoad(&wt_shared[row + 1u]),
+        atomicLoad(&wt_shared[row + 2u]),
+    ));
+}
+
+// One thread a slot of the shared table, after wt_seed: each held tile's key
+// joins this table's keys. Its entry gets no ring, so it wants no slot here.
+@compute @workgroup_size(256)
+fn wt_foreign(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let s = gid.x;
+    if wt_off() || !wt_sharing() || !wt_shared_held(s) {
+        return;
+    }
+    wt_insert(ts_tile_key(wt_shared_tile(s)));
+}
+
+// H threads, after wt_finish: the shared table takes this table's keys, and
+// every entry loses its slot there until wt_repoint gives it back.
+@compute @workgroup_size(256)
+fn wt_share(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let e = gid.x;
+    if wt_off() || e >= wt.entries || !wt_sharing() {
+        return;
+    }
+    atomicStore(&wt_shared[wt_key_word(e)], atomicLoad(&wt_table[wt_key_word(e)]));
+    atomicStore(&wt_shared[wt_entry_slot_word(e)], WT_NONE);
+}
+
+// One thread a slot of the shared table, after wt_share: each held slot finds
+// its tile's entry among the keys both tables now hold and takes it back. A
+// tile whose key a full table dropped keeps its old entry and sets the
+// table-full bit; lookups miss it until the shared table's next build frees
+// the slot.
+@compute @workgroup_size(256)
+fn wt_repoint(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let s = gid.x;
+    if wt_off() || !wt_sharing() || !wt_shared_held(s) {
+        return;
+    }
+    let e = ts_entry_of(ts_tile_key(wt_shared_tile(s)));
+    if e == WT_NONE {
+        wt_flag(WT_TABLE_FULL);
+        return;
+    }
+    atomicStore(&wt_shared[wt_entry_slot_word(e)], s);
+    atomicStore(&wt_shared[wt_slot_row(s) + 3u], e);
 }

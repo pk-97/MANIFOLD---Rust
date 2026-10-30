@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
 use manifold_core::liquid_domain::{
-    MAX_MATTER_SLOTS, MAX_WATERS, WATER_PUSH_NODE, WATER_PUSH_STEP,
+    MAX_MATTER_SLOTS, MAX_WATERS, SHARED_TABLE, WATER_PUSH_NODE, WATER_PUSH_STEP,
 };
 use manifold_core::scene_doc::{Item, ItemFields, ItemKind, Quality, SceneDoc, SourceShape};
 use manifold_core::scene_schema::{
@@ -311,6 +311,7 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
     }
     if let Some(&step) = water_ids.first().and_then(|(_, ids)| ids.get("step")) {
         water_push(b, step, solver);
+        share_tables(b, step, solver);
     }
     frames
 }
@@ -408,6 +409,23 @@ fn water_push(b: &mut Builder<'_>, step: u32, solver: &Solver) {
     for port in WATER_PUSH_STEP {
         b.wire(step, port, node, port);
     }
+}
+
+/// The first Water's and the Sand's world-tile tables share one key set
+/// (`world_tiles::SharedTable`): each reads the other's table and pool, the
+/// water the Sand's of the same tick, the Sand the water's last tick's.
+fn share_tables(b: &mut Builder<'_>, step: u32, solver: &Solver) {
+    let Some(&to_grid) = solver.ids.get(MATTER_TO_GRID) else {
+        return;
+    };
+    let Some((pool, pool_port)) = b.input(to_grid, "pool_tiles") else {
+        return;
+    };
+    let [tiles, pool_tiles] = SHARED_TABLE;
+    b.wire(to_grid, "tiles", step, tiles);
+    b.wire(pool, &pool_port, step, pool_tiles);
+    b.wire(step, "tiles", to_grid, tiles);
+    b.wire(step, "pool_tiles", to_grid, pool_tiles);
 }
 
 fn emit(

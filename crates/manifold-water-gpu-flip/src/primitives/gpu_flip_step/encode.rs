@@ -165,7 +165,17 @@ impl StepState {
         let points = (step.particles, record);
         // Narrow Band's grid water holds its tiles beside the particles.
         let kept = self.narrow_band.kept(p.narrow_band);
-        encode_tiles(enc, pipes, &base, l, tiles, points, kept, step.clock_plan);
+        encode_tiles(
+            enc,
+            pipes,
+            &base,
+            l,
+            tiles,
+            points,
+            kept,
+            step.shared,
+            step.clock_plan,
+        );
         let narrow = p.narrow_band != 0;
         if narrow {
             self.narrow_band.encode_fresh(enc, pipes, &base, tiles);

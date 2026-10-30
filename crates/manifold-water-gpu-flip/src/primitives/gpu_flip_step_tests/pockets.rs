@@ -134,7 +134,7 @@ impl Tiles {
         let h = entries as usize;
         let mut words = vec![NONE; table_words(p) as usize];
         let first = HEADER_WORDS as usize;
-        words[..first].copy_from_slice(&table_header(entries));
+        words[..first].copy_from_slice(&table_header(entries, p));
         let keys = &mut words[first..first + h];
         keys.fill(EMPTY);
         for &t in &tiles {

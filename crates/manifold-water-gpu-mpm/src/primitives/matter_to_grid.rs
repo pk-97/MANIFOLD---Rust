@@ -27,8 +27,11 @@ use manifold_water_liquid::primitives::sort_particles_into_cells::{
     ParticleSorter, SortCount, SortJob, SortLabels, block_keys, record_read,
 };
 use manifold_water_liquid::tile_pool::pool_tiles_wire;
+use manifold_core::liquid_domain::SHARED_TABLE;
+use manifold_water_liquid::tile_pool::MAX_POOL_TILES;
 use manifold_water_liquid::world_tiles::{
-    Allocation, MATTER_POINTS, PointCount, WorldTiles, allocated_args_offset,
+    Allocation, MATTER_POINTS, PointCount, SharedTable, WorldTiles, allocated_args_offset,
+    shared_table_entries,
 };
 
 // The kernel after the table's read side it indexes its nodes through.
@@ -83,10 +86,15 @@ manifold_node_engine::primitive! {
         tick_index: ScalarF32 optional,
         substep_in_tick: ScalarF32 optional,
         momentum_unit: ScalarF32 optional,
+        // The World's water table and pool, as the water's last tick left
+        // them: this table shares its key set (`world_tiles::SharedTable`).
+        shared_tiles: Array(u32) optional,
+        shared_pool_tiles: ScalarF32 optional,
     },
     outputs: {
         accum_out: Array(i32),
-        // The world tile table of the pooled grid (`table_words(pool_tiles)` words).
+        // The world tile table of the pooled grid (at least
+        // `table_words(pool_tiles)` words: more when it shares its keys).
         tiles: Array(u32),
         // The table's held slots, and the args whose triple at
         // `held_args_offset()` dispatches 512 threads per held slot.
@@ -183,6 +191,12 @@ impl Primitive for MatterToGrid {
         &[("accum", "accum_out")]
     }
 
+    // The water steps after Matter in the World's tick: its table is the one
+    // its last tick left.
+    fn state_capture_input_ports(&self) -> &[&str] {
+        &SHARED_TABLE
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let pool = match pool_tiles_wire(|name, default| ctx.scalar_or_param(name, default)) {
             Ok(pool) => pool,
@@ -205,7 +219,19 @@ impl Primitive for MatterToGrid {
         let points = ctx.inputs.array("points");
         let accum = ctx.inputs.array("accum");
         let materials = ctx.inputs.array("materials");
-        let fresh = self.tiles.as_ref().is_none_or(|t| t.pool_tiles() != pool);
+        // The water's table, sharing this one's keys: one H sized for both
+        // pools. A new H starts an empty table, as a new pool does.
+        let shared_tiles = ctx.inputs.array("shared_tiles");
+        let shared_pool = shared_tiles.map_or(0, |_| {
+            ctx.scalar_or_param("shared_pool_tiles", 0.0)
+                .round()
+                .clamp(0.0, MAX_POOL_TILES as f32) as u32
+        });
+        let entries = shared_table_entries(pool, shared_pool);
+        let fresh = self
+            .tiles
+            .as_ref()
+            .is_none_or(|t| t.pool_tiles() != pool || t.table_entries() != entries);
         let active = points.map_or(0, |p| active_elements::<MatterPoint>(p.size, requested));
         // A table that has never been built (no ranges yet) builds on whatever
         // substep the points first appear.
@@ -238,7 +264,7 @@ impl Primitive for MatterToGrid {
         }
         if fresh {
             self.tiles = None;
-            match WorldTiles::new(gpu.device, pool, MATTER_REACH, MATTER_POINTS) {
+            match WorldTiles::with_entries(gpu.device, pool, entries, MATTER_REACH, MATTER_POINTS) {
                 Ok(mut tiles) => {
                     tiles.prepare(gpu.device);
                     self.tiles = Some(tiles);
@@ -297,6 +323,12 @@ impl Primitive for MatterToGrid {
                     gate,
                     clip: None,
                     kept: None,
+                    shared: shared_tiles
+                        .filter(|_| shared_pool > 0)
+                        .map(|table| SharedTable {
+                            table,
+                            pool_tiles: shared_pool,
+                        }),
                 },
             );
             if let Err(error) = self

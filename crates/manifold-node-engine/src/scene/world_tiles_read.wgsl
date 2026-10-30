@@ -11,7 +11,7 @@
 // `fn ts_table_word(i: u32) -> u32`, word i of the table, with h = 4 the
 // header's words:
 //   [0, h)                      the header: H (a power of two at or above
-//                               4P), then zeros
+//                               4P), P, then zeros
 //   [h, h + H)                  keys, ts_tile_key(tile); 0 is empty
 //   [h + H, h + 2H)             the slot of each entry, WT_NONE when it has
 //                               none
