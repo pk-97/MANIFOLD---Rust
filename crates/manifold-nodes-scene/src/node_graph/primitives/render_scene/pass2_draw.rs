@@ -151,10 +151,10 @@ impl RenderScene {
             .unwrap_or_else(|| self.dummy_depth_array.as_ref().expect("stubs ensured"));
         let dummy_mask_array = self.dummy_mask_array.as_ref().expect("stubs ensured");
 
-        if !draws.iter().any(|d| d.vertex_count > 0) && fields.is_empty() {
-            // Every object had zero drawable vertices — clear so stale
-            // pool contents don't leak through (matches render_mesh's
-            // vertex_count == 0 fallback).
+        if !draws.iter().any(|d| d.vertex_count > 0) && fields.is_empty() && gases.is_empty() {
+            // Nothing to draw: no object has a vertex and there is no
+            // liquid field or gas — clear so stale pool contents don't leak
+            // through (matches render_mesh's vertex_count == 0 fallback).
             ctx.gpu_encoder()
                 .native_enc
                 .clear_texture(resolve_target, 0.0, 0.0, 0.0, 0.0);
