@@ -39,7 +39,7 @@ use manifold_physics::input::{AppliedEvent, EventStamp};
 use manifold_physics::tick_hits::TickHits;
 use manifold_physics::{FieldValue, PlayedTime, Seconds, TickStamp, VectorField};
 use manifold_water_liquid::bodies::{
-    BodiesStatus, COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBodies, LiquidShape,
+    BodiesStatus, COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBodies, LiquidBody, LiquidShape,
 };
 use manifold_water_liquid::body_buffers::LiquidBodyBuffers;
 use manifold_water_liquid::coupling::{LiquidRigidOwner, SharedSolids, SharesSolids};
@@ -407,6 +407,8 @@ struct GasUniforms {
     water_count: u32,
     sand_count: u32,
     pad4: u32,
+    /// One bit a body row: a Collider that moves this frame ([`moving_trees`]).
+    moving: [[u32; 4]; 2],
 }
 
 impl GasUniforms {
@@ -417,6 +419,7 @@ impl GasUniforms {
         lattice: ForceLattice,
         step: Step,
         matter: &Matter<'_>,
+        moving: [[u32; 4]; 2],
     ) -> Self {
         let nodes = lattice.node_count() as u32;
         let (up, g) = up_and_gravity(settings.gravity);
@@ -459,6 +462,7 @@ impl GasUniforms {
             water_count: matter.water.map_or(0, |(_, count)| count),
             sand_count: matter.sand.map_or(0, |(_, count)| count),
             pad4: 0,
+            moving,
         }
     }
 }
@@ -1015,6 +1019,9 @@ manifold_node_engine::primitive! {
         solids: SharedSolids = SharedSolids::default(),
         bodies: LiquidBodies = LiquidBodies::default(),
         body_buffers: LiquidBodyBuffers = LiquidBodyBuffers::default(),
+        // The first tick's body poses last frame, to tell which Colliders
+        // moved since.
+        tree_poses: Vec<[f32; 7]> = Vec::new(),
     },
 }
 
@@ -1053,7 +1060,11 @@ pub struct StepSolids {
 /// The Collider meshes as the first tick places them, every shape, the
 /// trees' sizes and the box: a change of any rewrites the static solids.
 /// Without bodies only the box counts.
-fn static_hash(bodies: Option<&LiquidBodies>, geometry: &GasGeometry) -> u64 {
+fn static_hash(
+    bodies: Option<&LiquidBodies>,
+    geometry: &GasGeometry,
+    moving: [[u32; 4]; 2],
+) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::hash::DefaultHasher::new();
     geometry.origin.map(f32::to_bits).hash(&mut hasher);
@@ -1066,13 +1077,67 @@ fn static_hash(bodies: Option<&LiquidBodies>, geometry: &GasGeometry) -> u64 {
     bytemuck::cast_slice::<LiquidShape, u8>(shapes).hash(&mut hasher);
     bodies.collider_nodes().len().hash(&mut hasher);
     bodies.collider_triangles().len().hash(&mut hasher);
-    for row in &bodies.last_rows()[..bodies.count().min(bodies.last_rows().len())] {
-        let shape = row.accel_shape[3];
-        if shape >= 0.0 && shapes.get(shape as usize).is_some_and(|s| s.tree == 1) {
+    // A moving Collider is laid each tick, so only which ones move counts.
+    moving.hash(&mut hasher);
+    for (index, row) in tree_rows(bodies, &bodies.last_rows()[..first_tick_rows(bodies)]) {
+        if !is_moving(moving, index) {
             bytemuck::bytes_of(row).hash(&mut hasher);
         }
     }
     hasher.finish()
+}
+
+/// Which Colliders read through their trees move this frame, one bit a body:
+/// a row with motion, or a pose at any of the frame's ticks other than its
+/// pose at the last frame's first tick (`last`). A Collider driven by a
+/// param can take a new pose with no motion in its row.
+fn moving_trees(bodies: &LiquidBodies, last: &[[f32; 7]]) -> [[u32; 4]; 2] {
+    let mut moving = [[0; 4]; 2];
+    let count = bodies.count();
+    if count == 0 {
+        return moving;
+    }
+    for (index, row) in tree_rows(bodies, bodies.last_rows()) {
+        let body = index % count;
+        if row_moves(row) || last.get(body) != Some(&pose(row)) {
+            moving[body / 128][body / 32 % 4] |= 1 << (body % 32);
+        }
+    }
+    moving
+}
+
+fn is_moving(moving: [[u32; 4]; 2], body: usize) -> bool {
+    moving[body / 128][body / 32 % 4] & (1 << (body % 32)) != 0
+}
+
+/// A row's position and rotation.
+fn pose(row: &LiquidBody) -> [f32; 7] {
+    let (p, q) = (row.position_inv_mass, row.rotation);
+    [p[0], p[1], p[2], q[0], q[1], q[2], q[3]]
+}
+
+/// The rows of the frame's first tick, which the static solids are laid
+/// from.
+fn first_tick_rows(bodies: &LiquidBodies) -> usize {
+    bodies.count().min(bodies.last_rows().len())
+}
+
+/// The rows among `rows` of Colliders read through their trees, with their
+/// index.
+fn tree_rows<'a>(
+    bodies: &'a LiquidBodies,
+    rows: &'a [LiquidBody],
+) -> impl Iterator<Item = (usize, &'a LiquidBody)> {
+    let shapes = bodies.shapes();
+    rows.iter().enumerate().filter(move |(_, row)| {
+        let shape = row.accel_shape[3];
+        shape >= 0.0 && shapes.get(shape as usize).is_some_and(|s| s.tree == 1)
+    })
+}
+
+/// A body's row carries motion.
+fn row_moves(row: &LiquidBody) -> bool {
+    row.linear_velocity[..3] != [0.0; 3] || row.angular_velocity[..3] != [0.0; 3]
 }
 
 /// Simulated seconds of the frame's tick `tick`.
@@ -1294,12 +1359,24 @@ impl GasVolume {
         // written only when they or the box change; the moving solids, a
         // lattice each, and the water and sand every tick. With none, the
         // rows stay as they are.
+        let moving = if first_solids.is_some() {
+            moving_trees(&self.bodies, &self.tree_poses)
+        } else {
+            [[0; 4]; 2]
+        };
+        self.tree_poses.clear();
+        if first_solids.is_some() {
+            let first = &self.bodies.last_rows()[..first_tick_rows(&self.bodies)];
+            self.tree_poses.extend(first.iter().map(pose));
+        }
         let static_hash =
-            with_solids.then(|| static_hash(first_solids.map(|_| &self.bodies), geometry));
+            with_solids.then(|| static_hash(first_solids.map(|_| &self.bodies), geometry, moving));
         let rewrite_static = static_hash.is_some() && stored.static_written != static_hash;
-        let bodies_move =
-            first_solids.is_some() && self.bodies.shapes().iter().any(|s| s.tree != 1);
-        let moving = bodies_move || matter.any();
+        // Bodies and hulls are lattices sampled each tick, and a Collider
+        // that moves is read through its tree each tick.
+        let bodies_move = first_solids.is_some()
+            && (self.bodies.shapes().iter().any(|s| s.tree != 1) || moving != [[0; 4]; 2]);
+        let solids_move = bodies_move || matter.any();
         if first_solids.is_some() && (rewrite_static || bodies_move) {
             self.body_buffers
                 .upload(gpu, &self.bodies, true, "node.gas_volume.bodies")?;
@@ -1354,7 +1431,8 @@ impl GasVolume {
                 enc.clear_buffer(fine);
             }
             enc.clear_buffer(&buffers.velocity_out);
-            let uniforms = GasUniforms::new(geometry, settings, 0.0, lattice, still, &matter);
+            let uniforms =
+                GasUniforms::new(geometry, settings, 0.0, lattice, still, &matter, moving);
             // vel_in and state_in are read-only, so two dispatches with the
             // roles rotated reach all three buffers.
             for roles in [Roles::new(2, 0), Roles::new(0, 2)] {
@@ -1384,6 +1462,7 @@ impl GasVolume {
             lattice,
             still,
             &matter,
+            moving,
         );
         if rewrite_static {
             enc.clear_buffer(&buffers.source_floor);
@@ -1439,6 +1518,7 @@ impl GasVolume {
                 lattice,
                 step,
                 &matter,
+                moving,
             );
             let uniform_bytes = bytemuck::bytes_of(&uniforms);
             let (a, b) = ((last + 1) % RING, (last + 2) % RING);
@@ -1450,7 +1530,7 @@ impl GasVolume {
                 lattices,
                 &solids,
             );
-            if moving {
+            if solids_move {
                 pass(
                     enc,
                     pipelines
@@ -1907,8 +1987,9 @@ mod tests {
             water_count,
             sand_count,
             pad4,
+            moving,
         );
-        assert_eq!(std::mem::size_of::<GasUniforms>(), 192);
+        assert_eq!(std::mem::size_of::<GasUniforms>(), 224);
         let module = valid_shader(true);
         let params = module
             .types

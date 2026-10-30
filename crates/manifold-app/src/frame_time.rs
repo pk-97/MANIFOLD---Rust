@@ -59,6 +59,7 @@ const SOLVE_LEVEL_PARAM: &str = "solve_level";
 const STEP: &str = "node.gpu_flip_step";
 const WHITEWATER: &str = "node.whitewater_step";
 const RENDER: &str = "node.render_scene";
+const GAS: &str = "node.gas_volume";
 const STAGE_PREFIX: &str = "gpu_flip.stage.";
 /// Spans a timestamped frame may hold: the most a process can sample (32
 /// buffers of 2,048 on M4 Max). A calm res-64 GPU FLIP frame stamps ~38,000.
@@ -694,6 +695,7 @@ struct Split {
     per_step_label: BTreeMap<String, f64>,
     per_whitewater_label: BTreeMap<String, f64>,
     per_render_label: BTreeMap<String, f64>,
+    per_gas_label: BTreeMap<String, f64>,
 }
 
 fn percentile(samples: &[f64], fraction: f64) -> f64 {
@@ -735,6 +737,7 @@ struct Phase {
     per_step: BTreeMap<String, Vec<f64>>,
     per_whitewater: BTreeMap<String, Vec<f64>>,
     per_render: BTreeMap<String, Vec<f64>>,
+    per_gas: BTreeMap<String, Vec<f64>>,
     /// Command-buffer GPU span sums by whether the frame ran a solver tick:
     /// [plain tick, plain no-tick, timestamped tick, timestamped no-tick].
     gpu_by_tick: [Vec<f64>; 4],
@@ -781,6 +784,7 @@ impl Phase {
             (&mut self.per_step, &split.per_step_label),
             (&mut self.per_whitewater, &split.per_whitewater_label),
             (&mut self.per_render, &split.per_render_label),
+            (&mut self.per_gas, &split.per_gas_label),
         ] {
             for (name, ms) in from {
                 into.entry(name.clone()).or_default().push(*ms);
@@ -935,6 +939,10 @@ impl Phase {
         print_split(step_title, &self.per_step);
         print_split(whitewater_title, &self.per_whitewater);
         print_split("render_scene per pass label", &self.per_render);
+        // A node-granularity span is the whole node under its first label.
+        if self.dispatch_frames > 0 {
+            print_split("gas_volume per dispatch label", &self.per_gas);
+        }
         println!(
             "  profiled CPU preparation per node type (acquire, encode, scalar drains; timestamped frames):"
         );
@@ -1034,6 +1042,7 @@ fn split_profiles(
                 STEP => Some(&mut split.per_step_label),
                 WHITEWATER => Some(&mut split.per_whitewater_label),
                 RENDER => Some(&mut split.per_render_label),
+                GAS => Some(&mut split.per_gas_label),
                 _ => None,
             };
             if let Some(labelled) = labelled {

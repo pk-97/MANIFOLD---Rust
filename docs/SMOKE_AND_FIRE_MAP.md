@@ -50,8 +50,11 @@ World Speed and Reset reach it as they reach water.
 0. Solids: the World's Colliders and Bodies, taken as a second water takes
    them (`SharedSolids`): from the water that owns the World, or straight
    from the World when no water does (`WorldSolidsPair`, rows at the end of
-   the frame's ticks, carried back to each tick). A Collider's mesh is
-   voxelised through its tree only when it or the box changes; bodies and
+   the frame's ticks, carried back to each tick). A still Collider's
+   mesh is voxelised through its tree only when it or the box changes; a
+   Collider whose pose changed since the last frame (one on a driver) is
+   read through its tree each tick instead, so it never forces the rest
+   to be laid again; bodies and
    hulls are sampled from their lattices each tick and give the cell their
    velocity. A solid cell holds no gas, its faces move with the solid, and
    the solve leaves it out (the count of open neighbours rides in the low
@@ -141,13 +144,13 @@ the gas over most of the frame:
 
 | | Medium | High |
 |---|---|---|
-| simulation, both items | 7.8 | 11.6 |
+| simulation, both items | 1.5 | 8.8 |
 | unpack, glow and light | 0.1 | 1.0 |
 | march | 2.1 | 5.2 |
 
-A wide shot of the same at High marches in 2.7 ms. The simulation is about
-240 small dispatches a frame for the two items, so Medium costs most of what
-High does. High is the live default; Extra High is for renders.
+A wide shot of the same at High marches in 2.7 ms. Whole frame with a head
+mesh and a driven Paddle: Medium 7.1 ms, High 17.5 ms. High is the live
+default; Extra High is for renders.
 
 ## Not built
 

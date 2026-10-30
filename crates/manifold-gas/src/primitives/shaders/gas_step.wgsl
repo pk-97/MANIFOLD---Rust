@@ -74,6 +74,10 @@ struct Params {
     water_count: u32,
     sand_count: u32,
     pad4: u32,
+    // One bit a body row (bit b % 32 of word b / 32): a Collider that moves
+    // this frame, laid each tick by cs_solids and left out of the static
+    // solids.
+    moving: array<vec4<u32>, 2>,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -768,9 +772,29 @@ fn cs_fine_maccormack(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 // ---- Solids (each tick, before advection) -------------------------------------
 
-// Every cell air, or inside a Collider's mesh (kind 1, at rest): the meshes
-// are read through their trees, so this runs only when they or the box
-// change. The mesh is about the body's centre of mass, at its scale.
+// Whether the Collider at body row `b` moves this frame (`moving_trees` in
+// gas_volume.rs).
+fn tree_moves(b: u32) -> bool {
+    return ((params.moving[b >> 7u][(b >> 5u) & 3u] >> (b & 31u)) & 1u) != 0u;
+}
+
+// The signed distance from `x` to a Collider's mesh in `body`'s pose, read
+// through its tree; 1 past the tree's box, where the mesh cannot reach. The
+// mesh is about the body's centre of mass, at its scale.
+fn tree_phi(body: LiquidBody, shape: LiquidShape, x: vec3<f32>) -> f32 {
+    let q = body.rotation;
+    let local = liquid_rotate(vec4<f32>(-q.xyz, q.w), x - body.position_inv_mass.xyz);
+    let shell = 0.5 * params.h;
+    let root = 4u * shape.tree_node;
+    if cb_box_distance_squared(local, cb_node(root).xyz, cb_node(root + 1u).xyz) > shell * shell {
+        return 1.0;
+    }
+    return cb_phi(shape.tree_node, shape.tree_triangle, local, 2.0 * params.h, shell);
+}
+
+// Every cell air, or inside a still Collider's mesh (kind 1, at rest): the
+// meshes are read through their trees, so this runs only when they or the
+// box change. A Collider that moves is laid each tick by `cs_solids`.
 @compute @workgroup_size(4, 4, 4)
 fn cs_solids_static(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !inside(gid) {
@@ -785,12 +809,10 @@ fn cs_solids_static(@builtin(global_invocation_id) gid: vec3<u32>) {
             continue;
         }
         let shape = shapes[u32(shape_index)];
-        if shape.tree != 1u {
+        if shape.tree != 1u || tree_moves(b) {
             continue;
         }
-        let q = body.rotation;
-        let local = liquid_rotate(vec4<f32>(-q.xyz, q.w), x - body.position_inv_mass.xyz);
-        if cb_phi(shape.tree_node, shape.tree_triangle, local, 2.0 * params.h, 0.5 * params.h) < 0.0 {
+        if tree_phi(body, shape, x) < 0.0 {
             kind = 1.0;
             break;
         }
@@ -846,10 +868,11 @@ fn cs_matter(
     }
 }
 
-// The moving solids at this tick's start: a cell inside a body or a
-// Collider's hull takes the velocity of the one it is deepest in (kind 2); a
-// cell inside a Collider's mesh keeps it; a cell at least half full of water
-// or sand takes their mean velocity (kind 3), and the rest is air.
+// The moving solids at this tick's start: a cell inside a body, a Collider's
+// hull or a moving Collider's mesh takes the velocity of the one it is
+// deepest in (kind 2); a cell inside a still Collider's mesh keeps it; a cell
+// at least half full of water or sand takes their mean velocity (kind 3), and
+// the rest is air.
 @compute @workgroup_size(4, 4, 4)
 fn cs_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !inside(gid) {
@@ -870,16 +893,21 @@ fn cs_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
             continue;
         }
         let shape = shapes[u32(shape_index)];
+        var d = 0.0;
         if shape.tree == 1u {
-            continue;
+            if !tree_moves(b) {
+                continue;
+            }
+            d = tree_phi(body, shape, x);
+        } else {
+            let dims = vec3<u32>(shape.dims_x, shape.dims_y, shape.dims_z);
+            let g = liquid_lattice_coord(x, body.position_inv_mass.xyz, body.rotation, shape.origin_spacing, shape.scale_min.xyz);
+            // The lattice pads its shape, so a point past it is outside.
+            if !liquid_lattice_holds(g, dims) {
+                continue;
+            }
+            d = liquid_shape_distance(shape.atlas_offset, dims, g, shape.origin_spacing.w, shape.scale_min.xyz);
         }
-        let dims = vec3<u32>(shape.dims_x, shape.dims_y, shape.dims_z);
-        let g = liquid_lattice_coord(x, body.position_inv_mass.xyz, body.rotation, shape.origin_spacing, shape.scale_min.xyz);
-        // The lattice pads its shape, so a point past it is outside.
-        if !liquid_lattice_holds(g, dims) {
-            continue;
-        }
-        let d = liquid_shape_distance(shape.atlas_offset, dims, g, shape.origin_spacing.w, shape.scale_min.xyz);
         if d < deepest {
             deepest = d;
             kind = 2.0;
