@@ -36,13 +36,28 @@ pub(crate) fn parse_and_validate_wgsl(
 /// [`rebind_vertex_output_as_point_size`], both of which must surface shader
 /// errors loudly at boot rather than swallow them at runtime.
 fn validate_module(module: naga::Module, label: &str) -> (naga::Module, naga::valid::ModuleInfo) {
-    let info = naga::valid::Validator::new(
+    let info = validator()
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{label}: WGSL validation error: {e}"));
+    (module, info)
+}
+
+fn validator() -> naga::valid::Validator {
+    naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
     )
-    .validate(&module)
-    .unwrap_or_else(|e| panic!("{label}: WGSL validation error: {e}"));
-    (module, info)
+}
+
+/// [`parse_and_validate_wgsl`]'s check without the panic, for shader text
+/// edited while the process runs: naga's message with the offending line.
+pub(crate) fn check_wgsl(wgsl_source: &str) -> Result<(), String> {
+    let module =
+        naga::front::wgsl::parse_str(wgsl_source).map_err(|e| e.emit_to_string(wgsl_source))?;
+    validator()
+        .validate(&module)
+        .map_err(|e| e.emit_to_string(wgsl_source))?;
+    Ok(())
 }
 
 /// Rebind one vertex-output struct member from `@location(N)` to

@@ -19,6 +19,7 @@ Machine:
 
 Render and measure:
   capture                 render any preset to PNG frames: OUT_DIR --preset <json> [--frames N] (the visual oracle)  [scripts/gpu_queue.py -- cargo run -p manifold-nodes --features gpu-proofs --example fluid_capture --]
+  look-loop               warm still: PROJECT --frame F --png OUT [--params P.json]; re-renders frame F on a scene shader or params edit, no cargo build, no re-simulation  [scripts/look_loop.py]
   render-generator        render one generator preset headless  [cargo run -p manifold-nodes --bin render-generator-preset --]
   render-import           render an imported glTF/GLB headless; --hdri FILE lights it with an HDRI; --dump-def writes the importer's def JSON  [cargo run -p manifold-app --bin render-import --]
   graph-tool              validate <file.json> --kind effect|generator, fusion report; pre-flight for graph JSON  [cargo run -p manifold-app --bin graph-tool --]

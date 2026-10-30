@@ -473,7 +473,7 @@ pub fn clear_chain_state(cache: &mut ChainSlot) {
 /// Process-wide [`PrimitiveRegistry`] used by every chain dispatch.
 /// Built lazily on first call so callers don't have to thread a
 /// registry reference.
-fn primitive_registry() -> &'static PrimitiveRegistry {
+pub(crate) fn primitive_registry() -> &'static PrimitiveRegistry {
     static CELL: OnceLock<PrimitiveRegistry> = OnceLock::new();
     CELL.get_or_init(PrimitiveRegistry::with_builtin)
 }

@@ -1064,11 +1064,15 @@ fn split_profiles(
     split
 }
 
-fn write_png(ct: &mut crate::content_thread::ContentThread, path: &str) {
-    let Some(device) = ct.content_pipeline.native_device_handle() else {
-        eprintln!("frame-time: no native device for the PNG");
-        return;
-    };
+/// The frame's output as an sRGB PNG at `path`.
+pub(crate) fn write_png(
+    ct: &mut crate::content_thread::ContentThread,
+    path: &str,
+) -> Result<(), String> {
+    let device = ct
+        .content_pipeline
+        .native_device_handle()
+        .ok_or("no native device for the PNG")?;
     let texture = ct.content_pipeline.export_output_texture();
     // The graph tone-maps in-graph (node.tone_map), so display-encode only.
     let png = manifold_node_engine::gpu::headless_readback::readback_to_srgb_png_linear(
@@ -1078,9 +1082,13 @@ fn write_png(ct: &mut crate::content_thread::ContentThread, path: &str) {
         texture.height,
     )
     .expect("GPU readback completes");
-    match std::fs::write(path, png) {
+    std::fs::write(path, png).map_err(|e| format!("write {path}: {e}"))
+}
+
+fn report_png(ct: &mut crate::content_thread::ContentThread, path: &str) {
+    match write_png(ct, path) {
         Ok(()) => eprintln!("frame-time: wrote {path}"),
-        Err(e) => eprintln!("frame-time: write {path}: {e}"),
+        Err(e) => eprintln!("frame-time: {e}"),
     }
 }
 
@@ -1099,6 +1107,26 @@ pub fn run(args: &[String]) -> ! {
 
 /// The longest a frame-clocked run waits for file loads before frame 0.
 const LOAD_SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// A frame-clocked run is a repeatable capture: paused frames let every file
+/// load land first (an HDRI and the Sun that follows it, textures uploading a
+/// band a frame), so frame N shows the same picture however fast the run goes.
+pub(crate) fn settle_loads(
+    ct: &mut crate::content_thread::ContentThread,
+    state_tx: &crate::content_state::StateTx,
+) -> Result<(), String> {
+    let deadline = Instant::now() + LOAD_SETTLE_LIMIT;
+    while ct.engine.has_pending_decodes() {
+        if Instant::now() > deadline {
+            return Err(format!(
+                "file loads still pending after {LOAD_SETTLE_LIMIT:?}"
+            ));
+        }
+        manifold_gpu::autorelease_scope(|| ct.tick_frame(state_tx));
+        ct.content_pipeline.wait_for_render_complete();
+    }
+    Ok(())
+}
 
 fn probe(args: &Args) -> Result<(), String> {
     let initial_faults = manifold_gpu::gpu_fault::mark();
@@ -1179,21 +1207,8 @@ fn probe(args: &Args) -> Result<(), String> {
 
     ct.timer.set_frame_clocked(args.frame_clock);
     ct.timer.resume_after_load();
-    // A frame-clocked run is a repeatable capture: paused frames let every
-    // file load land first (an HDRI and the Sun that follows it, textures
-    // uploading a band a frame), so frame N shows the same picture however
-    // fast the run goes.
     if args.frame_clock {
-        let deadline = Instant::now() + LOAD_SETTLE_LIMIT;
-        while ct.engine.has_pending_decodes() {
-            if Instant::now() > deadline {
-                return Err(format!(
-                    "file loads still pending after {LOAD_SETTLE_LIMIT:?}"
-                ));
-            }
-            manifold_gpu::autorelease_scope(|| ct.tick_frame(&state_tx));
-            ct.content_pipeline.wait_for_render_complete();
-        }
+        settle_loads(&mut ct, &state_tx)?;
     }
     if let Some(seed) = args.pre_play_delay_seed {
         let delay = pre_play_delay(seed, f64::from(ct.engine.frame_rate()));
@@ -1270,13 +1285,13 @@ fn probe(args: &Args) -> Result<(), String> {
             && at.contains(&index)
         {
             if at.len() == 1 {
-                write_png(&mut ct, path);
+                report_png(&mut ct, path);
             } else {
                 let path = std::path::Path::new(path);
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("frame");
                 let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("png");
                 let framed = path.with_file_name(format!("{stem}_{index}.{ext}"));
-                write_png(&mut ct, &framed.to_string_lossy());
+                report_png(&mut ct, &framed.to_string_lossy());
             }
         }
         if let Some(memory) = ct

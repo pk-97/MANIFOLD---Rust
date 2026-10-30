@@ -330,7 +330,11 @@ fn trim(dir: &std::path::Path, above: u64, to: u64) {
         let modified = meta.modified().unwrap_or(now);
         match path.extension().and_then(|e| e.to_str()) {
             Some("mslcache") => files.push((modified, meta.len(), path)),
-            Some("tmp") if now.duration_since(modified).is_ok_and(|age| age > STALE_TEMP) => {
+            Some("tmp")
+                if now
+                    .duration_since(modified)
+                    .is_ok_and(|age| age > STALE_TEMP) =>
+            {
                 let _ = std::fs::remove_file(&path);
             }
             _ => {}
@@ -392,7 +396,10 @@ mod tests {
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
         left.sort();
-        assert_eq!(left, ["0000000000000003.mslcache", "0000000000000004.mslcache"]);
+        assert_eq!(
+            left,
+            ["0000000000000003.mslcache", "0000000000000004.mslcache"]
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

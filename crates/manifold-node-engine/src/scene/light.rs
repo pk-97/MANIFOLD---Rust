@@ -629,7 +629,13 @@ mod tests {
         let t = (fov_y * 0.5).tan();
         for step in 1..=60 {
             let depth = 0.1 * (SHADOW_DISTANCE / 0.1f32).powf(step as f32 / 60.0) * 0.999;
-            for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0), (0.0, 0.0)] {
+            for (sx, sy) in [
+                (-1.0, -1.0),
+                (1.0, -1.0),
+                (-1.0, 1.0),
+                (1.0, 1.0),
+                (0.0, 0.0),
+            ] {
                 let p: [f32; 3] = std::array::from_fn(|k| {
                     camera.pos[k]
                         + camera.fwd[k] * depth
@@ -647,7 +653,8 @@ mod tests {
             }
         }
         let side = normalize3(cross3(sun.dir, pick_up(sun.dir)));
-        let moved = Camera::orbit_perspective(2.5013, 0.1207, 150.3, fov_y, 200.0, 0.0, 0.05, 20000.0);
+        let moved =
+            Camera::orbit_perspective(2.5013, 0.1207, 150.3, fov_y, 200.0, 0.0, 0.05, 20000.0);
         for c in sun.cascades(&moved, aspect) {
             let texel = 2.0 * c.range / 4096.0;
             let along = dot3(c.aim, side) / texel;

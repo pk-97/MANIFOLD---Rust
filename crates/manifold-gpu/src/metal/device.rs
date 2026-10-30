@@ -643,6 +643,18 @@ impl GpuDevice {
         entry_point: &str,
         label: &str,
     ) -> GpuComputePipeline {
+        match crate::shader_swap::apply_compute(wgsl_source, entry_point, label, &[]) {
+            Some(swapped) => self.compute_pipeline(&swapped, entry_point, label),
+            None => self.compute_pipeline(wgsl_source, entry_point, label),
+        }
+    }
+
+    fn compute_pipeline(
+        &self,
+        wgsl_source: &str,
+        entry_point: &str,
+        label: &str,
+    ) -> GpuComputePipeline {
         let hash = archive::pipeline_hash(wgsl_source, entry_point);
         if let Some(cached) = self.compute_cache.lock().unwrap().get(&hash) {
             return cached.clone();
@@ -798,11 +810,13 @@ impl GpuDevice {
         specializations: &[(&str, &str)],
         label: &str,
     ) -> GpuComputePipeline {
-        let mut source = wgsl_source.to_string();
+        let mut source =
+            crate::shader_swap::apply_compute(wgsl_source, entry_point, label, specializations)
+                .unwrap_or_else(|| wgsl_source.to_string());
         for &(pattern, replacement) in specializations {
             source = source.replace(pattern, replacement);
         }
-        self.create_compute_pipeline(&source, entry_point, label)
+        self.compute_pipeline(&source, entry_point, label)
     }
 
     /// Load or create a pipeline binary archive at the given path.
@@ -834,6 +848,11 @@ impl GpuDevice {
     /// Create (or fetch from the cache) a render pipeline. A combination
     /// this backend does not build panics with the reason.
     pub fn create_render_pipeline(&self, desc: &RenderPipelineDesc) -> GpuRenderPipeline {
+        let swapped = crate::shader_swap::apply_render(desc);
+        let desc = &RenderPipelineDesc {
+            wgsl_source: swapped.as_deref().unwrap_or(desc.wgsl_source),
+            ..*desc
+        };
         let label = desc.label;
         let Some(color_format) = desc.color_format else {
             assert!(
