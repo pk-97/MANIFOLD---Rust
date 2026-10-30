@@ -120,6 +120,9 @@ Sand on a vibrating plate settling into patterns that change with the pitch of t
 ### Different sim speeds in one scene
 Two waters, or one water and the bodies in it, running at different Speeds and still touching: a pool in slow motion beside one at full speed, a slow-motion splash round a body that falls at normal speed. Today a Water Speed other than the World's stops coupled water with an error (BUG-n0nr), because the water and Box3D must step the same clock. On the shared grid (WATER_SHARED_GRID_DESIGN.md) each region would carry its own time scale, and exchanges between regions would convert momentum across the seam. Needs first: the shared grid, then a clock per region with a rule for what a body straddling two speeds feels.
 
+### Regional time steps for packed snow
+Packed snow takes its own short steps inside Matter's shared grid while sand, mud and jelly keep longer ones (Fang, Hu, Hu and Jiang 2018, AsyncMPM: power-of-two steps per region, coarse first, the coarse points' last state as the buffer). The payoff is bounded: packing stiffens snow at most 5×, so its waves run at most 2.2× faster and it at most doubles the step count. Other materials can only ever take double steps, and only when the ratio clears 2 (fully packed snow beside sand in a 4 m domain is 2.03; taller domains or looser snow fall under it, unless the snow's step shrinks to make it exactly 2). Matter could run nearly twice as fast with a small packed snowball in a lot of sand; snow-heavy scenes barely change. Needs: per-tile levels at each rebuild, per-level tile lists for the grid passes, a ~110-byte backup per coarse point, and G2P skipping other levels' points.
+
 ### Cloth and rope simulation
 Lets cloth and ropes swing and drape live in the scene, and could move with the beat. Nothing solves cloth or rope motion yet.
 
