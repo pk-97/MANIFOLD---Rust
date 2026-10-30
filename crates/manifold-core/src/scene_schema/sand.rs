@@ -128,7 +128,7 @@ pub static SAND_ROWS: [PropertyRow; 49] = [
         .range(0.0, 20.0)
         .when(snow),
     density("snow_density", 400.0, "How packed the snow is, which sets how heavy and how stiff it is: about 100 for fresh powder that slumps, 400 for settled snow that holds a wall, 600 for wet snow").when(snow),
-    firmness("clay_firmness", 1.0e4, (1.0e3, 5.0e4)).when(clay),
+    firmness("clay_firmness", 3.0e4, (1.0e3, 5.0e4)).when(clay),
     thickness("clay_thickness", 20.0, (0.0, 500.0)).when(clay),
     density("clay_density", 1800.0, "How heavy the clay is, which sets how it sags and how bodies sink into it").when(clay),
     firmness("mud_firmness", 1500.0, (20.0, 5.0e3)).when(mud),

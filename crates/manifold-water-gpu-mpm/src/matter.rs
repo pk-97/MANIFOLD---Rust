@@ -377,7 +377,9 @@ pub const SNOW_HARDENING: f32 = 10.0;
 /// a metre tall.
 const JELLY_YOUNG: f64 = 2.0e4;
 const JELLY_POISSON: f64 = 0.45;
-/// Clay: modelling clay yields at about 10 kPa in shear. Its true Young's
+/// Clay: modelling clay (plasticine) yields at 10 to 50 kPa in shear, and
+/// its Firmness starts at 30 kPa, where a block holds its shape under its
+/// own weight and still squashes where it lands. Its true Young's
 /// modulus (about 1 MPa) would double the substeps for a springiness no one
 /// sees, so it runs at sand's; the yield, which makes the look, is real.
 const CLAY_YOUNG: f64 = 3.0e5;

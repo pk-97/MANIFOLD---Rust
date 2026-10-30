@@ -1569,10 +1569,12 @@ fn transmission_diffuse(
 // ===== Sand grain =====
 
 // A material with a grain size (u.surface.x, metres) shades as packed grains:
-// world space is cut into Voronoi cells, one jittered seed per lattice cell,
-// searched over the 2×2×2 cells round the point (seeds stay in the middle of
-// their cell, so the nearest is always among them). One flat loop: the
-// optimizer unrolls a 3×3×3 nest in this shader for minutes.
+// each world plane (yz, xz, xy) is cut into Voronoi cells, one jittered seed
+// per lattice cell, searched over the 2×2 cells round the point (seeds stay
+// in the middle of their cell, so the nearest is always among them), and the
+// planes blend by the normal, sharply, so a surface reads mostly one. A 3D
+// pattern sliced by the surface instead changes grains wherever a gentle
+// slope crosses a layer of cells, which draws contour lines across it.
 //
 // Each grain gets its own shade and a slight hue, a few are dark mineral
 // grains, the gaps darken as crevices, and each grain bends the normal like a
@@ -1611,19 +1613,21 @@ fn grain_hash(c: vec3<i32>) -> vec3<f32> {
 // material's colour on average.
 const GRAIN_MEAN: f32 = 0.82;
 
-// Octave `k` of the pattern at `p`, in that octave's cells.
-fn grain_octave(p: vec3<f32>, n: vec3<f32>, k: f32) -> GrainOctave {
-    let corner = floor(p - vec3<f32>(0.5));
-    let cell = vec3<i32>(corner);
-    let f = p - corner;
+// Octave `k` of the pattern on one plane: `q` the point in that plane, in the
+// octave's cells, `u` and `v` the world directions of its axes, `plane` which
+// plane it is (so the planes' grains differ).
+fn grain_plane(q: vec2<f32>, u: vec3<f32>, v: vec3<f32>, plane: i32, n: vec3<f32>, k: f32) -> GrainOctave {
+    let corner = floor(q - vec2<f32>(0.5));
+    let cell = vec2<i32>(corner);
+    let f = q - corner;
     var d1 = 8.0;
     var d2 = 8.0;
-    var to_seed = vec3<f32>(0.0);
+    var to_seed = vec2<f32>(0.0);
     var id = vec3<f32>(0.0);
-    for (var i = 0u; i < 8u; i = i + 1u) {
-        let o = vec3<i32>(vec3<u32>(i, i >> 1u, i >> 2u) & vec3<u32>(1u));
-        let h = grain_hash(cell + o);
-        let r = vec3<f32>(o) + vec3<f32>(0.15) + 0.7 * h - f;
+    for (var i = 0u; i < 4u; i = i + 1u) {
+        let o = vec2<i32>(vec2<u32>(i, i >> 1u) & vec2<u32>(1u));
+        let h = grain_hash(vec3<i32>(cell + o, plane));
+        let r = vec2<f32>(o) + vec2<f32>(0.15) + 0.7 * h.xy - f;
         let d = dot(r, r);
         let nearer = d < d1;
         d2 = select(min(d2, d), d1, nearer);
@@ -1631,7 +1635,7 @@ fn grain_octave(p: vec3<f32>, n: vec3<f32>, k: f32) -> GrainOctave {
         to_seed = select(to_seed, r, nearer);
         id = select(id, h, nearer);
     }
-    // A clump of 8^k grains varies less than one grain.
+    // A clump of 4^k grains varies less than one grain.
     let contrast = max(exp2(-1.5 * k), 0.35);
     var shade = 0.8 + 0.4 * id.x;
     shade = select(shade, 0.45, id.y < 0.07);
@@ -1641,10 +1645,38 @@ fn grain_octave(p: vec3<f32>, n: vec3<f32>, k: f32) -> GrainOctave {
     let glint = select(0.0, 1.0, id.y > 0.95);
     // The dome: tilted away from the seed, more toward the grain's edge; a
     // glint grain is a flat facet turned at random instead.
-    let dome = -to_seed - dot(-to_seed, n) * n;
+    let seed = u * to_seed.x + v * to_seed.y;
+    let dome = -seed - dot(-seed, n) * n;
     let facet = 0.7 * (fract(id.zxy * 7.31) - vec3<f32>(0.5));
     let bend = mix(1.4 * max(exp2(-k), 0.3) * dome, facet, glint);
     return GrainOctave(mix(vec3<f32>(1.0), grain, contrast), bend, glint);
+}
+
+// Planes weighing less than this share of the blend are skipped.
+const GRAIN_PLANE_MIN: f32 = 0.02;
+
+// Octave `k` of the pattern at `p`, in that octave's cells: the three planes'
+// patterns blended by the eighth power of the normal's components.
+fn grain_octave(p: vec3<f32>, n: vec3<f32>, k: f32) -> GrainOctave {
+    let a = abs(n);
+    let a2 = a * a;
+    let a4 = a2 * a2;
+    let w = a4 * a4 / dot(a4 * a4, vec3<f32>(1.0));
+    var sum = GrainOctave(vec3<f32>(0.0), vec3<f32>(0.0), 0.0);
+    if w.x > GRAIN_PLANE_MIN {
+        let o = grain_plane(p.yz, vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), 0, n, k);
+        sum = GrainOctave(sum.tint + w.x * o.tint, sum.bend + w.x * o.bend, sum.glint + w.x * o.glint);
+    }
+    if w.y > GRAIN_PLANE_MIN {
+        let o = grain_plane(p.xz, vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), 1, n, k);
+        sum = GrainOctave(sum.tint + w.y * o.tint, sum.bend + w.y * o.bend, sum.glint + w.y * o.glint);
+    }
+    if w.z > GRAIN_PLANE_MIN {
+        let o = grain_plane(p.xy, vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), 2, n, k);
+        sum = GrainOctave(sum.tint + w.z * o.tint, sum.bend + w.z * o.bend, sum.glint + w.z * o.glint);
+    }
+    let kept = max(dot(select(vec3<f32>(0.0), w, w > vec3<f32>(GRAIN_PLANE_MIN)), vec3<f32>(1.0)), 1e-6);
+    return GrainOctave(sum.tint / kept, sum.bend / kept, sum.glint / kept);
 }
 
 fn sand_grain(world_pos: vec3<f32>, n: vec3<f32>, albedo: vec3<f32>, roughness: f32, size: f32) -> Grain {
