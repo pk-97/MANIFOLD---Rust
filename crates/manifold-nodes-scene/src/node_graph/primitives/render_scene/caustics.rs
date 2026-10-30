@@ -541,7 +541,10 @@ impl Caustics {
     pub(super) fn bindings(&self) -> Option<(&GpuTexture, &GpuTexture, &GpuBuffer)> {
         match (&self.targets, &self.fits) {
             (Some(targets), Some(fits)) if self.ran => Some((&targets.map, &targets.front, fits)),
-            _ => self.off.as_ref().map(|off| (&off.map, &off.surface, &off.fits)),
+            _ => self
+                .off
+                .as_ref()
+                .map(|off| (&off.map, &off.surface, &off.fits)),
         }
     }
 
@@ -640,7 +643,11 @@ impl Caustics {
             self.targets = Some(Targets::new(device, side, layers)?);
         }
         let fit_bytes = FIT_BYTES * lights.views.len() as u64;
-        if self.fits.as_ref().is_none_or(|fits| fits.size() < fit_bytes) {
+        if self
+            .fits
+            .as_ref()
+            .is_none_or(|fits| fits.size() < fit_bytes)
+        {
             self.fits = Some(device.try_create_buffer(fit_bytes, BufferUse::Gpu)?);
         }
         let targets = self.targets.as_ref().expect("ensured");
@@ -696,9 +703,8 @@ impl Caustics {
         });
 
         for (layer, (slot, view, faces)) in views().enumerate() {
-            let inverse = |vp| {
-                mat4_inverse(vp).ok_or_else(|| "Caustics: singular light matrix".to_owned())
-            };
+            let inverse =
+                |vp| mat4_inverse(vp).ok_or_else(|| "Caustics: singular light matrix".to_owned());
             let vp = view.shadow_view_proj();
             let texel = 1.0 / shadow_map_resolution(view.shadow_resolution) as f32;
             let toward = match (view.mode, faces) {
@@ -710,7 +716,11 @@ impl Caustics {
             // light's own.
             let mut shadow_views = [[[0.0; 4]; 4]; 6];
             let mut inverse_shadow_views = [[[0.0; 4]; 4]; 6];
-            for (face, light) in faces.unwrap_or(std::slice::from_ref(&view)).iter().enumerate() {
+            for (face, light) in faces
+                .unwrap_or(std::slice::from_ref(&view))
+                .iter()
+                .enumerate()
+            {
                 shadow_views[face] = light.shadow_view_proj();
                 inverse_shadow_views[face] = inverse(shadow_views[face])?;
             }

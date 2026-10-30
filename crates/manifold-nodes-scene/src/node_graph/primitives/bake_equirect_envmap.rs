@@ -460,6 +460,8 @@ manifold_node_engine::primitive! {
         last_output_identity: Option<(usize, Option<usize>)> = None,
         // The sun region `lighting` was last painted without.
         last_fill: [f32; 4] = [0.0; 4],
+        // The Sun handed on last frame in HDRI mode.
+        last_sun: Option<Light> = None,
     },
 }
 
@@ -559,14 +561,14 @@ impl Primitive for BakeEquirectEnvmap {
             && matches!(ctx.params.get("follow_sun"), Some(ParamValue::Bool(true)));
         let followed = HdriSun::from_light(ctx.inputs.light("hdri_sun"))
             .filter(|_| follow && wired_sun.is_some());
-        if mode == MODE_HDRI
-            && let Some(sun) = wired_sun
-        {
-            let emitted = match followed {
+        let emitted = wired_sun
+            .filter(|_| mode == MODE_HDRI)
+            .map(|sun| match followed {
                 Some(found) => followed_sun(sun, found, read_float("env_rotation", 0.0), intensity),
                 None => sun,
-            };
-            ctx.outputs.set_light("sun", emitted);
+            });
+        if let Some(sun) = emitted {
+            ctx.outputs.set_light("sun", sun);
         }
         let lighting = if hdri.is_some() {
             ctx.outputs.texture_2d("lighting")
@@ -620,14 +622,17 @@ impl Primitive for BakeEquirectEnvmap {
             self.last_uniforms == Some(uniforms) && hdri_unchanged && self.last_fill == fill;
         let unchanged = content_unchanged && self.last_output_identity == Some(output_identity);
 
+        let sun_unchanged = self.last_sun == emitted;
+        self.last_sun = emitted;
         if unchanged && ctx.outputs_retained() {
-            // The maps hold. A followed Sun is a value read each frame, not
-            // content anyone versions, so a turn alone keeps the maps' content
-            // version and the render's lighting convolution with it.
-            if follow {
-                ctx.mark_output_content_unchanged();
-            } else {
+            // The maps hold. A Sun that moved (a turn of the HDRI, a drag) is
+            // a value read each frame, not content anyone versions, so it
+            // keeps the maps' content version and the render's lighting
+            // convolution with it.
+            if sun_unchanged {
                 ctx.mark_outputs_unchanged();
+            } else {
+                ctx.mark_output_content_unchanged();
             }
             return;
         }

@@ -161,33 +161,33 @@ fn around(width: usize, height: usize, rgba16: &[u8], centre: [f64; 3]) -> Optio
     if brightest <= 0.0 {
         return None;
     }
+    // The sun's texels: direction, light above the sky, solid angle, and
+    // luminance over solid angle, which weighs its direction and its size.
     let floor = brightest * REGION_FLOOR;
+    let region: Vec<([f64; 3], [f64; 3], f64, f64)> = inside
+        .iter()
+        .filter_map(|&(dir, rgb, solid_angle)| {
+            let light = excess(rgb);
+            let strength = luma(light);
+            (strength >= floor).then_some((dir, light, solid_angle, strength * solid_angle))
+        })
+        .collect();
     let mut irradiance = [0.0f64; 3];
     let mut weighted = [0.0f64; 3];
     let mut energy = 0.0f64;
-    for &(dir, rgb, solid_angle) in &inside {
-        let light = excess(rgb);
-        let strength = luma(light);
-        if strength < floor {
-            continue;
-        }
+    for &(dir, light, solid_angle, weight) in &region {
         for k in 0..3 {
             irradiance[k] += light[k] * solid_angle;
-            weighted[k] += strength * solid_angle * dir[k];
+            weighted[k] += weight * dir[k];
         }
-        energy += strength * solid_angle;
+        energy += weight;
     }
     let toward = normalize(weighted)?;
-    let mut widest = 0.0f64;
-    let mut spread = 0.0f64;
-    for &(dir, rgb, solid_angle) in &inside {
-        let strength = luma(excess(rgb));
-        if strength < floor {
-            continue;
-        }
+    let (mut widest, mut spread) = (0.0f64, 0.0f64);
+    for &(dir, _, _, weight) in &region {
         let angle = dot(dir, toward).clamp(-1.0, 1.0).acos();
         widest = widest.max(angle);
-        spread += strength * solid_angle * angle * angle;
+        spread += weight * angle * angle;
     }
     let sun = HdriSun {
         toward: toward.map(|c| c as f32),
