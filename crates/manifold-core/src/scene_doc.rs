@@ -223,6 +223,12 @@ pub enum Shape {
     Ocean,
     /// Land shaped by noise and carved by simulated rain on the GPU.
     Terrain,
+    /// A tree grown from branching rules on the GPU: the bark, with the
+    /// Material as its wood.
+    Tree,
+    /// The leaves of the Tree beside it in the same Group, with the Material
+    /// as its leaf.
+    Leaves,
     /// A built-in curve pushed back into a solid, centred on the curve's plane
     /// (Blender's curve Extrude). `caps` is Fill Caps: a closed outline's
     /// ends are filled.

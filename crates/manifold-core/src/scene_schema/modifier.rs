@@ -625,6 +625,9 @@ pub fn modifier_refuses(target: &Item) -> Option<&'static str> {
         ItemFields::Object(object) if matches!(object.shape, Shape::Terrain) => {
             Some("A Terrain is shaped on the GPU each frame: a modifier cannot bend it")
         }
+        ItemFields::Object(object) if matches!(object.shape, Shape::Tree | Shape::Leaves) => {
+            Some("A tree is grown on the GPU: a modifier cannot bend it")
+        }
         ItemFields::Water(_) => {
             Some("Water moves by its own simulation: a modifier cannot bend it")
         }

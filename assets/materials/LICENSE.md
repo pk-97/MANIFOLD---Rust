@@ -56,6 +56,11 @@ Creative Commons CC0 1.0 Universal License.
 | Marble012 | 1.5 *est.* | broken | <https://ambientcg.com/a/Marble012> |
 | Plaster007 | 2.0 *est.* | broken | <https://ambientcg.com/a/Plaster007> |
 | Snow010A | 2.0 *est.* | broken | <https://ambientcg.com/a/Snow010A> |
+| Leaf001 | one leaf | cut-out | <https://ambientcg.com/a/Leaf001> |
+
+Leaf001 has an opacity picture, so it is a cut-out: one leaf drawn across
+each leaf card's own UVs, never repeated, so its `.mtlx` is left as
+downloaded. Give it to a Tree's Leaves as their Material.
 
 The Poly Haven materials are drone scans of ground tens of metres across,
 for terrain seen from the air. From each 4K download we kept the colour,

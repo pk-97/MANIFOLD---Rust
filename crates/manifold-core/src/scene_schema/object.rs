@@ -635,6 +635,14 @@ const SHAPES: &[Choice] = &[
         label: "Terrain",
     },
     Choice {
+        key: "tree",
+        label: "Tree",
+    },
+    Choice {
+        key: "leaves",
+        label: "Leaves",
+    },
+    Choice {
         key: "extrude",
         label: "Extrude",
     },
@@ -691,6 +699,14 @@ const MESH_SHAPES: &[Choice] = &[
         label: "Terrain",
     },
     Choice {
+        key: "tree",
+        label: "Tree",
+    },
+    Choice {
+        key: "leaves",
+        label: "Leaves",
+    },
+    Choice {
         key: "extrude",
         label: "Extrude",
     },
@@ -715,6 +731,8 @@ fn shape_key(shape: &Shape) -> &'static str {
         Shape::Dodecahedron => "dodecahedron",
         Shape::Ocean => "ocean",
         Shape::Terrain => "terrain",
+        Shape::Tree => "tree",
+        Shape::Leaves => "leaves",
         Shape::Extrude { .. } => "extrude",
         Shape::Revolve { .. } => "revolve",
         Shape::Tube { .. } => "tube",
@@ -790,6 +808,8 @@ fn write_shape(fields: &mut ItemFields, value: &FieldValue) -> Result<(), String
         "dodecahedron" => Shape::Dodecahedron,
         "ocean" => Shape::Ocean,
         "terrain" => Shape::Terrain,
+        "tree" => Shape::Tree,
+        "leaves" => Shape::Leaves,
         "extrude" => Shape::Extrude { curve, caps },
         "revolve" => Shape::Revolve { curve },
         "tube" => Shape::Tube { curve, caps },

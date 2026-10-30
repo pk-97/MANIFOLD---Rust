@@ -166,8 +166,10 @@ pub(crate) fn read_facts(path: &Path) -> Result<(ModelFacts, Vec<String>), Strin
         texture_dims,
         radius: 1e-3,
         nodes: HashMap::new(),
-        // A file that gives no real-world size tiles once a metre.
-        tiles: Some(Tiles {
+        // A file that gives no real-world size tiles once a metre. A cut-out
+        // (a leaf, a decal: an opacity picture) is one picture, read at the
+        // mesh's own UVs instead.
+        tiles: material.map(MapSlot::Opacity).is_none().then(|| Tiles {
             size: material.tile_size.unwrap_or(1.0),
             hex: material.hex_tiled,
             // A height picture with no real depth in the file starts 2 cm

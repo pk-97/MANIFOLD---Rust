@@ -185,10 +185,19 @@ pub static COPIES_ROWS: [PropertyRow; 40] = [
     auto("copies_parts", "parts", "the objects inside a copied group"),
 ];
 
-/// Whether an Object of this shape can be copied: every solid can (built-in,
-/// imported or curve shape), an Ocean or Terrain surface cannot.
+/// Whether an Object of this shape can take Copies: every solid can (built-in,
+/// imported or curve shape), an Ocean or Terrain surface cannot, and a tree
+/// is copied by the Group holding its bark and leaves.
 pub fn can_copy(shape: &Shape) -> bool {
-    !matches!(shape, Shape::Ocean | Shape::Terrain)
+    !matches!(
+        shape,
+        Shape::Ocean | Shape::Terrain | Shape::Tree | Shape::Leaves
+    )
+}
+
+/// Whether an Object of this shape is drawn by a copied group's copies.
+fn copied_in_group(shape: &Shape) -> bool {
+    can_copy(shape) || matches!(shape, Shape::Tree | Shape::Leaves)
 }
 
 /// Objects below `items` that are one part of a copied group's shape.
@@ -196,7 +205,7 @@ fn copied_parts(items: &[Item]) -> usize {
     items
         .iter()
         .map(|item| match &item.fields {
-            ItemFields::Object(object) => usize::from(can_copy(&object.shape)),
+            ItemFields::Object(object) => usize::from(copied_in_group(&object.shape)),
             _ => copied_parts(&item.children),
         })
         .sum()
@@ -205,6 +214,9 @@ fn copied_parts(items: &[Item]) -> usize {
 /// Why `item` cannot take Copies, for the disabled switch's hover text.
 pub fn copies_unavailable(item: &Item) -> Option<&'static str> {
     match &item.fields {
+        ItemFields::Object(object) if matches!(object.shape, Shape::Tree | Shape::Leaves) => {
+            Some("Copy a tree by the Group that holds it")
+        }
         ItemFields::Object(object) if !can_copy(&object.shape) => {
             Some("An Ocean or Terrain surface cannot be copied")
         }

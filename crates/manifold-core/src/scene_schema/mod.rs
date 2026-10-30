@@ -34,6 +34,7 @@ mod scene_level;
 mod scene_wide;
 mod swarm;
 mod terrain;
+mod tree;
 mod water;
 mod water_source;
 mod world;
@@ -81,6 +82,7 @@ pub use swarm::{
 };
 pub use terrain::TERRAIN_RESOLUTION;
 use terrain::TERRAIN_TABLES;
+use tree::TREE_TABLES;
 pub use water::{
     DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET,
     WATER_FAMILY_REASON, WATER_MATERIAL_ROLE, WATER_OBJECT_ROLE, WATER_ROWS, WORLD_FOLLOWS,
@@ -372,20 +374,25 @@ fn copies_rows(kind: ItemKind) -> &'static [PropertyRow] {
     }
 }
 
-/// The Ocean and Terrain surfaces' rows, on an Object (they apply while its
-/// Shape is Ocean or Terrain).
+/// The Ocean, Terrain and Tree shapes' rows, on an Object (they apply while
+/// its Shape is one of them).
 fn ocean_rows(kind: ItemKind) -> impl Iterator<Item = &'static PropertyRow> {
     let tables: &'static [&'static [PropertyRow]] = if kind == ItemKind::Object {
         &OCEAN_TABLES
     } else {
         &[]
     };
-    let terrain: &'static [&'static [PropertyRow]] = if kind == ItemKind::Object {
-        &TERRAIN_TABLES
-    } else {
-        &[]
-    };
-    tables.iter().chain(terrain).flat_map(|table| table.iter())
+    let (terrain, tree): (&'static [&'static [PropertyRow]], &'static [&'static [PropertyRow]]) =
+        if kind == ItemKind::Object {
+            (&TERRAIN_TABLES, &TREE_TABLES)
+        } else {
+            (&[], &[])
+        };
+    tables
+        .iter()
+        .chain(terrain)
+        .chain(tree)
+        .flat_map(|table| table.iter())
 }
 
 /// Every row a kind declares, applicable or not, including the sections

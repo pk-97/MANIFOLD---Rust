@@ -5,7 +5,7 @@
 //!
 //! Size, Height, Feature Size, Roughness, Weathering and Seed are performance
 //! rows, so the land can morph on the beat. The grid's density is fixed setup.
-//! Rock on the slopes and snow up high are the material's own Layers.
+//! Rock on the slopes and snow up high are the Material's Covers.
 
 use manifold_foundation::scene_surface::{CardBand, ControlGroup, Unit};
 

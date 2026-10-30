@@ -1236,10 +1236,26 @@ fn core_map(tex: texture_2d<f32>, samp: sampler, uv: vec4<f32>, index: u32) -> v
     return textureSampleBias(tex, samp, material_uv(uv, index), u.render_mode.y);
 }
 
+// A cut-out picture read from a smaller mip averages each leaf with the
+// gaps round it, so its alpha falls under the cutoff and far foliage thins
+// to bare twigs. Alpha scales up a quarter for each mip level past the
+// first, keeping the coverage (Ben Golus, "Anti-aliased Alpha Test").
+fn cutout_coverage(uv: vec4<f32>) -> f32 {
+    let texels = material_uv_flat(uv, 0u) * vec2<f32>(textureDimensions(base_color_map));
+    let dx = dpdx(texels);
+    let dy = dpdy(texels);
+    let lod = 0.5 * log2(max(dot(dx, dx), dot(dy, dy))) + u.render_mode.y;
+    return 1.0 + 0.25 * max(lod, 0.0);
+}
+
 fn resolve_albedo(uv: vec4<f32>, color: vec4<f32>) -> vec4<f32> {
     if u.texture_flags.z > 0.5 {
         let t = core_map(base_color_map, base_color_sampler, uv, 0u);
-        return u.base_color * t * color;
+        var albedo = u.base_color * t * color;
+        if u.alpha_params.x == 1.0 && u.surface.y < 0.5 {
+            albedo.a *= cutout_coverage(uv);
+        }
+        return albedo;
     }
     return u.base_color * color;
 }

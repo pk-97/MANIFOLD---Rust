@@ -46,6 +46,8 @@ fn mesh_type(shape: &Shape) -> Option<(&'static str, Option<u32>)> {
         Shape::Dodecahedron => ("node.platonic_solid_mesh", Some(4)),
         Shape::Ocean
         | Shape::Terrain
+        | Shape::Tree
+        | Shape::Leaves
         | Shape::Mesh { .. }
         | Shape::Extrude { .. }
         | Shape::Revolve { .. }
@@ -140,6 +142,31 @@ fn emit_terrain(b: &mut Builder<'_>, item: &Item) -> (u32, u32) {
     (grid, indices)
 }
 
+/// The `node.tree` a Tree Object `owner` grows, made by whichever of the
+/// Tree and its Leaves compiles first.
+fn tree_node(b: &mut Builder<'_>, owner: &str) -> u32 {
+    match b.id(owner, "tree") {
+        Some(tree) => tree,
+        None => b.add(owner, "tree", "node.tree"),
+    }
+}
+
+/// The tree a Leaves Object draws the leaves of: the first Tree beside it,
+/// in its Group or at the top of the scene. None draws nothing.
+fn leaves_tree(b: &mut Builder<'_>, item: &Item) -> Option<u32> {
+    let doc = b.doc;
+    let mut beside: Option<&[Item]> = None;
+    doc.walk(|candidate, ancestors| {
+        if candidate.id == item.id {
+            beside = Some(ancestors.last().map_or(&doc.items[..], |parent| &parent.children[..]));
+        }
+    });
+    let tree = beside?
+        .iter()
+        .find(|other| matches!(&other.fields, ItemFields::Object(o) if o.shape == Shape::Tree))?;
+    Some(tree_node(b, tree.id.as_str()))
+}
+
 pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     let ItemFields::Object(fields) = &item.fields else {
         return;
@@ -150,6 +177,8 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     // once: it has no mesh source to copy.
     let ocean = fields.shape == Shape::Ocean;
     let terrain = matches!(fields.shape, Shape::Terrain);
+    // A tree's bark and leaves are grown on the GPU, with no solid.
+    let grown = matches!(fields.shape, Shape::Tree | Shape::Leaves);
     let group_copies = frame
         .and_then(|frame| frame.copies)
         .or_else(|| b.swarm_draws.get(&item.id).copied())
@@ -182,6 +211,16 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         let (grid, indices) = emit_terrain(b, item);
         rest = None;
         (grid, (grid, "vertices"), Some((indices, "indices")))
+    } else if fields.shape == Shape::Tree {
+        let tree = tree_node(b, owner);
+        rest = None;
+        (tree, (tree, "vertices"), Some((tree, "indices")))
+    } else if fields.shape == Shape::Leaves {
+        let Some(tree) = leaves_tree(b, item) else {
+            return;
+        };
+        rest = None;
+        (tree, (tree, "leaves"), None)
     } else if let Some(curve) = super::curves::emit(b, item, &fields.shape) {
         rest = curve.rest;
         (curve.solid, curve.vertices, None)
@@ -230,7 +269,7 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     let (surface, maps) = surface_for(b, &item.id);
     // An object that is its own body draws at the body's solved pose.
     // A surface made on the GPU each frame has no collision mesh.
-    let pose = if ocean || terrain {
+    let pose = if ocean || terrain || grown {
         None
     } else {
         super::physics::object(b, item, frame, mesh, transform)

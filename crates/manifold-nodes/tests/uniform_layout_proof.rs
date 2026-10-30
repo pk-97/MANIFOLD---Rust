@@ -637,6 +637,9 @@ const NON_STANDALONE: &[&str] = &[
     // kept across frames; its TerrainUniforms reflected in
     // uniform_layout_extended.
     "node.terrain",
+    // Tree: branch levels grown in turn, then bark and leaves, over one hand
+    // shader; its TreeUniforms reflected in uniform_layout_extended.
+    "node.tree",
     // Grid indices: one hand shader writing a grid's triangle indices once
     // per size; its GridUniforms reflected in uniform_layout_extended.
     "node.grid_indices",

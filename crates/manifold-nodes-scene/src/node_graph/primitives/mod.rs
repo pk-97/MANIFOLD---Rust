@@ -117,6 +117,7 @@ mod terrain;
 mod torus_wrap_field;
 mod transform_3d;
 mod transform_shake;
+mod tree;
 mod triangulate_grid;
 mod tube_from_path;
 mod twist_mesh;
