@@ -176,6 +176,7 @@ fn tail(b: &mut Builder<'_>, camera: &ItemId, lens: u32) -> u32 {
         b.push_node(node);
     }
     b.adopt(owner, "bokeh", tail.bokeh_id);
+    b.adopt(owner, "dof", tail.dof_group_id);
     b.adopt(owner, "motion_blur", tail.motion_blur_id);
     let dof = tail.dof_group_id;
     let blur = tail.motion_blur_id;
@@ -212,25 +213,60 @@ fn find_type(node: &EffectGraphNode, type_id: &str) -> Option<u32> {
         .find_map(|inner| find_type(inner, type_id))
 }
 
-/// Aim each Look At camera that has a Target item at that item's drawn frame:
-/// a body's solved pose, else its transform. Runs after the tree has emitted
-/// every frame.
+/// Aim each Look At camera that has a Target item at that item's drawn frame,
+/// and point each camera's Auto Focus at its Focus On item's. Runs after the
+/// tree has emitted every frame.
 pub(crate) fn aim_all(b: &mut Builder<'_>) {
     let mut aims = Vec::new();
     b.doc.walk(|item, _| {
-        if let ItemFields::Camera(camera) = &item.fields
-            && camera.rig == CameraRig::LookAt
-            && let Some(target) = &camera.target
-        {
-            aims.push((item.id.clone(), target.clone()));
+        if let ItemFields::Camera(camera) = &item.fields {
+            if camera.rig == CameraRig::LookAt
+                && let Some(target) = &camera.target
+            {
+                aims.push((item.id.clone(), "rig", "target", target.clone()));
+            }
+            if let Some(subject) = &camera.focus_on {
+                aims.push((item.id.clone(), "dof", "subject", subject.clone()));
+            }
         }
     });
-    for (camera, target) in aims {
-        let frame = b
-            .id(target.as_str(), "pose_frame")
-            .or_else(|| b.id(target.as_str(), "transform"));
-        if let (Some(rig), Some(frame)) = (b.id(camera.as_str(), "rig"), frame) {
-            b.wire(frame, "transform", rig, "target");
+    for (camera, role, port, item) in aims {
+        if let Some(node) = b.id(camera.as_str(), role)
+            && let Some(frame) = drawn_frame(b, &item)
+        {
+            b.wire(frame, "transform", node, port);
         }
     }
+}
+
+/// The frame `item` draws at, as one Transform: a body's solved pose, else its
+/// transform, carried through the frame an Object draws in. A part inside a
+/// Group draws at its transform placed in the group's frame, so an aim at it
+/// follows the group.
+fn drawn_frame(b: &mut Builder<'_>, item: &ItemId) -> Option<u32> {
+    const COMPONENTS: [&str; 9] = [
+        "pos_x", "pos_y", "pos_z", "rot_x", "rot_y", "rot_z", "scale_x", "scale_y", "scale_z",
+    ];
+    let owner = item.as_str();
+    if let Some(frame) = b
+        .id(owner, "pose_frame")
+        .or_else(|| b.id(owner, "drawn_frame"))
+    {
+        return Some(frame);
+    }
+    let own = b.id(owner, "transform")?;
+    let Some((within, within_port)) = b
+        .id(owner, "object")
+        .and_then(|object| b.input(object, "parent_transform"))
+    else {
+        return Some(own);
+    };
+    let placed = b.add(owner, "placed", "node.transform_components");
+    b.wire(own, "transform", placed, "transform");
+    b.wire(within, &within_port, placed, "parent");
+    let frame = b.add(owner, "drawn_frame", "node.transform_3d");
+    for port in COMPONENTS {
+        b.wire(placed, port, frame, port);
+    }
+    Some(frame)
 }

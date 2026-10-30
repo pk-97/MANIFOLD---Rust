@@ -355,6 +355,10 @@ pub struct CameraFields {
     /// aims at an object; its Target X/Y/Z then offset from that item's
     /// origin. `None` aims at the Target X/Y/Z point.
     pub target: Option<ItemId>,
+    /// The Object or Group Auto Focus keeps sharp, racking focus onto it
+    /// when picked. `None` focuses on what the rig aims at, or the frame
+    /// centre for a rig that aims at nothing.
+    pub focus_on: Option<ItemId>,
     /// The number the World's Camera row cuts to this camera with (ruling
     /// 11). Given once when the camera enters the scene
     /// ([`SceneDoc::insert`]), from [`SceneDoc::next_cut`]; a reorder, move or

@@ -384,7 +384,7 @@ const RIGS: &[Choice] = &[
     },
 ];
 
-pub static CAMERA_FIELDS: [FieldRow; 2] = [
+pub static CAMERA_FIELDS: [FieldRow; 3] = [
     FieldRow {
         id: "rig",
         label: "Rig",
@@ -438,6 +438,28 @@ pub static CAMERA_FIELDS: [FieldRow; 2] = [
                 Ok(())
             }
             _ => Err(wrong_value("target", value)),
+        },
+    },
+    FieldRow {
+        id: "focus_on",
+        label: "Focus On",
+        section: ControlGroup::DepthOfField,
+        control: FieldControl::Item {
+            items: is_object_or_group,
+            none: "Auto",
+        },
+        applies: always,
+        disabled: enabled,
+        read: |fields| match fields {
+            ItemFields::Camera(c) => FieldValue::Item(c.focus_on.clone()),
+            _ => FieldValue::Item(None),
+        },
+        write: |fields, value| match (fields, value) {
+            (ItemFields::Camera(c), FieldValue::Item(item)) => {
+                c.focus_on = item.clone();
+                Ok(())
+            }
+            _ => Err(wrong_value("focus_on", value)),
         },
     },
 ];

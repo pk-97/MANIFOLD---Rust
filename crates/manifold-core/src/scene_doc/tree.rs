@@ -146,7 +146,10 @@ impl Item {
             }
             ItemFields::Water(w) => w.material = w.material.as_ref().map(swap),
             ItemFields::Sand(s) => s.material = s.material.as_ref().map(swap),
-            ItemFields::Camera(c) => c.target = c.target.as_ref().map(swap),
+            ItemFields::Camera(c) => {
+                c.target = c.target.as_ref().map(swap);
+                c.focus_on = c.focus_on.as_ref().map(swap);
+            }
             ItemFields::Swarm(s) => {
                 s.material = s.material.as_ref().map(swap);
                 if let DrawAs::Item(id) = &mut s.draw_as {
@@ -544,7 +547,14 @@ impl SceneDoc {
                     ids.retain(|id| !gone(id));
                 }
             }
-            ItemFields::Camera(c) if c.target.as_ref().is_some_and(gone) => c.target = None,
+            ItemFields::Camera(c) => {
+                if c.target.as_ref().is_some_and(gone) {
+                    c.target = None;
+                }
+                if c.focus_on.as_ref().is_some_and(gone) {
+                    c.focus_on = None;
+                }
+            }
             _ => {}
         });
     }

@@ -92,6 +92,7 @@ pub(crate) fn build_cinematic_tail(
     dof_wires.push(wire(dof_in_id, "depth", coc_id, "depth"));
     dof_wires.push(wire(dof_in_id, "camera", focus_id, "camera"));
     dof_wires.push(wire(dof_in_id, "depth", focus_id, "depth"));
+    dof_wires.push(wire(dof_in_id, "subject", focus_id, "subject"));
     dof_wires.push(wire(focus_id, "out", coc_id, "camera"));
     dof_wires.push(wire(coc_id, "out", bokeh_id, "width"));
     dof_wires.push(wire(dof_in_id, "color", bokeh_id, "in"));
@@ -110,6 +111,11 @@ pub(crate) fn build_cinematic_tail(
                 InterfacePortDef {
                     name: "camera".to_string(),
                     port_type: "Camera".to_string(),
+                },
+                // What Auto Focus keeps sharp, when a Focus On item is picked.
+                InterfacePortDef {
+                    name: "subject".to_string(),
+                    port_type: "Transform".to_string(),
                 },
                 InterfacePortDef {
                     name: "color".to_string(),
