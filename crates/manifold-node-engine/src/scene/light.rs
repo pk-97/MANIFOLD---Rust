@@ -52,6 +52,9 @@ const CASCADE_NEAR: f32 = 1.0;
 /// A Sun's default Shadow Bias, and the depth it holds back at it, in each
 /// cascade's own texels.
 const SUN_BIAS: f32 = 0.003;
+/// The real sun's angular radius, in radians: a Sun's own until something,
+/// such as an HDRI's measured sun, says otherwise.
+pub const SUN_RADIUS: f32 = 0.004_65;
 const BIAS_TEXELS: f32 = 1.5;
 
 /// Discriminator for the light's geometric kind. All modes share the same
@@ -162,6 +165,9 @@ pub struct Light {
     pub shadow_bias: f32,
     /// Shadow map edge resolution (power of two; default 2048).
     pub shadow_resolution: u32,
+    /// Sun: the sun's angular radius in radians, which sizes Contact
+    /// shadows' penumbras and ray-traced shadows' cone. 0 for lamps.
+    pub sun_radius: f32,
 }
 
 impl Light {
@@ -187,6 +193,7 @@ impl Light {
             shadow_softness: ShadowSoftness::Soft,
             shadow_bias: 0.003,
             shadow_resolution: 2048,
+            sun_radius: SUN_RADIUS,
         }
     }
 
@@ -225,6 +232,7 @@ impl Light {
             shadow_softness,
             shadow_bias,
             shadow_resolution,
+            sun_radius: SUN_RADIUS,
         }
     }
 
@@ -263,6 +271,7 @@ impl Light {
             shadow_softness,
             shadow_bias,
             shadow_resolution,
+            sun_radius: 0.0,
         }
     }
 
@@ -304,6 +313,7 @@ impl Light {
             shadow_softness,
             shadow_bias,
             shadow_resolution,
+            sun_radius: 0.0,
         }
     }
 

@@ -1652,7 +1652,7 @@ fn shadow_caster_entry(
             -l.dir[0],
             -l.dir[1],
             -l.dir[2],
-            sun_cone_half_angle(l.shadow_softness),
+            sun_cone_half_angle(l),
         ]
     } else {
         [l.pos[0], l.pos[1], l.pos[2], light_size]
@@ -1669,3 +1669,13 @@ fn shadow_caster_entry(
         color: [rgb[0], rgb[1], rgb[2], kind],
     }
 }
+    // A sun's penumbra grows with the gap between blocker and receiver at
+    // the sun's angle, wherever the blocker is: per unit of this cascade's
+    // depth (its ortho depth runs 0..far, its uv across 2·range), in uv.
+    let light_size = if l.mode == LightMode::Sun {
+        let far = l.pos.iter().zip(l.aim).map(|(p, a)| (p - a) * (p - a)).sum::<f32>().sqrt()
+            + l.range;
+        far * l.sun_radius.tan() / (2.0 * l.range.max(1e-3))
+    } else {
+        light_size
+    };

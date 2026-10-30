@@ -156,6 +156,7 @@ fn svt_test_light(
         shadow_softness: manifold_node_engine::scene::light::ShadowSoftness::Soft,
         shadow_bias: 0.005,
         shadow_resolution: 1024,
+        sun_radius: manifold_node_engine::scene::light::SUN_RADIUS,
     }
 }
 
@@ -903,22 +904,23 @@ fn discard_free_needs_every_removed_depth_test_dead() {
 /// petals hatch and flicker with softness set to Hard.
 #[test]
 fn sun_cone_half_angle_honours_the_lights_softness() {
-    use manifold_node_engine::scene::light::ShadowSoftness;
-    assert_eq!(sun_cone_half_angle(ShadowSoftness::Hard), 0.0);
+    use manifold_node_engine::scene::light::{LightMode, ShadowSoftness};
+    let sun = |shadow_softness| manifold_node_engine::scene::light::Light {
+        shadow_softness,
+        ..svt_test_light(LightMode::Sun)
+    };
+    assert_eq!(sun_cone_half_angle(&sun(ShadowSoftness::Hard)), 0.0);
     assert_eq!(
-        sun_cone_half_angle(ShadowSoftness::Soft),
+        sun_cone_half_angle(&sun(ShadowSoftness::Soft)),
         SUN_CONE_SOFT_RADIANS
     );
     assert_eq!(
-        sun_cone_half_angle(ShadowSoftness::VerySoft),
+        sun_cone_half_angle(&sun(ShadowSoftness::VerySoft)),
         SUN_CONE_VERY_SOFT_RADIANS
     );
-    // Contact hardening is what an RT cone does for free, so Contact
-    // rides the Soft cone and ignores the raster blocker-search size.
-    assert_eq!(
-        sun_cone_half_angle(ShadowSoftness::Contact { light_size: 4.0 }),
-        SUN_CONE_SOFT_RADIANS
-    );
+    // Contact is the sun itself: its own angular radius.
+    let contact = sun(ShadowSoftness::Contact { light_size: 4.0 });
+    assert_eq!(sun_cone_half_angle(&contact), contact.sun_radius);
     const { assert!(SUN_CONE_VERY_SOFT_RADIANS > SUN_CONE_SOFT_RADIANS) };
 }
 

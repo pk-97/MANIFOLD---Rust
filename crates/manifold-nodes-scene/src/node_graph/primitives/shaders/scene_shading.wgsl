@@ -530,7 +530,12 @@ fn pcss_search_radius_uv(vp: mat4x4<f32>, world_pos: vec3<f32>, suv: vec2<f32>, 
 // gradients at 17 taps; rotating per pixel trades that structured artifact
 // for fine unstructured noise the eye averages away. Applied to BOTH loops
 // so the blocker search and the filter stay on the same disc.
-fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, search_radius_uv: f32, texel: f32, rot: f32) -> f32 {
+// The widest penumbra the PCSS filter draws, in shadow-map texels.
+const PCSS_MAX_PENUMBRA_PX: f32 = 24.0;
+
+// `growth` is a sun's penumbra in uv per unit of depth between blocker and
+// receiver; 0 for a lamp, whose penumbra follows the blocker's distance.
+fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, search_radius_uv: f32, growth: f32, texel: f32, rot: f32) -> f32 {
     if search_radius_uv <= 0.0 {
         // D12 gate (b): Contact with light_size=0 must match the sharpest
         // fixed tier (Hard, kernel_half_width=1) within 1px of gradient
@@ -554,7 +559,8 @@ fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, searc
         return 1.0;
     }
     let z_b = blocker_sum / blocker_count;
-    let penumbra_px = clamp(search_radius_uv * (z_r - z_b) / max(z_b, 1e-6) / texel, 0.0, 24.0);
+    let penumbra_uv = select(search_radius_uv * (z_r - z_b) / max(z_b, 1e-6), growth * (z_r - z_b), growth > 0.0);
+    let penumbra_px = clamp(penumbra_uv / texel, 0.0, PCSS_MAX_PENUMBRA_PX);
     // Fixed tap count, variable radius (standard PCSS step 3). The original
     // step 3 fed penumbra_px into the dense (2·khw+1)² box above, which
     // grows to 49×49 = 2,401 compare taps per fragment at the 24px clamp —
@@ -676,14 +682,25 @@ fn shadow_factor(world_pos: vec3<f32>, slot_f: f32, frag_xy: vec2<f32>) -> f32 {
     let ref_depth = ndc.z - bias;
 
     if khw_raw < 0.0 {
-        let search_radius_uv = pcss_search_radius_uv(vp, world_pos, suv, light_size);
+        // A sun's cascade holds, in `light_size`, how far its penumbra
+        // grows per unit of depth between blocker and receiver
+        // (`shadow_caster_entry`): a sun's angle, not the blocker's
+        // distance, sets it. Its search reaches as far as the widest
+        // penumbra the filter draws.
+        let sun = casters[i32(slot_f + 0.5)].color.w == 0.0;
+        let growth = select(0.0, light_size, sun);
+        let search_radius_uv = select(
+            pcss_search_radius_uv(vp, world_pos, suv, light_size),
+            min(light_size * ndc.z, PCSS_MAX_PENUMBRA_PX * texel),
+            sun,
+        );
         // Interleaved gradient noise (Jimenez 2014) on the fragment's
         // screen position: a well-distributed per-pixel angle in [0, 2π)
         // with no state and no texture read. Screen-space (not a
         // world_pos hash) so the noise density is uniform on screen
         // regardless of surface scale or viewing angle.
         let ign = fract(52.9829189 * fract(dot(frag_xy, vec2<f32>(0.06711056, 0.00583715))));
-        return pcss_shadow_factor(slot, suv, ref_depth, ndc.z, search_radius_uv, texel, ign * 6.2831853);
+        return pcss_shadow_factor(slot, suv, ref_depth, ndc.z, search_radius_uv, growth, texel, ign * 6.2831853);
     }
     return pcf_average(slot, suv, ref_depth, texel, i32(khw_raw));
 }

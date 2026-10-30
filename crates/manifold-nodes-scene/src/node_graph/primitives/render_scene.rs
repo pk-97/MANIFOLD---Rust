@@ -462,16 +462,16 @@ const SUN_CONE_VERY_SOFT_RADIANS: f32 = 0.06;
 /// different visibility answer per frame — the mask reached the screen as
 /// hatched, blotchy noise.
 ///
-/// `Contact` maps to the `Soft` cone: contact hardening is what a cone
-/// does for free under ray tracing (penumbra widens with occluder
-/// distance), so the raster path's blocker-search `light_size` has no
-/// meaning here.
-fn sun_cone_half_angle(softness: manifold_node_engine::scene::light::ShadowSoftness) -> f32 {
+/// `Contact` is the sun itself, its `sun_radius`: a cone hardens at
+/// contact for free under ray tracing, as the raster path's cascades do
+/// with the same angle.
+fn sun_cone_half_angle(l: &manifold_node_engine::scene::light::Light) -> f32 {
     use manifold_node_engine::scene::light::ShadowSoftness;
-    match softness {
+    match l.shadow_softness {
         ShadowSoftness::Hard => 0.0,
-        ShadowSoftness::Soft | ShadowSoftness::Contact { .. } => SUN_CONE_SOFT_RADIANS,
+        ShadowSoftness::Soft => SUN_CONE_SOFT_RADIANS,
         ShadowSoftness::VerySoft => SUN_CONE_VERY_SOFT_RADIANS,
+        ShadowSoftness::Contact { .. } => l.sun_radius,
     }
 }
 
