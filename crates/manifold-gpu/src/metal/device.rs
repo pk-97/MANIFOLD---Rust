@@ -643,7 +643,7 @@ impl GpuDevice {
         entry_point: &str,
         label: &str,
     ) -> GpuComputePipeline {
-        match crate::shader_swap::apply(wgsl_source, &[]) {
+        match crate::shader_swap::apply_compute(wgsl_source, entry_point, label, &[]) {
             Some(swapped) => self.compute_pipeline(&swapped, entry_point, label),
             None => self.compute_pipeline(wgsl_source, entry_point, label),
         }
@@ -810,8 +810,9 @@ impl GpuDevice {
         specializations: &[(&str, &str)],
         label: &str,
     ) -> GpuComputePipeline {
-        let mut source = crate::shader_swap::apply(wgsl_source, specializations)
-            .unwrap_or_else(|| wgsl_source.to_string());
+        let mut source =
+            crate::shader_swap::apply_compute(wgsl_source, entry_point, label, specializations)
+                .unwrap_or_else(|| wgsl_source.to_string());
         for &(pattern, replacement) in specializations {
             source = source.replace(pattern, replacement);
         }
@@ -847,7 +848,7 @@ impl GpuDevice {
     /// Create (or fetch from the cache) a render pipeline. A combination
     /// this backend does not build panics with the reason.
     pub fn create_render_pipeline(&self, desc: &RenderPipelineDesc) -> GpuRenderPipeline {
-        let swapped = crate::shader_swap::apply(desc.wgsl_source, desc.specializations);
+        let swapped = crate::shader_swap::apply_render(desc);
         let desc = &RenderPipelineDesc {
             wgsl_source: swapped.as_deref().unwrap_or(desc.wgsl_source),
             ..*desc

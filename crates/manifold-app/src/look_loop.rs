@@ -8,8 +8,9 @@
 //! no re-simulation.
 //!
 //! An edited shader file swaps its built-in text at compile time
-//! (`manifold_gpu::shader_swap`, checked with naga first) and every
-//! `node.render_scene` gets a fresh instance so it compiles the edit; the
+//! (`manifold_gpu::shader_swap`, checked with naga first), the pipelines the
+//! render node drew with compile again in parallel, and every
+//! `node.render_scene` gets a fresh instance that finds them compiled; the
 //! simulation nodes keep their state. The params file is a flat JSON object
 //! of generator card param ids to numbers, written over the project's values
 //! the way a slider writes them; an id the file drops goes back to the
@@ -239,6 +240,8 @@ struct Loop {
     built: BTreeMap<PathBuf, String>,
     swaps: Vec<Swap>,
     overrides: Overrides,
+    /// Whether a fresh render node has drawn with its pipelines recorded.
+    recorded: bool,
 }
 
 impl Loop {
@@ -259,6 +262,8 @@ impl Loop {
                 })
             })
             .collect();
+        // The first render rebuilds too, so the node's pipelines get recorded.
+        let mut rebuild = !self.recorded;
         if swaps != self.swaps {
             let landed = shader_swap::set(swaps.clone())?;
             self.swaps = swaps;
@@ -268,17 +273,28 @@ impl Loop {
                         .to_owned(),
                 );
             }
+            // The pipelines the last fresh node drew with, compiled in
+            // parallel before the next one asks for them one by one.
+            if let Some(device) = self.ct.content_pipeline.native_device() {
+                shader_swap::compile_recorded(device);
+            }
+            rebuild = true;
+        }
+        if rebuild {
             if rebuild_render_nodes(&mut self.ct) == 0 {
                 notes.push(format!("no {RENDER_NODE} to rebuild"));
             }
+            shader_swap::record(true);
         }
         if let Some(path) = &args.params {
             let wanted = read_params(path)?;
             apply_params(&mut self.ct, &mut self.overrides, wanted)?;
         }
-        for _ in 0..args.settle {
-            tick(&mut self.ct, &self.state_tx, &self.faults)?;
-        }
+        let ticked =
+            (0..args.settle).try_for_each(|_| tick(&mut self.ct, &self.state_tx, &self.faults));
+        shader_swap::record(false);
+        ticked?;
+        self.recorded |= rebuild;
         write_png(&mut self.ct, &args.png)?;
         Ok(notes)
     }
@@ -317,6 +333,7 @@ fn look_loop(args: &Args) -> Result<(), String> {
         built,
         swaps: Vec::new(),
         overrides,
+        recorded: false,
     };
     warm.render(args)?;
     println!(
