@@ -21,28 +21,46 @@ sand, are pushed by them and by scene forces, and push nothing back. A scene wit
 
 ## Grid
 
-A dense box on the World's lattice: it snaps to whole World cells and its
-cell is the World's Cell Size times the item's Quality scale (Low 2,
-Medium 1, High ½, Extra High ¼). The item's Transform is the box; the
-source sits at its floor centre. The floor is a wall, the sides and top are
-open.
+A box on the World's lattice, held on world tiles: it snaps to whole cells
+and its air cell is twice the World's Cell Size times the item's Quality
+scale (Low 2, Medium 1, High ½, Extra High ¼); the fine state's cell is the
+World's. The item's Transform is the box; the source sits at its floor
+centre. The floor is a wall, the sides and top are open.
+
+The gas keeps its fields in its own `WorldTiles` table (the one water and
+Matter keep theirs in, `water-liquid/src/world_tiles.rs`) at its air cell:
+8³ air cells a tile, a record per cell in every field, and the canonical
+record (still air, no gas) wherever the table holds no tile. Every stepped
+tick rebuilds the table (`encode_allocation`) from the source's tiles
+(`cs_source_points`, one point a tile the source's box touches) and every
+tile still holding gas (`kept`: `cs_fine_sources` marks a cell above
+`GAS_KEPT` in any channel), with a ring of one tile round them, clipped to
+the box and the cells one past its far sides. The pool is every tile the
+clip can hold, so it never runs short. A slot the build hands out is zeroed
+in last tick's result (`cs_fresh`), and the still solids are laid in it
+(`cs_solids_static` over the fresh list). Every kernel runs over the held
+slots, 512 threads a slot, from the table's indirect triple. A tile the
+table does not hold is open air: pressure 0, still, no gas. So a thin plume
+in a tall box steps only its plume.
 
 The air is the costly part and stays on these cells. Velocity is staggered
-(a MAC grid): node (x, y, z), one more than the cells along each axis, holds
-u, v and w on the cell's low x, y and z faces. Divergence, pressure and
-projection share one compact stencil, so no cell-to-cell zigzag hides from
-the solve.
+(a MAC grid): record c holds u, v and w on the cell's low x, y and z faces;
+the far sides' faces live with the cells one past the box. Divergence,
+pressure and projection share one compact stencil, so no cell-to-cell
+zigzag hides from the solve.
 
 The state (density, temperature, fuel, flame) lives on a fine grid, `FINE`
-(2) cells per air cell along each axis, two packed halves per fine cell. The
-air carries it and burning happens at its scale, so the flow stretches smoke
-into sheets and flames into fronts thinner than an air cell; drawn from the
-air's cells alone they showed as blocks and soft blobs. Each tick the fine
-state is averaged back onto the air's cells (`cs_restrict`) for buoyancy,
-the flames' expansion and the fire light. Three velocity and three fine
-state buffers rotate roles each tick; the frame's last tick writes the fine
-result and the air's velocity on the fine grid into the tick loop's
-published arrays, which the object draws.
+(2) cells per air cell along each axis, two packed halves per fine cell, in
+its air cell's record (FINE³ planes of the pool's records). The air carries
+it and burning happens at its scale, so the flow stretches smoke into sheets
+and flames into fronts thinner than an air cell; drawn from the air's cells
+alone they showed as blocks and soft blobs. Each tick the fine state is
+averaged back onto the air's cells (`cs_restrict`) for buoyancy, the flames'
+expansion and the fire light. Three velocity and three fine state buffers
+rotate roles each tick; the frame's last tick clears the tick loop's
+published arrays and writes the held cells' fine result and the air's
+velocity on the fine grid into them, the box's fine cells in x-fastest
+order, which the object draws.
 
 ## Step (once a tick of the World's clock, as water and sand step)
 
@@ -71,7 +89,9 @@ the Matter and the water. Each tick reads its own scalars from the domain
    velocity. A solid cell holds no gas, its faces move with the solid, and
    the solve leaves it out (the count of open neighbours rides in the low
    bits of the divergence). The source sits on the static solids under its
-   centre, so a box floor sunk in the ground emits from the ground's top.
+   centre (`cs_source_floor`, down the column through it whenever the still
+   solids change), so a box floor sunk in the ground emits from the ground's
+   top.
    Water and sand as this tick left them are solids too. The first Water's
    step is read through its own world tiles (`gas_water`: its faces and
    distance at each gas cell, as the Matter's water push reads them): a
@@ -105,9 +125,13 @@ the Matter and the water. Each tick reads its own scalars from the domain
    smoke leave through its side.
 4. Vorticity confinement (Swirl) at cell centres, each face taking the mean
    of its two cells.
-5. Project: divergence less the flames' expansion, red-black SOR on the
-   warm-started pressure (sweeps per Quality), subtract the gradient. Open
-   faces are atmosphere (p = 0); the floor is closed.
+5. Project: divergence less the flames' expansion, then the warm-started
+   pressure a tile at a time (`pressure_tile`): each round solves the even
+   tiles and then the odd ones in place, four red-black SOR pairs in
+   workgroup memory with the face neighbours' latest values as the ring, so
+   it settles like global sweeps at half the pairs (rounds per Quality).
+   Subtract the gradient. Open faces are atmosphere (p = 0); the floor is
+   closed.
 6. Publish: state and centred velocity as packed halves, and the flames'
    emission sum and centre for the fire light (read back two frames late).
 
@@ -146,7 +170,7 @@ centre, the flame colour, its power following the flames.
 |---|---|---|---|---|
 | air cell | 2× World | 1× | ½× | ¼× |
 | fine state cell | 1× World | ½× | ¼× | ⅛× |
-| pressure sweep pairs | 20 | 30 | 50 | 80 |
+| pressure rounds (4 pairs a tile each) | 3 | 4 | 7 | 10 |
 | march samples per fine cell | 0.5 | 0.75 | 1 | 1.5 |
 | light volume, per fine cells; steps one a light cell, at most | ¼ res, 32 | ¼ res, 64 | ½, 128 | ½, 256 |
 | detail octaves (if on) | 1 | 2 | 3 | 4 |

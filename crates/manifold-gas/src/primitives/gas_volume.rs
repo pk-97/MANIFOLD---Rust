@@ -1,6 +1,12 @@
-//! `node.gas_volume` — the gas solver of Smoke and Fire: a dense, axis-aligned
-//! box of cells advanced on the GPU one tick at a time (see
+//! `node.gas_volume` — the gas solver of Smoke and Fire: an axis-aligned box
+//! of cells held on world tiles, advanced on the GPU one tick at a time (see
 //! docs/SMOKE_AND_FIRE_MAP.md). The kernels are in `shaders/gas_step.wgsl`.
+//!
+//! The gas's cells are world cells of its own tile table (`WorldTiles`, the
+//! table water and Matter keep theirs in), rebuilt every tick from the
+//! source's tiles and every tile that still holds gas, with a ring of one
+//! tile round them and clipped to the box: the kernels step only those
+//! tiles, so a thin plume in a big box costs its plume.
 //!
 //! It is the body of the gas's tick loop (`node.gas_ticks`): its domain
 //! (`node.gas_domain`) follows the World's clock and lays the scene's solids,
@@ -30,7 +36,9 @@ use manifold_node_engine::scene::blackbody::{
     BLACKBODY_ENTRIES, BLACKBODY_MAX_KELVIN, BLACKBODY_MIN_KELVIN, blackbody_table,
 };
 use manifold_node_engine::scene::transform::Transform;
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, read_side_as, table_words};
+use manifold_node_engine::scene::world_tiles::{
+    READ_SIDE, TILE, lattice_origin, pool_len, read_side_as, table_words,
+};
 use manifold_physics::force_lattice::ForceLattice;
 use manifold_water_liquid::bodies::{
     COLLIDER_BVH, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape,
@@ -39,7 +47,12 @@ use manifold_water_liquid::fluid_particles::{
     FaceSample, MatterGridNode, SAND_BULK, SAND_BULK_BYTES, SAND_READ,
 };
 use manifold_water_liquid::grid::LIQUID_FACES;
+use manifold_water_liquid::primitives::prefix_scan::open_gate;
 use manifold_water_liquid::whitewater::WHITEWATER_COMMON;
+use manifold_water_liquid::world_tiles::{
+    Allocation, PointCount, Reach, TileClip, WorldTiles, allocated_args_offset, fresh_args_offset,
+    held_bytes, run_tiles,
+};
 
 /// Most cells along one axis of the box.
 const MAX_AXIS_CELLS: u32 = 512;
@@ -55,8 +68,22 @@ const EDGE_TOLERANCE: f64 = 1e-3;
 const DEFAULT_GRAVITY: f32 = 9.81;
 /// The temperature past which fuel burns.
 const IGNITION: f32 = 0.2;
-/// Threads per workgroup edge in `gas_step.wgsl`.
-const GROUP_EDGE: u32 = 4;
+/// Threads a workgroup of `cs_source_points` and `cs_source_floor`.
+const SMALL_GROUP: u32 = 64;
+/// The gas's table reaches one tile round every tile with gas or source in
+/// it: no face moves more than four cells a step (`cs_forces`), half a tile,
+/// so a tile the gas reaches next tick is held this tick.
+const GAS_REACH: Reach = Reach {
+    ring_max: 1,
+    alloc_ring: 1,
+    cell_reach: 0,
+};
+
+/// The build's points (`world_tiles.wgsl`): the world cells
+/// `cs_source_points` lays, one per source tile, at binding 13.
+const GAS_POINTS: &str = "@group(0) @binding(13) var<storage, read> wt_gas_points: array<vec4<i32>>;\n\
+fn wt_point_live(i: u32) -> bool { return i < wt.point_count; }\n\
+fn wt_point_cell(i: u32) -> vec3<i32> { return wt_gas_points[i].xyz; }\n";
 /// Light sum buffers in the domain's ring: this frame's write, the one still
 /// in flight and the one the CPU reads.
 pub(crate) const RING: usize = 3;
@@ -80,9 +107,15 @@ fn shader_constants(solids: bool) -> String {
          const LIGHT_FIXED_SCALE: f32 = {LIGHT_FIXED_SCALE:?};\n\
          const LIGHT_WORDS: u32 = {LIGHT_WORDS}u;\n\
          const FINE: u32 = {FINE}u;\n\
+         const TILE_PAIRS: u32 = {TILE_PAIRS}u;\n\
          const SOLIDS: bool = {solids};\n"
     )
 }
+
+/// Red-black sweep pairs one pressure dispatch runs inside each tile
+/// (`pressure_tile`): a quarter of the dispatches global sweeps take, each
+/// reading and writing the field once.
+const TILE_PAIRS: u32 = 4;
 
 /// Fine state cells per air cell along each axis. Smoke, heat, fuel and
 /// flame live on the fine grid, carried by the air and burning there, so the
@@ -94,8 +127,9 @@ const FINE: u32 = 2;
 static SHADERS: LazyLock<[String; 2]> = LazyLock::new(|| {
     [false, true].map(|solids| {
         format!(
-            "{}\n{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{COLLIDER_BVH}\n{READ_SIDE}\n{}\n{SAND_BULK}\n{SAND_READ}\n{LIQUID_FACES}\n{WHITEWATER_COMMON}\n{}",
+            "{}\n{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{COLLIDER_BVH}\n{READ_SIDE}\n{}\n{}\n{SAND_BULK}\n{SAND_READ}\n{LIQUID_FACES}\n{WHITEWATER_COMMON}\n{}",
             shader_constants(solids),
+            read_side_as("ws_"),
             read_side_as("ms_"),
             include_str!("shaders/gas_step.wgsl")
         )
@@ -140,19 +174,39 @@ impl GasGeometry {
         self.dims.iter().map(|&d| u64::from(d)).product()
     }
 
-    /// Nodes of the staggered velocity: one more than the cells along each
-    /// axis, so every face of every cell has one.
-    fn face_nodes(&self) -> u64 {
-        self.dims.iter().map(|&d| u64::from(d) + 1).product()
+    /// The box's first cell in world cells: cell p spans [p h, (p + 1) h).
+    fn first(&self) -> [i32; 3] {
+        self.origin.map(|o| (o / self.cell).round() as i32)
+    }
+
+    /// The tiles the table may hold: those of the box's cells and of the
+    /// cells one past its far sides, where its far faces live.
+    fn clip(&self) -> TileClip {
+        let first = self.first();
+        [
+            first.map(|f| f >> 3),
+            std::array::from_fn(|axis| (first[axis] + self.dims[axis] as i32) >> 3),
+        ]
+    }
+
+    /// The table's pool: every tile the clip holds, wherever the box sits,
+    /// so the pool never runs short.
+    fn pool_tiles(&self) -> u32 {
+        self.dims
+            .iter()
+            .map(|&d| run_tiles(d + 1))
+            .product::<u64>()
+            .min(u64::from(u32::MAX)) as u32
+    }
+
+    /// Records of every pooled field: the pool's cells and the canonical one.
+    pub(crate) fn records(&self) -> u64 {
+        pool_len(self.pool_tiles())
     }
 
     /// The fine state grid's cells along each axis.
     pub(crate) fn fine_dims(&self) -> [u32; 3] {
         self.dims.map(|d| d * FINE)
-    }
-
-    fn fine_cells(&self) -> u64 {
-        self.cells() * u64::from(FINE.pow(3))
     }
 
     /// The scalar outputs this geometry fixes, by name: the published
@@ -226,6 +280,22 @@ pub(crate) fn gas_geometry(
     })
 }
 
+/// The source's tiles along each axis that `cs_source_points` samples: the
+/// ellipsoid's box a cell wider on each side (`source_radii`), a point
+/// every tile and one more for its far end, never more than the box's.
+fn source_tiles(geometry: &GasGeometry, source_size: f32) -> [u32; 3] {
+    let h = geometry.cell;
+    let radii = [
+        0.5 * source_size,
+        (1.5 * h).max(0.3 * source_size),
+        0.5 * source_size,
+    ];
+    std::array::from_fn(|axis| {
+        let span = 2.0 * radii[axis] / h + 3.0;
+        ((span / TILE as f32).ceil() as u32 + 1).min(geometry.dims[axis].div_ceil(TILE) + 1)
+    })
+}
+
 /// Bytes of one published field on a fine grid of `fine_dims`: two words a
 /// fine cell.
 pub(crate) fn fine_field_bytes(fine_dims: [u32; 3]) -> u64 {
@@ -258,7 +328,7 @@ impl Quality {
         }
     }
 
-    /// Red plus black pressure sweeps per step.
+    /// Red plus black pressure sweep pairs per step.
     fn pressure_pairs(self) -> u32 {
         match self {
             Self::Low => 20,
@@ -266,6 +336,13 @@ impl Quality {
             Self::High => 50,
             Self::ExtraHigh => 80,
         }
+    }
+
+    /// Pressure rounds per step, each solving the even tiles and then the
+    /// odd ones, TILE_PAIRS pairs a tile: half of `pressure_pairs`, since a
+    /// round's tiles read their neighbours' latest values.
+    fn pressure_rounds(self) -> u32 {
+        self.pressure_pairs().div_ceil(2 * TILE_PAIRS)
     }
 }
 
@@ -383,7 +460,7 @@ fn up_and_gravity(gravity: [f32; 3]) -> ([f32; 3], f32) {
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct GasUniforms {
     dims: [u32; 3],
-    cells: u32,
+    source_count: u32,
     origin: [f32; 3],
     h: f32,
     up: [f32; 3],
@@ -422,6 +499,13 @@ struct GasUniforms {
     water_pool: u32,
     sand_inv_cell: f32,
     water_cell: f32,
+    /// The box's first cell in world cells, the table's pool, the source's
+    /// tiles along each axis, and the word of the table's args holding the
+    /// held slots' triple's x.
+    first: [i32; 3],
+    pool_tiles: u32,
+    source_tiles: [u32; 3],
+    held_word: u32,
 }
 
 impl GasUniforms {
@@ -435,9 +519,10 @@ impl GasUniforms {
     ) -> Self {
         let nodes = lattice.node_count() as u32;
         let (up, g) = up_and_gravity(settings.gravity);
+        let source_tiles = source_tiles(geometry, settings.source_size);
         Self {
             dims: geometry.dims,
-            cells: geometry.cells() as u32,
+            source_count: source_tiles.iter().product(),
             origin: geometry.origin,
             h: geometry.cell,
             up,
@@ -474,41 +559,50 @@ impl GasUniforms {
             water_pool: matter.water.map_or(0, |water| water.pool_tiles),
             sand_inv_cell: matter.sand.map_or(0.0, |sand| sand.inv_cell),
             water_cell: matter.water.map_or(0.0, |water| water.cell),
+            first: geometry.first(),
+            pool_tiles: geometry.pool_tiles(),
+            source_tiles,
+            held_word: (allocated_args_offset(GAS_REACH.ring_max) / 4) as u32,
         }
     }
 }
 
 // ---- Storage -------------------------------------------------------------
 
-/// Bytes of each kind of buffer for a box of cells.
+/// Bytes of each kind of buffer for a box of cells, every field a record
+/// per pooled cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GasBytes {
-    /// A vec4 per cell: the averaged state and the curl.
+    /// A vec4 per record: the averaged state, the curl and a velocity
+    /// buffer (three of them).
     vec4: u64,
-    /// A vec4 per face node: a velocity buffer (three of them).
-    faces: u64,
-    /// An f32 per cell: pressure and divergence.
+    /// An f32 per record: pressure and divergence.
     scalar: u64,
-    /// Two words per fine cell: a fine state buffer (three of them).
+    /// Two words per fine cell, FINE³ a record: a fine state buffer (three
+    /// of them).
     fine: u64,
+    /// The tile table, its build and the kept words.
+    table: u64,
 }
 
 impl GasBytes {
     pub(crate) fn of(geometry: &GasGeometry) -> Self {
-        let cells = geometry.cells();
+        let records = geometry.records();
+        let pool = geometry.pool_tiles();
         Self {
-            vec4: cells * 16,
-            faces: geometry.face_nodes() * 16,
-            scalar: cells * 4,
-            fine: geometry.fine_cells() * 8,
+            vec4: records * 16,
+            scalar: records * 4,
+            fine: records * u64::from(FINE.pow(3)) * 8,
+            table: held_bytes(pool, GAS_REACH.ring_max) + u64::from(pool) * 4,
         }
     }
 
-    /// Everything the step holds: the rotating fields, the averaged state,
-    /// the curl, pressure and divergence, and the blackbody table. The
-    /// published fields are the tick loop's, the light ring the domain's.
+    /// Everything the step holds: the rotating velocity and fine state, the
+    /// averaged state, the curl, pressure and divergence, the blackbody table
+    /// and the tile table. The published fields are the tick loop's, the
+    /// light ring the domain's.
     pub(crate) fn total(&self) -> u64 {
-        2 * self.vec4 + 3 * self.faces + 2 * self.scalar + 3 * self.fine + BLACKBODY_BYTES
+        5 * self.vec4 + 2 * self.scalar + 3 * self.fine + BLACKBODY_BYTES + self.table
     }
 }
 
@@ -541,6 +635,15 @@ pub struct GasBuffers {
     static_written: Option<f32>,
     /// One word: where the source sits on the static solids.
     source_floor: GpuBuffer,
+    /// The table the fields are pooled on, built every stepped tick.
+    tiles: WorldTiles,
+    /// A word a slot: a cell of its tile still holding gas (`cs_fine_sources`).
+    kept: GpuBuffer,
+    /// The source's points for the build (`cs_source_points`).
+    source_points: GpuBuffer,
+    gate: GpuBuffer,
+    /// The fine kernels' indirect triple (`cs_fine_args`).
+    fine_args: GpuBuffer,
 }
 
 impl GasBuffers {
@@ -563,12 +666,23 @@ impl GasBuffers {
         // SAFETY: the buffer is shared, holds exactly the table, and no GPU
         // work has used it yet.
         unsafe { blackbody.write(0, bytemuck::cast_slice(&blackbody_table())) };
+        let pool = geometry.pool_tiles();
+        let mut tiles = WorldTiles::new(device, pool, GAS_REACH, GAS_POINTS)
+            .map_err(|error| refusal(geometry, bytes.table, error))?;
+        tiles.prepare(device);
+        tiles.prepare_kept(device);
+        let kept = make(u64::from(pool) * 4, BufferUse::Upload)?;
+        // No groups until the first stepped tick lays them.
+        let fine_args = make(24, BufferUse::Upload)?;
+        fine_args.zero_fill();
+        // SAFETY: a new shared buffer of `pool` words no GPU work has used.
+        unsafe { kept.write(0, bytemuck::cast_slice(&vec![u32::MAX; pool as usize])) };
         Ok(Self {
             dims: geometry.dims,
             velocity: [
-                make(bytes.faces, BufferUse::Gpu)?,
-                make(bytes.faces, BufferUse::Gpu)?,
-                make(bytes.faces, BufferUse::Gpu)?,
+                make(bytes.vec4, BufferUse::Gpu)?,
+                make(bytes.vec4, BufferUse::Gpu)?,
+                make(bytes.vec4, BufferUse::Gpu)?,
             ],
             fine: [
                 make(bytes.fine, BufferUse::Gpu)?,
@@ -584,24 +698,48 @@ impl GasBuffers {
             solid: None,
             static_written: None,
             source_floor: make(16, BufferUse::Gpu)?,
+            tiles,
+            kept,
+            source_points: make(16, BufferUse::Gpu)?,
+            gate: open_gate(device),
+            fine_args,
         })
     }
 
+    /// Room for `count` source points.
+    fn reserve_points(&mut self, device: &GpuDevice, count: u32) -> Result<(), String> {
+        let bytes = u64::from(count.max(1)) * 16;
+        if self.source_points.size < bytes {
+            self.source_points = device.try_create_buffer(bytes, BufferUse::Gpu)?;
+        }
+        Ok(())
+    }
+
+    /// The fields a clear zeroes.
+    fn fields(&self) -> impl Iterator<Item = &GpuBuffer> {
+        self.velocity
+            .iter()
+            .chain(&self.fine)
+            .chain([&self.state, &self.curl, &self.pressure, &self.divergence])
+            .chain(self.solid.as_ref())
+    }
+
     /// Keep the solid field while the scene has solids, admitted against the
-    /// World's budget; drop it when it has none.
+    /// World's budget; drop it when it has none. True when it was just made,
+    /// so the caller zeroes it before any kernel reads it.
     fn keep_solid(
         &mut self,
         device: &GpuDevice,
         geometry: &GasGeometry,
         wanted: bool,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         if !wanted {
             self.solid = None;
             self.static_written = None;
-            return Ok(());
+            return Ok(false);
         }
         if self.solid.is_none() {
-            let bytes = geometry.cells() * 8;
+            let bytes = geometry.records() * 8;
             manifold_node_engine::load::expand::admit_world_bytes(
                 device.modifier_memory_snapshot(),
                 bytes,
@@ -613,8 +751,9 @@ impl GasBuffers {
                     .map_err(|error| refusal(geometry, bytes, error))?,
             );
             self.static_written = None;
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 }
 
@@ -634,14 +773,18 @@ pub struct Pipelines {
     curl: GpuComputePipeline,
     confine: GpuComputePipeline,
     divergence: GpuComputePipeline,
-    pressure_red: GpuComputePipeline,
-    pressure_black: GpuComputePipeline,
+    pressure_even: GpuComputePipeline,
+    pressure_odd: GpuComputePipeline,
     project: GpuComputePipeline,
     clear_sums: GpuComputePipeline,
     publish: GpuComputePipeline,
     publish_velocity: GpuComputePipeline,
-    clear: GpuComputePipeline,
+    source_points: GpuComputePipeline,
+    fine_args: GpuComputePipeline,
+    fresh: GpuComputePipeline,
+    reset_kept: GpuComputePipeline,
     /// The kernels that write the solid field, built with the solids only.
+    source_floor: Option<GpuComputePipeline>,
     solids_static: Option<GpuComputePipeline>,
     solids: Option<GpuComputePipeline>,
     fill_solids: Option<GpuComputePipeline>,
@@ -666,13 +809,17 @@ impl Pipelines {
             curl: make("cs_curl"),
             confine: make("cs_confine"),
             divergence: make("cs_divergence"),
-            pressure_red: make("cs_pressure_red"),
-            pressure_black: make("cs_pressure_black"),
+            pressure_even: make("cs_pressure_even"),
+            pressure_odd: make("cs_pressure_odd"),
             project: make("cs_project"),
             clear_sums: make("cs_clear_sums"),
             publish: make("cs_publish"),
             publish_velocity: make("cs_publish_velocity"),
-            clear: make("cs_clear"),
+            source_points: make("cs_source_points"),
+            fine_args: make("cs_fine_args"),
+            fresh: make("cs_fresh"),
+            reset_kept: make("cs_reset_kept"),
+            source_floor: solids.then(|| make("cs_source_floor")),
             solids_static: solids.then(|| make("cs_solids_static")),
             solids: solids.then(|| make("cs_solids")),
             fill_solids: solids.then(|| make("cs_fill_solids")),
@@ -719,7 +866,8 @@ fn binding_list<'a>(
     roles: Roles,
     shared: Shared<'a>,
     solids: &SolidBuffers<'a>,
-) -> [GpuBinding<'a>; 31] {
+    slots: &'a GpuBuffer,
+) -> [GpuBinding<'a>; 37] {
     let bind = |binding: u32, buffer: &'a GpuBuffer| GpuBinding::Buffer {
         binding,
         buffer,
@@ -760,6 +908,12 @@ fn binding_list<'a>(
         bind(28, solids.water_distance),
         bind(29, solids.water_tiles),
         bind(30, solids.sand_tiles),
+        bind(31, buffers.tiles.table()),
+        bind(32, slots),
+        bind(33, &buffers.kept),
+        bind(34, &buffers.source_points),
+        bind(35, buffers.tiles.args()),
+        bind(36, &buffers.fine_args),
     ]
 }
 
@@ -908,7 +1062,7 @@ impl<'a> Matter<'a> {
     }
 }
 
-/// One dispatch over the whole box, then a barrier for the next one.
+/// One dispatch, then a barrier for the next one.
 fn pass(
     enc: &mut manifold_gpu::GpuEncoder,
     pipeline: &GpuComputePipeline,
@@ -917,6 +1071,20 @@ fn pass(
     label: &str,
 ) {
     enc.dispatch_compute(pipeline, bindings, groups, label);
+    enc.compute_memory_barrier_buffers();
+}
+
+/// One dispatch over a list of the table's slots from the triple at `args.1`
+/// of `args.0` (the table's, 512 threads a slot, or the fine kernels', 512
+/// SUBS); then a barrier.
+fn list(
+    enc: &mut manifold_gpu::GpuEncoder,
+    pipeline: &GpuComputePipeline,
+    bindings: &[GpuBinding<'_>],
+    args: (&GpuBuffer, u64),
+    label: &str,
+) {
+    enc.dispatch_compute_indirect(pipeline, bindings, args.0, args.1, label);
     enc.compute_memory_barrier_buffers();
 }
 
@@ -1106,7 +1274,7 @@ impl<'a> Frame<'a> {
         ) else {
             return Err("Gas Volume: wire node.gas_domain's moving and light and node.gas_ticks' state and velocity".into());
         };
-        let fine = GasBytes::of(&geometry).fine;
+        let fine = fine_field_bytes(geometry.fine_dims());
         if state.size < fine || velocity.size < fine {
             return Err(format!(
                 "Gas Volume: the published fields hold {} and {} bytes, the box needs {fine}",
@@ -1139,8 +1307,9 @@ impl<'a> Frame<'a> {
 
 impl GasVolume {
     /// Encode one tick: reallocate and clear when the box changed or the
-    /// clock restarted, lay the still solids when they changed, step the
-    /// fields, and on the frame's last tick publish them and the light.
+    /// clock restarted; on a stepped tick build the table, clear the slots it
+    /// handed out, lay the solids and step the fields; and on the frame's
+    /// last tick publish them and the light.
     fn advance(&mut self, gpu: &mut GpuEncoder<'_>, frame: Frame<'_>) -> Result<(), String> {
         let Frame {
             geometry,
@@ -1173,27 +1342,38 @@ impl GasVolume {
             self.buffers = None;
             self.buffers = Some(GasBuffers::allocate(device, &geometry)?);
             log::info!(
-                "Gas Volume: {} × {} × {} cells",
+                "Gas Volume: {} × {} × {} cells on a pool of {} tiles",
                 geometry.dims[0],
                 geometry.dims[1],
-                geometry.dims[2]
+                geometry.dims[2],
+                geometry.pool_tiles()
             );
         }
         let with_bodies = tick.solids.is_some();
         let with_solids = with_bodies || matter.any();
+        let steps = tick.dt > 0.0;
+        let counts = source_tiles(&geometry, settings.source_size);
+        let source_count: u32 = counts.iter().product();
         let stored = self.buffers.as_mut().expect("buffers were just allocated");
-        stored.keep_solid(device, &geometry, with_solids)?;
-        // The Collider meshes are read through their trees, so they are laid
-        // only when they or the box change; the moving solids, a lattice
-        // each, and the water and sand every tick.
-        let rewrite_static = with_solids && stored.static_written != Some(static_epoch);
-        stored.static_written = with_solids.then_some(static_epoch);
-        let solids_move = (with_bodies && bodies_move) || matter.any();
+        let new_solid = stored.keep_solid(device, &geometry, with_solids)?;
+        stored
+            .reserve_points(device, source_count)
+            .map_err(|error| refusal(&geometry, u64::from(source_count) * 16, error))?;
         let clear = resized || restart;
         if clear {
             self.current = 0;
             self.sim_time = 0.0;
+            stored.static_written = None;
         }
+        // The Collider meshes are read through their trees, so every held
+        // cell is laid only when they or the box change, and otherwise only
+        // the slots each build hands out; the moving solids, a lattice each,
+        // and the water and sand every tick.
+        let rewrite_static = steps && with_solids && stored.static_written != Some(static_epoch);
+        if steps {
+            stored.static_written = with_solids.then_some(static_epoch);
+        }
+        let solids_move = (with_bodies && bodies_move) || matter.any();
         let lattice = force_lattice(&geometry);
         let buffers = self.buffers.as_ref().expect("buffers were just allocated");
         let pipelines =
@@ -1206,37 +1386,41 @@ impl GasVolume {
             velocity,
         };
         let solids = SolidBuffers::of(buffers, bodies, &matter, with_bodies);
-
-        // Cell kernels cover the cells; face kernels the one-larger face nodes.
-        let groups = geometry.dims.map(|d| d.div_ceil(GROUP_EDGE));
-        let face_groups = geometry.dims.map(|d| (d + 1).div_ceil(GROUP_EDGE));
-        let fine_groups = geometry.fine_dims().map(|d| d.div_ceil(GROUP_EDGE));
+        let tiles = &buffers.tiles;
+        let held_list = &tiles.lists().by_rank;
+        let fresh_list = &tiles.lists().fresh;
+        let held = (tiles.args(), allocated_args_offset(GAS_REACH.ring_max));
+        let fresh = (tiles.args(), fresh_args_offset(GAS_REACH.ring_max));
+        let fine = (&buffers.fine_args, 0);
+        let tile_groups = (&buffers.fine_args, 12);
         let enc = &mut *gpu.native_enc;
         let still = Tick { dt: 0.0, ..tick };
+        // A new solid field is all air: records outside the held tiles, the
+        // canonical one among them, are never written.
+        if let (true, Some(solid)) = (new_solid && !clear, &buffers.solid) {
+            enc.clear_buffer(solid);
+        }
 
         if clear {
-            for fine in &buffers.fine {
-                enc.clear_buffer(fine);
+            for field in buffers.fields() {
+                enc.clear_buffer(field);
             }
             let uniforms = GasUniforms::new(&geometry, &settings, 0.0, lattice, still, &matter);
-            // vel_in and state_in are read-only, so two dispatches with the
-            // roles rotated reach all three buffers.
-            for roles in [Roles::new(2, 0), Roles::new(0, 2)] {
-                let bindings = binding_list(
-                    bytemuck::bytes_of(&uniforms),
-                    buffers,
-                    roles,
-                    shared,
-                    &solids,
-                );
-                pass(
-                    enc,
-                    &pipelines.clear,
-                    &bindings,
-                    face_groups,
-                    "node.gas_volume.clear",
-                );
-            }
+            let bindings = binding_list(
+                bytemuck::bytes_of(&uniforms),
+                buffers,
+                Roles::new(0, 1),
+                shared,
+                &solids,
+                held_list,
+            );
+            pass(
+                enc,
+                &pipelines.reset_kept,
+                &bindings,
+                [geometry.pool_tiles().div_ceil(256), 1, 1],
+                "node.gas_volume.reset_kept",
+            );
         }
 
         let mut last = self.current;
@@ -1249,27 +1433,7 @@ impl GasVolume {
             &matter,
         );
         let uniform_bytes = bytemuck::bytes_of(&uniforms);
-        if rewrite_static {
-            enc.clear_buffer(&buffers.source_floor);
-            let bindings = binding_list(
-                uniform_bytes,
-                buffers,
-                Roles::new(last, (last + 1) % RING),
-                shared,
-                &solids,
-            );
-            pass(
-                enc,
-                pipelines
-                    .solids_static
-                    .as_ref()
-                    .expect("solids build their kernels"),
-                &bindings,
-                groups,
-                "node.gas_volume.solids_static",
-            );
-        }
-        if tick.dt > 0.0 {
+        if steps {
             let (a, b) = ((last + 1) % RING, (last + 2) % RING);
             let advection = binding_list(
                 uniform_bytes,
@@ -1277,132 +1441,163 @@ impl GasVolume {
                 Roles { input: last, a, b },
                 shared,
                 &solids,
+                held_list,
             );
-            if solids_move {
+            if rewrite_static {
+                enc.clear_buffer(&buffers.source_floor);
                 pass(
+                    enc,
+                    pipelines
+                        .source_floor
+                        .as_ref()
+                        .expect("solids build their kernels"),
+                    &advection,
+                    [geometry.dims[1].div_ceil(SMALL_GROUP), 1, 1],
+                    "node.gas_volume.source_floor",
+                );
+            }
+            pass(
+                enc,
+                &pipelines.source_points,
+                &advection,
+                [source_count.div_ceil(SMALL_GROUP), 1, 1],
+                "node.gas_volume.source_points",
+            );
+            tiles.encode_allocation(
+                enc,
+                &Allocation {
+                    points: &buffers.source_points,
+                    count: PointCount::Slots(source_count),
+                    origin: lattice_origin(geometry.cell),
+                    inv_cell: 1.0 / geometry.cell,
+                    replay_counts: [0; 2],
+                    gate: &buffers.gate,
+                    clip: Some(geometry.clip()),
+                    kept: Some(&buffers.kept),
+                    shared: None,
+                },
+            );
+            pass(
+                enc,
+                &pipelines.fine_args,
+                &advection,
+                [1, 1, 1],
+                "node.gas_volume.fine_args",
+            );
+            // A slot the build handed out held another tile last tick: its
+            // records start clean in last tick's result.
+            let handed_out = binding_list(
+                uniform_bytes,
+                buffers,
+                Roles::new(a, last),
+                shared,
+                &solids,
+                fresh_list,
+            );
+            list(
+                enc,
+                &pipelines.fresh,
+                &handed_out,
+                fresh,
+                "node.gas_volume.fresh",
+            );
+            if let Some(solids_static) = &pipelines.solids_static {
+                let (bindings, slots) = if rewrite_static {
+                    (&advection, held)
+                } else {
+                    (&handed_out, fresh)
+                };
+                list(
+                    enc,
+                    solids_static,
+                    bindings,
+                    slots,
+                    "node.gas_volume.solids_static",
+                );
+            }
+            if solids_move {
+                list(
                     enc,
                     pipelines
                         .solids
                         .as_ref()
                         .expect("solids build their kernels"),
                     &advection,
-                    groups,
+                    held,
                     "node.gas_volume.solids",
                 );
             }
-            pass(
-                enc,
-                &pipelines.advect,
-                &advection,
-                face_groups,
-                "node.gas_volume.advect",
-            );
-            pass(
-                enc,
-                &pipelines.advect_back,
-                &advection,
-                face_groups,
-                "node.gas_volume.advect_back",
-            );
-            pass(
-                enc,
-                &pipelines.maccormack,
-                &advection,
-                face_groups,
-                "node.gas_volume.maccormack",
-            );
-            pass(
-                enc,
-                &pipelines.centres_in,
-                &advection,
-                groups,
-                "node.gas_volume.centres_in",
-            );
-            for (pipeline, label) in [
-                (&pipelines.fine_advect, "node.gas_volume.fine_advect"),
+            for (pipeline, label, slots) in [
+                (&pipelines.advect, "node.gas_volume.advect", held),
+                (&pipelines.advect_back, "node.gas_volume.advect_back", held),
+                (&pipelines.maccormack, "node.gas_volume.maccormack", held),
+                (&pipelines.centres_in, "node.gas_volume.centres_in", held),
+                (&pipelines.fine_advect, "node.gas_volume.fine_advect", fine),
                 (
                     &pipelines.fine_advect_back,
                     "node.gas_volume.fine_advect_back",
+                    fine,
                 ),
                 (
                     &pipelines.fine_maccormack,
                     "node.gas_volume.fine_maccormack",
+                    fine,
                 ),
             ] {
-                pass(enc, pipeline, &advection, fine_groups, label);
+                list(enc, pipeline, &advection, slots, label);
             }
-            let working =
-                binding_list(uniform_bytes, buffers, Roles::new(last, b), shared, &solids);
+            let working = binding_list(
+                uniform_bytes,
+                buffers,
+                Roles::new(last, b),
+                shared,
+                &solids,
+                held_list,
+            );
             // Swirl at 0 confines nothing: its two passes don't run.
             let swirl = settings.vorticity > 0.0;
-            for (pipeline, grid, label, runs) in [
+            for (pipeline, label, slots, runs) in [
                 (
                     &pipelines.fine_sources,
-                    fine_groups,
                     "node.gas_volume.fine_sources",
+                    fine,
                     true,
                 ),
-                (
-                    &pipelines.restrict,
-                    groups,
-                    "node.gas_volume.restrict",
-                    true,
-                ),
-                (
-                    &pipelines.forces,
-                    face_groups,
-                    "node.gas_volume.forces",
-                    true,
-                ),
-                (&pipelines.curl, groups, "node.gas_volume.curl", swirl),
-                (
-                    &pipelines.confine,
-                    face_groups,
-                    "node.gas_volume.confine",
-                    swirl,
-                ),
+                (&pipelines.restrict, "node.gas_volume.restrict", held, true),
+                (&pipelines.forces, "node.gas_volume.forces", held, true),
+                (&pipelines.curl, "node.gas_volume.curl", held, swirl),
+                (&pipelines.confine, "node.gas_volume.confine", held, swirl),
                 (
                     &pipelines.divergence,
-                    groups,
                     "node.gas_volume.divergence",
+                    held,
                     true,
                 ),
             ] {
                 if runs {
-                    pass(enc, pipeline, &working, grid, label);
+                    list(enc, pipeline, &working, slots, label);
                 }
             }
-            for _ in 0..settings.quality.pressure_pairs() {
-                pass(
-                    enc,
-                    &pipelines.pressure_red,
-                    &working,
-                    groups,
-                    "node.gas_volume.pressure_red",
-                );
-                pass(
-                    enc,
-                    &pipelines.pressure_black,
-                    &working,
-                    groups,
-                    "node.gas_volume.pressure_black",
-                );
+            for _ in 0..settings.quality.pressure_rounds() {
+                for pipeline in [&pipelines.pressure_even, &pipelines.pressure_odd] {
+                    list(
+                        enc,
+                        pipeline,
+                        &working,
+                        tile_groups,
+                        "node.gas_volume.pressure",
+                    );
+                }
             }
-            pass(
+            list(
                 enc,
                 &pipelines.project,
                 &working,
-                face_groups,
+                held,
                 "node.gas_volume.project",
             );
             if let Some(fill) = &pipelines.fill_solids {
-                pass(
-                    enc,
-                    fill,
-                    &working,
-                    fine_groups,
-                    "node.gas_volume.fill_solids",
-                );
+                list(enc, fill, &working, fine, "node.gas_volume.fill_solids");
             }
             last = b;
             self.sim_time += f64::from(tick.dt);
@@ -1412,7 +1607,8 @@ impl GasVolume {
             return Ok(());
         }
 
-        // The published fields and this frame's light, from the result.
+        // The published fields and this frame's light, from the result. A
+        // cell of a tile the table does not hold publishes still, clear air.
         uniforms.time = self.sim_time as f32;
         let working = binding_list(
             bytemuck::bytes_of(&uniforms),
@@ -1420,7 +1616,10 @@ impl GasVolume {
             Roles::new((last + 1) % RING, last),
             shared,
             &solids,
+            held_list,
         );
+        enc.clear_buffer(state);
+        enc.clear_buffer(velocity);
         pass(
             enc,
             &pipelines.clear_sums,
@@ -1428,27 +1627,17 @@ impl GasVolume {
             [1, 1, 1],
             "node.gas_volume.clear_sums",
         );
-        pass(
-            enc,
-            &pipelines.publish,
-            &working,
-            groups,
-            "node.gas_volume.publish",
-        );
-        pass(
-            enc,
-            &pipelines.centres_a,
-            &working,
-            groups,
-            "node.gas_volume.centres_a",
-        );
-        pass(
-            enc,
-            &pipelines.publish_velocity,
-            &working,
-            fine_groups,
-            "node.gas_volume.publish_velocity",
-        );
+        for (pipeline, label, slots) in [
+            (&pipelines.publish, "node.gas_volume.publish", held),
+            (&pipelines.centres_a, "node.gas_volume.centres_a", held),
+            (
+                &pipelines.publish_velocity,
+                "node.gas_volume.publish_velocity",
+                fine,
+            ),
+        ] {
+            list(enc, pipeline, &working, slots, label);
+        }
         Ok(())
     }
 }
@@ -1524,13 +1713,17 @@ mod tests {
                 "cs_curl",
                 "cs_confine",
                 "cs_divergence",
-                "cs_pressure_red",
-                "cs_pressure_black",
+                "cs_pressure_even",
+                "cs_pressure_odd",
                 "cs_project",
                 "cs_clear_sums",
                 "cs_publish",
                 "cs_publish_velocity",
-                "cs_clear",
+                "cs_source_points",
+                "cs_fine_args",
+                "cs_fresh",
+                "cs_reset_kept",
+                "cs_source_floor",
                 "cs_solids_static",
                 "cs_solids",
                 "cs_fill_solids",
@@ -1552,7 +1745,7 @@ mod tests {
         }
         let rust = offsets!(
             dims,
-            cells,
+            source_count,
             origin,
             h,
             up,
@@ -1589,8 +1782,12 @@ mod tests {
             water_pool,
             sand_inv_cell,
             water_cell,
+            first,
+            pool_tiles,
+            source_tiles,
+            held_word,
         );
-        assert_eq!(std::mem::size_of::<GasUniforms>(), 192);
+        assert_eq!(std::mem::size_of::<GasUniforms>(), 224);
         let module = valid_shader(true);
         let params = module
             .types
@@ -1699,6 +1896,9 @@ mod tests {
     fn quality_sets_the_pressure_sweeps() {
         let pairs = [0.0, 1.0, 2.0, 3.0].map(|q| Quality::from_param(q).pressure_pairs());
         assert_eq!(pairs, [20, 30, 50, 80]);
+        // Half as many pairs a tile, rounded up to whole rounds.
+        let rounds = [0.0, 1.0, 2.0, 3.0].map(|q| Quality::from_param(q).pressure_rounds());
+        assert_eq!(rounds, [3, 4, 7, 10]);
         assert_eq!(Quality::from_param(-4.0), Quality::Low);
         assert_eq!(Quality::from_param(9.0), Quality::ExtraHigh);
     }
@@ -1719,14 +1919,48 @@ mod tests {
             origin: [0.0; 3],
             dims: [10, 10, 10],
         };
+        // 11 cells along each axis (the far faces' cells) touch at most
+        // three tiles wherever they start.
+        assert_eq!(geometry.pool_tiles(), 27);
+        let records = 27 * 512 + 1;
         let bytes = GasBytes::of(&geometry);
-        assert_eq!(bytes.vec4, 16_000);
-        assert_eq!(bytes.faces, 11 * 11 * 11 * 16);
-        assert_eq!(bytes.fine, 8_000 * 8);
+        assert_eq!(bytes.vec4, records * 16);
+        assert_eq!(bytes.fine, records * 8 * 8);
         assert_eq!(
             bytes.total(),
-            2 * 16_000 + 3 * 21_296 + 2 * 4_000 + 3 * 64_000 + 256 * 16
+            5 * records * 16 + 2 * records * 4 + 3 * records * 64 + 256 * 16 + bytes.table
         );
+    }
+
+    #[test]
+    fn the_clip_holds_the_box_and_its_far_faces() {
+        let geometry = GasGeometry {
+            cell: 0.1,
+            origin: [-1.0, 0.0, 0.7],
+            dims: [20, 8, 9],
+        };
+        assert_eq!(geometry.first(), [-10, 0, 7]);
+        // Cells -10..=10, 0..=8 and 7..=16 lie in tiles -2..=1, 0..=1 and
+        // 0..=2.
+        assert_eq!(geometry.clip(), [[-2, 0, 0], [1, 1, 2]]);
+    }
+
+    #[test]
+    fn the_source_points_reach_every_tile_the_source_touches() {
+        let geometry = GasGeometry {
+            cell: 0.05,
+            origin: [0.0; 3],
+            dims: [64, 96, 64],
+        };
+        // 0.6 m across is 12 cells, 15 with a cell each side and the
+        // floor's rounding: two tiles and one more for the far end.
+        assert_eq!(source_tiles(&geometry, 0.6), [3, 3, 3]);
+        // A source wider than the box is held to the box's tiles.
+        let narrow = GasGeometry {
+            dims: [8, 96, 8],
+            ..geometry
+        };
+        assert_eq!(source_tiles(&narrow, 6.0), [2, 11, 2]);
     }
 }
 

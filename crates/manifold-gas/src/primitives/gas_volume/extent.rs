@@ -10,13 +10,12 @@ fn gas_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         ["origin_x", "origin_y", "origin_z"].map(|name| x.scalar(name, 0.0)),
         ["dims_x", "dims_y", "dims_z"].map(|name| whole(x.scalar(name, 0.0))),
     );
-    // `run` owns the fields and the blackbody table; the published state and
+    // `run` owns the fields, the tile table and the blackbody table; the published state and
     // velocity are the tick loop's, written in place.
     x.hold(GasBytes::of(&geometry).total());
-    // Water or sand wired: the grains' field and the solid field, four and
-    // two words a cell.
-    if x.input("faces").is_some() || x.input("sand").is_some() {
-        x.hold(geometry.cells() * 24);
+    // Water or sand wired: the solid field, two words a record.
+    if x.input("faces").is_some() || x.input("sand_grid").is_some() {
+        x.hold(geometry.records() * 8);
     }
     Ok(())
 }
