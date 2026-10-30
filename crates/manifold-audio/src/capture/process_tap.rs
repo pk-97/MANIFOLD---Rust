@@ -1,12 +1,12 @@
 //! macOS CoreAudio **process-tap** capture — system audio + per-app output.
 //!
 //! Apple's process-tap API (macOS 14.4+) captures *rendered output* — the whole
-//! system mix, or a chosen set of processes — with no loopback driver and no
-//! cable. The path is three OS objects wired together:
+//! system mix less MANIFOLD's own sound, or a chosen set of processes — with no
+//! loopback driver and no cable. The path is three OS objects wired together:
 //!
 //! 1. **Tap** — `AudioHardwareCreateProcessTap` from a `CATapDescription`
-//!    (global, or a mixdown of specific process object ids). It defines *what*
-//!    audio to capture.
+//!    (global except MANIFOLD itself, or a mixdown of specific process object
+//!    ids). It defines *what* audio to capture.
 //! 2. **Aggregate device** — a private aggregate that lists the tap in its tap
 //!    list. This is what exposes the tapped audio as a readable input stream.
 //! 3. **IO proc** — `AudioDeviceCreateIOProcID` on the aggregate; its realtime
@@ -183,6 +183,8 @@ const SCOPE_GLOBAL: u32 = fourcc(b"glob");
 const ELEMENT_MAIN: u32 = 0;
 const PROP_TAP_FORMAT: u32 = fourcc(b"tfmt");
 const PROP_NOMINAL_SAMPLE_RATE: u32 = fourcc(b"nsrt");
+const PROP_TRANSLATE_PID: u32 = fourcc(b"id2p"); // kAudioHardwarePropertyTranslatePIDToProcessObject
+const SYSTEM_OBJECT: AudioObjectID = 1; // kAudioObjectSystemObject
 
 // CoreAudio aggregate-device / sub-tap dictionary keys (literal CFString values
 // from <CoreAudio/AudioHardware.h>; stable across releases).
@@ -593,9 +595,9 @@ unsafe fn tap_description_uuid(description: &Retained<AnyObject>) -> Option<Stri
     Some(uuid_str.to_string())
 }
 
-/// Construct a `CATapDescription`. `processes` empty → a global tap of the whole
-/// system mix; non-empty → a stereo mixdown of those process object ids.
-fn make_description(processes: &[TapHandle]) -> Result<Retained<AnyObject>, String> {
+/// Construct a `CATapDescription`: `global` taps the whole system mix except
+/// `processes`; otherwise a stereo mixdown of `processes`.
+fn make_description(processes: &[TapHandle], global: bool) -> Result<Retained<AnyObject>, String> {
     let cls = AnyClass::get(c"CATapDescription").ok_or("CATapDescription class unavailable")?;
     let numbers: Vec<Retained<NSNumber>> = processes
         .iter()
@@ -604,7 +606,7 @@ fn make_description(processes: &[TapHandle]) -> Result<Retained<AnyObject>, Stri
     let array = NSArray::from_retained_slice(&numbers);
 
     let alloc: *mut AnyObject = unsafe { msg_send![cls, alloc] };
-    let desc: *mut AnyObject = if processes.is_empty() {
+    let desc: *mut AnyObject = if global {
         unsafe { msg_send![alloc, initStereoGlobalTapButExcludeProcesses: &*array] }
     } else {
         unsafe { msg_send![alloc, initStereoMixdownOfProcesses: &*array] }
@@ -613,12 +615,42 @@ fn make_description(processes: &[TapHandle]) -> Result<Retained<AnyObject>, Stri
     unsafe { Retained::from_raw(desc) }.ok_or_else(|| "CATapDescription init failed".to_string())
 }
 
-/// Open a system-audio tap (whole output mix).
+/// Open a system-audio tap: the whole output mix except MANIFOLD's own sound, so
+/// timeline audio never comes back in as input.
 pub fn open_system_audio() -> Result<Box<dyn CaptureBackend>, String> {
     if !is_supported() {
         return Err("system-audio tap requires macOS 14.4+".to_string());
     }
-    build(make_description(&[])?)
+    build(make_description(&[own_process()?], true)?)
+}
+
+/// MANIFOLD's own process object. Every client of the audio server has one.
+fn own_process() -> Result<TapHandle, String> {
+    let address = AudioObjectPropertyAddress {
+        selector: PROP_TRANSLATE_PID,
+        scope: SCOPE_GLOBAL,
+        element: ELEMENT_MAIN,
+    };
+    let pid = std::process::id() as i32;
+    let mut object: AudioObjectID = 0;
+    let mut size = std::mem::size_of::<AudioObjectID>() as u32;
+    // SAFETY: the qualifier is one live pid_t and the output one live AudioObjectID, sized to match.
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            SYSTEM_OBJECT,
+            &address,
+            std::mem::size_of::<i32>() as u32,
+            (&pid as *const i32).cast(),
+            &mut size,
+            (&mut object as *mut AudioObjectID).cast(),
+        )
+    };
+    if status != 0 || object == 0 {
+        return Err(format!(
+            "MANIFOLD's own audio process was not found (status {status})"
+        ));
+    }
+    Ok(TapHandle::from(object))
 }
 
 /// Open a tap of the given application processes, mixed down.
@@ -629,7 +661,7 @@ pub fn open_apps(handles: &[TapHandle]) -> Result<Box<dyn CaptureBackend>, Strin
     if handles.is_empty() {
         return Err("no application process to tap".to_string());
     }
-    build(make_description(handles)?)
+    build(make_description(handles, false)?)
 }
 
 impl CaptureBackend for ProcessTapCapture {

@@ -217,7 +217,7 @@ impl AudioSend {
 /// The default, [`InputDevice`](Self::InputDevice), is the historical meaning: a
 /// hardware, aggregate, or virtual **input** device addressed by its CoreAudio
 /// UID. The tap kinds capture *rendered output* instead of a hardware input:
-/// [`SystemAudio`](Self::SystemAudio) taps the whole system mix;
+/// [`SystemAudio`](Self::SystemAudio) taps the whole system mix less MANIFOLD's own sound;
 /// [`App`](Self::App) taps a single application's audio. The variant decides how
 /// the runtime resolves the ref to a live capture backend, so it is the
 /// authority — not the `uid`/`name` strings, which mean different things per
@@ -231,7 +231,8 @@ pub enum AudioSourceKind {
     /// No capture at all — the device stays dark and sends are fed by
     /// timeline audio layers only. Serializes as `"none"`.
     None,
-    /// The system-wide audio output mix, tapped (no per-process filter).
+    /// The system-wide audio output mix, tapped, less MANIFOLD's own sound so
+    /// timeline audio never comes back in as input.
     SystemAudio,
     /// One application's audio output, tapped. `uid` holds the app's stable
     /// bundle id; `name` is the app's display name.
