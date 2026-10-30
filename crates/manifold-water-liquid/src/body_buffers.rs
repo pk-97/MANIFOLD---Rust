@@ -7,7 +7,7 @@
 //! order each frame.
 
 use manifold_gpu::BufferUse;
-use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
+use manifold_gpu::{FrameClock, GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use crate::bodies::{BodySupports, COLLIDER_BVH, LiquidBodies, LiquidBody, LiquidShape};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
@@ -63,6 +63,14 @@ struct Stored {
     version: u64,
 }
 
+/// A shared buffer the changed clock vertices are written into and copied
+/// from in encoder order; reused once the frame that copied from it retired.
+struct ClockStaging {
+    buffer: GpuBuffer,
+    /// Frame-clock stamp of the frame that copied from it; 0 never read.
+    read_stamp: u64,
+}
+
 /// A domain's provided `bodies`, `regions`, `shapes`, `atlas`,
 /// `collider_nodes` and `collider_triangles` outputs.
 #[derive(Default)]
@@ -70,6 +78,8 @@ pub struct LiquidBodyBuffers {
     stored: Option<Stored>,
     upload: Option<GpuComputePipeline>,
     lattice: Option<GpuComputePipeline>,
+    clock_staging: Vec<ClockStaging>,
+    clock: Option<FrameClock>,
 }
 
 impl LiquidBodyBuffers {
@@ -340,20 +350,58 @@ impl LiquidBodyBuffers {
         ] {
             write_groups(gpu, pipeline, target, groups, label);
         }
-        // The clock vertices are the bulk of the bytes and are unchanged for
-        // a still scene, so they are rewritten only when they changed.
+        // The clock vertices are the bulk of the bytes (every vertex of every
+        // coupled mesh) and are unchanged for a still scene, so they are
+        // rewritten only when they changed, through one staging buffer and
+        // two copies in encoder order rather than an inline upload per 4 KB.
         if stored.clock_gen != Some(bodies.clock_generation()) {
-            for (target, groups) in [
-                (
-                    &stored.clock_obstacles,
-                    bytemuck::cast_slice(bodies.clock_obstacles()),
-                ),
-                (
-                    &stored.clock_sources,
-                    bytemuck::cast_slice(bodies.clock_sources()),
-                ),
-            ] {
-                write_groups(gpu, pipeline, target, groups, label);
+            let obstacles: &[u8] = bytemuck::cast_slice(bodies.clock_obstacles());
+            let sources: &[u8] = bytemuck::cast_slice(bodies.clock_sources());
+            let bytes = (obstacles.len() + sources.len()) as u64;
+            if bytes > 0 {
+                if self.clock.is_none() {
+                    self.clock = gpu.device.frame_clock();
+                }
+                let clock = self.clock.as_ref();
+                let retired = |slot: &ClockStaging| {
+                    clock.is_none_or(|clock| clock.is_complete(slot.read_stamp))
+                };
+                let index = match self.clock_staging.iter().position(retired) {
+                    Some(index) => index,
+                    None => {
+                        self.clock_staging.push(ClockStaging {
+                            buffer: gpu.device.create_buffer(bytes, BufferUse::Upload),
+                            read_stamp: 0,
+                        });
+                        self.clock_staging.len() - 1
+                    }
+                };
+                let slot = &mut self.clock_staging[index];
+                if slot.buffer.size < bytes {
+                    slot.buffer = gpu.device.create_buffer(bytes, BufferUse::Upload);
+                }
+                // SAFETY: shared storage of at least `bytes`; its last GPU
+                // reader has retired (checked above) or it is new, and the
+                // copies below are the next.
+                unsafe {
+                    slot.buffer.write(0, obstacles);
+                    slot.buffer.write(obstacles.len() as u64, sources);
+                }
+                for (target, offset, len) in [
+                    (&stored.clock_obstacles, 0, obstacles.len()),
+                    (&stored.clock_sources, obstacles.len(), sources.len()),
+                ] {
+                    if len > 0 {
+                        gpu.native_enc.copy_buffer_range(
+                            &slot.buffer,
+                            offset as u64,
+                            target,
+                            0,
+                            len as u64,
+                        );
+                    }
+                }
+                slot.read_stamp = clock.map_or(0, FrameClock::stamp);
             }
             stored.clock_gen = Some(bodies.clock_generation());
         }
