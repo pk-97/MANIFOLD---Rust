@@ -74,7 +74,9 @@ pub fn shared() -> &'static ParityHarness {
 
 impl ParityHarness {
     pub fn new() -> Self {
-        let device = Arc::new(GpuDevice::new_queued("gpu_proofs"));
+        let device = GpuDevice::new_queued("gpu_proofs");
+        manifold_gpu::load_disk_shader_caches(&device);
+        let device = Arc::new(device);
         // Prewarm the plugin-using effects so background FFI workers
         // (BlobDetector, DepthEstimator, WireframeDepth) are running
         // before the first sweep. The graph path looks primitives up via

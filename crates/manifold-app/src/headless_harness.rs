@@ -20,12 +20,7 @@ pub(crate) fn headless_content_thread(project: Project, w: u32, h: u32) -> Conte
     // each runtime MSL compile leaves slab-scale IOAccelerator allocations —
     // the dominant term in the 15-25GB startup spike that panicked the
     // machine when three lane renders ran concurrently (2026-08-14).
-    if let Some(dirs) = manifold_foundation::AppDirs::current() {
-        let cache_dir = dirs.cache;
-        std::fs::create_dir_all(&cache_dir).ok();
-        native_device.load_pipeline_archive(&cache_dir.join("pipeline_cache.metallib"));
-        native_device.load_msl_cache(&cache_dir.join("msl_cache"));
-    }
+    manifold_gpu::load_disk_shader_caches(&native_device);
     let engine = crate::content_thread::playback_engine(&native_device, project, w, h);
     let mut content_pipeline = ContentPipeline::new(Box::new(
         manifold_compositor::layer_compositor::LayerCompositor::new(&native_device, w, h),

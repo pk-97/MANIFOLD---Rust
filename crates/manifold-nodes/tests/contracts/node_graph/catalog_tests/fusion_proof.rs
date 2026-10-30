@@ -1312,7 +1312,7 @@ fn every_fused_generator_executes_one_frame() {
     use std::panic::AssertUnwindSafe;
 
     let device = manifold_gpu::testkit::test_device();
-    manifold_gpu::testkit::load_disk_shader_caches(&device);
+    manifold_gpu::load_disk_shader_caches(&device);
     let registry = PrimitiveRegistry::with_builtin();
     let (w, h) = (192u32, 192u32);
     let ctx = PresetContext {
