@@ -79,9 +79,7 @@ pub fn water_family(fields: &ItemFields) -> Option<Arc<WaterFamily>> {
     inventory::iter::<WaterTemplate>
         .into_iter()
         .find(|template| {
-            template.kind == kind
-                && template.draw == draw
-                && template.narrow_band == narrow_band
+            template.kind == kind && template.draw == draw && template.narrow_band == narrow_band
         })
         .map(|template| (template.family)())
 }

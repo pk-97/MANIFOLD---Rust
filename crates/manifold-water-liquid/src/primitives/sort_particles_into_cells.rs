@@ -415,7 +415,8 @@ impl ParticleSorter {
         let sorted_capacity = [
             job.sorted.map(|b| b.size / particle_size),
             job.order.map(|b| b.size / 4),
-            job.companion.map(|c| c.to.size / (u64::from(c.words.max(1)) * 4)),
+            job.companion
+                .map(|c| c.to.size / (u64::from(c.words.max(1)) * 4)),
         ]
         .into_iter()
         .flatten()

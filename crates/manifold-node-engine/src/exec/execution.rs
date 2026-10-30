@@ -2135,8 +2135,7 @@ impl Executor {
                             graph, plan, group, env, &mut tally, &mut gpu, &mut state,
                         ),
                         None => self.run_substep_region(
-                            graph, plan, region_idx, region, env, &mut tally, &mut gpu,
-                            &mut state,
+                            graph, plan, region_idx, region, env, &mut tally, &mut gpu, &mut state,
                         ),
                     }
                 }

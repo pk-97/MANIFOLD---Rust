@@ -27,9 +27,9 @@ use crate::fluid_role::PreparedFluidGeometry;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::scene_impulse::RigidImpulseTargets;
 use manifold_node_engine::scene::transform::Transform;
-use manifold_physics::clock::{ClockFrame, SimulationClock};
 #[cfg(test)]
 use manifold_physics::clock::TICK;
+use manifold_physics::clock::{ClockFrame, SimulationClock};
 use manifold_physics::collision_shape::scaled_mesh;
 use manifold_water_rigid::coupled_frame::{CoupledRigidLayout, RigidFrame};
 use manifold_water_rigid::physics::{RigidBody, RigidSceneInputs, RigidSimulation, Solid};
@@ -861,15 +861,26 @@ struct Bound {
 }
 
 /// A body's installed solid about its centre of mass, and its largest local
-/// box face: its hulls, or for a Collider its exact mesh at its scale. A
-/// still Collider is a static solid; a `moving` one is a moving solid with
-/// its own lattice, as a body is.
+/// box face: its hulls, or for a Collider its exact mesh or ground at its
+/// scale. A still Collider is a static solid; a `moving` one is a moving solid
+/// with its own lattice, as a body is.
 fn hull_geometry(
     world: &PhysicsWorld,
     handle: BodyHandle,
     body: Option<&RigidBody>,
     moving: bool,
 ) -> Result<(Arc<PreparedFluidGeometry>, f32), String> {
+    if let Some(body) = body
+        && let Some(Solid::HeightField(field)) = body.collider.as_deref()
+    {
+        let centre = world
+            .local_center_of_mass(handle)
+            .map_err(|error| error.to_string())?;
+        let ground = ground_geometry(field, body.transform.scale, centre);
+        let face = (ground.hi[0] - ground.lo[0]) * (ground.hi[2] - ground.lo[2]);
+        let geometry = PreparedFluidGeometry::ground(ground, !moving);
+        return Ok((Arc::new(geometry.of_body(handle)), face));
+    }
     let exact = body.and_then(|body| match body.collider.as_deref() {
         Some(Solid::Mesh(mesh)) => Some(scaled_mesh(mesh, body.transform.scale)),
         _ => None,
@@ -908,6 +919,31 @@ fn hull_geometry(
         PreparedFluidGeometry::new(meshes)
     };
     Ok((Arc::new(geometry.of_body(handle)), face))
+}
+
+/// A height field at `scale` in its body's frame about `centre`: Box3D puts
+/// that body at the grid's first point.
+fn ground_geometry(
+    field: &manifold_physics::collision_shape::HeightField,
+    scale: [f32; 3],
+    centre: [f32; 3],
+) -> crate::fluid_role::FluidGround {
+    let [low, high] = field.height_range();
+    let extent = |axis: usize, points: u32| (points - 1) as f32 * field.spacing * scale[axis];
+    crate::fluid_role::FluidGround {
+        points: field.points,
+        lo: [-centre[0], low * scale[1] - centre[1], -centre[2]],
+        hi: [
+            extent(0, field.points[0]) - centre[0],
+            high * scale[1] - centre[1],
+            extent(2, field.points[1]) - centre[2],
+        ],
+        heights: field
+            .heights
+            .iter()
+            .map(|h| h * scale[1] - centre[1])
+            .collect(),
+    }
 }
 
 /// Each coupled body's state as a row: its centre of mass, 1/m, velocities,
@@ -1455,7 +1491,14 @@ mod tests {
     #[test]
     fn a_taker_follows_the_worlds_clock_under_its_own_epoch() {
         fn step(lead: &mut SimulationClock, played: f64, restart: bool) -> ClockFrame {
-            lead.advance(PlayedTime::from_played(played), 1.0 / 50.0, 1.0, 0.0, restart, true)
+            lead.advance(
+                PlayedTime::from_played(played),
+                1.0 / 50.0,
+                1.0,
+                0.0,
+                restart,
+                true,
+            )
         }
         fn follow(
             taker: &mut SharedSolids,
@@ -1475,9 +1518,15 @@ mod tests {
             SimulationClock::default(),
             SharedSolids::default(),
         );
-        assert!(matches!(taker.followed_frame(&mut own, false), Followed::Own));
+        assert!(matches!(
+            taker.followed_frame(&mut own, false),
+            Followed::Own
+        ));
         taker.follow_clock(None);
-        assert!(matches!(taker.followed_frame(&mut own, false), Followed::Hold));
+        assert!(matches!(
+            taker.followed_frame(&mut own, false),
+            Followed::Hold
+        ));
 
         let first = step(&mut lead, 0.1, false);
         let frame = follow(&mut taker, &lead, &first, &mut own, false);
@@ -1965,7 +2014,9 @@ mod tests {
                 ),
                 offline: true,
             });
-            owner.settle_ready(Some(scene), |_| true, no_reaction).unwrap();
+            owner
+                .settle_ready(Some(scene), |_| true, no_reaction)
+                .unwrap();
         };
         tick(&mut owner, 0, &inputs);
         assert!(!owner.wants_rebind(), "standing Colliders stay static");
@@ -2236,10 +2287,14 @@ mod tests {
         owner.set_pending(tick(0));
         owner.add_observed_push(push(0.5));
         owner
-            .settle_ready(Some(&scene), |_| true, |_, rows, impulses| {
-                impulses[0].linear[1] += 1.0 / rows[0].position_inv_mass[3];
-                Ok(())
-            })
+            .settle_ready(
+                Some(&scene),
+                |_| true,
+                |_, rows, impulses| {
+                    impulses[0].linear[1] += 1.0 / rows[0].position_inv_mass[3];
+                    Ok(())
+                },
+            )
             .unwrap();
         let v = owner.rows()[0].linear_velocity[1];
         assert!((v - (1.5 - 9.81 * TICK as f32)).abs() < 1e-3, "{v}");

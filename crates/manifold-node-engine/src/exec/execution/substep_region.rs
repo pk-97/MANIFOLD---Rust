@@ -163,7 +163,8 @@ impl Executor {
                     break StepFlow::Next;
                 }
                 let run = &mut runs[0];
-                if self.finish_iteration(graph, plan, region, iteration, run, env, tally, gpu, state)
+                if self
+                    .finish_iteration(graph, plan, region, iteration, run, env, tally, gpu, state)
                     == StepFlow::Abort
                 {
                     break 'iterations StepFlow::Abort;
@@ -282,8 +283,9 @@ impl Executor {
                         run.iteration = None;
                         break;
                     }
-                    if self.finish_iteration(graph, plan, region, iteration, run, env, tally, gpu, state)
-                        == StepFlow::Abort
+                    if self.finish_iteration(
+                        graph, plan, region, iteration, run, env, tally, gpu, state,
+                    ) == StepFlow::Abort
                     {
                         flow = StepFlow::Abort;
                         break 'ticks;

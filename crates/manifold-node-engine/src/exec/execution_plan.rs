@@ -388,10 +388,13 @@ impl ExecutionPlan {
         let mut groups: Vec<Option<usize>> = p.substep_regions.iter().map(|r| r.group).collect();
         for at in 0..groups.len() {
             let Some(group) = groups[at] else { continue };
-            let members: Vec<usize> = (at..groups.len()).filter(|&i| groups[i] == Some(group)).collect();
+            let members: Vec<usize> = (at..groups.len())
+                .filter(|&i| groups[i] == Some(group))
+                .collect();
             for &member in &members {
                 groups[member] = None;
-                p.substep_regions[member].group = (members.len() > 1).then_some(p.region_groups.len());
+                p.substep_regions[member].group =
+                    (members.len() > 1).then_some(p.region_groups.len());
             }
             if members.len() > 1 {
                 p.region_groups.push(members);

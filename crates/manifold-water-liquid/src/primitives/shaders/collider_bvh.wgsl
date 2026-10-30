@@ -11,6 +11,10 @@
 // triangle_base (its first triangle, in triangles). An inner node's `first` is
 // relative to node_base and a leaf's relative to triangle_base, so per-geometry
 // trees can be concatenated. Everything is in the shape's local units.
+// A height field (MeshBvh::height_field) is one root whose radius is -1: its
+// box spans the ground, `first` and `count` are the grid's points along x and
+// z, and its heights sit three to a vec4 (xyz) from triangle_base, row by row
+// in z.
 
 // Traversal stack entries. The build keeps depth <= 64 with the root at 1, so
 // an inner node popped at level L (<= 63) leaves at most L - 1 siblings on the
@@ -164,6 +168,39 @@ fn cb_winding(node_base: u32, triangle_base: u32, p: vec3<f32>) -> f32 {
     return sum;
 }
 
+// Height k (= z * nx + x) of a height field.
+fn cb_height(triangle_base: u32, k: u32) -> f32 {
+    return cb_triangle(3u * triangle_base + k / 3u)[k % 3u];
+}
+
+// A height field's signed distance: solid below the ground, the height above
+// it along the ground's normal (bilinear between the four grid points round
+// p), saturating at +-band. Past the grid's edge there is no ground.
+fn cb_height_phi(root: u32, triangle_base: u32, p: vec3<f32>, band: f32) -> f32 {
+    let lo = cb_node(root);
+    let hi = cb_node(root + 1u);
+    let n = vec2<u32>(bitcast<u32>(lo.w), bitcast<u32>(hi.w));
+    if n.x < 2u || n.y < 2u || p.y > hi.y + band || any(p.xz < lo.xz) || any(p.xz > hi.xz) {
+        return band;
+    }
+    let cells = vec2<f32>(n - vec2<u32>(1u));
+    let spacing = (hi.xz - lo.xz) / cells;
+    let g = clamp((p.xz - lo.xz) / spacing, vec2<f32>(0.0), cells);
+    let i = min(vec2<u32>(floor(g)), n - vec2<u32>(2u));
+    let f = g - vec2<f32>(i);
+    let k = i.y * n.x + i.x;
+    let h00 = cb_height(triangle_base, k);
+    let h10 = cb_height(triangle_base, k + 1u);
+    let h01 = cb_height(triangle_base, k + n.x);
+    let h11 = cb_height(triangle_base, k + n.x + 1u);
+    let h = mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
+    let slope = vec2<f32>(
+        mix(h10 - h00, h11 - h01, f.y) / spacing.x,
+        mix(h01 - h00, h11 - h10, f.x) / spacing.y,
+    );
+    return clamp((p.y - h) / sqrt(1.0 + dot(slope, slope)), -band, band);
+}
+
 // Signed distance by the collider rule: the nearest-triangle distance d
 // (searched up to band) and winding number w. Where |w| is within a quarter of
 // a half (beside a hole or open sheet) the point is a shell, d - shell, so an
@@ -173,6 +210,9 @@ fn cb_winding(node_base: u32, triangle_base: u32, p: vec3<f32>) -> f32 {
 // the band there, with no winding walk.
 fn cb_phi(node_base: u32, triangle_base: u32, p: vec3<f32>, band: f32, shell: f32) -> f32 {
     let root = 4u * node_base;
+    if cb_node(root + 2u).w < 0.0 {
+        return cb_height_phi(root, triangle_base, p, band);
+    }
     if any(p < cb_node(root).xyz - vec3<f32>(band)) || any(p > cb_node(root + 1u).xyz + vec3<f32>(band)) {
         return band;
     }

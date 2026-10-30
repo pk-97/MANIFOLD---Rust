@@ -428,6 +428,7 @@ fn add_body_geometry(
     let volume = match solid {
         Solid::Hulls(_) => installed_volume(world, handle)?,
         Solid::Mesh(mesh) => mesh_volume(mesh, scale),
+        Solid::HeightField(field) => ground_volume(field, scale),
     };
     Ok((handle, volume))
 }
@@ -447,7 +448,20 @@ fn reshape(
     match solid {
         Solid::Hulls(_) => installed_volume(world, handle),
         Solid::Mesh(mesh) => Ok(mesh_volume(mesh, scale)),
+        Solid::HeightField(field) => Ok(ground_volume(field, scale)),
     }
+}
+
+/// A ground's box at `scale`, m³: what lies between its lowest and highest
+/// height.
+fn ground_volume(field: &manifold_physics::collision_shape::HeightField, scale: [f32; 3]) -> f32 {
+    let [low, high] = field.height_range();
+    let side = |axis: usize, points: u32| {
+        points.saturating_sub(1) as f32 * field.spacing * scale[axis].abs()
+    };
+    side(0, field.points[0])
+        * side(2, field.points[1])
+        * ((high - low) * scale[1].abs()).max(1.0e-3)
 }
 
 /// A static mesh's enclosed volume at `scale`, m³, or its bounding box's

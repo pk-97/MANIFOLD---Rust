@@ -109,7 +109,9 @@ pub fn within_key_span(
         if hi - lo <= span[axis] {
             continue;
         }
-        let centre = sources.map_or(0.5 * (lo + hi), |box_| 0.5 * (box_[0][axis] + box_[1][axis]));
+        let centre = sources.map_or(0.5 * (lo + hi), |box_| {
+            0.5 * (box_[0][axis] + box_[1][axis])
+        });
         let start = (centre - 0.5 * span[axis]).clamp(lo, hi - span[axis]);
         kept[0][axis] = start;
         kept[1][axis] = start + span[axis];
@@ -306,7 +308,10 @@ mod tests {
         let high_tap = Some([[0.0, 6.0, 0.0], [1.0, 7.0, 1.0]]);
         let (kept, kill, clipped) = within_key_span((tall, -1.0), high_tap, h);
         assert!(clipped);
-        assert!(near(kept[0][1], 6.5 - 2.016) && near(kept[1][1], 6.5 + 2.016), "{kept:?}");
+        assert!(
+            near(kept[0][1], 6.5 - 2.016) && near(kept[1][1], 6.5 + 2.016),
+            "{kept:?}"
+        );
         assert!(near(kill, kept[0][1]), "{kill}");
         assert_eq!(kept[0][0], 0.0, "the short axes stay");
         // Sources near an end keep the span inside the scene.
@@ -315,12 +320,18 @@ mod tests {
         assert!(near(kept[0][1], 0.0) && near(kept[1][1], 4.032), "{kept:?}");
         let wide = [[-20.0, 0.0, 0.0], [20.0, 1.0, 1.0]];
         let (kept, ..) = within_key_span((wide, -1.0), None, h);
-        assert!(near(kept[0][0], -8.16) && near(kept[1][0], 8.16), "{kept:?}");
+        assert!(
+            near(kept[0][0], -8.16) && near(kept[1][0], 8.16),
+            "{kept:?}"
+        );
         let scene = [[0.0, 0.0, 0.0], [1.0, 2.0, 1.0]];
         let (kept, deep, clipped) = within_key_span((scene, -100.0), None, h);
         assert!(!clipped && kept == scene);
         assert!(near(deep, 2.0 - 4.032), "{deep}");
         assert_eq!(within_key_span((scene, -0.5), None, h).1, -0.5);
-        assert_eq!(within_key_span((scene, NO_KILL_HEIGHT), None, h).1, NO_KILL_HEIGHT);
+        assert_eq!(
+            within_key_span((scene, NO_KILL_HEIGHT), None, h).1,
+            NO_KILL_HEIGHT
+        );
     }
 }

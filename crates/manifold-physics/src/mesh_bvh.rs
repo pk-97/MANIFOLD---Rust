@@ -215,6 +215,31 @@ fn sah_split(tris: &mut [Tri], node_box: &([f32; 3], [f32; 3])) -> Option<usize>
 }
 
 impl MeshBvh {
+    /// A height field's stand-in tree for the GPU colliders
+    /// (`collider_bvh.wgsl` `cb_height_phi`): one root spanning `[lo, hi]`
+    /// whose radius is -1, its `first` and `count` the grid's points along x
+    /// and z, and the heights (row by row in z) packed into the triangles'
+    /// corners, three to a corner. The CPU queries are for meshes only.
+    pub fn height_field(points: [u32; 2], lo: [f32; 3], hi: [f32; 3], heights: &[f32]) -> Self {
+        let mut triangles = vec![[[0.0f32; 3]; 3]; heights.len().div_ceil(9)];
+        for (k, &h) in heights.iter().enumerate() {
+            triangles[k / 9][k % 9 / 3][k % 3] = h;
+        }
+        Self {
+            nodes: vec![BvhNode {
+                min: lo,
+                max: hi,
+                first: points[0],
+                count: points[1],
+                dipole: [0.0; 3],
+                centroid: [0.0; 3],
+                radius: -1.0,
+            }],
+            triangles,
+            depth: 1,
+        }
+    }
+
     /// Every mesh's triangles go in one tree.
     pub fn build(meshes: &[TriangleMesh]) -> Result<Self, PhysicsError> {
         let mut triangles: Vec<Tri> = Vec::new();
@@ -265,15 +290,16 @@ impl MeshBvh {
             nodes[index].min = node_box.0;
             nodes[index].max = node_box.1;
             let n = slice.len();
-            let left = if n <= BVH_LEAF_TRIANGLES {
-                None
-            } else if level >= MEDIAN_ONLY_DEPTH {
-                Some(median_split(slice, longest_axis(node_box.0, node_box.1)))
-            } else {
-                Some(sah_split(slice, &node_box).unwrap_or_else(|| {
-                    median_split(slice, longest_axis(node_box.0, node_box.1))
-                }))
-            };
+            let left =
+                if n <= BVH_LEAF_TRIANGLES {
+                    None
+                } else if level >= MEDIAN_ONLY_DEPTH {
+                    Some(median_split(slice, longest_axis(node_box.0, node_box.1)))
+                } else {
+                    Some(sah_split(slice, &node_box).unwrap_or_else(|| {
+                        median_split(slice, longest_axis(node_box.0, node_box.1))
+                    }))
+                };
             match left {
                 None => {
                     nodes[index].first = start as u32;
@@ -484,8 +510,12 @@ mod tests {
             let flip = positive == inward;
             for i in 0..n {
                 for j in 0..n {
-                    let (p00, p10, p11, p01) =
-                        (point(i, j), point(i + 1, j), point(i + 1, j + 1), point(i, j + 1));
+                    let (p00, p10, p11, p01) = (
+                        point(i, j),
+                        point(i + 1, j),
+                        point(i + 1, j + 1),
+                        point(i, j + 1),
+                    );
                     let quads = [[p00, p10, p11], [p00, p11, p01]];
                     for mut t in quads {
                         if flip {

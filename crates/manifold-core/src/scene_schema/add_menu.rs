@@ -266,9 +266,14 @@ pub static ADD_ENTRIES: [AddEntry; 72] = [
         "Liquid Metal",
         || matter(Matter::LiquidMetal, WaterDraw::Surface),
     ),
-    entry("matter.lava", "Matter", "Lava", ItemKind::Sand, "Lava", || {
-        matter(Matter::Lava, WaterDraw::Surface)
-    }),
+    entry(
+        "matter.lava",
+        "Matter",
+        "Lava",
+        ItemKind::Sand,
+        "Lava",
+        || matter(Matter::Lava, WaterDraw::Surface),
+    ),
     entry("smoke", "Smoke", "Smoke", ItemKind::Smoke, "Smoke", || {
         ItemFields::default_for(ItemKind::Smoke)
     }),

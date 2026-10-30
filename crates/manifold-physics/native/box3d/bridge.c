@@ -460,6 +460,85 @@ uint64_t manifold_box3d_mesh_body_create_cooked(
 	return b3StoreBodyId( body_id );
 }
 
+/* A height field of `count_x` by `count_z` points, row by row in z, point
+ * (0, 0) at the local origin, the grid `sx` and `sz` apart and every height
+ * times `sy`. Heights outside [min_height, max_height] are clamped. */
+uintptr_t manifold_box3d_cook_height_field(
+	const float* heights,
+	int count_x,
+	int count_z,
+	float sx,
+	float sy,
+	float sz,
+	float min_height,
+	float max_height )
+{
+	if ( heights == NULL || count_x < 2 || count_z < 2 || !( sx > 0.0f ) || !( sy > 0.0f ) || !( sz > 0.0f ) ||
+		 !( min_height <= max_height ) )
+	{
+		return 0;
+	}
+	b3HeightFieldDef definition = { 0 };
+	definition.heights = (float*)heights;
+	definition.materialIndices = NULL;
+	definition.scale = (b3Vec3){ sx, sy, sz };
+	definition.countX = count_x;
+	definition.countZ = count_z;
+	definition.globalMinimumHeight = min_height;
+	definition.globalMaximumHeight = max_height;
+	definition.clockwiseWinding = false;
+	return (uintptr_t)b3CreateHeightField( &definition );
+}
+
+/* A static body whose shape is the cooked height field `field_value`. The
+ * height field stays the caller's. */
+uint64_t manifold_box3d_height_field_body_create(
+	uint32_t world_id,
+	uintptr_t field_value,
+	float px,
+	float py,
+	float pz,
+	float qx,
+	float qy,
+	float qz,
+	float qw,
+	float friction,
+	float restitution )
+{
+	if ( field_value == 0 )
+	{
+		return 0;
+	}
+	b3BodyDef body_definition = b3DefaultBodyDef();
+	body_definition.type = b3_staticBody;
+	body_definition.position = (b3Pos){ px, py, pz };
+	body_definition.rotation = box3d_quat( qx, qy, qz, qw );
+	b3BodyId body_id = b3CreateBody( b3LoadWorldId( world_id ), &body_definition );
+	if ( body_id.index1 == 0 )
+	{
+		return 0;
+	}
+	b3ShapeDef shape_definition = b3DefaultShapeDef();
+	shape_definition.density = 0.0f;
+	shape_definition.baseMaterial.friction = friction;
+	shape_definition.baseMaterial.restitution = restitution;
+	b3ShapeId shape_id = b3CreateHeightFieldShape( body_id, &shape_definition, (b3HeightFieldData*)field_value );
+	if ( shape_id.index1 == 0 )
+	{
+		b3DestroyBody( body_id );
+		return 0;
+	}
+	return b3StoreBodyId( body_id );
+}
+
+void manifold_box3d_destroy_height_field( uintptr_t field_value )
+{
+	if ( field_value != 0 )
+	{
+		b3DestroyHeightField( (b3HeightFieldData*)field_value );
+	}
+}
+
 int manifold_box3d_body_update(
 	uint64_t body_value,
 	int kind,

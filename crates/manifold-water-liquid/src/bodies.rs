@@ -542,7 +542,7 @@ fn emit_clock_vertices(
     };
     worlds.clear();
     let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
-    for vertex in geometry.meshes.iter().flat_map(|mesh| &mesh.vertices) {
+    for vertex in geometry.vertices() {
         let local: [f32; 3] = std::array::from_fn(|i| vertex[i] * scale[i]);
         let uv = cross(axis, local);
         let uuv = cross(axis, uv);
@@ -2022,7 +2022,10 @@ mod tests {
             "the trees are built, so a second solver waits for nothing"
         );
         assert!(Arc::ptr_eq(&other.collider_trees[0], &tree));
-        assert!(Arc::ptr_eq(&other.collider_trees[1], &bodies.collider_trees[1]));
+        assert!(Arc::ptr_eq(
+            &other.collider_trees[1],
+            &bodies.collider_trees[1]
+        ));
         let version = bodies.version;
         assert_eq!(
             bodies.prepare(&[], &hulls, 0.0625, false),

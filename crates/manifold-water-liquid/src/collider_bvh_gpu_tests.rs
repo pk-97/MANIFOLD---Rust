@@ -1,5 +1,6 @@
 //! `collider_bvh.wgsl` answers what `MeshBvh` answers on the CPU, for two
-//! trees concatenated into one buffer the way every Water shares them.
+//! trees concatenated into one buffer the way every Water shares them, and a
+//! height field's distance is the ground's.
 
 use manifold_gpu::{BufferUse, GpuBinding, GpuBuffer, GpuDevice};
 use manifold_physics::TriangleMesh;
@@ -113,12 +114,9 @@ fn cpu_phi(bvh: &MeshBvh, p: [f32; 3], band: f32, shell: f32) -> f32 {
     }
 }
 
-#[test]
-fn gpu_queries_match_the_cpu_tree_across_concatenated_trees() {
-    let trees = [
-        MeshBvh::build(&[cube(8, None)]).unwrap(),
-        MeshBvh::build(&[cube(4, Some((1, 1)))]).unwrap(),
-    ];
+/// Nearest, winding and phi at each point from `collider_bvh.wgsl`, with
+/// both trees in one buffer; a point's w picks the second tree.
+fn gpu_queries(trees: &[MeshBvh; 2], points: &[[f32; 4]], band: f32, shell: f32) -> Vec<f32> {
     let (mut nodes, mut tris) = (Vec::new(), Vec::new());
     let mut bases = [0u32; 4];
     for (index, tree) in trees.iter().enumerate() {
@@ -127,20 +125,6 @@ fn gpu_queries_match_the_cpu_tree_across_concatenated_trees() {
         tree.gpu_nodes(&mut nodes);
         tree.gpu_triangles(&mut tris);
     }
-    let (band, shell) = (0.3f32, 0.05f32);
-    // A 9³ grid over the cube grown by a half, off every face plane.
-    let mut points = Vec::new();
-    for tree in 0..2 {
-        for k in 0..9 {
-            for j in 0..9 {
-                for i in 0..9 {
-                    let at = |n: usize| -0.5 + 0.0137 + n as f32 * 0.25;
-                    points.push([at(i), at(j), at(k), tree as f32]);
-                }
-            }
-        }
-    }
-
     let device = manifold_gpu::testkit::test_device();
     let shader = format!("{LIBRARY}\n{HARNESS}");
     let pipeline = device.create_compute_pipeline(&shader, "main", "collider_bvh proof");
@@ -187,8 +171,29 @@ fn gpu_queries_match_the_cpu_tree_across_concatenated_trees() {
     enc.commit_and_wait().expect("GPU work completes");
     let ptr = out.mapped_ptr().expect("a shared buffer");
     // SAFETY: a shared buffer of 3 f32 per point; its GPU work has completed.
-    let got: &[f32] =
-        bytemuck::cast_slice(unsafe { std::slice::from_raw_parts(ptr, points.len() * 12) });
+    bytemuck::cast_slice(unsafe { std::slice::from_raw_parts(ptr, points.len() * 12) }).to_vec()
+}
+
+#[test]
+fn gpu_queries_match_the_cpu_tree_across_concatenated_trees() {
+    let trees = [
+        MeshBvh::build(&[cube(8, None)]).unwrap(),
+        MeshBvh::build(&[cube(4, Some((1, 1)))]).unwrap(),
+    ];
+    let (band, shell) = (0.3f32, 0.05f32);
+    // A 9³ grid over the cube grown by a half, off every face plane.
+    let mut points = Vec::new();
+    for tree in 0..2 {
+        for k in 0..9 {
+            for j in 0..9 {
+                for i in 0..9 {
+                    let at = |n: usize| -0.5 + 0.0137 + n as f32 * 0.25;
+                    points.push([at(i), at(j), at(k), tree as f32]);
+                }
+            }
+        }
+    }
+    let got = gpu_queries(&trees, &points, band, shell);
 
     let mut shells = 0;
     for (index, point) in points.iter().enumerate() {
@@ -212,4 +217,60 @@ fn gpu_queries_match_the_cpu_tree_across_concatenated_trees() {
     // The open box puts points on its shell side of the rule, so both
     // branches of C3 ran.
     assert!(shells > 0);
+}
+
+/// A sloped plane as a 5 by 4 height field behind a mesh tree: below it is
+/// solid, its phi is the distance to the plane (bilinear heights carry a
+/// plane exactly), and past the grid's edge or high above it the band.
+#[test]
+fn gpu_height_field_phi_is_the_distance_to_its_ground() {
+    let (spacing, lo) = ([0.5f32, 0.75], [1.0f32, -2.0]);
+    let (slope_x, slope_z, rise) = (0.4f32, -0.25f32, 0.1f32);
+    let ground = |x: f32, z: f32| slope_x * (x - lo[0]) + slope_z * (z - lo[1]) + rise;
+    let mut heights = Vec::new();
+    for row in 0..4 {
+        for col in 0..5 {
+            heights.push(ground(
+                lo[0] + col as f32 * spacing[0],
+                lo[1] + row as f32 * spacing[1],
+            ));
+        }
+    }
+    let low = heights.iter().copied().fold(f32::INFINITY, f32::min);
+    let high = heights.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let hi = [lo[0] + 4.0 * spacing[0], lo[1] + 3.0 * spacing[1]];
+    let field = MeshBvh::height_field([5, 4], [lo[0], low, lo[1]], [hi[0], high, hi[1]], &heights);
+    let trees = [MeshBvh::build(&[cube(4, None)]).unwrap(), field];
+    let (band, shell) = (0.3f32, 0.05f32);
+    let mut points = Vec::new();
+    for k in 0..12 {
+        for j in 0..10 {
+            for i in 0..12 {
+                let x = 0.6 + 0.0137 + i as f32 * 0.26;
+                let y = -0.9 + 0.0113 + j as f32 * 0.25;
+                let z = -2.4 + 0.0151 + k as f32 * 0.27;
+                points.push([x, y, z, 1.0]);
+            }
+        }
+    }
+    let got = gpu_queries(&trees, &points, band, shell);
+    let norm = (1.0 + slope_x * slope_x + slope_z * slope_z).sqrt();
+    let (mut solid, mut open) = (0, 0);
+    for (index, point) in points.iter().enumerate() {
+        let [x, y, z, _] = *point;
+        let off_grid = x < lo[0] || x > hi[0] || z < lo[1] || z > hi[1];
+        let want = if off_grid || y > high + band {
+            band
+        } else {
+            ((y - ground(x, z)) / norm).clamp(-band, band)
+        };
+        let phi = got[3 * index + 2];
+        assert!(
+            (phi - want).abs() < 1e-4,
+            "{point:?}: phi {phi}, want {want}"
+        );
+        solid += usize::from(want < 0.0);
+        open += usize::from(off_grid);
+    }
+    assert!(solid > 0 && open > 0);
 }

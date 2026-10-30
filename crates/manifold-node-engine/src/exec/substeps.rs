@@ -397,10 +397,15 @@ pub(crate) fn derive_regions(
         region_of.extend(region.nodes.iter().map(|&n| (n, index)));
     }
     let groups = co_iterated_groups(graph, &mut regions, &region_of, &rev)?;
-    let same_group = |a: usize, b: usize| a != b && regions[a].group.is_some() && regions[a].group == regions[b].group;
+    let same_group = |a: usize, b: usize| {
+        a != b && regions[a].group.is_some() && regions[a].group == regions[b].group
+    };
     for (boundary, node, target) in escapes {
         let from = region_of[&boundary];
-        if !region_of.get(&target).is_some_and(|&to| same_group(from, to)) {
+        if !region_of
+            .get(&target)
+            .is_some_and(|&to| same_group(from, to))
+        {
             return Err(malformed(
                 boundary,
                 node,
@@ -2020,10 +2025,14 @@ mod tests {
             graph.connect((src, "out"), (boundary, "seed")).unwrap();
             graph.connect((clock, "out"), (boundary, "clock")).unwrap();
             graph.connect((boundary, "out"), (body, "a")).unwrap();
-            graph.connect((boundary, "step_index"), (body, "b")).unwrap();
+            graph
+                .connect((boundary, "step_index"), (body, "b"))
+                .unwrap();
             graph.connect((body, "out"), (boundary, "in")).unwrap();
         }
-        graph.connect((sand_body, "out"), (water_body, "c")).unwrap();
+        graph
+            .connect((sand_body, "out"), (water_body, "c"))
+            .unwrap();
         graph.connect((water, "out"), (consumer, "a")).unwrap();
         graph.connect((sand, "out"), (consumer, "b")).unwrap();
         graph

@@ -11,8 +11,8 @@ use manifold_physics::{BodyConfig, BodyHandle, BodyPose, CookedSolid, PhysicsWor
 
 use super::copy_layout::{Arrangement, arrangement_of, copy_width, requested_count, rest_pose};
 use super::{
-    CopySpawn, DeferredAnimatedEdit, RigidBody, Solid, installed_volume, mesh_volume,
-    same_authored_body,
+    CopySpawn, DeferredAnimatedEdit, RigidBody, Solid, ground_volume, installed_volume,
+    mesh_volume, same_authored_body,
 };
 
 /// One group's installed copies. `handles` holds every body installed since
@@ -216,6 +216,7 @@ impl CopyGroup {
         self.volume = match &*cook.collider {
             Solid::Hulls(_) => installed_volume(world, handle)?,
             Solid::Mesh(mesh) => mesh_volume(mesh, prototype.transform.scale),
+            Solid::HeightField(field) => ground_volume(field, prototype.transform.scale),
         };
         cook.measured = true;
         Ok(())

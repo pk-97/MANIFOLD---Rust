@@ -12,8 +12,13 @@
 //! nothing and its vertices hold. Each vertex carries its normal, from its
 //! neighbours across the grid, and in its second UV set where water runs
 //! (gully floors and the rain's channels) and where its soil settled.
+//!
+//! While its `source` is read (a Terrain Collider), the settled land's heights
+//! are read back once and published as a [`MeshSource::HeightField`]: the
+//! ground bodies, water, Matter and smoke collide with.
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use manifold_gpu::{BufferUse, GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
@@ -22,6 +27,7 @@ use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::mesh_change::{MeshOutputRule, MeshRevisionRule};
+use manifold_node_engine::scene::mesh_source::MeshSource;
 
 const SHADER: &str = include_str!("shaders/terrain.wgsl");
 const THREADS: u32 = 256;
@@ -71,6 +77,7 @@ struct Pipelines {
     snapshot: GpuComputePipeline,
     slide: GpuComputePipeline,
     vertices: GpuComputePipeline,
+    heights: GpuComputePipeline,
 }
 
 impl Pipelines {
@@ -84,6 +91,7 @@ impl Pipelines {
             snapshot: make("snapshot_main"),
             slide: make("slide_main"),
             vertices: make("vertices_main"),
+            heights: make("heights_main"),
         }
     }
 }
@@ -146,6 +154,7 @@ manifold_node_engine::primitive! {
     inputs: {},
     outputs: {
         vertices: Array(MeshVertex),
+        source: MeshSource,
     },
     params: [
         ParamDef {
@@ -227,14 +236,93 @@ manifold_node_engine::primitive! {
         drawn: Option<(f32, u64)> = None,
         // Rain still to fall into the carving: the land is not settled yet.
         raining: bool = true,
+        // The settled land's heights as a collider, once read back; whether
+        // the land changed since the last readback; the readback in flight
+        // (its frame stamp, points per side and size) and its buffer.
+        ground: Option<MeshSource> = None,
+        ground_stale: bool = true,
+        ground_pending: Option<(u64, u32, f32)> = None,
+        ground_readback: Option<GpuBuffer> = None,
     },
+}
+
+impl Terrain {
+    /// Publish a readback whose frame retired.
+    fn take_ground(&mut self, clock: Option<&manifold_gpu::FrameClock>) {
+        let Some((stamp, points, size)) = self.ground_pending else {
+            return;
+        };
+        if !clock.is_none_or(|c| c.is_complete(stamp)) {
+            return;
+        }
+        self.ground_pending = None;
+        let Some(readback) = &self.ground_readback else {
+            return;
+        };
+        let ptr = readback
+            .mapped_ptr()
+            .expect("node.terrain: the heights readback must be CPU-visible");
+        // SAFETY: the frame that wrote this shared buffer has retired, and it
+        // holds `points` squared heights.
+        let heights = unsafe {
+            std::slice::from_raw_parts(ptr.cast::<f32>().cast_const(), (points * points) as usize)
+        };
+        self.ground = Some(MeshSource::HeightField {
+            points,
+            size,
+            heights: Arc::from(heights),
+        });
+    }
+
+    /// Read the drawn land's heights back, through the snapshot (free once
+    /// the rain is done).
+    fn read_ground(
+        &mut self,
+        gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
+        uniforms: &TerrainUniforms,
+    ) -> Result<(), String> {
+        let (Some(pipelines), Some(buffers)) = (self.pipelines.as_ref(), self.buffers.as_ref())
+        else {
+            return Ok(());
+        };
+        let bytes = buffers.snapshot.size;
+        if self
+            .ground_readback
+            .as_ref()
+            .is_none_or(|b| b.size != bytes)
+        {
+            self.ground_readback = Some(gpu.device.try_create_buffer(bytes, BufferUse::Readback)?);
+        }
+        let Some(readback) = &self.ground_readback else {
+            return Ok(());
+        };
+        gpu.native_enc.dispatch_compute(
+            &pipelines.heights,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(uniforms),
+                },
+                buffer(3, &buffers.vertices),
+                buffer(4, &buffers.snapshot),
+            ],
+            [(uniforms.res * uniforms.res).div_ceil(THREADS), 1, 1],
+            "node.terrain heights",
+        );
+        gpu.native_enc
+            .copy_buffer_to_buffer(&buffers.snapshot, readback, bytes);
+        let stamp = gpu.device.frame_clock().map_or(0, |c| c.stamp());
+        self.ground_pending = Some((stamp, uniforms.res, uniforms.size));
+        self.ground_stale = false;
+        Ok(())
+    }
 }
 
 impl Primitive for Terrain {
     /// The land settles once all its rain has fallen, so a still taken after
     /// the load's warm-up shows the finished carving.
     fn warmup_pending(&self) -> bool {
-        self.raining
+        self.raining || self.ground_pending.is_some()
     }
 
     fn prepare_pipelines(&mut self, device: &GpuDevice) {
@@ -315,10 +403,27 @@ impl Primitive for Terrain {
         let changed = reshaped || keep < 1.0 || droplets > 0;
         self.raining = done + f64::from(droplets) < budget;
         let drawn = (height, ctx.rebuild_epoch);
+        let collides = ctx.outputs.slot("source").is_some();
+        if collides {
+            self.take_ground(ctx.gpu_encoder().device.frame_clock().as_ref());
+            if let Some(ground) = &self.ground {
+                ctx.outputs.set_mesh_source("source", ground.clone());
+            }
+        }
         // Settled and drawn at this Height: the vertices hold, so the shadow
         // cache and ray-tracing structure keep. A state-carrying rebuild
         // carries a new epoch, so it writes them once.
         if !changed && self.drawn == Some(drawn) && ctx.outputs_retained() {
+            if collides && self.ground_stale {
+                let uniforms = TerrainUniforms {
+                    res,
+                    size: shape.size,
+                    ..bytemuck::Zeroable::zeroed()
+                };
+                if let Err(error) = self.read_ground(ctx.gpu_encoder(), &uniforms) {
+                    ctx.error(format!("Terrain: no room to read its ground back: {error}"));
+                }
+            }
             ctx.mark_outputs_unchanged();
             return;
         }
@@ -417,6 +522,14 @@ impl Primitive for Terrain {
         self.done = done + f64::from(droplets);
         self.spawned = self.spawned.wrapping_add(droplets);
         self.drawn = Some(drawn);
+        self.ground_stale = true;
+        // The collider follows the land once it settles.
+        if collides
+            && !self.raining
+            && let Err(error) = self.read_ground(gpu, &uniforms)
+        {
+            ctx.error(format!("Terrain: no room to read its ground back: {error}"));
+        }
     }
 }
 

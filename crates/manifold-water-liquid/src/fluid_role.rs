@@ -81,7 +81,10 @@ pub fn take_initial_fills(roles: &mut [Option<FluidRole>]) -> Result<InitialFill
                 .iter()
                 .enumerate()
                 .filter(|(_, role)| {
-                    is_fill(role) && role.as_ref().is_some_and(|role| role.water as usize == water)
+                    is_fill(role)
+                        && role
+                            .as_ref()
+                            .is_some_and(|role| role.water as usize == water)
                 })
                 .map(|(slot, role)| role.as_ref().filter(|role| role.enabled).map(|_| slot)),
         )?;
@@ -170,6 +173,20 @@ pub struct PreparedFluidGeometry {
     /// it, never serialized.
     #[serde(skip)]
     body: Option<BodyHandle>,
+    /// A Terrain's ground, read through its heights instead of meshes. Set
+    /// where the coupling builds it, never serialized.
+    #[serde(skip)]
+    ground: Option<FluidGround>,
+}
+
+/// Ground as a height grid in the solid's frame, scaled: `points` along x and
+/// z spread evenly from `lo` to `hi`, heights row by row in z, solid below.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FluidGround {
+    pub points: [u32; 2],
+    pub lo: [f32; 3],
+    pub hi: [f32; 3],
+    pub heights: Vec<f32>,
 }
 
 impl PreparedFluidGeometry {
@@ -182,7 +199,38 @@ impl PreparedFluidGeometry {
             tree_started: AtomicBool::new(false),
             fixed: false,
             body: None,
+            ground: None,
         }
+    }
+
+    /// A Terrain's ground, which each water reads through its heights.
+    /// `fixed` as in [`Self::fixed`]: a ground that moves gets a lattice.
+    pub fn ground(ground: FluidGround, fixed: bool) -> Self {
+        Self {
+            fixed,
+            ground: Some(ground),
+            ..Self::new(Vec::new())
+        }
+    }
+
+    /// Every local point that bounds the solid: the meshes' vertices, or the
+    /// corners of the ground's box.
+    pub fn vertices(&self) -> impl Iterator<Item = [f32; 3]> + '_ {
+        let corners = self.ground.iter().flat_map(|ground| {
+            (0..8).map(|k| {
+                std::array::from_fn(|axis| {
+                    if k >> axis & 1 == 0 {
+                        ground.lo[axis]
+                    } else {
+                        ground.hi[axis]
+                    }
+                })
+            })
+        });
+        self.meshes
+            .iter()
+            .flat_map(|mesh| mesh.vertices.iter().copied())
+            .chain(corners)
     }
 
     /// A static collider's mesh, which each water reads through a tree.
@@ -224,7 +272,7 @@ impl PreparedFluidGeometry {
     pub fn bounds(&self) -> [[f32; 3]; 2] {
         *self.bounds.get_or_init(|| {
             let mut bounds = [[f32::INFINITY; 3], [f32::NEG_INFINITY; 3]];
-            for vertex in self.meshes.iter().flat_map(|mesh| &mesh.vertices) {
+            for vertex in self.vertices() {
                 for i in 0..3 {
                     bounds[0][i] = bounds[0][i].min(vertex[i]);
                     bounds[1][i] = bounds[1][i].max(vertex[i]);
@@ -237,6 +285,14 @@ impl PreparedFluidGeometry {
     /// The meshes' BVH, which the GPU queries for distance and winding.
     /// Costs a BVH build; never call it on the content thread.
     pub fn build_tree(&self) -> Result<Arc<MeshBvh>, String> {
+        if let Some(ground) = &self.ground {
+            return Ok(Arc::new(MeshBvh::height_field(
+                ground.points,
+                ground.lo,
+                ground.hi,
+                &ground.heights,
+            )));
+        }
         MeshBvh::build(&self.meshes)
             .map(Arc::new)
             .map_err(|error| format!("Fluid role tree: {error}"))
@@ -363,9 +419,7 @@ mod tests {
                 .contains("one Initial Fill")
         );
 
-        let of_water = |water: u32, x: f32| {
-            fill(x, true).map(|role| FluidRole { water, ..role })
-        };
+        let of_water = |water: u32, x: f32| fill(x, true).map(|role| FluidRole { water, ..role });
         let mut shared = vec![of_water(3, 1.0), Some(role()), of_water(0, 2.0)];
         let fills = take_initial_fills(&mut shared).unwrap();
         let columns: Vec<_> = fills

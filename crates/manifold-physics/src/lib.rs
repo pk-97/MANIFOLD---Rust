@@ -235,6 +235,30 @@ mod ffi {
             impulse: *const f32,
         ) -> i32;
         pub fn manifold_box3d_destroy_mesh(mesh: usize);
+        pub fn manifold_box3d_cook_height_field(
+            heights: *const f32,
+            count_x: i32,
+            count_z: i32,
+            sx: f32,
+            sy: f32,
+            sz: f32,
+            min_height: f32,
+            max_height: f32,
+        ) -> usize;
+        pub fn manifold_box3d_height_field_body_create(
+            world: u32,
+            field: usize,
+            px: f32,
+            py: f32,
+            pz: f32,
+            qx: f32,
+            qy: f32,
+            qz: f32,
+            qw: f32,
+            friction: f32,
+            restitution: f32,
+        ) -> u64;
+        pub fn manifold_box3d_destroy_height_field(field: usize);
         pub fn manifold_box3d_assert_count() -> u32;
         pub fn manifold_box3d_install_assert_handler();
     }
@@ -639,6 +663,29 @@ impl PhysicsWorld {
                         )
                     }
                 }
+                CookedForm::HeightField { field, .. } => {
+                    if config.kind != BodyKind::Fixed {
+                        return Err(PhysicsError::InvalidInput(
+                            "a height field only supports a fixed body",
+                        ));
+                    }
+                    let [px, py, pz] = solid.placed(config.position, config.rotation);
+                    unsafe {
+                        ffi::manifold_box3d_height_field_body_create(
+                            self.native,
+                            *field,
+                            px,
+                            py,
+                            pz,
+                            qx,
+                            qy,
+                            qz,
+                            qw,
+                            config.friction,
+                            config.restitution,
+                        )
+                    }
+                }
             }
         };
         if native == 0 {
@@ -924,20 +971,22 @@ impl PhysicsWorld {
         move_pose: bool,
     ) -> Result<(), PhysicsError> {
         let config = validate_config(config)?;
-        if self.body_record(handle)?.geometry.is_mesh() && config.kind != BodyKind::Fixed {
+        let geometry = &self.body_record(handle)?.geometry;
+        if geometry.is_mesh() && config.kind != BodyKind::Fixed {
             return Err(PhysicsError::InvalidInput(
                 "triangle meshes only support fixed bodies",
             ));
         }
+        let [px, py, pz] = geometry.placed(config.position, config.rotation);
         let native = self.native_body(handle)?;
         let _lock = native_lock();
         let result = unsafe {
             ffi::manifold_box3d_body_update(
                 native,
                 config.kind.native_value(),
-                config.position[0],
-                config.position[1],
-                config.position[2],
+                px,
+                py,
+                pz,
                 config.rotation[0],
                 config.rotation[1],
                 config.rotation[2],
@@ -1042,6 +1091,11 @@ impl PhysicsWorld {
                             config.restitution,
                         )
                     }
+                }
+                CookedForm::HeightField { .. } => {
+                    return Err(PhysicsError::InvalidInput(
+                        "a height field is installed again, never swapped in place",
+                    ));
                 }
             };
             if result != 0 {

@@ -288,8 +288,12 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     }
     let (surface, maps) = surface_for(b, &item.id);
     // An object that is its own body draws at the body's solved pose.
-    // A surface made on the GPU each frame has no collision mesh.
-    let pose = if ocean || terrain || grown {
+    // A surface made on the GPU each frame has no collision mesh; a Terrain
+    // collides as its ground and draws where it is.
+    let pose = if ocean || grown {
+        None
+    } else if terrain {
+        super::physics::ground(b, item, frame, mesh, transform);
         None
     } else {
         super::physics::object(b, item, frame, mesh, transform)

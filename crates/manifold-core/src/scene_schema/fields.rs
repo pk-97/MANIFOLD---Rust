@@ -315,6 +315,11 @@ fn write_physics(fields: &mut ItemFields, value: &FieldValue) -> Result<(), Stri
         _ => return Err(wrong_value("physics", value)),
     };
     match fields {
+        ItemFields::Object(o)
+            if o.shape == crate::scene_doc::Shape::Terrain && setting == PhysicsSetting::Body =>
+        {
+            return Err("a Terrain can be a Collider, not a Body".to_owned());
+        }
         ItemFields::Object(o) => o.physics = setting,
         ItemFields::Group(g) => g.physics = setting,
         _ => return Err("only an Object or a Group has physics".to_owned()),

@@ -25,12 +25,10 @@ use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
 use manifold_core::liquid_domain::{MAX_MATTER_SLOTS, MAX_WATERS};
-use manifold_core::scene_doc::{
-    Item, ItemFields, ItemKind, Quality, SceneDoc, SourceShape,
-};
+use manifold_core::scene_doc::{Item, ItemFields, ItemKind, Quality, SceneDoc, SourceShape};
 use manifold_core::scene_schema::{
-    DOMAIN_ROLE, GRAIN_SHAPE_ROLE, GRAIN_SQUASH_ROLE, PHYSICS_VIEW_SWITCHES, SOLID, SURFACE_DETAIL_NODES,
-    SURFACE_DETAIL_OFFSET, WATER_MATERIAL_ROLE, WORLD_FOLLOWS, WaterFamily,
+    DOMAIN_ROLE, GRAIN_SHAPE_ROLE, GRAIN_SQUASH_ROLE, PHYSICS_VIEW_SWITCHES, SOLID,
+    SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET, WATER_MATERIAL_ROLE, WORLD_FOLLOWS, WaterFamily,
     role_index, rows, template_roles, water_family,
 };
 use manifold_core::scene_world_controls::WORLD_INPUTS;
@@ -463,7 +461,10 @@ fn emit(
             b.set_number(switch, "selector", if shape.pebble { 1.0 } else { 0.0 });
         }
         if let Some(squash) = node(GRAIN_SQUASH_ROLE) {
-            for (axis, scale) in ["scale_x", "scale_y", "scale_z"].into_iter().zip(shape.squash) {
+            for (axis, scale) in ["scale_x", "scale_y", "scale_z"]
+                .into_iter()
+                .zip(shape.squash)
+            {
                 b.set_number(squash, axis, scale);
             }
         }

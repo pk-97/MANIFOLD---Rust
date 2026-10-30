@@ -11,7 +11,9 @@ use manifold_node_engine::scene::mesh_source::MeshSource;
 use manifold_node_engine::scene::transform::{
     IDENTITY_MAT4, Transform, rotation_to_render_scene_euler,
 };
-use manifold_physics::collision_shape::{CollisionShape, SCALE_STEPS_PER_OCTAVE, ShapeKey};
+use manifold_physics::collision_shape::{
+    CollisionShape, HeightField, SCALE_STEPS_PER_OCTAVE, ShapeKey,
+};
 use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
 
@@ -239,6 +241,20 @@ fn same_source(a: &MeshSource, b: &MeshSource) -> bool {
                 selection: b,
             },
         ) => path_a == path_b && node_a == node_b && same_selection(a, b),
+        (
+            MeshSource::HeightField {
+                points: points_a,
+                size: a,
+                heights: heights_a,
+            },
+            MeshSource::HeightField {
+                points: points_b,
+                size: b,
+                heights: heights_b,
+            },
+        ) => {
+            points_a == points_b && a.to_bits() == b.to_bits() && Arc::ptr_eq(heights_a, heights_b)
+        }
         _ => a == b,
     }
 }
@@ -275,6 +291,32 @@ impl ShapeWant {
     /// Load every part, place it, and make the solid this want asks for.
     /// Runs on a worker thread.
     fn build(&self) -> Result<(ShapeKey, Solid), String> {
+        if let [
+            Some((
+                MeshSource::HeightField {
+                    points,
+                    size,
+                    heights,
+                },
+                transform,
+            )),
+        ] = self.parts.as_slice()
+        {
+            if self.form != Form::Mesh {
+                return Err("a Terrain only collides as a Collider".into());
+            }
+            if transform_bits(transform) != transform_bits(&IDENTITY_TRANSFORM) {
+                return Err("a Terrain collides where it is, unmoved inside its object".into());
+            }
+            let half = size * 0.5;
+            let field = HeightField {
+                points: [*points; 2],
+                spacing: size / points.saturating_sub(1).max(1) as f32,
+                origin: [-half, 0.0, -half],
+                heights: heights.to_vec(),
+            };
+            return Ok((ShapeKey::of_height_field(&field), Solid::HeightField(field)));
+        }
         let mut lists: Vec<Vec<[f32; 3]>> = Vec::new();
         for (source, transform) in self.parts.iter().flatten() {
             let mut vertices = source.load_vertices()?;

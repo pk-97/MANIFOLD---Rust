@@ -576,6 +576,17 @@ fn sky_blocked(col: i32, row: i32, here: vec3<f32>, normal: vec3<f32>) -> f32 {
     return blocked / f32(SKY_DIRECTIONS);
 }
 
+// Each grid point's height as drawn, row by row, into the snapshot: the
+// ground a Collider reads back.
+@compute @workgroup_size(256)
+fn heights_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if i >= u.res * u.res {
+        return;
+    }
+    snapshot[i] = vertices[i].position.y;
+}
+
 @compute @workgroup_size(256)
 fn vertices_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x;

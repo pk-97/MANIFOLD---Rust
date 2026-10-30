@@ -28,6 +28,9 @@ pub(crate) enum CookedForm {
         center: [f32; 3],
         unit_inertia: [f32; 9],
     },
+    /// A native height field, and where its grid's first point sits in the
+    /// body's frame (scaled): the body is placed there.
+    HeightField { field: usize, origin: [f32; 3] },
 }
 
 impl CookedSolid {
@@ -135,9 +138,85 @@ impl CookedSolid {
         }
     }
 
-    /// Whether this is a static mesh rather than hulls.
+    /// Cook a height field at `scale` (each axis above zero: Box3D's grid
+    /// cannot mirror).
+    pub(crate) fn height_field(
+        field: &crate::collision_shape::HeightField,
+        scale: [f32; 3],
+    ) -> Result<Arc<Self>, PhysicsError> {
+        let [count_x, count_z] = field.points;
+        let count = count_x as usize * count_z as usize;
+        if count_x < 2 || count_z < 2 || field.heights.len() != count || count > i32::MAX as usize {
+            return Err(PhysicsError::InvalidInput(
+                "a height field needs at least 2 by 2 points and one height each",
+            ));
+        }
+        if !(field.spacing.is_finite() && field.spacing > 0.0) || scale.iter().any(|&s| s <= 0.0) {
+            return Err(PhysicsError::InvalidInput(
+                "a height field takes a positive spacing and scale",
+            ));
+        }
+        let [low, high] = field.height_range();
+        if !(low.is_finite() && high.is_finite()) {
+            return Err(PhysicsError::InvalidInput(
+                "a height field's heights must be finite",
+            ));
+        }
+        let origin: [f32; 3] = std::array::from_fn(|axis| field.origin[axis] * scale[axis]);
+        validate_position(origin)?;
+        let _lock = native_lock();
+        let native = unsafe {
+            ffi::manifold_box3d_cook_height_field(
+                field.heights.as_ptr(),
+                count_x as i32,
+                count_z as i32,
+                field.spacing * scale[0],
+                scale[1],
+                field.spacing * scale[2],
+                low,
+                high,
+            )
+        };
+        if native == 0 {
+            return Err(PhysicsError::NativeAllocation);
+        }
+        Ok(Arc::new(Self {
+            form: CookedForm::HeightField {
+                field: native,
+                origin,
+            },
+        }))
+    }
+
+    /// Where Box3D places a body authored at `position` and `rotation`: a
+    /// height field's grid starts at its body's origin, so that body sits at
+    /// the grid's first point; every other body where authored.
+    pub(crate) fn placed(&self, position: [f32; 3], rotation: [f32; 4]) -> [f32; 3] {
+        match &self.form {
+            CookedForm::HeightField { origin, .. } => {
+                let [x, y, z, w] = rotation;
+                let cross = |a: [f32; 3], b: [f32; 3]| {
+                    [
+                        a[1] * b[2] - a[2] * b[1],
+                        a[2] * b[0] - a[0] * b[2],
+                        a[0] * b[1] - a[1] * b[0],
+                    ]
+                };
+                let t = cross([x, y, z], *origin).map(|c| 2.0 * c);
+                let u = cross([x, y, z], t);
+                std::array::from_fn(|i| position[i] + origin[i] + w * t[i] + u[i])
+            }
+            _ => position,
+        }
+    }
+
+    /// Whether this is a static surface (a mesh or a height field) rather
+    /// than hulls.
     pub fn is_mesh(&self) -> bool {
-        matches!(self.form, CookedForm::Mesh { .. })
+        matches!(
+            self.form,
+            CookedForm::Mesh { .. } | CookedForm::HeightField { .. }
+        )
     }
 
     pub(crate) fn form(&self) -> &CookedForm {
@@ -155,6 +234,9 @@ impl Drop for CookedSolid {
                 }
             }
             CookedForm::Mesh { mesh, .. } => unsafe { ffi::manifold_box3d_destroy_mesh(*mesh) },
+            CookedForm::HeightField { field, .. } => unsafe {
+                ffi::manifold_box3d_destroy_height_field(*field)
+            },
         }
     }
 }

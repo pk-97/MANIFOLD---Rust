@@ -52,6 +52,14 @@ pub enum MeshSource {
         index: u32,
         detail: u32,
     },
+    /// A Terrain's ground (`node.terrain`): `points` by `points` heights, row
+    /// by row in z, on a grid `size` across centred on the origin. It
+    /// collides as its heights, never as triangles.
+    HeightField {
+        points: u32,
+        size: f32,
+        heights: Arc<[f32]>,
+    },
 }
 
 /// The fewest triangles a piece is cut from, so a piece of a few-triangle
@@ -161,6 +169,9 @@ impl MeshSource {
                 rings,
             } => return sphere_vertices(*radius, *segments, *rings),
             Self::Swept(curve) => return curve.load_vertices(),
+            Self::HeightField { .. } => {
+                return Err("a Terrain collides as its heights, not as triangles".into());
+            }
             Self::Fragment {
                 of,
                 count,

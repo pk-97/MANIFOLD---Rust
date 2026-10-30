@@ -9,6 +9,8 @@
 //!   0.1% shell.
 //! - Water: the exact triangle mesh through a mesh tree (`mesh_bvh`), read by
 //!   the GPU for distance and winding.
+//! - A Terrain's ground: a [`HeightField`] ([`Solid::HeightField`]), a Box3D
+//!   height field for bodies and the same heights on the GPU for water.
 //!
 //! Its [`ShapeKey`] is the cache key: the mesh content that was actually
 //! loaded (so a mesh arriving late changes it), the item's scale and the
@@ -106,6 +108,24 @@ impl ShapeKey {
             scale: scale.map(step),
             cell,
         })
+    }
+
+    /// The key for a height field, which is installed at its exact scale.
+    pub fn of_height_field(field: &HeightField) -> Self {
+        let mut hasher = DefaultHasher::new();
+        field.points.hash(&mut hasher);
+        for value in [field.spacing]
+            .into_iter()
+            .chain(field.origin)
+            .chain(field.heights.iter().copied())
+        {
+            value.to_bits().hash(&mut hasher);
+        }
+        Self {
+            content: hasher.finish(),
+            scale: [0; 3],
+            cell: 0,
+        }
     }
 }
 
@@ -371,6 +391,42 @@ fn any_open(meshes: &[TriangleMesh]) -> bool {
         .any(|mesh| closed_triangles(mesh).is_ok_and(|closed| closed.contains(&false)))
 }
 
+/// Ground as a grid of heights: `points[0]` along x and `points[1]` along z,
+/// `spacing` apart, row by row in z, point (0, 0) at `origin`, solid below.
+/// Local and unscaled, as every solid is.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeightField {
+    pub points: [u32; 2],
+    pub spacing: f32,
+    pub origin: [f32; 3],
+    pub heights: Vec<f32>,
+}
+
+impl HeightField {
+    /// The lowest and highest height.
+    pub fn height_range(&self) -> [f32; 2] {
+        self.heights
+            .iter()
+            .fold([f32::INFINITY, f32::NEG_INFINITY], |[low, high], &h| {
+                [low.min(h), high.max(h)]
+            })
+    }
+
+    /// Its box's corners, local and unscaled.
+    fn corners(&self) -> [[f32; 3]; 8] {
+        let [low, high] = self.height_range();
+        let extent = |axis: usize| (self.points[axis].max(1) - 1) as f32 * self.spacing;
+        std::array::from_fn(|k| {
+            [
+                self.origin[0] + if k & 1 == 0 { 0.0 } else { extent(0) },
+                self.origin[1] + if k & 2 == 0 { low } else { high },
+                self.origin[2] + if k & 4 == 0 { 0.0 } else { extent(1) },
+            ]
+        })
+    }
+}
+
 /// The form a body takes in Box3D.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -379,6 +435,8 @@ pub enum Solid {
     Hulls(Vec<Vec<[f32; 3]>>),
     /// The exact surface of a static collider, local and unscaled.
     Mesh(TriangleMesh),
+    /// A static collider's ground, local and unscaled.
+    HeightField(HeightField),
 }
 
 impl Solid {
@@ -386,15 +444,17 @@ impl Solid {
     pub fn hulls(&self) -> Option<&[Vec<[f32; 3]>]> {
         match self {
             Self::Hulls(hulls) => Some(hulls),
-            Self::Mesh(_) => None,
+            Self::Mesh(_) | Self::HeightField(_) => None,
         }
     }
 
-    /// Every local point: the hulls' points or the mesh's vertices.
+    /// Every local point: the hulls' points, the mesh's vertices, or the
+    /// corners of a height field's box.
     pub fn for_each_point(&self, mut visit: impl FnMut(&[f32; 3])) {
         match self {
             Self::Hulls(hulls) => hulls.iter().flatten().for_each(&mut visit),
             Self::Mesh(mesh) => mesh.vertices.iter().for_each(&mut visit),
+            Self::HeightField(field) => field.corners().iter().for_each(&mut visit),
         }
     }
 
@@ -435,6 +495,7 @@ impl Solid {
                 let mesh = scaled_mesh(mesh, scale);
                 CookedSolid::mesh(&mesh.vertices, &mesh.triangles)
             }
+            Self::HeightField(field) => CookedSolid::height_field(field, scale),
         }
     }
 
@@ -463,7 +524,8 @@ impl Solid {
     }
 
     /// Whether `self` and `other` install as the same form, so one can
-    /// replace the other in place ([`Self::replace`]).
+    /// replace the other in place ([`Self::replace`]). A height field never
+    /// does: its body sits at its grid's origin, which moves with it.
     pub fn same_form(&self, other: &Self) -> bool {
         matches!(
             (self, other),

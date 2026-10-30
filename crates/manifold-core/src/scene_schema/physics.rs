@@ -210,9 +210,6 @@ pub fn physics_unavailable(doc: &SceneDoc, item: &ItemId) -> Option<&'static str
         ItemFields::Object(object) if object.shape == Shape::Ocean => {
             return Some("An Ocean surface cannot collide; use Water for water");
         }
-        ItemFields::Object(object) if matches!(object.shape, Shape::Terrain) => {
-            return Some("A Terrain is shaped on the GPU each frame and has no collision mesh");
-        }
         ItemFields::Object(object) if matches!(object.shape, Shape::Tree | Shape::Leaves) => {
             return Some("A tree is grown on the GPU and has no collision mesh");
         }
@@ -341,6 +338,14 @@ fn classify(
             }
             ItemFields::Object(object) => {
                 let part = match within {
+                    // A Terrain collides on its own, as its ground, never
+                    // as part of a group's body.
+                    Within::Free
+                        if object.shape == Shape::Terrain
+                            && setting == PhysicsSetting::Collider =>
+                    {
+                        PhysicsPart::Solo(setting)
+                    }
                     _ if !solid(&object.shape) => PhysicsPart::Off,
                     Within::Copies => PhysicsPart::Off,
                     _ if object.copies => PhysicsPart::Off,
