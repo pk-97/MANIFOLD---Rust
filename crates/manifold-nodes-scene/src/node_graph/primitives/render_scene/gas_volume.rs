@@ -67,9 +67,9 @@ const GLOW_SIDE: u32 = 16;
 pub(super) struct RenderPreset {
     /// March samples per gas cell along the ray.
     pub samples_per_cell: f32,
-    /// Gas cells per light volume cell along each axis, a power of two. The
-    /// gas's fields are twice as fine as its air (`node.gas_volume`), and its
-    /// light is smooth at the air's scale.
+    /// Gas cells per light volume cell along each axis. The gas's fields are
+    /// twice as fine as its air (`node.gas_volume`), and its light is smooth
+    /// at the air's scale.
     pub light_divisor: u32,
     /// The most samples of the density a light volume cell takes toward
     /// the sun or the sky; short of it, one a light cell.

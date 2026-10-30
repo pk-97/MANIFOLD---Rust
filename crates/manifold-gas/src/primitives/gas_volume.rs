@@ -408,7 +408,7 @@ struct GasUniforms {
     sand_count: u32,
     pad4: u32,
     /// One bit a body row: a Collider that moves this frame ([`moving_trees`]).
-    moving: [[u32; 4]; 2],
+    moving: [u32; 8],
 }
 
 impl GasUniforms {
@@ -419,7 +419,7 @@ impl GasUniforms {
         lattice: ForceLattice,
         step: Step,
         matter: &Matter<'_>,
-        moving: [[u32; 4]; 2],
+        moving: [u32; 8],
     ) -> Self {
         let nodes = lattice.node_count() as u32;
         let (up, g) = up_and_gravity(settings.gravity);
@@ -1060,11 +1060,7 @@ pub struct StepSolids {
 /// The Collider meshes as the first tick places them, every shape, the
 /// trees' sizes and the box: a change of any rewrites the static solids.
 /// Without bodies only the box counts.
-fn static_hash(
-    bodies: Option<&LiquidBodies>,
-    geometry: &GasGeometry,
-    moving: [[u32; 4]; 2],
-) -> u64 {
+fn static_hash(bodies: Option<&LiquidBodies>, geometry: &GasGeometry, moving: [u32; 8]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::hash::DefaultHasher::new();
     geometry.origin.map(f32::to_bits).hash(&mut hasher);
@@ -1091,8 +1087,8 @@ fn static_hash(
 /// a row with motion, or a pose at any of the frame's ticks other than its
 /// pose at the last frame's first tick (`last`). A Collider driven by a
 /// param can take a new pose with no motion in its row.
-fn moving_trees(bodies: &LiquidBodies, last: &[[f32; 7]]) -> [[u32; 4]; 2] {
-    let mut moving = [[0; 4]; 2];
+fn moving_trees(bodies: &LiquidBodies, last: &[[f32; 7]]) -> [u32; 8] {
+    let mut moving = [0; 8];
     let count = bodies.count();
     if count == 0 {
         return moving;
@@ -1100,14 +1096,14 @@ fn moving_trees(bodies: &LiquidBodies, last: &[[f32; 7]]) -> [[u32; 4]; 2] {
     for (index, row) in tree_rows(bodies, bodies.last_rows()) {
         let body = index % count;
         if row_moves(row) || last.get(body) != Some(&pose(row)) {
-            moving[body / 128][body / 32 % 4] |= 1 << (body % 32);
+            moving[body / 32] |= 1 << (body % 32);
         }
     }
     moving
 }
 
-fn is_moving(moving: [[u32; 4]; 2], body: usize) -> bool {
-    moving[body / 128][body / 32 % 4] & (1 << (body % 32)) != 0
+fn is_moving(moving: [u32; 8], body: usize) -> bool {
+    moving[body / 32] & (1 << (body % 32)) != 0
 }
 
 /// A row's position and rotation.
@@ -1359,14 +1355,11 @@ impl GasVolume {
         // written only when they or the box change; the moving solids, a
         // lattice each, and the water and sand every tick. With none, the
         // rows stay as they are.
-        let moving = if first_solids.is_some() {
-            moving_trees(&self.bodies, &self.tree_poses)
-        } else {
-            [[0; 4]; 2]
-        };
-        self.tree_poses.clear();
+        let mut moving = [0; 8];
         if first_solids.is_some() {
+            moving = moving_trees(&self.bodies, &self.tree_poses);
             let first = &self.bodies.last_rows()[..first_tick_rows(&self.bodies)];
+            self.tree_poses.clear();
             self.tree_poses.extend(first.iter().map(pose));
         }
         let static_hash =
@@ -1375,7 +1368,7 @@ impl GasVolume {
         // Bodies and hulls are lattices sampled each tick, and a Collider
         // that moves is read through its tree each tick.
         let bodies_move = first_solids.is_some()
-            && (self.bodies.shapes().iter().any(|s| s.tree != 1) || moving != [[0; 4]; 2]);
+            && (self.bodies.shapes().iter().any(|s| s.tree != 1) || moving.iter().any(|&w| w != 0));
         let solids_move = bodies_move || matter.any();
         if first_solids.is_some() && (rewrite_static || bodies_move) {
             self.body_buffers
