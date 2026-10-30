@@ -868,6 +868,7 @@ mod tests {
             toward: [0.6, 0.48, 0.64],
             irradiance: [30.0, 25.0, 20.0],
             radius: 0.01,
+            disc: 0.005,
         };
         let mut sun = light(LightMode::Sun, [0.0, -1.0, 0.0], [6.0, 6.0, 6.0, 1.0]);
         sun.aim = [1.0, 0.0, 2.0];

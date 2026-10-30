@@ -43,13 +43,20 @@ pub(crate) struct HdriSun {
     pub irradiance: [f32; 3],
     /// Angular radius of the region counted as the sun, radians.
     pub radius: f32,
+    /// Angular radius of the even disc that spreads its light the same way,
+    /// radians: what sets how soft its shadows are. A disc of radius R has
+    /// a mean squared angle from its centre of R²/2; a glow around the disc
+    /// counts by the light it gives, so it widens this far less than it
+    /// widens `radius`.
+    pub disc: f32,
 }
 
 impl HdriSun {
     /// The sun as a Sun light shining from `toward`, its colour the
-    /// irradiance. Its angular radius rides in `outer_cone_angle`, which a
-    /// Sun has no other use for, so the Environment can paint the region out
-    /// of its lighting map. No sun is a black Sun: a light slot keeps its
+    /// irradiance. Its region's radius rides in `outer_cone_angle` and its
+    /// disc's in `inner_cone_angle`, which a Sun has no other use for, so the
+    /// Environment can paint the region out of its lighting map and size the
+    /// followed Sun's shadows. No sun is a black Sun: a light slot keeps its
     /// last value, so "none" has to be a value too.
     pub(crate) fn light(found: Option<Self>) -> Light {
         let Some(sun) = found else {
@@ -67,6 +74,7 @@ impl HdriSun {
             dir: [-x, -y, -z],
             color: [r, g, b, 1.0],
             outer_cone_angle: sun.radius,
+            inner_cone_angle: sun.disc,
             ..Light::default_sun()
         }
     }
@@ -83,6 +91,7 @@ impl HdriSun {
             toward: [-x, -y, -z],
             irradiance: [r, g, b],
             radius: light.outer_cone_angle,
+            disc: light.inner_cone_angle,
         })
     }
 }
@@ -169,16 +178,22 @@ fn around(width: usize, height: usize, rgba16: &[u8], centre: [f64; 3]) -> Optio
         energy += strength * solid_angle;
     }
     let toward = normalize(weighted)?;
-    let floor_cos = inside
-        .iter()
-        .filter(|&&(_, rgb, _)| luma(excess(rgb)) >= floor)
-        .map(|&(dir, _, _)| dot(dir, toward))
-        .fold(1.0f64, f64::min);
-    let radius = floor_cos.clamp(-1.0, 1.0).acos() + pi / height as f64;
+    let mut widest = 0.0f64;
+    let mut spread = 0.0f64;
+    for &(dir, rgb, solid_angle) in &inside {
+        let strength = luma(excess(rgb));
+        if strength < floor {
+            continue;
+        }
+        let angle = dot(dir, toward).clamp(-1.0, 1.0).acos();
+        widest = widest.max(angle);
+        spread += strength * solid_angle * angle * angle;
+    }
     let sun = HdriSun {
         toward: toward.map(|c| c as f32),
         irradiance: irradiance.map(|c| c as f32),
-        radius: radius as f32,
+        radius: (widest + pi / height as f64) as f32,
+        disc: (2.0 * spread / energy).sqrt() as f32,
     };
     Some((sun, energy))
 }
@@ -316,6 +331,8 @@ mod tests {
         );
         let radius = f64::from(found.radius);
         assert!((DISC..DISC + 0.008).contains(&radius), "radius {radius}");
+        let disc = f64::from(found.disc);
+        assert!((disc / DISC - 1.0).abs() < 0.05, "disc {disc}");
     }
 
     #[test]
@@ -349,6 +366,7 @@ mod tests {
             toward: [0.0, 0.6, 0.8],
             irradiance: [5.0, 4.0, 3.0],
             radius: 0.05,
+            disc: 0.01,
         };
         assert_eq!(
             HdriSun::from_light(Some(HdriSun::light(Some(sun)))),
