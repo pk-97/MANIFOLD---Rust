@@ -8,10 +8,10 @@ step upgrades a system that already exists; nothing here runs beside one.
 
 ## What exists (read 2026-10-30)
 
-- Sun shadow: one orthographic map per casting light, a box of half-size
-  Range round its aim (`Light::shadow_proj`, `manifold-node-engine/src/scene/light.rs`),
-  default 30 m, at most 200 m, at most 4096 texels. Soft edges come from PCSS
-  (`frame_setup.rs`). On a 2 km landscape almost nothing casts a shadow.
+- Sun shadow: four cascades round the camera's view out to 2 km
+  (`Light::cascades`, `manifold-node-engine/src/scene/light.rs`), each a
+  caster entry like a cube face; `caster_face` picks one per point. Soft
+  edges come from PCSS (`frame_setup.rs`).
 - Sky light: the environment is convolved to an irradiance map once per
   change (`prepasses.rs`) and multiplied by material AO, the parallax crevice
   term and screen-space AO (`node.ssao_gtao`, reach about a metre). Nothing
@@ -27,17 +27,19 @@ step upgrades a system that already exists; nothing here runs beside one.
   (`terrain.wgsl`). Covers pick materials by slope, height and noise
   (`cover_rule.wgsl`). The main pass on a covered terrain is fragment-bound
   (SCENE_GEOMETRY_SCALE_DESIGN.md findings).
-- Plants: `node.tree` grows bark and crossed leaf cards; Copies On Surface
-  scatter by the same rules as Covers. Copies can draw detail levels from a
-  `lods` array (`primitives/mesh_lods.rs`). No grass blades, no far-away
-  stand-in cards, no wind on plants.
+- Plants: `node.tree` grows bark and crossed leaf cards, with a Cone row
+  for conifers, crown-bent normals and crown shade in its vertex colour,
+  a box for culling, and four detail levels (one card a leaf, cards per
+  branch, three crown cards, nothing). Copies On Surface scatter by the
+  same rules as Covers. No grass blades, no wind on plants.
+- Cost (50k spruces, 1080p, stills profile): cut-out cards are shaded at
+  every layer, since `discard` defeats hidden-surface removal; the Lumen
+  session is adding a depth pass for cut-out draws. The terrain's Depth
+  (parallax) pipeline costs about 20 of its 34 ms; far patches move to the
+  plain pipeline (Lumen session).
 
 ## Ownership
 
-- `LIGHT_TRANSPORT_DESIGN.md` (the light session) keeps caustics per light
-  and the HDRI's sun (Follow HDRI, HDRI mode only). Its "physical daylight
-  sky" moves here, replacing the hand-tuned Sun 6 and strips 1.5. The
-  cascades land on top of its caustics phase, once that is committed.
 - `SCENE_GEOMETRY_SCALE_DESIGN.md` (the Lumen session) keeps patches,
   culling, mesh detail levels and terrain tiles by distance (its P6). This
   plan feeds those: trees publish `lods`, the land shape publishes the height
@@ -45,17 +47,8 @@ step upgrades a system that already exists; nothing here runs beside one.
 
 ## Phase 1: Light
 
-- **Sun cascades.** The Sun's one box becomes four shadow maps that follow
-  the camera, each covering a slice of the view: sharp for the first metres,
-  wide out to a Shadow Distance (default 2 km). Built the way Point lights
-  take six cube faces: one caster entry per cascade (`Light::cascades` beside
-  `Light::cube_faces`). Each cascade is a sphere snapped to its own texels so
-  shadows don't shimmer as the camera turns, and neighbouring cascades blend.
-  Range goes away for the Sun. Cascades get their own caster kind with real
-  colour (caustics skip black entries; only the first carries rays, as with
-  cube faces), and shading picks one through `caster_face`, so shafts and
-  caustics follow with no extra work. Only the nearest one or two cascades
-  run caustics, since each costs a view.
+- **Sun cascades: open.** Blend neighbouring cascades, and retire the
+  Sun's Range row, which cascades ignore.
 - **Contact shadows.** A short march toward the sun through the depth buffer
   for things smaller than a cascade texel: grass, pebbles, leaves on bark.
 - **Daylight sky.** A third Sky style beside Softbox and Gradient, made by

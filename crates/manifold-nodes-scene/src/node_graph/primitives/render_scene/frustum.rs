@@ -170,7 +170,7 @@ mod tests {
                 pos,
                 [0.0; 2],
                 [f64::from(range); 2],
-                ((d - range).max(0.05), d + range),
+                (0.0, d + range),
             )
         }
 

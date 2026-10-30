@@ -723,12 +723,17 @@ fn box_side_st(p: vec3<f32>, s: vec3<f32>, a: u32) -> vec2<f32> {
     return vec2<f32>(s.z * p.x, -p.y);
 }
 
+// A parallax shift under this many pixels returns at once: the carve is
+// too fine to see, and ground seen low, as a landscape is, would otherwise
+// trace out to hundreds of metres for nothing.
+const PARALLAX_MIN_SHIFT: f32 = 1.5;
+
 // Parallax: the height picture (the normal map's alpha, 1 at the surface)
 // carves the surface `u.relief.x` metres deep. The view ray `v` (box frame,
 // towards the eye) marches into the height on the strongest side's
 // strongest tile and stops where it meets it; the box point moves there, so
 // every map, side and tile reads the carved spot. Steps follow the shift in
-// pixels, and a shift under half a pixel returns at once.
+// pixels, and a shift under PARALLAX_MIN_SHIFT returns at once.
 fn box_parallax(p: vec3<f32>, px: vec3<f32>, py: vec3<f32>, n: vec3<f32>, s: vec3<f32>, axes: mat3x3<f32>, world_pos: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
     let v = transpose(axes) * normalize(u.camera_pos.xyz - world_pos);
     let vn = dot(v, n);
@@ -738,7 +743,7 @@ fn box_parallax(p: vec3<f32>, px: vec3<f32>, py: vec3<f32>, n: vec3<f32>, s: vec
     let depth = u.relief.x * u.surface.z;
     let reach = depth * length(v - n * vn) / vn;
     let pixel_size = max(length(px), length(py));
-    if reach < 0.5 * pixel_size {
+    if reach < PARALLAX_MIN_SHIFT * pixel_size {
         return p;
     }
     var a = 0u;
@@ -819,7 +824,7 @@ fn uv_parallax(uv: vec4<f32>, normal: vec3<f32>, world_pos: vec3<f32>, pixel: ve
     let dir = vec2<f32>(dot(m.matrix.xy, down), dot(m.matrix.zw, down));
     let pixel_size = max(length(cx), length(cy));
     let reach = length(dir);
-    if reach < 0.5 * pixel_size {
+    if reach < PARALLAX_MIN_SHIFT * pixel_size {
         return;
     }
     let size = vec2<f32>(textureDimensions(normal_map));
@@ -1896,7 +1901,7 @@ fn subsurface_through(world_pos: vec3<f32>, n: vec3<f32>, distance: vec3<f32>) -
         if back <= 0.0 || l_dir.w <= 0.0 || l_col.w < 0.0 {
             continue;
         }
-        let slot = i32(l_col.w + 0.5);
+        let slot = caster_face(i32(l_col.w + 0.5), world_pos);
         if casters[slot].shadow.z <= 0.0 {
             continue;
         }

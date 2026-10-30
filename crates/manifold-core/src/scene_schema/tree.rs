@@ -25,7 +25,7 @@ const fn dial(property: &'static str, param: &'static str, order: u8) -> Propert
         .when(tree)
 }
 
-static ROWS: [PropertyRow; 16] = [
+static ROWS: [PropertyRow; 17] = [
     dial("tree_height", "height", 0)
         .name("Height")
         .unit(Unit::Metres),
@@ -39,19 +39,20 @@ static ROWS: [PropertyRow; 16] = [
         .unit(Unit::Degrees),
     dial("tree_reach", "reach", 5).name("Reach"),
     dial("tree_start", "start", 6).name("Start"),
-    dial("tree_gnarl", "gnarl", 7).name("Gnarl"),
-    dial("tree_lift", "lift", 8).name("Lift"),
-    dial("tree_twist", "twist", 9)
+    dial("tree_cone", "cone", 7).name("Cone"),
+    dial("tree_gnarl", "gnarl", 8).name("Gnarl"),
+    dial("tree_lift", "lift", 9).name("Lift"),
+    dial("tree_twist", "twist", 10)
         .name("Twist")
         .unit(Unit::Degrees),
-    dial("tree_leaves", "leaves", 10).name("Leaves"),
-    dial("tree_leaf_size", "leaf_size", 11)
+    dial("tree_leaves", "leaves", 11).name("Leaves"),
+    dial("tree_leaf_size", "leaf_size", 12)
         .name("Leaf Size")
         .unit(Unit::Metres),
-    dial("tree_leaf_angle", "leaf_angle", 12)
+    dial("tree_leaf_angle", "leaf_angle", 13)
         .name("Leaf Angle")
         .unit(Unit::Degrees),
-    dial("tree_seed", "seed", 13).name("Seed"),
+    dial("tree_seed", "seed", 14).name("Seed"),
     row("tree_levels", TREE, S, setup())
         .param("levels")
         .name("Levels")

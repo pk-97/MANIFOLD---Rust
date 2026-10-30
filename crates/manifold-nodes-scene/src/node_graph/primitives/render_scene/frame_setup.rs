@@ -1065,11 +1065,19 @@ impl RenderScene {
             }
         });
 
+        let dims_tex = ctx.outputs.texture_2d("color")?;
+        let width = dims_tex.width;
+        let height = dims_tex.height;
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let aspect = width as f32 / height as f32;
         // One light interpretation for surfaces and shafts: position/direction
         // plus mode, premultiplied colour plus caster slot, and range. Every
-        // light with `cast_shadows` gets the next caster slot, and a point
-        // light the five after it too, one per cube face. The caster table
-        // both renderers read has one entry per slot.
+        // light with `cast_shadows` gets the next caster slot, a sun the
+        // CASCADES - 1 after it too, one per cascade round this camera's
+        // view, and a point light the five after it, one per cube face. The
+        // caster table both renderers read has one entry per slot.
         let mut light_data: Vec<[f32; 4]> = Vec::with_capacity(lights_n * LIGHT_VEC4_STRIDE);
         let mut light_count: u32 = 0;
         let mut casters: Vec<manifold_node_engine::scene::light::Light> = Vec::new();
@@ -1100,6 +1108,14 @@ impl RenderScene {
                         for (face, view) in l.cube_faces().into_iter().enumerate() {
                             shadow_casters.push(shadow_caster_entry(&view, Some(face)));
                             casters.push(view);
+                        }
+                    } else if l.mode == manifold_node_engine::scene::light::LightMode::Sun {
+                        for (cascade, view) in l.cascades(&cam, aspect).into_iter().enumerate() {
+                            shadow_casters.push(shadow_caster_entry(&view, Some(cascade)));
+                            // Later cascades are shadow views only, dark like
+                            // a cube's later faces, so caustics run once.
+                            let color = if cascade > 0 { [0.0, 0.0, 0.0, 1.0] } else { view.color };
+                            casters.push(manifold_node_engine::scene::light::Light { color, ..view });
                         }
                     } else {
                         shadow_casters.push(shadow_caster_entry(&l, None));
@@ -1154,13 +1170,6 @@ impl RenderScene {
         // desyncing the shader's `li * LIGHT_STRIDE` indexing from the
         // real appended entries).
 
-        let dims_tex = ctx.outputs.texture_2d("color")?;
-        let width = dims_tex.width;
-        let height = dims_tex.height;
-        if width == 0 || height == 0 {
-            return None;
-        }
-        let aspect = width as f32 / height as f32;
         // RAYTRACING_DESIGN.md section 8.2 D22 point 1/3 (T2-B): the per-scene
         // MetalFX Temporal toggle. When on, the WHOLE render (Pass A/B,
         // shafts, the RT half-res ray pass) draws at RENDER res — the
@@ -1596,32 +1605,30 @@ fn shadow_caster_entry(
     let texel = 1.0 / shadow_map_resolution(l.shadow_resolution) as f32;
     // A dark light keeps its slot, but its traced fields stay neutral so its
     // movement cannot disturb RT history; the tracer skips its rays. So do a
-    // cube's later faces: the tracer shadows the light once, from its first.
+    // cube's later faces and a sun's later cascades: the tracer shadows the
+    // light once, from its first. Shading reads the kind to find a point's
+    // face or cascade.
     let dark = l.color[..3].iter().all(|&channel| channel == 0.0);
-    let (source, kind) = if face.is_some_and(|face| face > 0) {
-        ([0.0, 1.0, 0.0, 0.0], ShadowCaster::CUBE_FACE)
-    } else if dark {
-        ([0.0, 1.0, 0.0, 0.0], ShadowCaster::SUN)
+    let kind = if face.is_some_and(|face| face > 0) {
+        ShadowCaster::CUBE_FACE
     } else {
         match l.mode {
-            LightMode::Sun => (
-                [
-                    -l.dir[0],
-                    -l.dir[1],
-                    -l.dir[2],
-                    sun_cone_half_angle(l.shadow_softness),
-                ],
-                ShadowCaster::SUN,
-            ),
-            LightMode::Point | LightMode::Spot => (
-                [l.pos[0], l.pos[1], l.pos[2], light_size],
-                if face.is_some() {
-                    ShadowCaster::CUBE
-                } else {
-                    ShadowCaster::POSITIONAL
-                },
-            ),
+            LightMode::Sun => ShadowCaster::SUN,
+            LightMode::Point | LightMode::Spot if face.is_some() => ShadowCaster::CUBE,
+            LightMode::Point | LightMode::Spot => ShadowCaster::POSITIONAL,
         }
+    };
+    let source = if dark || kind == ShadowCaster::CUBE_FACE {
+        [0.0, 1.0, 0.0, 0.0]
+    } else if l.mode == LightMode::Sun {
+        [
+            -l.dir[0],
+            -l.dir[1],
+            -l.dir[2],
+            sun_cone_half_angle(l.shadow_softness),
+        ]
+    } else {
+        [l.pos[0], l.pos[1], l.pos[2], light_size]
     };
     let rgb = if kind == ShadowCaster::CUBE_FACE {
         [0.0; 3]

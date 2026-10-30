@@ -2,6 +2,15 @@
 //! (`shaders/tree.wgsl`, after EZ-Tree by Dan Greenheck, MIT): the bark as
 //! indexed vertices, and the leaves as crossed cards.
 //!
+//! Both publish four detail levels in `mesh_lods.rs`'s layout, so far
+//! copies draw less: past the first the last level of wood goes and each
+//! leaf keeps one card; past the second a coarse trunk stays, with two
+//! crossed cards standing in for each last-level branch's leaves; past the
+//! third three cards round the trunk stand in for the whole crown; past the
+//! fourth the tree draws nothing. Each level's error is a share of Height.
+//! Copies need a box round what they draw: the tree publishes one from its
+//! rows.
+//!
 //! A handful of rows shape the whole tree: Height and Trunk Width size the
 //! trunk, Branches and Twigs say how many grow off each, Spread, Reach and
 //! Start where and how far they go, Gnarl, Lift and Twist how they wander,
@@ -18,7 +27,10 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
+use manifold_node_engine::scene::mesh_bounds::MeshBounds;
 use manifold_node_engine::scene::mesh_change::{MeshOutputRule, MeshRevisionRule};
+
+use super::mesh_lods::LOD_HEADER_WORDS;
 
 const SHADER: &str = include_str!("shaders/tree.wgsl");
 const THREADS: u32 = 64;
@@ -42,11 +54,21 @@ const LEAF_SPREAD: f32 = 0.35;
 const LEAF_START: f32 = 0.25;
 /// Two cards crossed at right angles, so a leaf reads from every side.
 const CARDS: u32 = 2;
+/// Each detail level's error as a share of Height. At a 60° lens on 1080p
+/// a 20 m tree moves to them about 150, 375, 1100 and 3700 m away.
+const LOD_ERROR: [f32; 4] = [0.008, 0.02, 0.06, 0.2];
+/// Crossed cards over each last-level branch's leaves at the second detail
+/// level, and cards round the trunk through the crown at the third.
+const BRANCH_CARDS: u32 = 2;
+const CROWN_CARDS: u32 = 3;
+/// Indices of the coarse trunk the second and third levels draw:
+/// `COARSE_INDICES` in `tree.wgsl`.
+const COARSE_INDICES: u32 = 54;
 
 /// name, label, type, default, low, high.
 type TreeParam = (&'static str, &'static str, ParamType, f32, f32, f32);
 
-const TREE_PARAMS: [TreeParam; 16] = [
+const TREE_PARAMS: [TreeParam; 17] = [
     ("levels", "Levels", ParamType::Int, 3.0, 0.0, 3.0),
     ("height", "Height", ParamType::Float, 10.0, 0.5, 60.0),
     (
@@ -57,11 +79,12 @@ const TREE_PARAMS: [TreeParam; 16] = [
         0.02,
         3.0,
     ),
-    ("branches", "Branches", ParamType::Int, 9.0, 0.0, 16.0),
+    ("branches", "Branches", ParamType::Int, 9.0, 0.0, 48.0),
     ("twigs", "Twigs", ParamType::Int, 6.0, 0.0, 10.0),
     ("spread", "Spread", ParamType::Float, 55.0, 0.0, 120.0),
     ("reach", "Reach", ParamType::Float, 0.55, 0.1, 1.0),
     ("start", "Start", ParamType::Float, 0.3, 0.0, 0.95),
+    ("cone", "Cone", ParamType::Float, 0.5, 0.0, 1.0),
     ("gnarl", "Gnarl", ParamType::Float, 0.25, 0.0, 1.0),
     ("lift", "Lift", ParamType::Float, 0.15, -1.0, 1.0),
     ("twist", "Twist", ParamType::Float, 0.0, -45.0, 45.0),
@@ -123,6 +146,11 @@ struct Structure {
     indices: u32,
     leaves: u32,
     cards: u32,
+    /// Cards standing in for the leaves far away.
+    branch_cards: u32,
+    crown_cards: u32,
+    /// Index count of the bark's detail level 1.
+    bark_lod: u32,
 }
 
 impl Structure {
@@ -148,6 +176,9 @@ impl Structure {
             indices: 0,
             leaves: 0,
             cards: count(params, "cards"),
+            branch_cards: 0,
+            crown_cards: 0,
+            bark_lod: 0,
         };
         for l in 0..LEVELS {
             s.branches[l] = match l {
@@ -162,12 +193,45 @@ impl Structure {
             s.indices += s.branches[l] * SECTIONS[l] * SEGMENTS[l] * 6;
         }
         s.leaves = s.branches[last] * count(params, "leaves");
+        if s.leaves > 0 {
+            s.branch_cards = s.branches[last] * BRANCH_CARDS;
+            s.crown_cards = CROWN_CARDS;
+        }
+        // Wood comes level by level, the trunk first.
+        s.bark_lod = if last > 0 {
+            s.index_base[last]
+        } else {
+            s.indices
+        };
         s
     }
 
-    /// Leaf vertices, at least one degenerate triangle.
+    fn cards(&self) -> u32 {
+        self.leaves * self.cards
+    }
+
+    /// Leaf vertices: four a card, then the branch and crown cards; at
+    /// least one degenerate triangle.
     fn leaf_vertices(&self) -> u32 {
-        (self.leaves * self.cards * 6).max(3)
+        ((self.cards() + self.branch_cards + self.crown_cards) * 4).max(3)
+    }
+
+    /// Leaf indices of the full tree.
+    fn leaf_indices(&self) -> u32 {
+        (self.cards() * 6).max(3)
+    }
+
+    /// Index counts of the leaves' detail levels 1 to 3.
+    fn leaf_lods(&self) -> [u32; 3] {
+        [self.leaves * 6, self.branch_cards * 6, self.crown_cards * 6]
+    }
+
+    fn bark_lods_words(&self) -> u32 {
+        LOD_HEADER_WORDS + self.bark_lod + COARSE_INDICES
+    }
+
+    fn leaf_lods_words(&self) -> u32 {
+        LOD_HEADER_WORDS + self.leaf_lods().iter().sum::<u32>()
     }
 }
 
@@ -193,6 +257,11 @@ struct TreeUniforms {
     leaf: [f32; 4],
     counts: [u32; 4],
     level: [u32; 4],
+    shape: [f32; 4],
+    lod_error: [f32; 4],
+    lod_count: [u32; 4],
+    cards: [u32; 4],
+    crown: [f32; 4],
 }
 
 impl TreeUniforms {
@@ -237,8 +306,58 @@ impl TreeUniforms {
                 count(params, "seed"),
             ],
             level: [0, s.vertices, s.indices, s.leaf_vertices()],
+            shape: [value(params, "cone"), 0.0, 0.0, 0.0],
+            lod_error: LOD_ERROR.map(|share| share * height),
+            lod_count: [
+                s.bark_lod,
+                s.leaf_lods()[0],
+                s.leaf_lods()[1],
+                s.leaf_lods()[2],
+            ],
+            cards: [s.cards(), s.branch_cards, s.crown_cards, s.cards() * 4],
+            crown: crown(params, s.last),
         }
     }
+}
+
+/// The crown as `tree.wgsl` shades it: its radius round the trunk, and the
+/// heights of its bottom and top. Branches reach out by Spread, the longest
+/// at the bottom, and twigs and leaves reach past them.
+fn crown(params: &ParamValues, last: u32) -> [f32; 4] {
+    let height = value(params, "height");
+    let reach = value(params, "reach");
+    let start = value(params, "start");
+    let leaf = value(params, "leaf_size");
+    if last == 0 {
+        return [leaf, LEAF_START * height, height, 0.0];
+    }
+    let branch = height * reach * (1.0 - value(params, "cone") * start);
+    let out = value(params, "spread").to_radians().sin().abs().max(0.3);
+    let twig = if last >= 2 {
+        0.5 * height * reach * reach
+    } else {
+        0.0
+    };
+    [branch * out + twig + leaf, start * height, height, 0.0]
+}
+
+/// A box sure to hold the whole tree, from the rows alone, which copies
+/// need to be culled and to draw at their detail levels: the trunk leans
+/// at most as far as its Gnarl can bend it in all its sections, and wood
+/// and leaves reach at most every level's length and the largest leaf
+/// past it, any way.
+fn bounds(params: &ParamValues, s: &Structure) -> Option<MeshBounds> {
+    let height = value(params, "height");
+    let reach = value(params, "reach");
+    let bend = GNARL[0] * value(params, "gnarl") * SECTIONS[0] as f32;
+    let lean = height * bend.min(std::f32::consts::FRAC_PI_2).sin();
+    let leaf = value(params, "leaf_size") * (1.0 + LEAF_SPREAD);
+    let out = (1..=s.last as i32)
+        .map(|l| height * reach.powi(l))
+        .sum::<f32>()
+        + leaf;
+    let side = lean + out;
+    MeshBounds::of_positions([[-side, -out, -side], [side, height + out, side]])
 }
 
 struct Pipelines {
@@ -246,6 +365,9 @@ struct Pipelines {
     bark: GpuComputePipeline,
     index: GpuComputePipeline,
     leaves: GpuComputePipeline,
+    leaf_index: GpuComputePipeline,
+    cards: GpuComputePipeline,
+    lods: GpuComputePipeline,
 }
 
 impl Pipelines {
@@ -256,6 +378,9 @@ impl Pipelines {
             bark: make("bark_main"),
             index: make("index_main"),
             leaves: make("leaves_main"),
+            leaf_index: make("leaf_index_main"),
+            cards: make("cards_main"),
+            lods: make("lods_main"),
         }
     }
 }
@@ -266,6 +391,9 @@ struct TreeBuffers {
     vertices: GpuBuffer,
     indices: GpuBuffer,
     leaves: GpuBuffer,
+    leaf_indices: GpuBuffer,
+    bark_lods: GpuBuffer,
+    leaf_lods: GpuBuffer,
 }
 
 impl TreeBuffers {
@@ -278,6 +406,12 @@ impl TreeBuffers {
             indices: device.try_create_buffer(u64::from(s.indices) * 4, BufferUse::Gpu)?,
             leaves: device
                 .try_create_buffer(u64::from(s.leaf_vertices()) * vertex, BufferUse::Gpu)?,
+            leaf_indices: device
+                .try_create_buffer(u64::from(s.leaf_indices()) * 4, BufferUse::Gpu)?,
+            bark_lods: device
+                .try_create_buffer(u64::from(s.bark_lods_words()) * 4, BufferUse::Gpu)?,
+            leaf_lods: device
+                .try_create_buffer(u64::from(s.leaf_lods_words()) * 4, BufferUse::Gpu)?,
         })
     }
 }
@@ -293,12 +427,15 @@ fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
 manifold_node_engine::primitive! {
     name: Tree,
     type_id: "node.tree",
-    purpose: "Grow a tree from branching rules on the GPU (after EZ-Tree): a trunk and up to three levels of branches as indexed bark vertices, and two crossed leaf cards per leaf on the last level. Height, Trunk Width, Branches, Twigs, Spread, Reach, Start, Gnarl, Lift, Twist, Leaves, Leaf Size and Leaf Angle shape it; Seed picks one of its kind.",
+    purpose: "Grow a tree from branching rules on the GPU (after EZ-Tree): a trunk and up to three levels of branches as indexed bark vertices, and two crossed leaf cards per leaf on the last level, each with four detail levels for far copies. Height, Trunk Width, Branches, Twigs, Spread, Reach, Start, Cone, Gnarl, Lift, Twist, Leaves, Leaf Size and Leaf Angle shape it; Seed picks one of its kind.",
     inputs: {},
     outputs: {
         vertices: Array(MeshVertex),
         indices: Array(u32),
         leaves: Array(MeshVertex),
+        leaf_indices: Array(u32),
+        bark_lods: Array(u32),
+        leaf_lods: Array(u32),
     },
     params: [
         tree_param(0),
@@ -317,9 +454,10 @@ manifold_node_engine::primitive! {
         tree_param(13),
         tree_param(14),
         tree_param(15),
+        tree_param(16),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire vertices and indices into one scene object (the bark) and leaves into another (an alpha-cut leaf material). Height is the trunk in metres; each level below is Reach times the one above, shorter toward the top of its parent. Spread is degrees out from the parent; Lift turns wood up (or down, below 0), thin wood the most. Levels, Branches, Twigs, Leaves and Cards size the outputs.",
+    composition_notes: "Wire vertices, indices and bark_lods into one scene object (the bark) and leaves, leaf_indices and leaf_lods into another (an alpha-cut leaf material). Height is the trunk in metres; each level below is Reach times the one above, shorter toward the top of its parent, and the branches off the trunk by Cone (1 makes a spire). Spread is degrees out from the parent; Lift turns wood up (or down, below 0), thin wood the most. Levels, Branches, Twigs, Leaves and Cards size the outputs.",
     examples: [],
     picker: { label: "Tree", category: Atom },
     summary: "Grows a tree with branches and leaves from a few rows, the same tree every time for the same seed.",
@@ -349,7 +487,10 @@ impl Primitive for Tree {
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "vertices" | "indices" | "leaves")
+        matches!(
+            port,
+            "vertices" | "indices" | "leaves" | "leaf_indices" | "bark_lods" | "leaf_lods"
+        )
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
@@ -358,6 +499,9 @@ impl Primitive for Tree {
             "vertices" => Some(&buffers.vertices),
             "indices" => Some(&buffers.indices),
             "leaves" => Some(&buffers.leaves),
+            "leaf_indices" => Some(&buffers.leaf_indices),
+            "bark_lods" => Some(&buffers.bark_lods),
+            "leaf_lods" => Some(&buffers.leaf_lods),
             _ => None,
         }
     }
@@ -373,6 +517,9 @@ impl Primitive for Tree {
             "vertices" => Some(s.vertices),
             "indices" => Some(s.indices),
             "leaves" => Some(s.leaf_vertices()),
+            "leaf_indices" => Some(s.leaf_indices()),
+            "bark_lods" => Some(s.bark_lods_words()),
+            "leaf_lods" => Some(s.leaf_lods_words()),
             _ => None,
         }
     }
@@ -424,6 +571,9 @@ impl Primitive for Tree {
                 buffer(2, &buffers.vertices),
                 buffer(3, &buffers.indices),
                 buffer(4, &buffers.leaves),
+                buffer(5, &buffers.leaf_indices),
+                buffer(6, &buffers.bark_lods),
+                buffer(7, &buffers.leaf_lods),
             ];
             enc.dispatch_compute(
                 pipeline,
@@ -440,8 +590,29 @@ impl Primitive for Tree {
             enc.compute_memory_barrier_buffers();
         }
         dispatch(enc, &pipelines.bark, &uniforms, structure.vertices);
-        dispatch(enc, &pipelines.index, &uniforms, structure.indices / 6);
+        dispatch(enc, &pipelines.index, &uniforms, structure.indices);
         dispatch(enc, &pipelines.leaves, &uniforms, structure.leaves.max(3));
+        dispatch(
+            enc,
+            &pipelines.leaf_index,
+            &uniforms,
+            structure.leaf_indices(),
+        );
+        dispatch(
+            enc,
+            &pipelines.cards,
+            &uniforms,
+            structure.branch_cards / BRANCH_CARDS + structure.crown_cards,
+        );
+        dispatch(
+            enc,
+            &pipelines.lods,
+            &uniforms,
+            structure.bark_lods_words().max(structure.leaf_lods_words()),
+        );
+        let bounds = bounds(ctx.params, &structure);
+        ctx.outputs.set_cpu_value("vertices", bounds);
+        ctx.outputs.set_cpu_value("leaves", bounds);
         self.drawn = Some(drawn);
     }
 }
@@ -472,9 +643,15 @@ mod tests {
         // Indices: 12 × 12 × 6, 3 × 8 × 7 × 6, 6 × 6 × 5 × 6.
         assert_eq!(s.index_base, [0, 864, 1872, 2952]);
         assert_eq!(s.indices, 2952);
-        // Four leaves on each of the six twigs, two cards of two triangles.
+        // Four leaves on each of the six twigs, two cards of four corners,
+        // then two branch cards on each twig and three round the crown.
         assert_eq!(s.leaves, 24);
-        assert_eq!(s.leaf_vertices(), 288);
+        assert_eq!(s.leaf_vertices(), (24 * 2 + 6 * 2 + 3) * 4);
+        assert_eq!(s.leaf_indices(), 24 * 2 * 6);
+        // Far away: the wood without twigs, then the coarse trunk; one
+        // card a leaf, then the branch cards, then the crown's.
+        assert_eq!(s.bark_lod, 1872);
+        assert_eq!(s.leaf_lods(), [24 * 6, 12 * 6, 3 * 6]);
     }
 
     #[test]

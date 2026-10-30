@@ -588,12 +588,30 @@ fn pcss_shadow_factor(slot: i32, suv: vec2<f32>, ref_depth: f32, z_r: f32, searc
 // sentinel (`render_scene.rs`'s caster-table build). Points outside the
 // caster's frustum read as lit (no shadow data there) rather than
 // clamped-dark.
+// A sun's cascades (`CASCADES` in light.rs), and how far in from a
+// cascade's edge a point must lie for it to be picked, so its filter stays
+// on the map.
+const SUN_CASCADES: i32 = 4;
+const CASCADE_EDGE: f32 = 0.97;
+
 // The caster slot whose shadow view holds `world_pos`: `slot` itself,
-// except for a point light's cube (`ShadowCaster::CUBE`), whose +X face sits
-// at `slot` and its -X, +Y, -Y, +Z, -Z faces at the next five; the face is
-// the largest axis from the light. Copied in `shaft_march.wgsl`.
+// except for a sun (`ShadowCaster::SUN`), whose cascades sit at `slot` and
+// the next three, nearest the camera first, the first that holds the point
+// taken; and a point light's cube (`ShadowCaster::CUBE`), whose +X face
+// sits at `slot` and its -X, +Y, -Y, +Z, -Z faces at the next five, the
+// face the largest axis from the light. Copied in `shaft_march.wgsl`.
 fn caster_face(slot: i32, world_pos: vec3<f32>) -> i32 {
-    if casters[slot].color.w != 2.0 {
+    let kind = casters[slot].color.w;
+    if kind == 0.0 {
+        for (var k = 0; k < SUN_CASCADES - 1; k++) {
+            let clip = (casters[slot + k].view_proj * vec4<f32>(world_pos, 1.0)).xy;
+            if all(abs(clip) < vec2<f32>(CASCADE_EDGE)) {
+                return slot + k;
+            }
+        }
+        return slot + SUN_CASCADES - 1;
+    }
+    if kind != 2.0 {
         return slot;
     }
     let d = world_pos - casters[slot].source.xyz;

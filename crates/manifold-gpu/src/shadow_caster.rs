@@ -63,15 +63,17 @@ gpu_record! {
 }
 
 impl ShadowCaster {
-    /// A sun: `source` is its direction.
+    /// A sun: `source` is its direction. This slot is its nearest cascade
+    /// and the next three its farther ones (`light::CASCADES`).
     pub const SUN: f32 = 0.0;
     /// A point or spot light with one shadow view: `source` is its position.
     pub const POSITIONAL: f32 = 1.0;
     /// A point light's cube: this slot is its +X face and the next five its
     /// -X, +Y, -Y, +Z and -Z faces. Traced like [`Self::POSITIONAL`].
     pub const CUBE: f32 = 2.0;
-    /// One of a cube's five later faces: a shadow view only, black, so the
-    /// tracer shadows the light once, from its first slot.
+    /// One of a cube's five later faces or a sun's later cascades: a shadow
+    /// view only, black, so the tracer shadows the light once, from its
+    /// first slot.
     pub const CUBE_FACE: f32 = 3.0;
 
     /// A ray-traced caster with no shadow map, for tracer-only callers.

@@ -225,7 +225,7 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
             return;
         };
         rest = None;
-        (tree, (tree, "leaves"), None)
+        (tree, (tree, "leaves"), Some((tree, "leaf_indices")))
     } else if let Some(curve) = super::curves::emit(b, item, &fields.shape) {
         rest = curve.rest;
         (curve.solid, curve.vertices, None)
@@ -293,14 +293,20 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     }
     if let Some(indices) = indices {
         b.wire(indices.0, indices.1, object, "indices");
-        // Copies of an imported mesh draw far ones at its detail levels;
-        // a big single one draws each part of itself at its own.
-        if let Shape::Mesh { vertex_count, .. } = &fields.shape {
-            if own_copies || group_copies.is_some() {
-                b.wire(indices.0, "lods", object, "lods");
-            } else if mesh_clusters::worth_clusters(*vertex_count) {
-                b.wire(indices.0, "clusters", object, "clusters");
+        // Copies of an imported mesh or a tree draw far ones at its detail
+        // levels; a big single mesh draws each part of itself at its own.
+        let copied = own_copies || group_copies.is_some();
+        match &fields.shape {
+            Shape::Mesh { vertex_count, .. } => {
+                if copied {
+                    b.wire(indices.0, "lods", object, "lods");
+                } else if mesh_clusters::worth_clusters(*vertex_count) {
+                    b.wire(indices.0, "clusters", object, "clusters");
+                }
             }
+            Shape::Tree if copied => b.wire(indices.0, "bark_lods", object, "lods"),
+            Shape::Leaves if copied => b.wire(indices.0, "leaf_lods", object, "lods"),
+            _ => {}
         }
     }
     for (source, port) in maps {

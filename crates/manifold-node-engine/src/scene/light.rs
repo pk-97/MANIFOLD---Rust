@@ -14,10 +14,11 @@
 //!
 //! Three modes, distinguished by [`LightMode`]:
 //!
-//! - **Sun** — parallel rays from a directional source. `pos` anchors the
-//!   shadow ortho frustum (the shadow pass needs a camera origin); the
-//!   actual lighting direction is `normalize(aim - pos)`. `range` is the
-//!   ortho half-extent (default 30.0).
+//! - **Sun** — parallel rays from a directional source. The lighting
+//!   direction is `normalize(aim - pos)`. A renderer shadows it through
+//!   [`Light::cascades`]: boxes that follow the camera out to
+//!   [`SHADOW_DISTANCE`], each a Sun light whose `pos` anchors its ortho
+//!   frustum and whose `range` is its half-extent.
 //! - **Point** — omnidirectional source at `pos`. A casting point light
 //!   shadows through six cube faces ([`Light::cube_faces`]), one shadow
 //!   view each.
@@ -33,6 +34,25 @@
 //! false` means renderers skip the depth pass entirely.
 
 use crate::mesh::pipeline::{look_at_rh, mat4_mul, ortho_rh, perspective_rh};
+use crate::scene::camera::{Camera, CameraMode, cross3, dot3};
+
+/// The shadow maps a Sun casts through, nearest the camera first
+/// (`SUN_CASCADES` in `scene_shading.wgsl` and `shaft_march.wgsl`).
+pub const CASCADES: usize = 4;
+/// How far from the camera a Sun's shadows reach, in metres.
+pub const SHADOW_DISTANCE: f32 = 2000.0;
+/// How far toward the sun past its box a caster still shadows a cascade:
+/// as far as the cascades reach, so a peak a valley away shades its floor.
+const CASCADE_REACH: f32 = SHADOW_DISTANCE;
+/// The share of each split between cascades spaced evenly over the
+/// distance; the rest is spaced evenly in ratio from `CASCADE_NEAR`
+/// metres, which keeps the near cascades sharp.
+const CASCADE_EVEN: f32 = 0.03;
+const CASCADE_NEAR: f32 = 1.0;
+/// A Sun's default Shadow Bias, and the depth it holds back at it, in each
+/// cascade's own texels.
+const SUN_BIAS: f32 = 0.003;
+const BIAS_TEXELS: f32 = 1.5;
 
 /// Discriminator for the light's geometric kind. All modes share the same
 /// `pos` / `aim` / `colour` / `range` / shadow fields on [`Light`] — only
@@ -390,11 +410,10 @@ impl Light {
     /// `0.1..200`) either clips a large scene or wastes depth precision on
     /// a small one.
     ///
-    /// - **Sun** → orthographic cube of half-extent `range` centred on
-    ///   `aim`, viewed down the light axis from `pos`. Depth spans
-    ///   `[d - range, d + range]` where `d = |pos - aim|`; X/Y span
-    ///   `±range`. This is the tight fit for a `range`-sized scene sitting
-    ///   around `aim`.
+    /// - **Sun** → orthographic box of half-extent `range` round `aim`,
+    ///   viewed down the light axis from `pos`: X/Y span `±range`, depth
+    ///   from `pos` to `range` past `aim`, so everything between the sun's
+    ///   anchor and the box casts into it (a cascade puts `pos` well back).
     /// - **Point** → one cube face: a perspective from `pos` toward `aim`,
     ///   a little wider than 90° so a filter near the face's edge stays on
     ///   its map. `far` must comfortably exceed `range` because attenuation
@@ -403,10 +422,8 @@ impl Light {
     pub fn shadow_proj(&self) -> [[f32; 4]; 4] {
         match self.mode {
             LightMode::Sun => {
-                let d = dist3(self.pos, self.aim);
-                let near = (d - self.range).max(0.05);
-                let far = d + self.range;
-                ortho_rh(-self.range, self.range, -self.range, self.range, near, far)
+                let far = dist3(self.pos, self.aim) + self.range;
+                ortho_rh(-self.range, self.range, -self.range, self.range, 0.0, far)
             }
             LightMode::Point | LightMode::Spot => {
                 let physical_infinite =
@@ -446,6 +463,67 @@ impl Light {
     /// column-major `m[col][row]` convention the shaders use.
     pub fn shadow_view_proj(&self) -> [[f32; 4]; 4] {
         mat4_mul(self.shadow_proj(), self.shadow_view())
+    }
+
+    /// A Sun's shadow cascades for `camera` at `aspect` (width over height):
+    /// boxes round successive slices of the view, nearest first, splitting
+    /// `SHADOW_DISTANCE`. Each box holds its slice's bounding sphere, so it
+    /// keeps its size as the camera turns, and moves in whole texels of its
+    /// map, so shadow edges hold still. Shadow Bias keeps its meaning in
+    /// each cascade's own texels.
+    pub fn cascades(&self, camera: &Camera, aspect: f32) -> [Light; CASCADES] {
+        let texels = self.shadow_resolution.max(1) as f32;
+        let up = pick_up(self.dir);
+        let side = normalize3(cross3(self.dir, up));
+        let lift = cross3(side, self.dir);
+        // How far a corner of the view lies off its axis: per metre ahead
+        // squared (perspective), or fixed squared (orthographic).
+        let (spread, flat) = match camera.mode {
+            CameraMode::Perspective { fov_y } => {
+                let t = (fov_y * 0.5).tan();
+                (t * t * (1.0 + aspect * aspect), 0.0)
+            }
+            CameraMode::Orthographic { half_height } => {
+                (0.0, half_height * half_height * (1.0 + aspect * aspect))
+            }
+        };
+        let near = camera.near.max(1e-3);
+        let far = SHADOW_DISTANCE.min(camera.far).max(2.0 * near);
+        let from = CASCADE_NEAR.clamp(near, far);
+        let split = |i: usize| {
+            if i == 0 {
+                return near;
+            }
+            let f = i as f32 / CASCADES as f32;
+            let ratio = from * (far / from).powf(f);
+            ratio + (near + (far - near) * f - ratio) * CASCADE_EVEN
+        };
+        std::array::from_fn(|i| {
+            let (a, b) = (split(i), split(i + 1));
+            // The sphere through the slice's near and far corners, its
+            // centre on the view axis, or at the far face when that is
+            // nearer; its radius rounded up so float noise never resizes it.
+            let c = ((a + b) * 0.5 * (1.0 + spread)).min(b);
+            let r = ((b - c) * (b - c) + b * b * spread + flat).sqrt();
+            let r = (r * 16.0).ceil() / 16.0;
+            let texel = 2.0 * r / texels;
+            let mut centre: [f32; 3] = std::array::from_fn(|k| camera.pos[k] + camera.fwd[k] * c);
+            for axis in [side, lift] {
+                let d = dot3(centre, axis);
+                let shift = (d / texel).round() * texel - d;
+                for k in 0..3 {
+                    centre[k] += axis[k] * shift;
+                }
+            }
+            let back = r + CASCADE_REACH;
+            Light {
+                pos: std::array::from_fn(|k| centre[k] - self.dir[k] * back),
+                aim: centre,
+                range: r,
+                shadow_bias: self.shadow_bias / SUN_BIAS * BIAS_TEXELS * texel / (back + r),
+                ..*self
+            }
+        })
     }
 
     /// A point light's six shadow views, one per cube face, in the order
@@ -514,6 +592,57 @@ mod tests {
 
     fn approx_vec3(a: [f32; 3], b: [f32; 3], eps: f32) -> bool {
         approx_eq(a[0], b[0], eps) && approx_eq(a[1], b[1], eps) && approx_eq(a[2], b[2], eps)
+    }
+
+    /// Every point the camera sees out to the shadow distance lies inside
+    /// some cascade's map, the near cascades are sharp, and a cascade's
+    /// box sits on its own texel grid wherever the camera stands.
+    #[test]
+    fn cascades_hold_the_view_on_their_texel_grid() {
+        let sun = Light::sun(
+            [300.0, 140.0, -260.0],
+            [0.0, 0.0, 0.0],
+            [1.0; 3],
+            1.0,
+            30.0,
+            true,
+            ShadowSoftness::Soft,
+            SUN_BIAS,
+            4096,
+        );
+        let aspect = 16.0 / 9.0;
+        let fov_y = 0.9f32;
+        let camera = Camera::orbit_perspective(2.5, 0.12, 150.0, fov_y, 200.0, 0.0, 0.05, 20000.0);
+        let cascades = sun.cascades(&camera, aspect);
+        assert!(cascades[0].range < 25.0, "{}", cascades[0].range);
+        assert!(cascades.windows(2).all(|w| w[0].range < w[1].range));
+        let t = (fov_y * 0.5).tan();
+        for step in 1..=60 {
+            let depth = 0.1 * (SHADOW_DISTANCE / 0.1f32).powf(step as f32 / 60.0) * 0.999;
+            for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0), (0.0, 0.0)] {
+                let p: [f32; 3] = std::array::from_fn(|k| {
+                    camera.pos[k]
+                        + camera.fwd[k] * depth
+                        + camera.right[k] * sx * t * aspect * depth
+                        + camera.up[k] * sy * t * depth
+                });
+                let held = cascades.iter().any(|c| {
+                    let m = c.shadow_view_proj();
+                    let clip: [f32; 4] = std::array::from_fn(|r| {
+                        m[0][r] * p[0] + m[1][r] * p[1] + m[2][r] * p[2] + m[3][r]
+                    });
+                    clip[0].abs() <= 1.0 && clip[1].abs() <= 1.0 && (0.0..=1.0).contains(&clip[2])
+                });
+                assert!(held, "a point {depth} m ahead is in no cascade");
+            }
+        }
+        let side = normalize3(cross3(sun.dir, pick_up(sun.dir)));
+        let moved = Camera::orbit_perspective(2.5013, 0.1207, 150.3, fov_y, 200.0, 0.0, 0.05, 20000.0);
+        for c in sun.cascades(&moved, aspect) {
+            let texel = 2.0 * c.range / 4096.0;
+            let along = dot3(c.aim, side) / texel;
+            assert!((along - along.round()).abs() < 0.01, "{along}");
+        }
     }
 
     #[test]
