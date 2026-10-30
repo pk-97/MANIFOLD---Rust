@@ -14,28 +14,22 @@ counts it a second time.
   (`Light::cube_faces`); `caster_face` in `scene_shading.wgsl` and
   `shaft_march.wgsl` picks the face. Only the first entry carries rays
   (`ShadowCaster::CUBE`), so ray-traced shadows trace the light once.
-- Caustics (`render_scene/caustics.rs`, `caustics.wgsl`) run from the first
-  casting Sun only: one GPU-narrowed fit, one map, one `CausticFit`, read by
-  `caustic_light` for that one caster slot.
+- Caustics (`render_scene/caustics.rs`, `caustics.wgsl`) run once per lit
+  light whose view may hold a clear surface: a clear mesh's box is tested on
+  the CPU against the view, a water's reach only on the GPU. A Sun or Spot
+  uses its shadow view. A Point uses one 150° cone toward the clear
+  surfaces' centre, not its cube faces, so light bent across a face's edge
+  still lands; its photons find the scene in whichever face's shadow map
+  holds it. Each light gets its own GPU-narrowed fit, a `CausticFit` at its
+  first caster slot, and its own layer of the caustic map array, capped at
+  1024 square. Sun photons travel parallel; Spot and Point photons leave the
+  light's position. `caustic_light` reads the light's slot and tests "under
+  the surface" as a distance in metres along the light's ray.
 - HDRI light is image-based lighting only. `render_scene` convolves the
   environment once per content version (`prepasses.rs`). Nothing shadows it
   except screen-space AO, or traced GI rays when ray tracing is on.
   "Aim Sun at HDRI" (`hdri_sun.rs`, `scene_edit.rs`) aims the first Sun once;
   the sun in the HDRI still lights the scene through the IBL as well.
-
-## Phase 2: Caustics from every casting light
-
-- `caustics.rs` runs per casting light (each Point face counts as one) whose
-  view holds a clear surface. Lights with none in view cost nothing.
-- Each light gets its own fit, narrowed on the GPU in that light's clip space
-  as today, and its own layer in a caustic map array. The fit buffer becomes
-  one `CausticFit` per caster slot; `caustic_light` reads its slot's entry.
-- Spot and Point photons leave from the light's position, one direction per
-  texel; Sun photons stay parallel. The under-the-surface bias becomes a
-  distance along the light's ray, so it works in perspective depth.
-- Map size per light: its shadow resolution, capped at 1024 as now.
-- Cost: measured per light with `render-import --passes` on a pool scene
-  before and after, reported with the phase.
 
 ## Phase 3: the Sun is the HDRI's sun
 

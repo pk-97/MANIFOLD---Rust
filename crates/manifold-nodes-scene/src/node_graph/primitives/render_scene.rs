@@ -3349,29 +3349,27 @@ impl RenderScene {
             self.ripple_detail
                 .encode(gpu.device, gpu.native_enc, &fields, seconds);
         }
-        // Caustics follow the sun whose shadow map was drawn this frame: the
-        // raster maps render unless traced shadows own the visibility and
-        // nothing is transparent (`raster_shadow_prepasses`).
+        // Caustics follow every light whose shadow map was drawn this frame:
+        // the raster maps render unless traced shadows own the visibility
+        // and nothing is transparent (`raster_shadow_prepasses`).
         let raster_shadows = !(pre.rt_enabled && rt_ready && pre.rt_shadows_enabled)
             || draws.iter().any(ObjectDraw::routes_to_transparent);
-        let sun = caustics::sun_slot(&pre.shadow_casters)
-            .filter(|_| raster_shadows)
-            .and_then(|slot| {
+        let lights = raster_shadows
+            .then(|| {
                 let maps = self.shadow_maps.as_ref()?;
-                maps.layers.get(slot)?;
-                Some(caustics::Sun {
-                    slot,
-                    caster: &pre.shadow_casters[slot],
+                Some(caustics::Lights {
+                    views: &pre.casters[..pre.casters.len().min(maps.layers.len())],
                     shadow_maps: &maps.texture,
                     // A drawn shadow map means its depth state was made.
                     depth_state: self.shadow_depth_stencil.as_ref()?,
                 })
-            });
+            })
+            .flatten();
         let gpu = ctx.gpu_encoder();
         if let Err(error) = self.caustics.encode(
             gpu.device,
             gpu.native_enc,
-            sun,
+            lights,
             &fields,
             &draws,
             &self.ripple_detail,

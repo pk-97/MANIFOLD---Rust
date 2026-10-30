@@ -237,10 +237,10 @@ impl RenderScene {
         let caster_offset = self.caster_offset;
         let refraction_sampler = self.refraction_sampler.as_ref().expect("ensured");
         let prefiltered_sheen = self.prefiltered_sheen.as_ref().unwrap_or(dummy);
-        // The sun's light through the water; a black texel, a cleared depth
-        // and slot 0 when no caustics ran.
-        let caustic_fit = self.caustics.fit().expect("caustics encode ran this frame");
-        let (caustic_map, caustic_surface) = self.caustics.maps().unwrap_or((dummy, dummy_depth));
+        // Each light's light through the clear surfaces; stand-ins that read
+        // off when no caustics ran.
+        let (caustic_map, caustic_surface, caustic_fit) =
+            self.caustics.bindings().expect("caustics encode ran this frame");
         let scene_bindings = |opaque_scene_color| {
             [
                 GpuBinding::Texture {

@@ -303,28 +303,29 @@ struct ShadowCaster {
 @group(0) @binding(10) var shadow_maps: texture_depth_2d_array;
 @group(0) @binding(14) var shadow_sampler: sampler_comparison;
 
-// Caustics (`render_scene/caustics.rs`, `caustics.wgsl`): the sun's light
-// through the water onto what lies under it, in the sun's view narrowed to
-// the water. The renderer binds a black texel, a cleared depth and slot 0
-// when no caustics run.
+// Caustics (`render_scene/caustics.rs`, `caustics.wgsl`): each light's light
+// through the clear surfaces onto what lies under them, in that light's
+// view narrowed to them, at the light's caster slot. The renderer binds
+// one zeroed view and one-layer stand-ins when no caustics run.
 struct CausticFit {
     // The narrowed view and its inverse.
     view_proj: mat4x4<f32>,
     inverse_view_proj: mat4x4<f32>,
-    // The sun's caster slot + 1; 0 when no caustics run this frame.
+    // The caster slot + 1; 0 when this slot has no caustics this frame.
     slot: u32,
-    // How far past the water's surface, in the sun's depth, a receiver must
-    // lie to be under it: the water's own surface stays plainly lit.
+    // How far past the clear surface, in metres along the light, a receiver
+    // must lie to be under it: the surface itself stays plainly lit.
     bias: f32,
     // How strongly the caustics show: 1 is physical, past 1 exaggerated.
     intensity: f32,
-    pad: u32,
+    // The view's layer of `caustic_map` and `caustic_surface`.
+    layer: u32,
 }
-// The light the sun puts through the water, relative to its own.
-@group(0) @binding(11) var caustic_map: texture_2d<f32>;
-// The water's surface in the sun's depth.
-@group(0) @binding(12) var caustic_surface: texture_depth_2d;
-@group(0) @binding(13) var<storage, read> caustic: CausticFit;
+// The light each view puts through the clear surfaces, relative to its own.
+@group(0) @binding(11) var caustic_map: texture_2d_array<f32>;
+// The clear surfaces in each view's depth.
+@group(0) @binding(12) var caustic_surface: texture_depth_2d_array;
+@group(0) @binding(13) var<storage, read> caustics: array<CausticFit>;
 
 // Split-sum IBL. Always bound (same
 // always-bind ABI-stub discipline as bindings 4/5/7/10-14 above) —
@@ -883,9 +884,14 @@ fn light_visibility(caster_slot: f32, world_pos: vec3<f32>, frag_xy: vec2<f32>) 
 }
 
 // The share of caster `slot`'s light that reaches `world_pos` through the
-// water: the caustic map, bilinear, where the point lies under the water in
-// the narrowed view; 1 for any other light, and above or beside the water.
+// clear surfaces: that slot's layer of the caustic map, bilinear, where the
+// point lies under a clear surface in the slot's narrowed view; 1 for a slot
+// with no caustics, and above or beside every clear surface.
 fn caustic_light(slot: u32, world_pos: vec3<f32>) -> vec3<f32> {
+    if slot >= arrayLength(&caustics) {
+        return vec3<f32>(1.0);
+    }
+    let caustic = caustics[slot];
     if caustic.slot != slot + 1u {
         return vec3<f32>(1.0);
     }
@@ -898,9 +904,16 @@ fn caustic_light(slot: u32, world_pos: vec3<f32>) -> vec3<f32> {
     if any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0)) {
         return vec3<f32>(1.0);
     }
+    let layer = i32(caustic.layer);
     let size = vec2<i32>(textureDimensions(caustic_surface));
     let last = size - vec2<i32>(1);
-    if ndc.z <= textureLoad(caustic_surface, min(vec2<i32>(uv * vec2<f32>(size)), last), 0) + caustic.bias {
+    let surface = textureLoad(caustic_surface, min(vec2<i32>(uv * vec2<f32>(size)), last), layer, 0);
+    if ndc.z <= surface {
+        return vec3<f32>(1.0);
+    }
+    // The surface on the same light ray, in metres from the receiver.
+    let on_ray = caustic.inverse_view_proj * vec4<f32>(ndc.xy, surface, 1.0);
+    if distance(world_pos, on_ray.xyz / on_ray.w) <= caustic.bias {
         return vec3<f32>(1.0);
     }
     let p = uv * vec2<f32>(size) - vec2<f32>(0.5);
@@ -908,8 +921,8 @@ fn caustic_light(slot: u32, world_pos: vec3<f32>) -> vec3<f32> {
     let f = p - low;
     let a = clamp(vec2<i32>(low), vec2<i32>(0), last);
     let b = clamp(vec2<i32>(low) + vec2<i32>(1), vec2<i32>(0), last);
-    let top = mix(textureLoad(caustic_map, a, 0).rgb, textureLoad(caustic_map, vec2<i32>(b.x, a.y), 0).rgb, f.x);
-    let bottom = mix(textureLoad(caustic_map, vec2<i32>(a.x, b.y), 0).rgb, textureLoad(caustic_map, b, 0).rgb, f.x);
+    let top = mix(textureLoad(caustic_map, a, layer, 0).rgb, textureLoad(caustic_map, vec2<i32>(b.x, a.y), layer, 0).rgb, f.x);
+    let bottom = mix(textureLoad(caustic_map, vec2<i32>(a.x, b.y), layer, 0).rgb, textureLoad(caustic_map, b, layer, 0).rgb, f.x);
     let light = mix(top, bottom, f.y);
     return max(vec3<f32>(1.0) + caustic.intensity * (light - vec3<f32>(1.0)), vec3<f32>(0.0));
 }

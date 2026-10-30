@@ -1,23 +1,25 @@
-// Caustics: the sun's light bent by the clear surfaces (water, and clear
+// Caustics: a light's light bent by the clear surfaces (water, and clear
 // meshes such as goo, jelly and glass) onto what lies under them, by caustic
 // mapping (Shah, Konttinen and Pattanaik 2007, "Caustics mapping: an
 // image-space technique for real-time caustics"), with the light leaving
 // through the far side as in Wyman 2005 ("An approximate image-space approach
 // for interactive refraction").
 //
-// The caustic map is the sun's view narrowed to the clear surfaces' bounds
-// (`cs_bounds`, `cs_fit`), so its texels are millimetres on a tank, not the
-// sun's shadow texels across its whole range. Every clear surface draws its
-// side toward the sun into `front`, which also tells shading what lies under
-// one, and a clear mesh its far side into `back`, each with its normals and
-// which surface it is (`vs_surface`, `fs_normal`). Each texel of `front` is a
-// photon (`cs_splat`): it refracts the sun's light in there,
+// Each run is one light's view: a sun's or a spot's shadow view, or for a
+// point light one cone toward the clear surfaces, across its cube faces. Its
+// caustic map is that view narrowed to the clear surfaces' bounds (`cs_bounds`, `cs_fit`), so its texels are millimetres on
+// a tank, not the light's shadow texels across its whole range. Every clear
+// surface draws its side toward the light into `front`, which also tells
+// shading what lies under one, and a clear mesh its far side into `back`,
+// each with its normals and which surface it is (`vs_surface`, `fs_normal`).
+// Each texel of `front` is a photon (`cs_splat`): it refracts the light in
+// there (parallel from a sun, from its position for a point or spot),
 // crosses the medium, refracts out where it meets the far side if that comes
-// before the opaque scene, finds where it meets the opaque scene in the sun's
-// shadow map, and adds the light that gets through (Fresnel at each side, and
-// the medium's absorption over its path inside) to the caustic map at that
-// point. The resolve blurs the sums a little and caps them; scene shading
-// reads the map for whatever the sun sees through a clear surface
+// before the opaque scene, finds where it meets the opaque scene in the
+// light's shadow map, and adds the light that gets through (Fresnel at each
+// side, and the medium's absorption over its path inside) to the caustic map
+// at that point. The resolve blurs the sums a little and caps them; scene
+// shading reads the map for whatever the light sees through a clear surface
 // (`caustic_light` in `scene_shading.wgsl`). The shadow maps hold no clear
 // surface, so the map is their shadow too.
 //
@@ -25,7 +27,7 @@
 // cell, so the mesh's facets do not print into the light, tilted by the same
 // ripple detail the water shade lights the surface with
 // (`look_ripple_detail.wgsl`, composed before this file with the field's table
-// reads) at the size of one texel: the small ripples are what focus sunlight
+// reads) at the size of one texel: the small ripples are what focus light
 // into lines. A clear mesh's photon normal is its own, as it shades with it.
 //
 // A flat still pool sends each texel's photon to one texel, so the map reads
@@ -33,19 +35,25 @@
 // brightened. A curved surface bunches photons into lines where it focuses.
 
 struct Splat {
-    // The sun's view-projection, which its shadow map is drawn with, and its
-    // inverse.
-    sun_view_proj: mat4x4<f32>,
-    inverse_sun_view_proj: mat4x4<f32>,
-    // xyz: unit direction toward the sun; w: the sun's shadow-map texel in
-    // uv (1 / its resolution).
-    toward_sun: vec4<f32>,
-    // x: the caustic map's side; y: the sun's shadow-map layer; z: the sun's
-    // caster slot + 1; w 0.
+    // The light's shadow view-projection, which its shadow map is drawn
+    // with, and its inverse.
+    view_proj: mat4x4<f32>,
+    inverse_view_proj: mat4x4<f32>,
+    // w 0: xyz is the unit direction toward a sun; w 1: a spot light's
+    // position; w 2: a point light's, whose shadow views are its cube faces.
+    light: vec4<f32>,
+    // x: the caustic map's side; y: the light's shadow-map layer, its caster
+    // slot; z: that slot + 1; w: this view's layer of the caustic map.
     sizes: vec4<u32>,
-    // x: how far past a clear surface, in the sun's depth, a receiver must
-    // lie to be under it; y: how strongly the caustics show; zw 0.
+    // x: how far past a clear surface, in metres along the light, a receiver
+    // must lie to be under it; y: how strongly the caustics show; z: the
+    // light's shadow-map texel in uv (1 / its resolution); w 0.
     bias: vec4<f32>,
+    // The views the light's shadow maps are drawn with, from layer y on, and
+    // their inverses: a point light's six cube faces, else the light's own
+    // view first.
+    shadow_views: array<mat4x4<f32>, 6>,
+    inverse_shadow_views: array<mat4x4<f32>, 6>,
 };
 
 // One clear surface; field for field with `Clear` in `caustics.rs`.
@@ -66,16 +74,17 @@ struct Clear {
     live: vec4<u32>,
 };
 
-// The caustic map's view; field for field with `CausticFit` in
+// One caster slot's caustic view; field for field with `CausticFit` in
 // `scene_shading.wgsl`.
 struct CausticFit {
     view_proj: mat4x4<f32>,
     inverse_view_proj: mat4x4<f32>,
-    // The sun's caster slot + 1; 0 when there is no clear surface to light.
+    // The caster slot + 1; 0 when there is no clear surface to light.
     slot: u32,
     bias: f32,
     intensity: f32,
-    pad: u32,
+    // The view's layer of the caustic map and surface.
+    layer: u32,
 };
 
 struct MeshVertex {
@@ -91,17 +100,17 @@ struct MeshVertex {
 @group(0) @binding(2) var shadow_maps: texture_depth_2d_array;
 @group(0) @binding(3) var<storage, read_write> sums: array<atomic<u32>>;
 @group(0) @binding(4) var caustic_out: texture_storage_2d<rgba16float, write>;
-// `cs_fit` writes the view at 5; every pass after it reads the same buffer
-// at 6.
-@group(0) @binding(5) var<storage, read_write> fit_out: CausticFit;
-@group(0) @binding(6) var<storage, read> fit: CausticFit;
+// One view per caster slot: `cs_fit` writes this run's at 5; every pass
+// after it reads the same buffer at 6 (`ca_fit`).
+@group(0) @binding(5) var<storage, read_write> fits_out: array<CausticFit>;
+@group(0) @binding(6) var<storage, read> fits: array<CausticFit>;
 @group(0) @binding(7) var<storage, read> vertices: array<MeshVertex>;
 @group(0) @binding(8) var<uniform> clear: Clear;
 @group(0) @binding(9) var front_normal: texture_2d<f32>;
 @group(0) @binding(10) var back: texture_depth_2d;
 @group(0) @binding(11) var back_normal: texture_2d<f32>;
 @group(0) @binding(12) var<storage, read> counts: array<u32>;
-// The clear surfaces' reach in the sun's view: the largest x, y, -x and -y,
+// The clear surfaces' reach in the light's view: the largest x, y, -x and -y,
 // each kept in order by `ca_order`.
 @group(0) @binding(13) var<storage, read_write> bounds: array<atomic<u32>, 4>;
 // Every clear surface this frame, by the index its texels carry.
@@ -113,7 +122,7 @@ const CA_FIXED: f32 = 65536.0;
 const CA_MAX_SPAN: i32 = 16;
 // Refinements of where the refracted ray meets the scene or the far side.
 const CA_STEPS: u32 = 2u;
-// The brightest a focus reads, times the sun's own light, so a sharp focus
+// The brightest a focus reads, times the light's own, so a sharp focus
 // stays a bright line and never a sparkle.
 const CA_MAX: f32 = 4.0;
 // The narrowed view's margin round the clear surfaces, as a share of their
@@ -140,8 +149,19 @@ fn ca_unorder(u: u32) -> f32 {
 
 var<workgroup> ca_reach: array<vec4<f32>, 256>;
 
-// One clear surface's live vertices in the sun's view, reduced per group and
-// folded into `bounds`.
+// This run's caustic view.
+fn ca_fit() -> CausticFit {
+    return fits[s.sizes.y];
+}
+
+// The unit direction toward the light from `p`.
+fn ca_toward_light(p: vec3<f32>) -> vec3<f32> {
+    return select(s.light.xyz, normalize(s.light.xyz - p), s.light.w > 0.5);
+}
+
+// One clear surface's live vertices in the light's view, reduced per group
+// and folded into `bounds`. A vertex behind a point or spot light reaches
+// the whole view.
 @compute @workgroup_size(256)
 fn cs_bounds(
     @builtin(global_invocation_id) gid: vec3<u32>,
@@ -154,7 +174,11 @@ fn cs_bounds(
     }
     var reach = vec4<f32>(-3.0e38);
     for (var i = gid.x; i < live; i = i + groups.x * CA_BOUNDS_GROUP) {
-        let clip = s.sun_view_proj * (clear.model * vec4<f32>(vertices[i].position, 1.0));
+        let clip = s.view_proj * (clear.model * vec4<f32>(vertices[i].position, 1.0));
+        if clip.w <= 0.0 {
+            reach = vec4<f32>(1.0);
+            continue;
+        }
         let xy = clip.xy / clip.w;
         reach = max(reach, vec4<f32>(xy, -xy));
     }
@@ -175,13 +199,16 @@ fn cs_bounds(
     }
 }
 
-// The sun's view narrowed to a square round the clear surfaces' bounds,
-// within the sun's own view.
+// The light's view narrowed to a square round the clear surfaces' bounds,
+// within its own view. The narrowing remaps clip x and y, so it holds for a
+// perspective view as for a sun's.
 @compute @workgroup_size(1)
 fn cs_fit() {
-    fit_out.slot = 0u;
-    fit_out.bias = s.bias.x;
-    fit_out.intensity = s.bias.y;
+    let slot = s.sizes.y;
+    fits_out[slot].slot = 0u;
+    fits_out[slot].bias = s.bias.x;
+    fits_out[slot].intensity = s.bias.y;
+    fits_out[slot].layer = s.sizes.w;
     if atomicLoad(&bounds[0]) == 0u {
         return;
     }
@@ -194,7 +221,7 @@ fn cs_fit() {
     if any(lo >= hi) {
         return;
     }
-    // Clip x and y from [lo, hi] onto [-1, 1]; depth stays the sun's.
+    // Clip x and y from [lo, hi] onto [-1, 1]; depth stays the light's.
     let scale = 2.0 / (hi - lo);
     let offset = -(hi + lo) / (hi - lo);
     let narrow = mat4x4<f32>(
@@ -209,9 +236,9 @@ fn cs_fit() {
         vec4<f32>(0.0, 0.0, 1.0, 0.0),
         vec4<f32>(-offset.x / scale.x, -offset.y / scale.y, 0.0, 1.0),
     );
-    fit_out.view_proj = narrow * s.sun_view_proj;
-    fit_out.inverse_view_proj = s.inverse_sun_view_proj * widen;
-    fit_out.slot = s.sizes.z;
+    fits_out[slot].view_proj = narrow * s.view_proj;
+    fits_out[slot].inverse_view_proj = s.inverse_view_proj * widen;
+    fits_out[slot].slot = s.sizes.z;
 }
 
 struct CaSurfaceOut {
@@ -229,7 +256,7 @@ fn vs_surface(@builtin(vertex_index) vid: u32) -> CaSurfaceOut {
     let cofactor = mat3x3<f32>(cross(m[1], m[2]), cross(m[2], m[0]), cross(m[0], m[1]));
     let outward = select(1.0, -1.0, dot(m[0], cofactor[0]) < 0.0);
     var out: CaSurfaceOut;
-    out.position = fit.view_proj * (clear.model * vec4<f32>(v.position, 1.0));
+    out.position = ca_fit().view_proj * (clear.model * vec4<f32>(v.position, 1.0));
     out.normal = cofactor * v.normal * outward;
     return out;
 }
@@ -250,21 +277,42 @@ fn ca_ndc(uv: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
 }
 
-// The opaque point the sun sees along its ray through x, from its shadow map
-// (which never holds a clear surface); w is 0 off the map or where nothing
-// is.
+// The shadow view holding x: a point light's cube face, in the order of
+// `caster_face` in `scene_shading.wgsl`; else the light's own.
+fn ca_shadow_view(x: vec3<f32>) -> u32 {
+    if s.light.w < 1.5 {
+        return 0u;
+    }
+    let d = x - s.light.xyz;
+    let a = abs(d);
+    if a.x >= a.y && a.x >= a.z {
+        return select(1u, 0u, d.x >= 0.0);
+    }
+    if a.y >= a.z {
+        return select(3u, 2u, d.y >= 0.0);
+    }
+    return select(5u, 4u, d.z >= 0.0);
+}
+
+// The opaque point the light sees along its ray through x, from its shadow
+// map (which never holds a clear surface); w is 0 off the map or where
+// nothing is.
 fn ca_receiver(x: vec3<f32>) -> vec4<f32> {
-    let c = s.sun_view_proj * vec4<f32>(x, 1.0);
+    let view = ca_shadow_view(x);
+    let c = s.shadow_views[view] * vec4<f32>(x, 1.0);
+    if c.w <= 0.0 {
+        return vec4<f32>(0.0);
+    }
     let uv = ca_uv(c.xy / c.w);
     if any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0)) {
         return vec4<f32>(0.0);
     }
-    // The sun renders into the top-left (1 / texel)^2 of its layer.
-    let depth = textureLoad(shadow_maps, vec2<i32>(uv / s.toward_sun.w), i32(s.sizes.y), 0);
+    // The light renders into the top-left (1 / texel)^2 of its layer.
+    let depth = textureLoad(shadow_maps, vec2<i32>(uv / s.bias.z), i32(s.sizes.y + view), 0);
     if depth >= 1.0 {
         return vec4<f32>(0.0);
     }
-    let h = s.inverse_sun_view_proj * vec4<f32>(ca_ndc(uv), depth, 1.0);
+    let h = s.inverse_shadow_views[view] * vec4<f32>(ca_ndc(uv), depth, 1.0);
     return vec4<f32>(h.xyz / h.w, 1.0);
 }
 
@@ -274,17 +322,17 @@ fn ca_on_map(px: vec2<i32>) -> bool {
 
 fn ca_unproject(px: vec2<i32>, depth: f32) -> vec3<f32> {
     let uv = (vec2<f32>(px) + vec2<f32>(0.5)) / f32(s.sizes.x);
-    let h = fit.inverse_view_proj * vec4<f32>(ca_ndc(uv), depth, 1.0);
+    let h = ca_fit().inverse_view_proj * vec4<f32>(ca_ndc(uv), depth, 1.0);
     return h.xyz / h.w;
 }
 
-// The caustic map's texel the sun sees x in.
+// The caustic map's texel the light sees x in.
 fn ca_texel(x: vec3<f32>) -> vec2<i32> {
-    let c = fit.view_proj * vec4<f32>(x, 1.0);
+    let c = ca_fit().view_proj * vec4<f32>(x, 1.0);
     return vec2<i32>(floor(ca_uv(c.xy / c.w) * f32(s.sizes.x)));
 }
 
-// The clear surface's side toward the sun at texel `px`; w is 0 off the map
+// The clear surface's side toward the light at texel `px`; w is 0 off the map
 // or where it is not.
 fn ca_surface(px: vec2<i32>) -> vec4<f32> {
     if !ca_on_map(px) {
@@ -364,6 +412,7 @@ fn ca_add(px: vec2<i32>, side: i32, light: vec3<f32>) {
 fn cs_splat(@builtin(global_invocation_id) gid: vec3<u32>) {
     let side = i32(s.sizes.x);
     let px = vec2<i32>(gid.xy);
+    let fit = ca_fit();
     if fit.slot == 0u || any(px >= vec2<i32>(side)) {
         return;
     }
@@ -378,13 +427,15 @@ fn cs_splat(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let c = clears[index - 1u];
     let p = here.xyz;
-    let sun = s.toward_sun.xyz;
+    let sun = ca_toward_light(p);
     var n: vec3<f32>;
     if c.through.w > 0.5 {
         // One texel in metres: 2 / side of clip space over the view's clip x
-        // per metre. The slope spans about one display cell.
+        // per metre at p's depth (clip w, 1 for a sun). The slope spans about
+        // one display cell.
         let row_x = vec3<f32>(fit.view_proj[0].x, fit.view_proj[1].x, fit.view_proj[2].x);
-        let texel_metres = 2.0 / (f32(side) * length(row_x));
+        let w = (fit.view_proj * vec4<f32>(p, 1.0)).w;
+        let texel_metres = 2.0 * w / (f32(side) * length(row_x));
         let span = clamp(i32(round(ripple.field.x / texel_metres)), 1, CA_MAX_SPAN);
         let along_x = ca_slope(ca_surface(px + vec2<i32>(span, 0)), ca_surface(px - vec2<i32>(span, 0)), p);
         let along_y = ca_slope(ca_surface(px + vec2<i32>(0, span)), ca_surface(px - vec2<i32>(0, span)), p);
@@ -397,7 +448,7 @@ fn cs_splat(@builtin(global_invocation_id) gid: vec3<u32>) {
             n = -n;
         }
         // The ripples at one texel's size (`ripple.time.zw` is 1, 0).
-        // The foam mask is the camera's; the sun's view has no foam.
+        // The foam mask is the camera's; the light's view has no foam.
         if c.through.w < 1.5 {
             n = look_ripple_detail(p, n, texel_metres, 0.0);
         }
@@ -474,12 +525,13 @@ fn cs_splat(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // The sums blurred by a 5 x 5 Gaussian of one texel (sigma 1), as light
-// relative to the sun's, capped at CA_MAX.
+// relative to the light's own, capped at CA_MAX. A view with no clear
+// surface in it writes nothing: shading reads it off by its slot.
 @compute @workgroup_size(16, 16)
 fn cs_resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
     let side = i32(s.sizes.x);
     let px = vec2<i32>(gid.xy);
-    if any(px >= vec2<i32>(side)) {
+    if ca_fit().slot == 0u || any(px >= vec2<i32>(side)) {
         return;
     }
     var weights = array<f32, 5>(0.135335, 0.606531, 1.0, 0.606531, 0.135335);

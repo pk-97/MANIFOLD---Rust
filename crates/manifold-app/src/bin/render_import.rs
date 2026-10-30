@@ -452,6 +452,10 @@ fn dump_def_mode(glb: &std::path::Path, out: &std::path::Path) -> ! {
 }
 
 fn main() {
+    // Node errors reach only the log; without it a failed frame is a silent
+    // magenta still.
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
+        .try_init();
     // P3-D INV-R8 harness mode, resolved before the render arg parser: the
     // capture script drives `render-import --dump-def <glb> <out.json>`.
     {
