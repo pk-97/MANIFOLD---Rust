@@ -261,6 +261,16 @@ manifold_node_engine::primitive! {
             enum_values: &[],
         },
         ParamDef {
+            name: Cow::Borrowed("traced"),
+            label: "Ray Traced",
+            // Off for a detail layer over a surface the tracer already sees
+            // (a Matter's loose grains).
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(true),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
             name: Cow::Borrowed("sky_blocking"),
             label: "Sky Blocking",
             // On for a Terrain, whose vertices carry how much sky the land
@@ -414,6 +424,7 @@ impl Primitive for SceneObjectNode {
         let visible = ctx.scalar_or_param("visible", 1.0) > 0.5;
         let cast_shadows = ctx.scalar_or_param("cast_shadows", 1.0) > 0.5;
         let closed = matches!(ctx.params.get("closed"), Some(ParamValue::Bool(true)));
+        let traced = !matches!(ctx.params.get("traced"), Some(ParamValue::Bool(false)));
         let sky_blocking = matches!(ctx.params.get("sky_blocking"), Some(ParamValue::Bool(true)));
         let copy_shade = ctx.scalar_or_param("copy_shade", 0.0).clamp(0.0, 1.0);
         let sway = ctx.scalar_or_param("sway", 0.0).clamp(0.0, 1.0);
@@ -489,6 +500,7 @@ impl Primitive for SceneObjectNode {
             visible: visible && parent_visible,
             cast_shadows,
             closed,
+            traced,
             sky_blocking,
             copy_shade,
             sway,

@@ -650,6 +650,7 @@ impl RenderScene {
                 vertex_count: object_vertex_count,
                 point_count,
                 live_extent,
+                traced: object.traced,
                 indices,
                 indices_content,
                 lods: indices.and(

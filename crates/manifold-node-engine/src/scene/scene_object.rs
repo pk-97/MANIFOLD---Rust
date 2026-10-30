@@ -43,6 +43,10 @@ pub struct SceneObject {
     /// The mesh is closed and outward-wound, so an opaque draw may skip its
     /// back faces. Set by the scene compiler for built-in solids.
     pub closed: bool,
+    /// Whether ray tracing sees this object. Off for a detail layer drawn
+    /// over a surface the tracer already sees: a Matter's loose grains,
+    /// millions of copies whose tables would not fit, over its surface.
+    pub traced: bool,
     /// The vertices carry how much sky the land around hides, in the slot
     /// after the normal (`node.terrain`), so shading darkens sky light by it.
     /// Off, that slot is padding and never read.

@@ -2035,6 +2035,8 @@ struct ObjectDraw<'ctx> {
     point_count: u32,
     /// The mesh's live extent, when its producer publishes one.
     live_extent: Option<manifold_node_engine::scene::live_extent::LiveExtent>,
+    /// Whether ray tracing sees this object (`SceneObject::traced`).
+    traced: bool,
     indices: Option<&'ctx manifold_gpu::GpuBuffer>,
     indices_content: Option<ContentVersion>,
     /// The indexed mesh's detail levels (`mesh_lods.rs`), which a draw that
@@ -2163,6 +2165,13 @@ struct CameraCull {
 }
 
 impl ObjectDraw<'_> {
+    /// Whether the ray tracer builds this draw into its scene: an opaque or
+    /// cut-out draw with copies, of an object it sees. Every RT table and the
+    /// accel structure's object list keep this order.
+    fn rt_draw(&self) -> bool {
+        self.traced && !self.routes_to_transparent() && self.instance_count > 0
+    }
+
     /// An instanced triangle draw whose instance word the GPU trims to the
     /// last copy that is not a hole. Points mode draws every vertex, which
     /// the triangle-count arguments do not carry, so its instances stay direct.
@@ -3073,6 +3082,7 @@ impl RenderScene {
             visible: true,
             cast_shadows: true,
             closed: false,
+            traced: true,
             sky_blocking: false,
             copy_shade: 0.0,
             sway: 0.0,
@@ -3479,6 +3489,7 @@ impl RenderScene {
             // BUG-trh7 stage 2, pass 7b: the trace + accumulate half. false =
             // the degenerate-camera abort — color unwritten this frame,
             // exactly as the inline return.
+            let rt_draws: Vec<&ObjectDraw> = draws.iter().filter(|d| d.rt_draw()).collect();
             if !self.rt_trace_accumulate(
                 ctx,
                 &pre,
@@ -3488,7 +3499,7 @@ impl RenderScene {
                 denoise_active,
                 rt_just_resumed,
                 objects,
-                &opaque_draws,
+                &rt_draws,
                 gi_materials_data,
                 &alpha_textures,
                 topo_key,

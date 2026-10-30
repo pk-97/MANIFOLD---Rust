@@ -81,7 +81,12 @@ fn grains_draw(b: &mut Builder) {
     let object = b.node(
         SAND_GRAINS_OBJECT,
         "node.scene_object",
-        json!({"instances_space": {"type": "Enum", "value": GROUP_SPACE}}),
+        // The tracer sees the surface under the grains, not their millions
+        // of copies.
+        json!({
+            "instances_space": {"type": "Enum", "value": GROUP_SPACE},
+            "traced": {"type": "Bool", "value": false},
+        }),
     );
     let [frame, particles, material, visible, surface] = [
         "frame",

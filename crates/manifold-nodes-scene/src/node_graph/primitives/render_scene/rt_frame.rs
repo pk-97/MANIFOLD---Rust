@@ -40,9 +40,7 @@ impl RenderScene {
                 }
             }
         }
-        let opaque_draws = draws
-            .iter()
-            .filter(|d| !d.routes_to_transparent() && d.instance_count > 0);
+        let opaque_draws = draws.iter().filter(|d| d.rt_draw());
         // RS-B: build gi_materials alongside objects (SAME order) for
         // the emissive light table at accel-build time. Reused below
         // for the GPU upload at dispatch time.
@@ -510,173 +508,165 @@ impl RenderScene {
         // Resolve resident topology before authoring RT consumer flags or
         // selecting raster fallback. Reuse this exact object list for AS work.
         rt_objects.clear();
-        rt_objects.extend(
-            draws
-                .iter()
-                .filter(|d| rt_enabled && !d.routes_to_transparent() && d.instance_count > 0)
-                .map(|d| {
-                    let rt_instances_wired = d.instances.is_some();
-                    manifold_gpu::raytrace::RtObjectGeometry {
-                        vertex_buffer: d.vertices,
-                        vertex_stride: std::mem::size_of::<MeshVertex>() as u32,
-                        vertex_offset: 0,
-                        index_buffer: d.indices,
-                        triangle_count: d.vertex_count / 3,
-                        transform: d.uniforms.model,
-                        instance_inner: d.uniforms.instance_inner,
-                        // RT-T1-B: `MeshVertex`'s normal field offset (position
-                        // 12 bytes incl. pad + this) — see `mesh_common.rs`'s
-                        // `MeshVertex` layout.
-                        normal_offset: 16,
-                        // RT-T2-A (RAYTRACING_DESIGN.md section 8.2 Tier-2 item 4):
-                        // `MeshVertex`'s UV field offset (position 16 + normal
-                        // 16 = 32).
-                        uv_offset: 32,
-                        alpha_mask: d.alpha_mode == AlphaMode::Mask,
-                        // Translucent objects are non-opaque in their BLAS, so
-                        // transmission walks see them as candidates while plain
-                        // opaque geometry commits in hardware.
-                        translucent: d.uniforms.diffuse_transmission_params[0] > 0.0,
-                        alpha_cutoff: d.uniforms.alpha_params[1],
-                        base_color_texture: d.base_color_map,
-                        // Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): same
-                        // "None = unwired, flat factor fallback" shape as
-                        // `base_color_texture` above.
-                        mr_texture: d.mr_map,
-                        // BUG-wytp (rt-reflections-are-normal-map-blind): the normal map
-                        // reaches the RT kernel exactly the way the MR map does —
-                        // "None = unwired, vertex normal stands" shape. The kernel
-                        // samples it at the primary hit to perturb the reflection
-                        // lobe's R and the AO/GI hemisphere normal.
-                        normal_texture: d.normal_map,
-                        // BUG-1gqt: the emissive map + its KHR_texture_transform
-                        // fold reach the trace kernels (factor × sample at the
-                        // hit), mirroring the raster's `resolve_emissive`.
-                        emissive_texture: d.emissive_map,
-                        emissive_uv_m: d.uniforms.emissive_uv_m,
-                        emissive_uv_t: [d.uniforms.emissive_uv_t[0], d.uniforms.emissive_uv_t[1]],
-                        cast_shadows: d.cast_shadows,
-                        // Wire the
-                        // instance binding from `d.instances` /
-                        // `d.instance_count` — the buffer's GPU address plus the
-                        // live slot count. The count is part of the RT topology
-                        // key below, so changing it rebuilds the descriptor
-                        // slots and keeps tracing consistent with raster/shadow
-                        // draws; content changes ride the accel key via
-                        // `instances_content` (D9).
-                        // Zero live-count objects are filtered above, so the RT
-                        // descriptor kernel never receives a zero-slot buffer.
-                        instances_addr: if rt_instances_wired {
-                            d.instances.map_or(0, |b| b.gpu_address())
-                        } else {
-                            0
-                        },
-                        instances_buffer: if rt_instances_wired {
-                            d.instances
-                        } else {
-                            None
-                        },
-                        instance_slots: if rt_instances_wired {
-                            d.instance_count
-                        } else {
-                            1
-                        },
-                        // Appearance
-                        // reaches RT — per-vertex weights (bindless, pinned in
-                        // the accel's geometry set) + the per-object gain. A
-                        // wired buffer's float count was checked against the
-                        // mesh vertex count in Pass 1 (and again, structured,
-                        // at plan/encode). The descriptor-nonopaque property
-                        // (weights wired || gain != 1.0, via
-                        // `blas_geometry_nonopaque`) rides the topology check,
-                        // so a change in it rebuilds the affected BLAS.
-                        appearance_weights: d.weights,
-                        appearance_gain: d.gain,
-                        base_color_uv_transform: [
-                            d.uniforms.base_color_uv_m[0],
-                            d.uniforms.base_color_uv_m[1],
-                            d.uniforms.base_color_uv_m[2],
-                            d.uniforms.base_color_uv_m[3],
-                            d.uniforms.base_color_uv_t[0],
-                            d.uniforms.base_color_uv_t[1],
-                        ],
-                        mr_uv_transform: [
-                            d.uniforms.mr_uv_m[0],
-                            d.uniforms.mr_uv_m[1],
-                            d.uniforms.mr_uv_m[2],
-                            d.uniforms.mr_uv_m[3],
-                            d.uniforms.mr_uv_t[0],
-                            d.uniforms.mr_uv_t[1],
-                        ],
-                        normal_uv_transform: [
-                            d.uniforms.normal_uv_m[0],
-                            d.uniforms.normal_uv_m[1],
-                            d.uniforms.normal_uv_m[2],
-                            d.uniforms.normal_uv_m[3],
-                            d.uniforms.normal_uv_t[0],
-                            d.uniforms.normal_uv_t[1],
-                        ],
-                        normal_scale: d.uniforms.normal_uv_t[2],
-                        base_color_alpha: d.uniforms.base_color[3],
-                        tangent_offset: 48,
-                        extra_material_textures: [
-                            d.anisotropy_map,
-                            d.specular_map,
-                            d.specular_color_map,
-                            d.clearcoat_map,
-                            d.clearcoat_roughness_map,
-                            d.sheen_color_map,
-                            d.sheen_roughness_map,
-                            d.transmission_map,
-                            d.volume_thickness_map,
-                            d.clearcoat_normal_map,
-                            d.iridescence_map,
-                            d.iridescence_thickness_map,
-                            d.diffuse_transmission_map,
-                            d.diffuse_transmission_color_map,
-                            d.occlusion_map,
-                        ],
-                        material_attributes: manifold_gpu::raytrace::RtMaterialAttributes {
-                            uv1_offset: std::mem::offset_of!(MeshVertex, _pad2) as u32,
-                            color_offset: std::mem::offset_of!(MeshVertex, color) as u32,
-                            sampling: std::array::from_fn(|i| {
-                                let m = d.map_uniforms[[
-                                    0, 1, 2, 3, 4, 9, 13, 14, 5, 6, 7, 8, 10, 11, 12, 15, 16, 17,
-                                    18, 3,
-                                ][i]];
-                                [
-                                    m.offset_set[2] as u32,
-                                    m.sampling[0],
-                                    m.sampling[1],
-                                    m.sampling[2] & 1,
-                                ]
-                            }),
-                            extension_uv_transforms: [
-                                9, 13, 14, 5, 6, 7, 8, 10, 11, 12, 15, 16, 17, 18, 3,
+        rt_objects.extend(draws.iter().filter(|d| rt_enabled && d.rt_draw()).map(|d| {
+            let rt_instances_wired = d.instances.is_some();
+            manifold_gpu::raytrace::RtObjectGeometry {
+                vertex_buffer: d.vertices,
+                vertex_stride: std::mem::size_of::<MeshVertex>() as u32,
+                vertex_offset: 0,
+                index_buffer: d.indices,
+                triangle_count: d.vertex_count / 3,
+                transform: d.uniforms.model,
+                instance_inner: d.uniforms.instance_inner,
+                // RT-T1-B: `MeshVertex`'s normal field offset (position
+                // 12 bytes incl. pad + this) — see `mesh_common.rs`'s
+                // `MeshVertex` layout.
+                normal_offset: 16,
+                // RT-T2-A (RAYTRACING_DESIGN.md section 8.2 Tier-2 item 4):
+                // `MeshVertex`'s UV field offset (position 16 + normal
+                // 16 = 32).
+                uv_offset: 32,
+                alpha_mask: d.alpha_mode == AlphaMode::Mask,
+                // Translucent objects are non-opaque in their BLAS, so
+                // transmission walks see them as candidates while plain
+                // opaque geometry commits in hardware.
+                translucent: d.uniforms.diffuse_transmission_params[0] > 0.0,
+                alpha_cutoff: d.uniforms.alpha_params[1],
+                base_color_texture: d.base_color_map,
+                // Textured roughness (R3) (RAYTRACING_DESIGN.md section 9.6): same
+                // "None = unwired, flat factor fallback" shape as
+                // `base_color_texture` above.
+                mr_texture: d.mr_map,
+                // BUG-wytp (rt-reflections-are-normal-map-blind): the normal map
+                // reaches the RT kernel exactly the way the MR map does —
+                // "None = unwired, vertex normal stands" shape. The kernel
+                // samples it at the primary hit to perturb the reflection
+                // lobe's R and the AO/GI hemisphere normal.
+                normal_texture: d.normal_map,
+                // BUG-1gqt: the emissive map + its KHR_texture_transform
+                // fold reach the trace kernels (factor × sample at the
+                // hit), mirroring the raster's `resolve_emissive`.
+                emissive_texture: d.emissive_map,
+                emissive_uv_m: d.uniforms.emissive_uv_m,
+                emissive_uv_t: [d.uniforms.emissive_uv_t[0], d.uniforms.emissive_uv_t[1]],
+                cast_shadows: d.cast_shadows,
+                // Wire the
+                // instance binding from `d.instances` /
+                // `d.instance_count` — the buffer's GPU address plus the
+                // live slot count. The count is part of the RT topology
+                // key below, so changing it rebuilds the descriptor
+                // slots and keeps tracing consistent with raster/shadow
+                // draws; content changes ride the accel key via
+                // `instances_content` (D9).
+                // Zero live-count objects are filtered above, so the RT
+                // descriptor kernel never receives a zero-slot buffer.
+                instances_addr: if rt_instances_wired {
+                    d.instances.map_or(0, |b| b.gpu_address())
+                } else {
+                    0
+                },
+                instances_buffer: if rt_instances_wired {
+                    d.instances
+                } else {
+                    None
+                },
+                instance_slots: if rt_instances_wired {
+                    d.instance_count
+                } else {
+                    1
+                },
+                // Appearance
+                // reaches RT — per-vertex weights (bindless, pinned in
+                // the accel's geometry set) + the per-object gain. A
+                // wired buffer's float count was checked against the
+                // mesh vertex count in Pass 1 (and again, structured,
+                // at plan/encode). The descriptor-nonopaque property
+                // (weights wired || gain != 1.0, via
+                // `blas_geometry_nonopaque`) rides the topology check,
+                // so a change in it rebuilds the affected BLAS.
+                appearance_weights: d.weights,
+                appearance_gain: d.gain,
+                base_color_uv_transform: [
+                    d.uniforms.base_color_uv_m[0],
+                    d.uniforms.base_color_uv_m[1],
+                    d.uniforms.base_color_uv_m[2],
+                    d.uniforms.base_color_uv_m[3],
+                    d.uniforms.base_color_uv_t[0],
+                    d.uniforms.base_color_uv_t[1],
+                ],
+                mr_uv_transform: [
+                    d.uniforms.mr_uv_m[0],
+                    d.uniforms.mr_uv_m[1],
+                    d.uniforms.mr_uv_m[2],
+                    d.uniforms.mr_uv_m[3],
+                    d.uniforms.mr_uv_t[0],
+                    d.uniforms.mr_uv_t[1],
+                ],
+                normal_uv_transform: [
+                    d.uniforms.normal_uv_m[0],
+                    d.uniforms.normal_uv_m[1],
+                    d.uniforms.normal_uv_m[2],
+                    d.uniforms.normal_uv_m[3],
+                    d.uniforms.normal_uv_t[0],
+                    d.uniforms.normal_uv_t[1],
+                ],
+                normal_scale: d.uniforms.normal_uv_t[2],
+                base_color_alpha: d.uniforms.base_color[3],
+                tangent_offset: 48,
+                extra_material_textures: [
+                    d.anisotropy_map,
+                    d.specular_map,
+                    d.specular_color_map,
+                    d.clearcoat_map,
+                    d.clearcoat_roughness_map,
+                    d.sheen_color_map,
+                    d.sheen_roughness_map,
+                    d.transmission_map,
+                    d.volume_thickness_map,
+                    d.clearcoat_normal_map,
+                    d.iridescence_map,
+                    d.iridescence_thickness_map,
+                    d.diffuse_transmission_map,
+                    d.diffuse_transmission_color_map,
+                    d.occlusion_map,
+                ],
+                material_attributes: manifold_gpu::raytrace::RtMaterialAttributes {
+                    uv1_offset: std::mem::offset_of!(MeshVertex, _pad2) as u32,
+                    color_offset: std::mem::offset_of!(MeshVertex, color) as u32,
+                    sampling: std::array::from_fn(|i| {
+                        let m = d.map_uniforms[[
+                            0, 1, 2, 3, 4, 9, 13, 14, 5, 6, 7, 8, 10, 11, 12, 15, 16, 17, 18, 3,
+                        ][i]];
+                        [
+                            m.offset_set[2] as u32,
+                            m.sampling[0],
+                            m.sampling[1],
+                            m.sampling[2] & 1,
+                        ]
+                    }),
+                    extension_uv_transforms: [9, 13, 14, 5, 6, 7, 8, 10, 11, 12, 15, 16, 17, 18, 3]
+                        .map(|i| {
+                            let m = d.map_uniforms[i];
+                            [
+                                m.matrix[0],
+                                m.matrix[1],
+                                m.matrix[2],
+                                m.matrix[3],
+                                m.offset_set[0],
+                                m.offset_set[1],
                             ]
-                            .map(|i| {
-                                let m = d.map_uniforms[i];
-                                [
-                                    m.matrix[0],
-                                    m.matrix[1],
-                                    m.matrix[2],
-                                    m.matrix[3],
-                                    m.offset_set[0],
-                                    m.offset_set[1],
-                                ]
-                            }),
-                            box_mapping: [
-                                if d.uniforms.surface[1] > 0.5 {
-                                    d.uniforms.surface[2]
-                                } else {
-                                    0.0
-                                },
-                                d.uniforms.surface[3],
-                            ],
+                        }),
+                    box_mapping: [
+                        if d.uniforms.surface[1] > 0.5 {
+                            d.uniforms.surface[2]
+                        } else {
+                            0.0
                         },
-                    }
-                }),
-        );
+                        d.uniforms.surface[3],
+                    ],
+                },
+            }
+        }));
     }
 
     pub(super) fn author_rt_flags<'ctx, 'gpu>(
