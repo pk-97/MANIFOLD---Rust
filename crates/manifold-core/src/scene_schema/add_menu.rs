@@ -663,15 +663,16 @@ pub const FORCE_STARTS: [(&str, &[(&str, f32)]); 3] = [
 ];
 
 /// Particle Scale and Smoothness for packed grains (see [`MATTER_STARTS`]).
-const GRAIN_PARTICLE_SCALE: f32 = 1.5;
+const GRAIN_PARTICLE_SCALE: f32 = 2.0;
 const GRAIN_SMOOTHNESS: f32 = 0.5;
 
 /// Each Matter's surface, built at the simulation's cell (bumps smaller than
 /// a cell are single points jittering, which boil) and smoothed as the
-/// material is. Sand, snow, gravel and pebbles draw their points at 1.5 times
+/// material is. Sand, snow, gravel and pebbles draw their points at twice
 /// their size and half the smoothing: packed grains hold crisp edges and
 /// corners, which the water's larger, smoother blobs round off like a
-/// pillow. Snow breaks off in rounded clumps a few centimetres across,
+/// pillow. Smaller blobs barely overlap, and slits blink open between
+/// resting points as they jitter. Snow breaks off in rounded clumps a few centimetres across,
 /// about one per point; mud, clay and lava keep their lumps and folds, goo, jelly and
 /// liquid metal settle glassy smooth. Gravel is crushed stone about a
 /// centimetre across, piling steeper than sand; pebbles are a few
