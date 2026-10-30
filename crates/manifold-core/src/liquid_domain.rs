@@ -37,9 +37,12 @@ pub const MAX_MATTER_SLOTS: usize = 8;
 /// solver for each group of this many.
 pub const MAX_WATERS: u32 = 8;
 
-/// The input a Sand's state takes the water on: last frame's push at each
-/// grain. The water is not part of the sand's surface either.
-pub const WATER_PUSH_INPUT: &str = "water_push";
+/// The node a Water lifts and drags a Sand through, once a tick inside the
+/// Sand's tick. These ports read the water's step as its last tick left it
+/// (state-capture inputs), and `cell_size` the water's cell. The water is
+/// not part of the sand's surface either.
+pub const WATER_PUSH_NODE: &str = "node.matter_water_push";
+pub const WATER_PUSH_STEP: [&str; 4] = ["faces", "distance", "tiles", "pool_tiles"];
 
 /// How fast sand slows the water inside it, per second at a full cell of
 /// sand: water seeps through packed sand at about g / 40 (0.25 m/s), so it
@@ -94,7 +97,7 @@ pub fn liquid_domains_in(nodes: &[EffectGraphNode]) -> Vec<NestedLiquidDomain> {
 /// smoothing), a mesh drawn from the particles, and particles or grains drawn
 /// as copies of a fixed mesh all reach their domain. A Sand wired into a
 /// Water's step ([`SAND_INPUTS`]) is not the water's, nor a Water pushing a
-/// Sand ([`WATER_PUSH_INPUT`]) the sand's.
+/// Sand ([`WATER_PUSH_NODE`]) the sand's.
 pub fn liquid_domain_of(
     index: &FlatSceneIndex,
     object: &NodeId,
@@ -139,7 +142,9 @@ pub fn liquid_domain_of(
         for wire in index.flat.wires.iter().filter(|wire| {
             wire.to_node == id
                 && !SAND_INPUTS.contains(&wire.to_port.as_str())
-                && wire.to_port != WATER_PUSH_INPUT
+                && !(node.type_id == WATER_PUSH_NODE
+                    && (WATER_PUSH_STEP.contains(&wire.to_port.as_str())
+                        || wire.to_port == "cell_size"))
         }) {
             if seen.insert(wire.from_node) {
                 pending.push(wire.from_node);

@@ -1364,12 +1364,6 @@
     {
       "fromNode": 19,
       "fromPort": "materials",
-      "toNode": 3,
-      "toPort": "materials"
-    },
-    {
-      "fromNode": 19,
-      "fromPort": "materials",
       "toNode": 5,
       "toPort": "materials"
     },

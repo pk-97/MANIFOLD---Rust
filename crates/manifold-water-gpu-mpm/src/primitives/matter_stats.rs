@@ -152,7 +152,9 @@ impl Primitive for MatterStats {
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        (port == "fluid_view").then_some(self.view.as_ref()).flatten()
+        (port == "fluid_view")
+            .then_some(self.view.as_ref())
+            .flatten()
     }
 
     fn array_output_capacity(

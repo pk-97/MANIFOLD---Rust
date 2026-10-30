@@ -620,13 +620,13 @@ const NON_STANDALONE: &[&str] = &[
     // MeshUniforms and FillUniforms are reflected in uniform_layout_extended.
     "node.tile_surface_mesh",
     "node.interior_fill",
-    // The display table's hand build, the wet map, the water at the sand's
-    // grains and the spray mist splat: TileUniforms, WetMapUniforms,
-    // WaterOnSandUniforms and MistUniforms are reflected in
+    // The display table's hand build, the wet map, the water's push on the
+    // Matter and the spray mist splat: TileUniforms, WetMapUniforms,
+    // WaterPushUniforms and MistUniforms are reflected in
     // uniform_layout_extended.
     "node.surface_tiles",
     "node.wet_map",
-    "node.water_on_sand",
+    "node.matter_water_push",
     "node.spray_mist",
     // The whitewater emitter packer, proven above.
     "node.whitewater_influence",

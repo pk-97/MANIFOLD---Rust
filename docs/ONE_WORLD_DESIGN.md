@@ -11,7 +11,7 @@ Paths are relative to `crates/`.
 - **Clocks.** Every solver owns a `SimulationClock`: FLIP `gpu_flip_domain.rs:613` (advanced :1329), Matter `matter_domain.rs:607` (:1650), gas `gas_volume.rs:1001` (:1165), the rigid World `physics.rs:647`. They agree only because each is fed the same played time, Sim Rate and World Speed (`scene_compile/water.rs:626`, `gas.rs:55`). Guards catch drift in the coupled pair (`gpu_flip_domain.rs:1451,1688`, `matter_domain.rs:1800,2016`).
 - **Loops.** The engine runs a substep region per solver: a boundary node and a body that repeats (`node-engine/src/exec/execution/substep_region.rs:77`). Regions never nest or chain (`exec/substeps.rs:297,389`). FLIP's region repeats once per tick (`liquid_state.rs:793`) and its step runs up to 6 substeps inside (`gpu_flip_step/primitive.rs:564`). Matter's repeats once per substep, up to 128 a tick (`matter_state.rs:516`). Gas has no region: `gas_volume` encodes all its ticks in one run. So a frame runs all of water's ticks, then all of Matter's, then all of gas's.
 - **Tables.** FLIP and Matter use the same `WorldTiles` (`water-liquid/src/world_tiles.rs:309`), same 8³ tiles and keys, but each builds its own instance from its own points: FLIP every substep with reach 2 (`gpu_flip_step/tiles.rs:22`), Matter every 6th substep with reach 1 (`matter_to_grid.rs:213`, `matter.rs:648`). The display builds a third (`surface_tiles.rs`). Gas is a dense box at its own cell (`gas_volume.rs:176`). Cells line up: every solver's cell is the World Cell Size times its Quality scale (`scene_compile/water.rs:839`).
-- **Exchange.** Matter reaches water the same frame, after all of Matter's ticks, as a published frame every water substep reads (`water.rs:293`, `forces.wgsl:149`). Water reaches Matter a frame late, as one push per frame: `water_on_sand` samples the display level set and velocity into a state-capture wire (`water.rs:372`, `matter_state.rs:271,457`). Gas reads both a frame late through state capture (`gas_volume.rs:1813`). Bodies step one tick behind the liquid that owns the World (`water-liquid/src/coupling.rs:627`); others hand it their push.
+- **Exchange.** Matter reaches water the same frame, after all of Matter's ticks, as a published frame every water substep reads (`water.rs:293`, `forces.wgsl:149`). Water reached Matter a frame late, as one push per frame from the display level set (phase 4 moved it into the tick). Gas reads both a frame late through state capture (`gas_volume.rs:1813`). Bodies step one tick behind the liquid that owns the World (`water-liquid/src/coupling.rs:627`); others hand it their push.
 
 ## Decisions
 
@@ -47,7 +47,7 @@ Phase 1 landed: the lead's clock reaches every taker through `SharedSolids::foll
 - **Groups.** `NodePairBehavior::co_iterates()`, true for `SharedSolidsPair`. Regions whose clock owners such pairs link form one group (`co_iterated_groups`, `exec/substeps.rs`), ordered so a member runs after every member it reads; two members reading each other within the tick is a compile error. The plan contracts a group as one block (`ExecutionPlan::region_groups`).
 - **Rules inside a group.** A member's body may read another member's body or boundary outputs; outside a group a body wire still may not leave its region, and one region still may not feed another.
 - **Runner.** `run_substep_region` is split into open (boundary frame run, restart, pending), one iteration (begin, finish) and release. `run_region_group` opens every member, then for each tick runs each member's iterations whose clock interval `ordinal` is that tick, in group order, then releases every member's held resources together. The interleaved run is one replay span; the async lane is off inside a group until the optimise pass.
-- **Matter to water inside the tick.** The water step's `sand` reads `node.matter_stats`' `fluid_view`: every grain as a FluidParticle at the end of each tick, written only while read (the `matter_frame` conversion shader). `water_wetness`, `water_on_sand` and gas still read `matter_frame` once a frame; phase 4 replaces them.
+- **Matter to water inside the tick.** The water step's `sand` reads `node.matter_stats`' `fluid_view`: every grain as a FluidParticle at the end of each tick, written only while read (the `matter_frame` conversion shader). `water_wetness` and gas still read `matter_frame` once a frame.
 - **Gas** keeps encoding all its ticks in one run after the group; it joins the loop when it moves onto the table (phase 5).
 
 ## Phase 3 in code: what one table needs
@@ -63,6 +63,23 @@ Plan, each stage compiling and bit-identical until 3c:
 2. **3b.** `WorldTiles` builds into layers it does not own: a World table object in the lead domain with one key set and a layer per material (entry column, slot rows, neighbour rows), each build inserting the other layers' held tiles and re-pointing them.
 3. **3c.** Matter's Points to Grid builds its layer of the World table; its own table goes.
 4. **3d.** Phase 4's exchanges read the other material's slot through the shared entry instead of rescattering particles.
+
+## Phase 4 in code: water pushes Matter within the tick
+
+Landed before the table, on the tick loop:
+
+- **Back edges inside a group.** A body node in a co-iterated group may have state-capture inputs (`Primitive::state_capture_input_ports`) that read another member's body: they take that member's outputs as its last tick left them, and they do not order the group (`exec/substeps.rs`). A capture that reads outside the group stays a compile error.
+- **Water on Matter.** `node.matter_water_push` (`water-gpu-mpm/src/primitives/matter_water_push.rs`) sits in the Matter's tick body between `node.matter_state`'s out and Points to Grid, in place, and runs once a tick at its first substep. It reads the first Water's step (`faces`, `distance`, `tiles`, `pool_tiles`, `cell_size`; `liquid_domain::WATER_PUSH_PORTS`) through state-capture inputs, so in tick k the Matter steps against the water of tick k−1's end, and the water steps against the Matter of tick k's end. The lift and drag law is the old one, exact over the tick.
+- **Gone.** `node.water_on_sand` and its sampling of the display level set, and `node.matter_state`'s once-a-frame drag (`water_push`, `matter_water_drag.wgsl`).
+
+## Phase 6 in code: Terrain as a solid
+
+W6 landed before the table, as a solid every solver already reads:
+
+- **Ground out of the Terrain.** While a Collider reads `node.terrain`'s `source`, the settled land's heights are read back once (through the snapshot buffer, taken when its command buffer completes, so the load's warm-up lands it too) and published as `MeshSource::HeightField` (`node-engine/src/scene/mesh_source.rs`). Rain frames publish nothing new; a changed land reads back again once it settles.
+- **Bodies.** `rigid_body` turns it into `Solid::HeightField` (`physics/src/collision_shape.rs`), cooked as a Box3D height field on a fixed body (`cooked.rs`, `native/box3d/bridge.c`). Box3D's grid starts at its body's origin, so the body sits at the grid's first point (`CookedSolid::placement`, added by `add_cooked` and `update_body`, taken off again by `PhysicsWorld::pose`): poses go in and come out as authored, and the Terrain draws at its body's pose like any Collider. The body's centre of mass (`dynamics`) stays Box3D's, the frame the water's geometry is built in.
+- **Water, Matter, smoke.** The coupling builds `PreparedFluidGeometry::ground` (`water-liquid/src/fluid_role.rs`): its tree is `MeshBvh::height_field`, one root with radius -1 holding the grid, three heights to a vec4. `cb_phi` (`collider_bvh.wgsl`) answers it with `cb_height_phi`: the bilinear ground's distance, solid below, nothing past the grid's edge. Every solver reads solids through `cb_phi`, so all of them collide with it.
+- **Limits.** Terrain takes Collider, never Body. A Terrain moved live gets a lattice, as any moving collider; at Terrain sizes that lattice is large.
 
 ## Risks
 

@@ -13,14 +13,12 @@ use crate::matter::{
     STATS_WORDS, grid_accum_bytes, grid_bytes, substep_duration,
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
-use manifold_core::liquid_domain::WATER_PUSH_INPUT;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::exec::substeps::{
     SubstepBoundaryPorts, SubstepInterval, SubstepResultPorts,
 };
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::wet_map::DRY_SECONDS;
 use manifold_water_liquid::tile_pool::next_pool;
 use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 
@@ -29,13 +27,6 @@ use manifold_water_rigid::physics_metrics::DroppedTimeTracker;
 /// substep; the words themselves live in the domain's reaction slot, which
 /// the domain reads back.
 const REMOVE_NONFINITE_SHADER: &str = include_str!("shaders/matter_remove_nonfinite.wgsl");
-static WATER_DRAG_SHADER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    format!(
-        "{}\n{}",
-        super::matter_common::MATTER_MATERIAL,
-        include_str!("shaders/matter_water_drag.wgsl")
-    )
-});
 
 const RESULTS: &[SubstepResultPorts] = &[
     SubstepResultPorts {
@@ -69,18 +60,6 @@ pub const MATTER_STATE_PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts {
     // The domain: offline it exchanges with Box3D between ticks.
     clock: Some("ticks"),
 };
-
-/// The water drag's uniforms, field order identical to the shader's `Params`.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct WaterDragParams {
-    count: u32,
-    dt: f32,
-    dry: f32,
-    _pad0: u32,
-    gravity: [f32; 3],
-    _pad1: u32,
-}
 
 /// Stats readbacks in flight: the GPU writes a slot at the end of a frame's
 /// region, the CPU reads it once the frame clock says that frame retired.
@@ -116,12 +95,6 @@ manifold_node_engine::primitive! {
     step_cap_hit: ScalarF32 optional,
         substeps_per_tick: ScalarF32 optional,
         epoch: ScalarF32 optional,
-        // Last frame's water at each point (node.water_on_sand), a
-        // state-capture wire, the material table whose rows say how much
-        // the water lifts and drags each point, and the domain's gravity.
-        water_push: Array(f32) optional,
-        materials: Array(f32) optional,
-        gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
     },
     outputs: {
         out: Array(MatterPoint),
@@ -146,7 +119,7 @@ manifold_node_engine::primitive! {
     },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; pool_tiles, pool_ceiling, ticks, substeps_per_tick and epoch from node.matter_domain. The pool grows from the domain's toward pool_ceiling ahead of the tiles the last read tick held (stats word 17); every region atom reads this node's pool_tiles output. The region body (zero_array → matter_move_bodies → matter_to_grid → matter_grid_update → matter_body_reaction → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in, stats_in and reaction_in (node.matter_body_reaction's reaction_out). out and stats escape to node.matter_frame; reaction is the last substep's reaction words, which nothing needs to read. water_push (from node.water_on_sand, a state-capture wire) with materials (node.matter_material's table: each row's lift and drag rate) and gravity (node.matter_domain's) let a water lift and drag the points once a frame. hardened feeds node.matter_domain's hardened, a state-capture wire. Only live points (id ≠ 0) move.",
+    composition_notes: "The substep boundary of the Live Matter group. seed and count come from node.matter_fill; pool_tiles, pool_ceiling, ticks, substeps_per_tick and epoch from node.matter_domain. The pool grows from the domain's toward pool_ceiling ahead of the tiles the last read tick held (stats word 17); every region atom reads this node's pool_tiles output. The region body (zero_array → matter_move_bodies → matter_to_grid → matter_grid_update → matter_body_reaction → grid_to_matter → matter_stats) reads out, grid_accum and grid in place and closes back into in, stats_in and reaction_in (node.matter_body_reaction's reaction_out). out and stats escape to node.matter_frame; reaction is the last substep's reaction words, which nothing needs to read. hardened feeds node.matter_domain's hardened, a state-capture wire. Only live points (id ≠ 0) move.",
     examples: ["SandColumn", "SandBoxDrop"],
     picker: { label: "Matter State", category: Atom },
     summary: "Keeps the liquid's particles between frames and runs its simulation steps.",
@@ -180,7 +153,6 @@ manifold_node_engine::primitive! {
         // A growth the World's memory refused, warned once until one fits.
         growth_refused: bool = false,
         remove_nonfinite: Option<GpuComputePipeline> = None,
-        water_drag: Option<GpuComputePipeline> = None,
     },
 }
 
@@ -259,17 +231,10 @@ impl Primitive for MatterState {
                 "node.matter_state.remove_nonfinite",
             ));
         }
-        if self.water_drag.is_none() {
-            self.water_drag = Some(device.create_compute_pipeline(
-                WATER_DRAG_SHADER.as_str(),
-                "water_drag",
-                "node.matter_state.water_drag",
-            ));
-        }
     }
 
     fn state_capture_input_ports(&self) -> &'static [&'static str] {
-        &["in", "stats_in", "reaction_in", WATER_PUSH_INPUT]
+        &["in", "stats_in", "reaction_in"]
     }
 
     fn persistent_output_ports(&self) -> &'static [&'static str] {
@@ -328,10 +293,6 @@ impl Primitive for MatterState {
         let substeps = whole(ctx.scalar_or_param("substeps_per_tick", 1.0)).max(1);
         let epoch = whole(ctx.scalar_or_param("epoch", 0.0));
         let seed = ctx.inputs.array("seed");
-        let water_push = ctx.inputs.array(WATER_PUSH_INPUT);
-        let materials = ctx.inputs.array("materials");
-        let gravity = [("gravity_x", 0.0), ("gravity", -9.81), ("gravity_z", 0.0)]
-            .map(|(name, default)| ctx.scalar_or_param(name, default));
         let out = ctx.outputs.array("out");
         let stats = ctx.outputs.array("stats");
         let gpu = ctx.gpu_encoder();
@@ -451,50 +412,6 @@ impl Primitive for MatterState {
                 ],
                 [count.div_ceil(256), 1, 1],
                 "node.matter_state.remove_nonfinite",
-            );
-            gpu.native_enc.compute_memory_barrier_buffers();
-        }
-        // The water drags the sand once a frame, over the frame's simulated
-        // time, before the region moves it.
-        let seconds = ticks as f32 * interval_duration;
-        if let (Some(push), Some(materials), Some(out), Some(pipeline)) =
-            (water_push, materials, out, self.water_drag.as_ref())
-            && count > 0
-            && seconds > 0.0
-        {
-            let params = WaterDragParams {
-                count,
-                dt: seconds,
-                dry: DRY_SECONDS,
-                _pad0: 0,
-                gravity,
-                _pad1: 0,
-            };
-            gpu.native_enc.dispatch_compute(
-                pipeline,
-                &[
-                    GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&params),
-                    },
-                    GpuBinding::Buffer {
-                        binding: 1,
-                        buffer: out,
-                        offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 2,
-                        buffer: push,
-                        offset: 0,
-                    },
-                    GpuBinding::Buffer {
-                        binding: 3,
-                        buffer: materials,
-                        offset: 0,
-                    },
-                ],
-                [count.div_ceil(256), 1, 1],
-                "node.matter_state.water_drag",
             );
             gpu.native_enc.compute_memory_barrier_buffers();
         }

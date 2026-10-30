@@ -282,6 +282,9 @@ pub(crate) fn derive_regions(
     // Body wires read outside their region, checked once the groups are
     // known: one may reach a region stepped in the same tick.
     let mut escapes: Vec<(NodeInstanceId, NodeInstanceId, NodeInstanceId)> = Vec::new();
+    // Body nodes with state-capture inputs, checked once the groups are
+    // known: each may read only a region stepped in the same tick.
+    let mut captures: Vec<(NodeInstanceId, NodeInstanceId)> = Vec::new();
     for (boundary, ports, producers) in &declared {
         let (boundary, ports) = (*boundary, *ports);
         let in_body = region_body(boundary, producers, &fwd, &rev);
@@ -316,11 +319,7 @@ pub(crate) fn derive_regions(
                 ));
             }
             if !inst.node.state_capture_input_ports().is_empty() {
-                return Err(malformed(
-                    boundary,
-                    node,
-                    "feedback/state-capture node inside a substep region".to_string(),
-                ));
+                captures.push((boundary, node));
             }
             if inst.node.type_id().as_str() == FINAL_OUTPUT_TYPE_ID
                 || inst.node.boundary_reason() == Some(BoundaryReason::DrawCall)
@@ -415,6 +414,27 @@ pub(crate) fn derive_regions(
                      stepped in the same tick"
                 ),
             ));
+        }
+    }
+    // A state-capture input inside a body reads another region stepped in
+    // the same tick, as that region's last tick left it.
+    for (boundary, node) in captures {
+        let inst = graph.get_node(node).expect("body node exists");
+        let ports = inst.node.state_capture_input_ports();
+        let from = region_of[&boundary];
+        for wire in graph.wires_into(node).filter(|w| ports.contains(&w.to.1)) {
+            if !region_of
+                .get(&wire.from.0)
+                .is_some_and(|&to| same_group(from, to))
+            {
+                return Err(malformed(
+                    boundary,
+                    node,
+                    "a state-capture input inside a substep region must read a region \
+                     stepped in the same tick"
+                        .to_string(),
+                ));
+            }
         }
     }
     // One region feeding another (chaining) is supported only inside a
@@ -1651,6 +1671,7 @@ mod tests {
         log: Log,
         root: bool,
         value: Option<f32>,
+        captures: &'static [&'static str],
     }
 
     impl Adder {
@@ -1668,6 +1689,7 @@ mod tests {
                 log,
                 root: false,
                 value: None,
+                captures: &[],
             }
         }
 
@@ -1704,6 +1726,9 @@ mod tests {
         }
         fn is_liveness_root(&self) -> bool {
             self.root
+        }
+        fn state_capture_input_ports(&self) -> &[&str] {
+            self.captures
         }
         fn evaluate(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
             let out = if let Some(v) = self.value {
@@ -2016,7 +2041,9 @@ mod tests {
         let water = boundary(&mut graph, 2);
         let sand = boundary(&mut graph, 4);
         let water_body = graph.add_node(Box::new(Adder::new("water", log.clone())));
-        let sand_body = graph.add_node(Box::new(Adder::new("sand", log.clone())));
+        let mut sand_adder = Adder::new("sand", log.clone());
+        sand_adder.captures = &["c"];
+        let sand_body = graph.add_node(Box::new(sand_adder));
         let consumer = graph.add_node(Box::new(Adder::root("consumer", log.clone())));
         for (clock, boundary, body) in [
             (water_clock, water, water_body),
@@ -2032,6 +2059,11 @@ mod tests {
         }
         graph
             .connect((sand_body, "out"), (water_body, "c"))
+            .unwrap();
+        // The sand reads the water back through a state-capture input: the
+        // water as its last tick left it.
+        graph
+            .connect((water_body, "out"), (sand_body, "c"))
             .unwrap();
         graph.connect((water, "out"), (consumer, "a")).unwrap();
         graph.connect((sand, "out"), (consumer, "b")).unwrap();
@@ -2050,18 +2082,18 @@ mod tests {
             .filter(|entry| entry.starts_with("water") || entry.starts_with("sand"))
             .cloned()
             .collect();
-        // Sand: 1 + 0, then 1 + 1 = 2 ends tick 0; 2 + 2, then 4 + 3 = 7
-        // ends tick 1. The water reads 2 (its state becomes 1 + 0 + 2),
-        // then 7.
+        // Sand: 1 + 0, then 1 + 1 = 2 ends tick 0, before any water. The
+        // water reads 2 (1 + 0 + 2 = 3). Tick 1's sand reads the water's 3:
+        // 2 + 2 + 3 = 7, then 7 + 3 + 3 = 13. The water reads 13.
         assert_eq!(
             bodies,
             [
                 "sand a=1 b=0 c=none",
                 "sand a=1 b=1 c=none",
                 "water a=1 b=0 c=2",
-                "sand a=2 b=2 c=none",
-                "sand a=4 b=3 c=none",
-                "water a=3 b=1 c=7",
+                "sand a=2 b=2 c=3",
+                "sand a=7 b=3 c=3",
+                "water a=3 b=1 c=13",
             ]
         );
     }

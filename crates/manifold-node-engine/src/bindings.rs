@@ -426,7 +426,9 @@ impl<'a> NodeInputs<'a> {
     /// A registered CPU payload from an already-resolved slot, read through
     /// an array switch's alias to its chosen input's.
     pub fn cpu_value_slot<T: Clone + Send + 'static>(&self, slot: Slot) -> Option<T> {
-        self.backend.cpu_values().get(self.backend.array_source(slot))
+        self.backend
+            .cpu_values()
+            .get(self.backend.array_source(slot))
     }
 
     /// [`MeshSource`] bound to an already-resolved [`Slot`] — no name scan.

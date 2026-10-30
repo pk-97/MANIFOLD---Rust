@@ -85,8 +85,13 @@ pub fn live_body_limit(
     wave: f32,
     density: f32,
 ) -> Option<f32> {
-    body_limit_details(owner.face_areas().zip(owner.rows()), cell_size, wave, density)
-        .map(|(dt, _, _)| dt)
+    body_limit_details(
+        owner.face_areas().zip(owner.rows()),
+        cell_size,
+        wave,
+        density,
+    )
+    .map(|(dt, _, _)| dt)
 }
 
 /// The same limit over the bodies a Matter that takes another liquid's
@@ -113,9 +118,12 @@ pub fn body_limit(
     density: f32,
     v_est: f32,
 ) -> Result<Option<f32>, String> {
-    let Some((dt, index, face_area)) =
-        body_limit_details(owner.face_areas().zip(owner.rows()), cell_size, wave, density)
-    else {
+    let Some((dt, index, face_area)) = body_limit_details(
+        owner.face_areas().zip(owner.rows()),
+        cell_size,
+        wave,
+        density,
+    ) else {
         return Ok(None);
     };
     if substeps_per_tick(cell_size, wave, v_est, Some(dt), None) > MAX_SUBSTEPS {

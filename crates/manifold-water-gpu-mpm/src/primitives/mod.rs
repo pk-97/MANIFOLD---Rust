@@ -12,5 +12,6 @@ mod matter_state;
 mod matter_static_solid;
 mod matter_stats;
 mod matter_to_grid;
+mod matter_water_push;
 
 pub use matter_state::points_removed_for_tiles;

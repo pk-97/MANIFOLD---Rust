@@ -24,7 +24,9 @@
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
-use manifold_core::liquid_domain::{MAX_MATTER_SLOTS, MAX_WATERS};
+use manifold_core::liquid_domain::{
+    MAX_MATTER_SLOTS, MAX_WATERS, WATER_PUSH_NODE, WATER_PUSH_STEP,
+};
 use manifold_core::scene_doc::{Item, ItemFields, ItemKind, Quality, SceneDoc, SourceShape};
 use manifold_core::scene_schema::{
     DOMAIN_ROLE, GRAIN_SHAPE_ROLE, GRAIN_SQUASH_ROLE, PHYSICS_VIEW_SWITCHES, SOLID,
@@ -63,13 +65,15 @@ pub(crate) fn items_of(
     found
 }
 
-/// The Sand template's particle frame, state and domain, and the Water
-/// template's step and wet map: sand reaches the water from the one to the
-/// others, and the water pushes the sand back through the state. The step
-/// reads the sand of the same tick from `MATTER_TICK_STATS`.
+/// The Sand template's particle frame, state, domain and Points to Grid, and
+/// the Water template's step and wet map: sand reaches the water from the
+/// one to the others, and the water pushes the sand back in the sand's tick
+/// ([`water_push`]). The step reads the sand of the same tick from
+/// `MATTER_TICK_STATS`.
 const SAND_FRAME: &str = "frame";
 const SAND_STATE: &str = "state";
 const SAND_DOMAIN: &str = "domain";
+const MATTER_TO_GRID: &str = "matter_points_to_grid";
 /// The Sand template's `node.matter_material`: what the Sand is made of.
 const MATTER_MATERIAL: &str = "material";
 /// The Sand template's solver nodes. A later Sand splices none of them and
@@ -78,7 +82,7 @@ const MATTER_SOLVER: [&str; 10] = [
     SAND_DOMAIN,
     "matter_fill",
     SAND_STATE,
-    "matter_points_to_grid",
+    MATTER_TO_GRID,
     "matter_grid_update",
     "matter_grid_to_points",
     MATTER_TICK_STATS,
@@ -188,8 +192,8 @@ pub(crate) struct MatterFrames {
 /// Water: its particles this frame reach each water's step, which slows the
 /// water inside the sand, so water soaks into a pile instead of passing
 /// through it, and each water's wet map, which marks the sand where the
-/// water touches it. The first Water drags those grains back
-/// ([`water_on_sand`]).
+/// water touches it. The first Water lifts and drags those grains back
+/// once a tick ([`water_push`]).
 pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
     let all = waters(b.doc);
     let sources = |item: &Item| {
@@ -305,12 +309,8 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
             b.wire(frame, "count_b", wetness, count);
         }
     }
-    if let (Some((owner, ids)), Some(&state), Some(&domain)) = (
-        water_ids.first(),
-        solver.ids.get(SAND_STATE),
-        solver.ids.get(SAND_DOMAIN),
-    ) {
-        water_on_sand(b, owner, ids, [frame, state, domain]);
+    if let Some(&step) = water_ids.first().and_then(|(_, ids)| ids.get("step")) {
+        water_push(b, step, solver);
     }
     frames
 }
@@ -369,49 +369,44 @@ fn join_slots(b: &mut Builder<'_>, solver: &Solver, couples: bool) -> Option<u32
     coupling
 }
 
-/// The water at each grain of the Sand (`node.water_on_sand`), from the
-/// Water's display level set and velocity (the sources of its Physics View
-/// switches) on its display tiles (the wet map's), into the Sand's state on
-/// the next frame, which lifts the grains under water and drags them toward
-/// the water's velocity, each by its own row of the material table.
-fn water_on_sand(
-    b: &mut Builder<'_>,
-    owner: &str,
-    water: &BTreeMap<String, u32>,
-    [frame, state, domain]: [u32; 3],
-) {
-    let source =
-        |b: &Builder<'_>, node: &str, port: &str| water.get(node).and_then(|&id| b.input(id, port));
-    let (Some(field), Some(velocity), Some(tiles), Some(pool_tiles), Some(cell_size)) = (
-        source(b, PHYSICS_VIEW_SWITCHES[0], "in_0"),
-        source(b, PHYSICS_VIEW_SWITCHES[1], "in_0"),
-        source(b, WATER_WETNESS, "tiles"),
-        source(b, WATER_WETNESS, "pool_tiles"),
-        source(b, WATER_WETNESS, "cell_size"),
+/// The first Water lifts and drags the Sand once a tick
+/// (`node.matter_water_push`, between the Sand's state and its Points to Grid
+/// in the Sand's tick), from the water's step as its last tick left it: in
+/// the World's tick loop the Sand steps before the water, which reads the
+/// grains of the same tick.
+fn water_push(b: &mut Builder<'_>, step: u32, solver: &Solver) {
+    let ids = &solver.ids;
+    let (Some(&state), Some(&domain), Some(&to_grid)) = (
+        ids.get(SAND_STATE),
+        ids.get(SAND_DOMAIN),
+        ids.get(MATTER_TO_GRID),
     ) else {
         return;
     };
-    let node = b.add(owner, "water_on_sand", "node.water_on_sand");
-    let [points, count] = manifold_core::liquid_domain::SAND_INPUTS;
-    b.wire(frame, "particles_b", node, points);
-    b.wire(frame, "count_b", node, count);
+    let (Some(cell_size), Some(materials), Some(count)) = (
+        b.input(step, "cell_size"),
+        b.input(to_grid, "materials"),
+        b.input(to_grid, "active_count"),
+    ) else {
+        return;
+    };
+    let node = b.add(&solver.owner, "water_push", WATER_PUSH_NODE);
+    b.wire(state, "out", node, "points");
+    b.rewire(node, "points_out", to_grid, "points");
+    b.wire(state, "tick_start", node, "tick_start");
+    b.wire(domain, "interval_duration", node, "interval_duration");
+    for port in ["gravity_x", "gravity", "gravity_z"] {
+        b.wire(domain, port, node, port);
+    }
     for ((from, port), to) in [
-        (field, "levelset"),
-        (velocity, "velocity"),
-        (tiles, "tiles"),
-        (pool_tiles, "pool_tiles"),
+        (materials, "materials"),
+        (count, "active_count"),
         (cell_size, "cell_size"),
     ] {
         b.wire(from, &port, node, to);
     }
-    b.wire(
-        node,
-        "push",
-        state,
-        manifold_core::liquid_domain::WATER_PUSH_INPUT,
-    );
-    for port in ["gravity_x", "gravity", "gravity_z"] {
-        b.wire(domain, port, state, port);
+    for port in WATER_PUSH_STEP {
+        b.wire(step, port, node, port);
     }
 }
 

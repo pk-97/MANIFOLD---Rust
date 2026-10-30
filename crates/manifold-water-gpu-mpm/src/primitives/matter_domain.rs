@@ -55,10 +55,12 @@ use manifold_water_liquid::bounds::{
 };
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{
-    DomainWalls, Followed, LiquidRigidOwner, ObservedPush, PendingTick, SharedSolids,
-    SharesSolids, takes_reaction,
+    DomainWalls, Followed, LiquidRigidOwner, ObservedPush, PendingTick, SharedSolids, SharesSolids,
+    takes_reaction,
 };
-use manifold_water_liquid::fluid_role::{FluidRole, FluidRoleKind, InitialFill, take_initial_fills};
+use manifold_water_liquid::fluid_role::{
+    FluidRole, FluidRoleKind, InitialFill, take_initial_fills,
+};
 use manifold_water_liquid::gizmos::SetupReport;
 use manifold_water_rigid::coupled_frame::{CoupledRigidInputs, RigidFrame, RigidPresentation};
 use manifold_water_rigid::node::{PhysicsNode, PhysicsNodeRegistration};
