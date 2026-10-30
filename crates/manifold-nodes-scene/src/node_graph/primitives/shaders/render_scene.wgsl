@@ -1853,6 +1853,7 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // because materials are shared. After the cutout test, which stays on
     // the material's own alpha.
     var grain = Grain(albedo.rgb, N, mr.x);
+    let surface_n = N;
     if u.surface.x > 0.0 {
         grain = sand_grain(in.world_pos, N, albedo.rgb, mr.x, u.surface.x);
         N = grain.normal;
@@ -1867,9 +1868,12 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     // Specular anti-aliasing (Kaplanyan 2016, with Filament's constants):
     // normal detail finer than a pixel widens the highlight instead of
     // sparkling, and so does the detail the map's mips averaged away
-    // (`bump_variance`).
-    let dn_x = dpdx(N);
-    let dn_y = dpdy(N);
+    // (`bump_variance`). Grain bends are left out: the grain pattern keeps
+    // its cells two pixels across or more, so they are filtered already, and
+    // widening them would melt each glinting facet into a dull sheen.
+    let aa_n = select(N, surface_n, u.surface.x > 0.0);
+    let dn_x = dpdx(aa_n);
+    let dn_y = dpdy(aa_n);
     let alpha = wet.roughness * wet.roughness;
     let kernel = min(0.3 * (dot(dn_x, dn_x) + dot(dn_y, dn_y)), 0.2);
     let roughness = sqrt(sqrt(clamp(alpha * alpha + kernel + bump_variance, 0.0, 1.0)));
