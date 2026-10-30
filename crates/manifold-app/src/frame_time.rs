@@ -1097,6 +1097,9 @@ pub fn run(args: &[String]) -> ! {
     }
 }
 
+/// The longest a frame-clocked run waits for file loads before frame 0.
+const LOAD_SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
+
 fn probe(args: &Args) -> Result<(), String> {
     let initial_faults = manifold_gpu::gpu_fault::mark();
     let mut overridden = 0usize;
@@ -1176,6 +1179,22 @@ fn probe(args: &Args) -> Result<(), String> {
 
     ct.timer.set_frame_clocked(args.frame_clock);
     ct.timer.resume_after_load();
+    // A frame-clocked run is a repeatable capture: paused frames let every
+    // file load land first (an HDRI and the Sun that follows it, textures
+    // uploading a band a frame), so frame N shows the same picture however
+    // fast the run goes.
+    if args.frame_clock {
+        let deadline = Instant::now() + LOAD_SETTLE_LIMIT;
+        while ct.engine.has_pending_decodes() {
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "file loads still pending after {LOAD_SETTLE_LIMIT:?}"
+                ));
+            }
+            manifold_gpu::autorelease_scope(|| ct.tick_frame(&state_tx));
+            ct.content_pipeline.wait_for_render_complete();
+        }
+    }
     if let Some(seed) = args.pre_play_delay_seed {
         let delay = pre_play_delay(seed, f64::from(ct.engine.frame_rate()));
         println!(

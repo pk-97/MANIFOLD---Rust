@@ -31,6 +31,7 @@ Workers: `haiku` (the `lane` agent) for mechanical edits, deletions, moves and w
 - Work in the main checkout. No worktrees unless Peter asks.
 - Builds and tests are the lead's. Iterate with `cargo nextest run -p <crate> <filter>`. Before committing, run `cargo clippy -p <crate> --tests -- -D warnings`.
 - Slim loop per change: shader edits go through `scripts/wgsl_check.py` before any `cargo`; iterate on the debug build; render stills from the `stills` profile (`--profile stills`, release code that rebuilds incrementally; debug cannot load asset scenes in time, and perf numbers always come from `--release`); the full suite never runs per change. At most one test per change, and only for what a still cannot show.
+- Other sessions build this tree. Write every file of a cross-file change in one step before any build, and rename by adding the new name, moving callers, then deleting the old, so the tree compiles at every step.
 - Commit with explicit paths (`git commit -m '...' -- <paths>`), never `git add -A` or `git commit -a`.
 - When `cargo fmt` reformats files you didn't otherwise touch, leave them and don't restore them; commit them along with your change.
 - Never launch the `manifold` GUI. Use the headless subcommands (`ui-snap`, `perf-soak`, `rt-capture`, `bridge-probe`) or `scripts/run_ui_flows.py`. Peter runs the live app.

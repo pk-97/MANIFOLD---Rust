@@ -174,7 +174,8 @@ mod tests {
             )
         }
 
-        /// A point light's 90 degree perspective, forward-Z shadow volume.
+        /// A point light's cube-face perspective, forward-Z shadow volume: a
+        /// little over 90 degrees, so neighbouring faces overlap at the seam.
         fn point() -> Self {
             let (pos, aim, range) = ([-3.0, 5.0, 6.0], [0.0, 0.0, 0.0], 10.0f32);
             let light = Light::point(
@@ -188,11 +189,12 @@ mod tests {
                 0.003,
                 1024,
             );
+            let proj = light.shadow_proj();
             Self::new(
                 light.shadow_view_proj(),
                 light.shadow_view(),
                 pos,
-                [1.0; 2],
+                [1.0 / f64::from(proj[0][0]), 1.0 / f64::from(proj[1][1])],
                 [0.0; 2],
                 (range * 0.05, range * 4.0),
             )

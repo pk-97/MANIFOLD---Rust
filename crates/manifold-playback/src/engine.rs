@@ -601,6 +601,10 @@ impl PlaybackEngine {
             !self.renderers[idx].needs_prepare_phase() || self.renderers[idx].is_clip_ready(clip_id)
         })
     }
+    /// True while any renderer still has a decode or file load in flight.
+    pub fn has_pending_decodes(&self) -> bool {
+        self.renderers.iter().any(|r| r.has_pending_decodes())
+    }
     /// Block until all in-flight video decode jobs complete.
     /// Called in export loop to ensure decode keeps up with render speed.
     pub fn flush_pending_decodes(&mut self) {

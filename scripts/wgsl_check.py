@@ -83,7 +83,7 @@ SOLID_DISTANCE_STUB = """struct LiquidBody {
 }
 struct LiquidShape {
     origin_spacing: vec4<f32>, dims_x: u32, dims_y: u32, dims_z: u32, atlas_offset: u32,
-    scale_min: vec4<f32>,
+    scale_min: vec4<f32>, tree_node: u32, tree_triangle: u32, tree: u32, tree_pad: u32,
 }
 struct Params {
     cell_size: f32, closed_faces: i32,
@@ -98,6 +98,8 @@ struct Params {
 @group(0) @binding(3) var<storage, read> buf_atlas: array<u32>;
 @group(0) @binding(4) var<storage, read> buf_tiles: array<u32>;
 @group(0) @binding(5) var<storage, read_write> buf_solid: array<f32>;
+@group(0) @binding(10) var<storage, read> buf_collider_nodes: array<vec4<f32>>;
+@group(0) @binding(11) var<storage, read> buf_collider_triangles: array<vec4<f32>>;
 """
 SOLID_DISTANCE_MAIN = """@compute @workgroup_size(256)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -169,7 +171,7 @@ STACKS = {
     "push_out_of_solid": (False, [PUSH_OUT_STUB, WORLD_READ, FLIP / "push_out_of_solid_body.wgsl",
                                   PUSH_OUT_MAIN]),
     "liquid_solid_distance": (False, [SOLID_DISTANCE_STUB, WORLD_READ, LIQ / "liquid_pose.wgsl",
-                                      LIQ / "liquid_collider.wgsl",
+                                      LIQ / "liquid_collider.wgsl", LIQ / "collider_bvh.wgsl",
                                       FLIP / "liquid_solid_distance_body.wgsl",
                                       SOLID_DISTANCE_MAIN]),
     # The scene renderer's field reads: the stacks `water_march.rs`,

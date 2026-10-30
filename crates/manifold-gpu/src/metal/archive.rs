@@ -10,6 +10,9 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSString, NSURL};
 use objc2_metal::{MTLBinaryArchive, MTLBinaryArchiveDescriptor, MTLDevice};
 
+/// The archive size past which it starts fresh.
+const ARCHIVE_LIMIT: u64 = 384 << 20;
+
 /// Pipeline binary archive — wraps MTLBinaryArchive.
 pub struct GpuPipelineArchive {
     archive: Retained<ProtocolObject<dyn MTLBinaryArchive>>,
@@ -28,6 +31,13 @@ unsafe impl Sync for GpuPipelineArchive {}
 impl GpuPipelineArchive {
     /// Load an existing archive from disk, or create a new empty one.
     pub fn load_or_create(device: &ProtocolObject<dyn MTLDevice>, path: &Path) -> Option<Self> {
+        // The archive only grows: every pipeline any build compiled stays in
+        // it. Past ARCHIVE_LIMIT it starts empty, and the app's next save
+        // holds only what that run built.
+        if std::fs::metadata(path).is_ok_and(|meta| meta.len() > ARCHIVE_LIMIT) {
+            log::info!("Pipeline archive past {ARCHIVE_LIMIT} bytes; starting it fresh");
+            let _ = std::fs::remove_file(path);
+        }
         let url_string = format!("file://{}", path.display());
         let url_ns = NSString::from_str(&url_string);
         let url = NSURL::initWithString(NSURL::alloc(), &url_ns)

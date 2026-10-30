@@ -39,7 +39,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use manifold_core::NodeId;
-use manifold_core::fluid_domain::domain_layout;
 use manifold_core::liquid_domain::is_liquid_domain;
 use manifold_core::params::ParamManifest;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
@@ -48,7 +47,6 @@ use manifold_node_engine::gpu::headless_readback::{
     encode_rgba8_png, readback_srgb_rgba8, readback_tonemapped_rgba8,
 };
 use manifold_node_engine::gpu::render_target::RenderTarget;
-use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
 use manifold_node_engine::runtime::preset_context::PresetContext;
@@ -123,7 +121,6 @@ struct PresetSettings {
     /// outputs the capture reads, and the `particles_b` it dumps.
     frame_node: String,
     resolution: u32,
-    domain_size: f64,
     /// The domain's Cell Size in metres; the grid is `domain_size / cell_size`.
     cell_size: f64,
     surface_detail: u32,
@@ -341,7 +338,6 @@ fn preset_settings(json: &str, water: Option<&str>) -> CaptureResult<PresetSetti
             solver: Solver::None,
             frame_node: String::new(),
             resolution: 0,
-            domain_size: 0.0,
             cell_size: 0.0,
             surface_detail: 0,
             viscosity: 0.0,
@@ -416,7 +412,6 @@ fn preset_settings(json: &str, water: Option<&str>) -> CaptureResult<PresetSetti
         solver: Solver::Gpu,
         frame_node,
         resolution: resolution.round() as u32,
-        domain_size,
         cell_size,
         surface_detail: 0,
         viscosity: 0.0,
@@ -1089,7 +1084,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
     let frame_dt = 1.0 / f64::from(options.fps);
     let device = Arc::new(GpuDevice::new_queued("fluid_capture"));
     // The app's compiled shaders, so a capture starts without recompiling them.
-    manifold_gpu::testkit::load_disk_shader_caches(&device);
+    manifold_gpu::load_disk_shader_caches(&device);
     // The wall limit bounds the capture, not the wait for another holder of the GPU.
     let overall_started = Instant::now();
     let offline_target = RenderTarget::new(
@@ -1480,7 +1475,7 @@ mod tests {
             (matter.solver, matter.frame_node.as_str()),
             (Solver::Gpu, "matter_frame")
         );
-        assert_eq!((matter.resolution, matter.domain_size), (64, 4.0));
+        assert_eq!((matter.resolution, matter.cell_size), (64, 0.0625));
         let gpu_flip = preset_settings(
             include_str!("../tests/fixtures/presets/WaterDamBreakGpuFlip.json"),
             None,
@@ -1491,8 +1486,8 @@ mod tests {
             (Solver::Gpu, "frame")
         );
         assert_eq!(
-            (gpu_flip.resolution, gpu_flip.domain_size, gpu_flip.speed),
-            (64, 4.0, 1.0)
+            (gpu_flip.resolution, gpu_flip.cell_size, gpu_flip.speed),
+            (64, 0.0625, 1.0)
         );
         let sea_wall = preset_settings(
             include_str!("../tests/fixtures/presets/WaterSeaWallGpuFlip.json"),

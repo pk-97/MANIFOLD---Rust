@@ -1810,6 +1810,14 @@ impl ClipRenderer for GeneratorRenderer {
         acquired
     }
 
+    /// A generator's file loads (an HDRI, a model's textures) still
+    /// decoding or uploading.
+    fn has_pending_decodes(&self) -> bool {
+        self.layer_generators
+            .values()
+            .any(|ls| ls.generator.io_pending())
+    }
+
     fn prewarm_layer(
         &mut self,
         layer: &Layer,

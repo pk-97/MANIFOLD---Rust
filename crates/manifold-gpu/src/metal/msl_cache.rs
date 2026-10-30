@@ -6,6 +6,9 @@
 //! Cache value: compiled MSL source + SlotMap + workgroup size.
 //! Stored as one plain-text file per shader in the cache directory.
 //! Invalidation is automatic — if WGSL content changes, the hash changes.
+//! A hit stamps its file's modified time, and opening the cache trims the
+//! least recently used files once the folder outgrows [`TRIM_ABOVE`], so
+//! every shader edit's stale entries don't pile up for good.
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
@@ -19,6 +22,11 @@ const MSL_SEPARATOR: &str = "===MSL===";
 const VS_SEPARATOR: &str = "===VS===";
 const FS_SEPARATOR: &str = "===FS===";
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+/// The folder size that starts a trim, and the size it trims down to.
+const TRIM_ABOVE: u64 = 1536 << 20;
+const TRIM_TO: u64 = 1 << 30;
+/// A temporary file this old belongs to a writer that died mid-put.
+const STALE_TEMP: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// Cached result of a compute shader compilation.
 pub(super) struct ComputeCacheEntry {
@@ -43,9 +51,14 @@ pub struct MslCache {
 }
 
 impl MslCache {
-    /// Create or open a cache directory. Creates the directory if it doesn't exist.
+    /// Create or open a cache directory. Creates the directory if it doesn't
+    /// exist, and trims it on a background thread.
     pub fn new(cache_dir: PathBuf) -> Self {
         std::fs::create_dir_all(&cache_dir).ok();
+        let dir = cache_dir.clone();
+        let _ = std::thread::Builder::new()
+            .name("msl cache trim".into())
+            .spawn(move || trim(&dir, TRIM_ABOVE, TRIM_TO));
         Self {
             cache_dir,
             hits: 0,
@@ -82,6 +95,7 @@ impl MslCache {
     pub(super) fn get_compute(&mut self, hash: u64) -> Option<ComputeCacheEntry> {
         let path = self.path_for(hash);
         let file = std::fs::File::open(&path).ok()?;
+        let _ = file.set_modified(std::time::SystemTime::now());
         let reader = std::io::BufReader::new(file);
         let mut lines = reader.lines();
 
@@ -152,7 +166,10 @@ impl MslCache {
     /// Look up a cached render shader compilation result.
     pub(super) fn get_render(&mut self, hash: u64) -> Option<RenderCacheEntry> {
         let path = self.path_for(hash);
-        let content = std::fs::read_to_string(&path).ok()?;
+        let mut file = std::fs::File::open(&path).ok()?;
+        let _ = file.set_modified(std::time::SystemTime::now());
+        let mut content = String::new();
+        std::io::Read::read_to_string(&mut file, &mut content).ok()?;
 
         // Header
         if !content.starts_with(RENDER_HEADER) {
@@ -296,10 +313,88 @@ fn read_slot_map_from_str(section: &str) -> Option<SlotMap> {
     Some(slot_map)
 }
 
+/// Delete the least recently used entries until the folder holds `to`
+/// bytes, once it holds more than `above`; and temporary files a dead
+/// writer left. Another process may race it: a missing file is a miss.
+fn trim(dir: &std::path::Path, above: u64, to: u64) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let modified = meta.modified().unwrap_or(now);
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("mslcache") => files.push((modified, meta.len(), path)),
+            Some("tmp") if now.duration_since(modified).is_ok_and(|age| age > STALE_TEMP) => {
+                let _ = std::fs::remove_file(&path);
+            }
+            _ => {}
+        }
+    }
+    let mut total: u64 = files.iter().map(|(_, len, _)| len).sum();
+    if total <= above {
+        return;
+    }
+    files.sort_by_key(|(modified, _, _)| *modified);
+    for (_, len, path) in files {
+        if total <= to {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total -= len;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Read;
+
+    #[test]
+    fn trim_drops_least_recently_used_down_to_target() {
+        let dir = std::env::temp_dir().join(format!(
+            "msl-trim-{}-{}",
+            std::process::id(),
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let start = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        // Five 100-byte entries, oldest first, and a dead writer's temp file.
+        for i in 0..5u64 {
+            let path = dir.join(format!("{i:016x}.mslcache"));
+            std::fs::write(&path, [0u8; 100]).unwrap();
+            let file = std::fs::File::options().write(true).open(&path).unwrap();
+            file.set_modified(start + std::time::Duration::from_secs(i * 60))
+                .unwrap();
+        }
+        let temp = dir.join(".0000000000000009.1.0.tmp");
+        std::fs::write(&temp, [0u8; 10]).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&temp)
+            .unwrap()
+            .set_modified(start)
+            .unwrap();
+        // Under the trigger nothing but the temp file goes.
+        trim(&dir, 500, 200);
+        assert!(!temp.exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 5);
+        // Over it, the oldest go first until 200 bytes remain.
+        trim(&dir, 400, 200);
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["0000000000000003.mslcache", "0000000000000004.mslcache"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn puts_round_trip_through_atomic_replacement() {
