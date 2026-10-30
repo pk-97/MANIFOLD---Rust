@@ -255,3 +255,6 @@ Lets an AI assistant such as Claude Desktop drive the app over a local connectio
 
 ### UI automation
 Lets a script find, click and check controls in the running app, so UI bugs get caught without someone reading screenshots by eye. Already built: the basic control and flow pieces. Wider flows and multi-window support are still open.
+
+### Lava crust that travels with the lava
+A textured Matter (lava, mud, gravel) reads its texture fixed in the world, so while it flows the surface slides under the crust. The fix is texture coordinates carried by the particles: each point keeps where it started, the surface vertices take it from the points round them, and the box mapping reads there. The crust then moves and stretches with the material, and the stretch can open glowing cracks. Flow maps, which crossfade two copies sliding along the surface velocity, double and streak the cracks and look worse than the fixed crust.
