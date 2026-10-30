@@ -25,11 +25,8 @@ use manifold_node_engine::{
     parameters::ParamValue, scene::boundary_nodes::FinalOutput, scene::boundary_nodes::Source,
 };
 
+use manifold_nodes_image::node_graph::primitives::BLUR_REFERENCE_HEIGHT;
 use manifold_nodes_image::node_graph::primitives::bokeh_gather::{BokehGather, BokehSettings};
-
-const APERTURE_CIRCLE: u32 = 0;
-const APERTURE_HEXAGON: u32 = 1;
-const APERTURE_OCTAGON: u32 = 2;
 
 #[derive(Clone, Copy)]
 struct Pixel {
@@ -95,14 +92,8 @@ fn readback(device: &GpuDevice, tex: &GpuTexture) -> Vec<[f32; 4]> {
         .collect()
 }
 
-fn run(
-    device: &GpuDevice,
-    src: &GpuTexture,
-    width: &GpuTexture,
-    max_radius: f32,
-    aperture: u32,
-) -> Vec<[f32; 4]> {
-    run_quality(device, src, width, max_radius, aperture, 1)
+fn run(device: &GpuDevice, src: &GpuTexture, width: &GpuTexture, max_radius: f32) -> Vec<[f32; 4]> {
+    run_quality(device, src, width, max_radius, 1)
 }
 
 fn run_quality(
@@ -110,19 +101,10 @@ fn run_quality(
     src: &GpuTexture,
     width: &GpuTexture,
     max_radius: f32,
-    aperture: u32,
     quality: u32,
 ) -> Vec<[f32; 4]> {
     let mut gather = BokehGather::new();
-    run_with_gather_quality(
-        &mut gather,
-        device,
-        src,
-        width,
-        max_radius,
-        aperture,
-        quality,
-    )
+    run_with_gather_quality(&mut gather, device, src, width, max_radius, quality)
 }
 
 fn run_with_gather(
@@ -131,9 +113,8 @@ fn run_with_gather(
     src: &GpuTexture,
     width: &GpuTexture,
     max_radius: f32,
-    aperture: u32,
 ) -> Vec<[f32; 4]> {
-    run_with_gather_quality(gather, device, src, width, max_radius, aperture, 1)
+    run_with_gather_quality(gather, device, src, width, max_radius, 1)
 }
 
 fn run_with_gather_quality(
@@ -142,7 +123,6 @@ fn run_with_gather_quality(
     src: &GpuTexture,
     width: &GpuTexture,
     max_radius: f32,
-    aperture: u32,
     quality: u32,
 ) -> Vec<[f32; 4]> {
     run_with_settings(
@@ -152,7 +132,6 @@ fn run_with_gather_quality(
         width,
         BokehSettings {
             radius: max_radius,
-            aperture,
             quality,
             blur_alpha: false,
         },
@@ -335,14 +314,14 @@ fn run_graph(
     let coc = graph.add_node(Box::new(Source::new()));
     let bokeh = graph.add_node(Box::new(BokehGather::new()));
     let output = graph.add_node(Box::new(FinalOutput::new()));
+    // The node's Max Radius is set for a 1080-tall frame: ask for the one
+    // that lands at `settings.radius` pixels in this one.
+    let max_radius = settings.radius * BLUR_REFERENCE_HEIGHT / src.height as f32;
     graph
-        .set_param(bokeh, "max_radius", ParamValue::Float(settings.radius))
+        .set_param(bokeh, "max_radius", ParamValue::Float(max_radius))
         .unwrap();
     graph
         .set_param(bokeh, "enabled", ParamValue::Bool(enabled))
-        .unwrap();
-    graph
-        .set_param(bokeh, "aperture", ParamValue::Enum(settings.aperture))
         .unwrap();
     graph
         .set_param(bokeh, "quality", ParamValue::Enum(settings.quality))
@@ -424,7 +403,6 @@ fn graph_executor_matches_direct_encode_on_mixed_hdr_odd_scene() {
     let width = signed_width(&device, w, h, &coc);
     let settings = BokehSettings {
         radius: 24.0,
-        aperture: APERTURE_HEXAGON,
         quality: 1,
         blur_alpha: false,
     };
@@ -434,7 +412,6 @@ fn graph_executor_matches_direct_encode_on_mixed_hdr_odd_scene() {
         &src,
         &width,
         settings.radius,
-        settings.aperture,
         settings.quality,
     );
     let graph = run_graph(&device, &src, &width, settings, true);
@@ -478,7 +455,6 @@ fn graph_executor_disabled_bokeh_is_hdr_identity_on_odd_scene() {
         &width,
         BokehSettings {
             radius: 24.0,
-            aperture: APERTURE_OCTAGON,
             quality: 2,
             blur_alpha: false,
         },
@@ -715,7 +691,6 @@ fn zero_coc_is_bit_exact_identity() {
             &width,
             BokehSettings {
                 radius: 32.0,
-                aperture: APERTURE_CIRCLE,
                 quality: 1,
                 blur_alpha,
             },
@@ -755,7 +730,6 @@ fn zero_radius_preserves_detail_across_near_far_edges() {
                 &coc,
                 BokehSettings {
                     radius,
-                    aperture: APERTURE_CIRCLE,
                     quality: 1,
                     blur_alpha,
                 },
@@ -796,7 +770,6 @@ fn blur_alpha_true_expands_opaque_silhouettes_without_dark_fringe() {
             &width,
             BokehSettings {
                 radius: 28.0,
-                aperture: APERTURE_CIRCLE,
                 quality: 1,
                 blur_alpha: true,
             },
@@ -850,7 +823,6 @@ fn blur_alpha_true_preserves_translucent_flat_hdr_near_and_far() {
         &width,
         BokehSettings {
             radius: 32.0,
-            aperture: APERTURE_CIRCLE,
             quality: 1,
             blur_alpha: true,
         },
@@ -903,7 +875,6 @@ fn near_opacity_does_not_fade_during_focus_transition() {
             &coc,
             BokehSettings {
                 radius: 24.0,
-                aperture: 0,
                 quality: 1,
                 blur_alpha: true,
             },
@@ -946,7 +917,6 @@ fn blur_alpha_true_stays_premultiplied_through_layer_compositor() {
         &width,
         BokehSettings {
             radius: 24.0,
-            aperture: APERTURE_CIRCLE,
             quality: 1,
             blur_alpha: true,
         },
@@ -1013,7 +983,6 @@ fn blur_alpha_true_ignores_hidden_rgb_in_transparent_far_texels() {
         &width,
         BokehSettings {
             radius: 32.0,
-            aperture: APERTURE_CIRCLE,
             quality: 1,
             blur_alpha: true,
         },
@@ -1056,7 +1025,7 @@ fn uniform_far_cpu_oracle_matches_even_and_odd_area_mips() {
         };
         let src = texture(&device, w, h, &source_pixels, "bokeh-proof-oracle-src");
         let width = signed_width(&device, w, h, &vec![(0.8, false); (w * h) as usize]);
-        let got = run_quality(&device, &src, &width, 24.0, APERTURE_CIRCLE, 1);
+        let got = run_quality(&device, &src, &width, 24.0, 1);
         let expected = oracle_uniform_far_output(&oracle_source, 24.0, 0.8);
         for (i, (actual, reference)) in got.iter().zip(expected.px.iter()).enumerate() {
             for c in 0..3 {
@@ -1083,7 +1052,7 @@ fn flat_hdr_colour_keeps_alpha_and_energy() {
         "bokeh-proof-hdr-src",
     );
     let width = signed_width(&device, w, h, &vec![(0.72, false); (w * h) as usize]);
-    let out = run(&device, &src, &width, 40.0, APERTURE_CIRCLE);
+    let out = run(&device, &src, &width, 40.0);
     assert_finite(&out);
     for (i, p) in out.iter().enumerate() {
         assert!((p[3] - 0.37).abs() < 0.01, "alpha changed at {i}: {}", p[3]);
@@ -1116,7 +1085,7 @@ fn thin_near_object_survives_half_res_prefilter() {
     }
     let src = texture(&device, w, h, &colors, "bokeh-proof-thin-src");
     let width = signed_width(&device, w, h, &coc);
-    let out = run(&device, &src, &width, 28.0, APERTURE_CIRCLE);
+    let out = run(&device, &src, &width, 28.0);
     assert_finite(&out);
     let total: f32 = out.iter().map(|p| luma(*p)).sum();
     let centre_column: f32 = (0..h).map(|y| luma(out[(y * w + w / 2) as usize])).sum();
@@ -1153,7 +1122,7 @@ fn bright_far_background_does_not_bleed_into_sharp_foreground() {
     }
     let src = texture(&device, w, h, &colors, "bokeh-proof-spill-src");
     let width = signed_width(&device, w, h, &coc);
-    let out = run(&device, &src, &width, 32.0, APERTURE_CIRCLE);
+    let out = run(&device, &src, &width, 32.0);
     assert_finite(&out);
     let stripe = (0..h)
         .map(|y| luma(out[(y * w + w / 2) as usize]))
@@ -1184,7 +1153,7 @@ fn rim_fixture_feathers_beyond_bright_rectangle_without_cliff() {
     }
     let src = texture(&device, w, h, &colors, "bokeh-proof-rim-src");
     let width = signed_width(&device, w, h, &coc);
-    let out = run(&device, &src, &width, 24.0, APERTURE_CIRCLE);
+    let out = run(&device, &src, &width, 24.0);
     assert_finite(&out);
     let input_energy = 20.0 * 16.0 * 16.0;
     let output_energy: f32 = out.iter().map(|p| p[0]).sum();
@@ -1251,7 +1220,7 @@ fn near_halo_overlays_edge_but_keeps_dark_bar_interior() {
     }
     let src = texture(&device, w, h, &colors, "bokeh-proof-near-bar-src");
     let width = signed_width(&device, w, h, &coc);
-    let out = run(&device, &src, &width, 24.0, APERTURE_CIRCLE);
+    let out = run(&device, &src, &width, 24.0);
     assert_finite(&out);
     let edge_mean = (0..h)
         .map(|y| luma(out[(y * w + 42) as usize]))
@@ -1287,7 +1256,7 @@ fn tiny_odd_dimensions_and_radius_modulation_are_stable() {
         );
         let width = signed_width(&device, w, h, &vec![(0.5, false); (w * h) as usize]);
         for &radius in &[1.0, 7.0, 63.0] {
-            let out = run_with_gather(&mut gather, &device, &src, &width, radius, APERTURE_CIRCLE);
+            let out = run_with_gather(&mut gather, &device, &src, &width, radius);
             assert_eq!(out.len(), (w * h) as usize);
             assert_finite(&out);
             assert!(out.iter().all(|p| (p[3] - 0.75).abs() < 0.02));
@@ -1308,8 +1277,8 @@ fn warm_resize_rebuilds_resources_and_keeps_modulation_finite() {
             "bokeh-proof-warm-resize-src",
         );
         let width = signed_width(&device, w, h, &vec![(0.35, false); (w * h) as usize]);
-        for (radius, aperture) in [(2.0, APERTURE_CIRCLE), (18.0, APERTURE_HEXAGON)] {
-            let out = run_with_gather(&mut gather, &device, &src, &width, radius, aperture);
+        for radius in [2.0, 18.0] {
+            let out = run_with_gather(&mut gather, &device, &src, &width, radius);
             assert_eq!(out.len(), (w * h) as usize);
             assert_finite(&out);
             assert!(out.iter().all(|p| (p[3] - 0.61).abs() < 0.02));
@@ -1328,7 +1297,7 @@ fn quality_levels_preserve_constant_hdr_colour_across_layer_boundary() {
     let src = texture(&device, w, h, &colors, "bokeh-proof-quality-src");
     let width = signed_width(&device, w, h, &coc);
     for quality in 0..=2 {
-        let out = run_quality(&device, &src, &width, 32.0, APERTURE_CIRCLE, quality);
+        let out = run_quality(&device, &src, &width, 32.0, quality);
         assert_finite(&out);
         for (i, p) in out.iter().enumerate() {
             assert!(
@@ -1356,43 +1325,6 @@ fn quality_levels_preserve_constant_hdr_colour_across_layer_boundary() {
 }
 
 #[test]
-fn aperture_shapes_change_bokeh_without_changing_flat_colour() {
-    let device = manifold_gpu::testkit::test_device();
-    let (w, h) = (81, 81);
-    let mut colors = solid_pixels(w, h, [0.0, 0.0, 0.0, 1.0]);
-    let centre = (h / 2 * w + w / 2) as usize;
-    colors[centre] = Pixel {
-        rgba: [10.0, 8.0, 2.0, 1.0],
-    };
-    let src = texture(&device, w, h, &colors, "bokeh-proof-aperture-src");
-    let width = signed_width(&device, w, h, &vec![(0.75, false); (w * h) as usize]);
-    let circle = run(&device, &src, &width, 24.0, APERTURE_CIRCLE);
-    let hex = run(&device, &src, &width, 24.0, APERTURE_HEXAGON);
-    let oct = run(&device, &src, &width, 24.0, APERTURE_OCTAGON);
-    assert_finite(&circle);
-    assert_finite(&hex);
-    assert_finite(&oct);
-    let d_hex: f32 = circle
-        .iter()
-        .zip(&hex)
-        .map(|(a, b)| (luma(*a) - luma(*b)).abs())
-        .sum();
-    let d_oct: f32 = circle
-        .iter()
-        .zip(&oct)
-        .map(|(a, b)| (luma(*a) - luma(*b)).abs())
-        .sum();
-    assert!(
-        d_hex > 0.05,
-        "hexagonal aperture had no measurable shape effect"
-    );
-    assert!(
-        d_oct > 0.05,
-        "octagonal aperture had no measurable shape effect"
-    );
-}
-
-#[test]
 fn isolated_hdr_highlight_spreads_energy_over_a_bounded_footprint() {
     let device = manifold_gpu::testkit::test_device();
     let (w, h) = (96, 64);
@@ -1404,7 +1336,7 @@ fn isolated_hdr_highlight_spreads_energy_over_a_bounded_footprint() {
     };
     let src = texture(&device, w, h, &colors, "bokeh-proof-isolated-hdr-src");
     let width = signed_width(&device, w, h, &coc);
-    let out = run(&device, &src, &width, 32.0, APERTURE_CIRCLE);
+    let out = run(&device, &src, &width, 32.0);
     assert_finite(&out);
 
     let input = [24.0, 12.0, 4.0];
@@ -1477,8 +1409,8 @@ fn small_far_blur_is_independent_of_unreachable_tile_maximum() {
         .map(|i| (if i / w >= 80 { 1.0 } else { 0.125 }, false))
         .collect::<Vec<_>>();
     let mixed = signed_width(&device, w, h, &values);
-    let reference = run(&device, &src, &uniform, 24.0, 0);
-    let actual = run(&device, &src, &mixed, 24.0, 0);
+    let reference = run(&device, &src, &uniform, 24.0);
+    let actual = run(&device, &src, &mixed, 24.0);
     // More than the 24-pixel maximum radius from the changed surface, but
     // inside conservative tile reach. Its blur must not alter local detail.
     for y in 32..48 {
@@ -1518,7 +1450,7 @@ fn focused_checkerboard_detail_survives_beside_blurred_region() {
     }
     let src = texture(&device, w, h, &colors, "bokeh-proof-checker-src");
     let width = signed_width(&device, w, h, &coc);
-    let out = run(&device, &src, &width, 28.0, APERTURE_CIRCLE);
+    let out = run(&device, &src, &width, 28.0);
     assert_finite(&out);
     let mut focused_values = Vec::new();
     for x in 8..(w / 2 - 8) {
@@ -1585,7 +1517,6 @@ fn small_alpha_blur_monotonically_sheds_high_frequency_detail() {
             &width,
             BokehSettings {
                 radius: 2.0,
-                aperture: APERTURE_CIRCLE,
                 quality: 1,
                 blur_alpha: true,
             },
@@ -1652,7 +1583,6 @@ fn small_alpha_blur_rejects_unrelated_far_surface() {
         &width,
         BokehSettings {
             radius: 2.0,
-            aperture: APERTURE_CIRCLE,
             quality: 1,
             blur_alpha: true,
         },
@@ -1692,7 +1622,7 @@ fn motion_and_focus_sweep_has_bounded_frame_to_frame_change() {
         let coc = vec![(0.2 + frame as f32 * 0.04, false); (w * h) as usize];
         let src = texture(&device, w, h, &colors, "bokeh-proof-motion-src");
         let width = signed_width(&device, w, h, &coc);
-        let out = run(&device, &src, &width, 24.0, APERTURE_CIRCLE);
+        let out = run(&device, &src, &width, 24.0);
         assert_finite(&out);
         let mut signal_energy = 0.0;
         let mut signal_x = 0.0;
@@ -1766,7 +1696,7 @@ fn production_pipeline_baseline_fixture_emits_optional_visual_artifact() {
     }
     let src = texture(&device, w, h, &colors, "bokeh-proof-baseline-src");
     let width = signed_width(&device, w, h, &coc);
-    let out = run(&device, &src, &width, 24.0, APERTURE_CIRCLE);
+    let out = run(&device, &src, &width, 24.0);
     assert_finite(&out);
     if let Ok(dir) = std::env::var("MANIFOLD_DOF_ARTIFACT_DIR") {
         save_artifact(&dir, "dof-upgrade-baseline", &out, w, h);
@@ -1801,7 +1731,6 @@ fn bounded_gpu_benchmark_1080p_and_4k() {
         let mut gather = BokehGather::new();
         let settings = BokehSettings {
             radius: 32.0,
-            aperture: APERTURE_CIRCLE,
             quality: 1,
             blur_alpha: true,
         };
