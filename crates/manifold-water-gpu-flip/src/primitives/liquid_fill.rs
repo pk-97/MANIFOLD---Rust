@@ -318,49 +318,34 @@ impl Primitive for LiquidFill {
             ctx.inputs.array("collider_triangles"),
         );
         let regions = ctx.inputs.array("regions");
-        let gpu = ctx.gpu_encoder();
-        // Every filled site, live or dead, before the live ones are kept.
-        let bytes = u64::from(filled.max(1)) * std::mem::size_of::<FluidParticle>() as u64;
-        let all_sites = match gpu.device.try_create_buffer(bytes, BufferUse::Gpu) {
-            Ok(buffer) => buffer,
-            Err(error) => {
-                ctx.error(format!(
-                    "Liquid Fill needs {bytes} bytes of GPU scratch: {error}"
-                ));
-                return;
-            }
-        };
-        let buffer = &all_sites;
-        // Without all five collider arrays no body is read; the particle
-        // buffer fills their slots.
-        let (bodies, shapes, atlas, nodes, triangles, body_count) = match colliders {
-            (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)) => {
-                let rows = (bodies.size / std::mem::size_of::<LiquidBody>() as u64)
-                    .min(i32::MAX as u64) as i32;
-                (
-                    bodies,
-                    shapes,
-                    atlas,
-                    nodes,
-                    triangles,
-                    body_count.min(rows),
-                )
-            }
-            _ => (buffer, buffer, buffer, buffer, buffer, 0),
+        // Without all five collider arrays no body is read.
+        let body_count = match colliders {
+            (Some(bodies), Some(_), Some(_), Some(_), Some(_)) => body_count
+                .min((bodies.size / std::mem::size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32),
+            _ => 0,
         };
         // A shaped fill's region row, read from the regions beside the
         // collider shapes; without them the fill is its whole box.
-        let (regions, fill_region) = match (regions, colliders.1) {
+        let fill_region = match (regions, colliders.1) {
             (Some(regions), Some(_))
                 if fill_region >= 0.0
                     && (fill_region as u64)
                         < regions.size / std::mem::size_of::<LiquidBody>() as u64 =>
             {
-                (regions, fill_region as i32)
+                fill_region as i32
             }
-            _ => (buffer, -1),
+            _ => -1,
         };
-
+        // Only a Wall face's plane decides a site: an open face's, which
+        // follows the bodies when Bounds is off, never refills.
+        let face = |i: usize| {
+            let bit = if i < 3 { 2 * i } else { 2 * (i - 3) + 1 };
+            if closed_faces & (1 << bit) != 0 {
+                bounds[i].to_bits()
+            } else {
+                0
+            }
+        };
         let key = [
             min[0].to_bits(),
             min[1].to_bits(),
@@ -381,12 +366,12 @@ impl Primitive for LiquidFill {
             body_count as u32,
             epoch,
             closed_faces as u32,
-            bounds[0].to_bits(),
-            bounds[1].to_bits(),
-            bounds[2].to_bits(),
-            bounds[3].to_bits(),
-            bounds[4].to_bits(),
-            bounds[5].to_bits(),
+            face(0),
+            face(1),
+            face(2),
+            face(3),
+            face(4),
+            face(5),
             fill_region as u32,
         ];
         if let Some(kept) = &self.buffer
@@ -396,6 +381,30 @@ impl Primitive for LiquidFill {
                 .set_scalar("count", ParamValue::Float(self.live as f32));
             return;
         }
+        let gpu = ctx.gpu_encoder();
+        // Every filled site, live or dead, before the live ones are kept.
+        let bytes = u64::from(filled.max(1)) * std::mem::size_of::<FluidParticle>() as u64;
+        let all_sites = match gpu.device.try_create_buffer(bytes, BufferUse::Gpu) {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                ctx.error(format!(
+                    "Liquid Fill needs {bytes} bytes of GPU scratch: {error}"
+                ));
+                return;
+            }
+        };
+        let buffer = &all_sites;
+        // The particle buffer stands in for the arrays that are not read.
+        let (bodies, shapes, atlas, nodes, triangles) = match colliders {
+            (Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)) => {
+                (bodies, shapes, atlas, nodes, triangles)
+            }
+            _ => (buffer, buffer, buffer, buffer, buffer),
+        };
+        let regions = match regions {
+            Some(regions) if fill_region >= 0 => regions,
+            _ => buffer,
+        };
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let clamp = |v: u32| v.min(i32::MAX as u32) as i32;
         let uniforms = FillUniforms {

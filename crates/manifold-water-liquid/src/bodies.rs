@@ -1426,7 +1426,7 @@ impl LiquidBodies {
 
     /// The world axis-aligned box (min then max) round `row`'s oriented box.
     /// `None` for a disabled row or a mesh without finite bounds.
-    fn world_box(&self, row: &LiquidBody) -> Option<[[f32; 3]; 2]> {
+    pub fn world_box(&self, row: &LiquidBody) -> Option<[[f32; 3]; 2]> {
         let (center, half) = self.oriented_box(row)?;
         let world = posed_box(center, half, row.rotation);
         world

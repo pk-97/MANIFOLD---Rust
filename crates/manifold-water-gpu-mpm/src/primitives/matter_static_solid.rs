@@ -2,8 +2,8 @@
 //! normal at every node of Matter's held world tiles, cached. The mesh search
 //! keeps a deep stack per thread, which starves any kernel that carries it,
 //! so the per-substep passes read this cache instead: it is written for the
-//! tiles a table build hands out, and for every held tile when the static
-//! meshes change or move.
+//! tiles a table build hands out, for every held tile when the static meshes
+//! change, and for the held tiles round where one moved when only that moved.
 
 use std::borrow::Cow;
 
@@ -21,6 +21,9 @@ use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_words}
 use manifold_water_liquid::bodies::{LIQUID_POSE, LiquidBody, LiquidShape};
 use manifold_water_liquid::world_tiles::fresh_args_offset;
 
+/// The moved box's stand-in for no bound: every node is inside it.
+const UNBOUNDED: f32 = 1.0e30;
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct StaticSolidUniforms {
@@ -29,15 +32,19 @@ struct StaticSolidUniforms {
     body_count: i32,
     static_key: i32,
     built: i32,
+    moved_lo_x: f32,
+    moved_lo_y: f32,
+    moved_lo_z: f32,
+    moved_hi_x: f32,
+    moved_hi_y: f32,
+    moved_hi_z: f32,
     dispatch_count: u32,
-    _pad0: u32,
-    _pad1: u32,
 }
 
 manifold_node_engine::primitive! {
     name: MatterStaticSolid,
     type_id: "node.matter_static_solid",
-    purpose: "Cache the static collider meshes for Matter's grid: at every node of a held world tile, the nearest static mesh's signed distance, outward normal and body. Written for the tiles a table build hands out (built = 1), and for every held tile when static_key, the shapes or the trees change.",
+    purpose: "Cache the static collider meshes for Matter's grid: at every node of a held world tile, the nearest static mesh's signed distance, outward normal and body. Written for the tiles a table build hands out (built = 1), for every held tile when static_key, the shapes or the trees change, and for the held tiles round the moved box when only moved_key changes (a static mesh moved there).",
     inputs: {
         held: Array(u32) required,
         bodies: Array(LiquidBody) optional,
@@ -52,6 +59,9 @@ manifold_node_engine::primitive! {
         body_count: ScalarF32 optional,
         static_key: ScalarF32 optional,
         built: ScalarF32 optional,
+        moved_key: ScalarF32 optional,
+        moved_lo_x: ScalarF32 optional, moved_lo_y: ScalarF32 optional, moved_lo_z: ScalarF32 optional,
+        moved_hi_x: ScalarF32 optional, moved_hi_y: ScalarF32 optional, moved_hi_z: ScalarF32 optional,
     },
     outputs: {
         solid: Array(Vec4Vertex),
@@ -62,9 +72,15 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 64.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("static_key"), label: "Static Key", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("built"), label: "Table Built", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("moved_lo_x"), label: "Moved Min X", ty: ParamType::Float, default: ParamValue::Float(-UNBOUNDED), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("moved_lo_y"), label: "Moved Min Y", ty: ParamType::Float, default: ParamValue::Float(-UNBOUNDED), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("moved_lo_z"), label: "Moved Min Z", ty: ParamType::Float, default: ParamValue::Float(-UNBOUNDED), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("moved_hi_x"), label: "Moved Max X", ty: ParamType::Float, default: ParamValue::Float(UNBOUNDED), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("moved_hi_y"), label: "Moved Max Y", ty: ParamType::Float, default: ParamValue::Float(UNBOUNDED), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("moved_hi_z"), label: "Moved Max Z", ty: ParamType::Float, default: ParamValue::Float(UNBOUNDED), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Region body of the Live Matter group, after node.matter_to_grid (tiles, held, fresh, held_args, built) and node.matter_move_bodies (bodies), before node.matter_grid_update, node.matter_body_reaction and node.grid_to_matter, which read solid. shapes, collider_nodes, collider_triangles, body_count and static_key come from node.matter_domain. solid holds one element per pooled node (512 per tile slot and a canonical node last): (n·(1 + row), φ) with φ the nearest static mesh's signed distance (band four cells), n its outward unit normal and row its body, or (0, 0, 0, φ) with no mesh near. The node owns solid; a new pool clears it and rewrites every held tile.",
+    composition_notes: "Region body of the Live Matter group, after node.matter_to_grid (tiles, held, fresh, held_args, built) and node.matter_move_bodies (bodies), before node.matter_grid_update, node.matter_body_reaction and node.grid_to_matter, which read solid. shapes, collider_nodes, collider_triangles, body_count, static_key, moved_key and the moved box come from node.matter_domain. solid holds one element per pooled node (512 per tile slot and a canonical node last): (n·(1 + row), φ) with φ the nearest static mesh's signed distance (band four cells), n its outward unit normal and row its body, or (0, 0, 0, φ) with no mesh near. The node owns solid; a new pool clears it and rewrites every held tile.",
     examples: ["SandColumn"],
     picker: { label: "Matter Static Solid", category: Atom },
     summary: "Caches how far each grid node is from the scene's fixed meshes, so the sand can collide with them cheaply.",
@@ -82,6 +98,8 @@ manifold_node_engine::primitive! {
         // static_key, shapes, trees, body_count and pool the cache was last
         // written for over every held tile.
         written: Option<(i32, usize, u64, usize, i32, u32)> = None,
+        // The moved_key the cache was last written for.
+        moved: Option<i32> = None,
     },
 }
 
@@ -116,6 +134,11 @@ impl Primitive for MatterStaticSolid {
             .clamp(0.0, MAX_LIQUID_BODIES as f32) as i32;
         let static_key = ctx.scalar_or_param("static_key", 0.0).round() as i32;
         let built = ctx.scalar_or_param("built", 0.0) > 0.5;
+        let moved_key = ctx.scalar_or_param("moved_key", 0.0).round() as i32;
+        let moved_box = [
+            ["moved_lo_x", "moved_lo_y", "moved_lo_z"].map(|p| ctx.scalar_or_param(p, -UNBOUNDED)),
+            ["moved_hi_x", "moved_hi_y", "moved_hi_z"].map(|p| ctx.scalar_or_param(p, UNBOUNDED)),
+        ];
         let held = ctx.inputs.array("held");
         let fresh = ctx.inputs.array("fresh");
         let held_args = ctx.inputs.array("held_args");
@@ -194,60 +217,74 @@ impl Primitive for MatterStaticSolid {
             pool_tiles,
         );
         let every_held = self.written != Some(key);
-        if !every_held && !built {
-            return;
-        }
+        let moved = !every_held && self.moved != Some(moved_key);
         self.written = Some(key);
-        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let uniforms = StaticSolidUniforms {
-            cell_size,
-            pool_tiles: pool_tiles as i32,
-            body_count,
-            static_key,
-            built: i32::from(built),
-            dispatch_count: nodes,
-            _pad0: 0,
-            _pad1: 0,
-        };
-        // Every held tile after a change, else the build's fresh tiles: the
-        // list bound as `held` and the triple it is dispatched by.
-        let (list, offset) = if every_held {
-            (held, super::matter_to_grid::held_args_offset())
+        self.moved = Some(moved_key);
+        let everywhere = [[-UNBOUNDED; 3], [UNBOUNDED; 3]];
+        // Every held tile after a change; the held tiles round a static mesh
+        // that only moved; the build's fresh tiles, all of their nodes, even
+        // beside a move. Each is the list bound as `held` and the triple it
+        // is dispatched by.
+        let mut passes = Vec::with_capacity(2);
+        if every_held {
+            passes.push((held, super::matter_to_grid::held_args_offset(), everywhere));
         } else {
-            (fresh, fresh_args_offset(MATTER_REACH.ring_max))
-        };
-        let buffers = [
-            list,
-            bodies,
-            shapes,
-            collider_nodes,
-            collider_triangles,
-            tiles,
-            fresh,
-            held_args,
-            solid,
-        ];
-        let mut bindings = vec![GpuBinding::Bytes {
-            binding: 0,
-            data: bytemuck::bytes_of(&uniforms),
-        }];
-        bindings.extend(
-            buffers
-                .into_iter()
-                .enumerate()
-                .map(|(i, buffer)| GpuBinding::Buffer {
-                    binding: i as u32 + 1,
-                    buffer,
-                    offset: 0,
-                }),
-        );
-        gpu.native_enc.dispatch_compute_indirect(
-            pipeline,
-            &bindings,
-            held_args,
-            offset,
-            "node.matter_static_solid",
-        );
+            if moved {
+                passes.push((held, super::matter_to_grid::held_args_offset(), moved_box));
+            }
+            if built {
+                passes.push((fresh, fresh_args_offset(MATTER_REACH.ring_max), everywhere));
+            }
+        }
+        let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
+        for (list, offset, [lo, hi]) in passes {
+            let uniforms = StaticSolidUniforms {
+                cell_size,
+                pool_tiles: pool_tiles as i32,
+                body_count,
+                static_key,
+                built: i32::from(built),
+                moved_lo_x: lo[0],
+                moved_lo_y: lo[1],
+                moved_lo_z: lo[2],
+                moved_hi_x: hi[0],
+                moved_hi_y: hi[1],
+                moved_hi_z: hi[2],
+                dispatch_count: nodes,
+            };
+            let buffers = [
+                list,
+                bodies,
+                shapes,
+                collider_nodes,
+                collider_triangles,
+                tiles,
+                fresh,
+                held_args,
+                solid,
+            ];
+            let mut bindings = vec![GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            }];
+            bindings.extend(
+                buffers
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, buffer)| GpuBinding::Buffer {
+                        binding: i as u32 + 1,
+                        buffer,
+                        offset: 0,
+                    }),
+            );
+            gpu.native_enc.dispatch_compute_indirect(
+                pipeline,
+                &bindings,
+                held_args,
+                offset,
+                "node.matter_static_solid",
+            );
+        }
     }
 }
 

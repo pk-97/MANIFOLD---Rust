@@ -349,6 +349,9 @@ manifold_node_engine::primitive! {
         body_count: ScalarF32, body_rows: ScalarF32, first_tick: ScalarF32,
         dynamic_count: ScalarF32,
         static_key: ScalarF32,
+        moved_key: ScalarF32,
+        moved_lo_x: ScalarF32, moved_lo_y: ScalarF32, moved_lo_z: ScalarF32,
+        moved_hi_x: ScalarF32, moved_hi_y: ScalarF32, moved_hi_z: ScalarF32,
         field_nodes_x: ScalarF32, field_nodes_y: ScalarF32, field_nodes_z: ScalarF32,
         field_spacing: ScalarF32,
         force_lattices: ScalarF32,
@@ -422,10 +425,15 @@ manifold_node_engine::primitive! {
         body_buffers: LiquidBodyBuffers = LiquidBodyBuffers::default(),
         body_rows: f32 = 0.0,
         rows_fresh: bool = false,
-        // The static meshes' rows, shapes and trees as last published, and
-        // the count of their changes node.matter_static_solid rebuilds on.
+        // The static meshes' shapes, trees and rows as last published, the
+        // count of their changes node.matter_static_solid rebuilds every
+        // held tile on, and the count of moves alone with the box round the
+        // last one, which it rebuilds the tiles round.
         static_hash: u64 = 0,
+        static_rows: Vec<(usize, LiquidBody)> = Vec::new(),
         static_key: f32 = 0.0,
+        moved_key: f32 = 0.0,
+        moved_box: [[f32; 3]; 2] = [[0.0; 3]; 2],
         coupled: Coupling = Coupling::default(),
         reaction: Option<GpuBuffer> = None,
         impulses: LiquidImpulses = LiquidImpulses::default(),
@@ -591,7 +599,7 @@ const YIELD_STRESS_RANGE: (f32, f32) = (0.0, 5.0e4);
 const VISCOSITY_RANGE: (f32, f32) = (0.0, 1.0e4);
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 72] = [
+const OUTPUTS: [&str; 79] = [
     "fill_min_x",
     "fill_min_y",
     "fill_min_z",
@@ -664,6 +672,13 @@ const OUTPUTS: [&str; 72] = [
     "yield_strain",
     "relax_time",
     "hardening",
+    "moved_key",
+    "moved_lo_x",
+    "moved_lo_y",
+    "moved_lo_z",
+    "moved_hi_x",
+    "moved_hi_y",
+    "moved_hi_z",
 ];
 const TICKS: usize = 22;
 const EPOCH: usize = 24;
@@ -1125,10 +1140,15 @@ impl TickSampled for MatterDomain {
 
 inventory::submit! { TickSampledRegistration::new::<MatterDomain>() }
 
-/// The static meshes (tree shapes) as this frame's last tick places them,
-/// with every shape and the trees' sizes: a moved, added or rebuilt static
-/// mesh changes it.
-fn static_hash(bodies: &LiquidBodies) -> u64 {
+/// The static meshes (bodies read through their trees) at the last tick:
+/// a hash of their shapes, trees and which rows hold which, and, when only
+/// where they stand changed since `last`, the world box round each moved
+/// row's old and new box. `last` takes this call's rows. A row whose box is
+/// not finite counts as a change of shape.
+fn static_change(
+    bodies: &LiquidBodies,
+    last: &mut Vec<(usize, LiquidBody)>,
+) -> (u64, Option<[[f32; 3]; 2]>) {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::hash::DefaultHasher::new();
     let shapes = bodies.shapes();
@@ -1137,13 +1157,49 @@ fn static_hash(bodies: &LiquidBodies) -> u64 {
     bodies.collider_triangles().len().hash(&mut hasher);
     let rows = bodies.last_rows();
     let last_tick = &rows[rows.len() - bodies.count().min(rows.len())..];
-    for row in last_tick {
-        let shape = row.accel_shape[3];
-        if shape >= 0.0 && shapes.get(shape as usize).is_some_and(|s| s.tree == 1) {
+    let now: Vec<(usize, LiquidBody)> = last_tick
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, row)| {
+            let shape = row.accel_shape[3];
+            shape >= 0.0 && shapes.get(shape as usize).is_some_and(|s| s.tree == 1)
+        })
+        .collect();
+    for (index, row) in &now {
+        index.hash(&mut hasher);
+        row.accel_shape[3].to_bits().hash(&mut hasher);
+    }
+    let mut moved: Option<[[f32; 3]; 2]> = None;
+    let mut unbounded = false;
+    if last.len() == now.len() {
+        for ((_, old), (_, new)) in last.iter().zip(&now) {
+            if old.position_inv_mass[..3] == new.position_inv_mass[..3] && old.rotation == new.rotation {
+                continue;
+            }
+            match (bodies.world_box(old), bodies.world_box(new)) {
+                (Some(a), Some(b)) => {
+                    let joined = moved.get_or_insert(a);
+                    for [lo, hi] in [a, b] {
+                        for axis in 0..3 {
+                            joined[0][axis] = joined[0][axis].min(lo[axis]);
+                            joined[1][axis] = joined[1][axis].max(hi[axis]);
+                        }
+                    }
+                }
+                _ => unbounded = true,
+            }
+        }
+    }
+    if unbounded {
+        // A moved row with no finite box: its pose joins the hash, so every
+        // held tile is rebuilt.
+        for (_, row) in &now {
             bytemuck::bytes_of(row).hash(&mut hasher);
         }
     }
-    hasher.finish()
+    *last = now;
+    (hasher.finish(), moved.filter(|_| !unbounded))
 }
 
 impl MatterDomain {
@@ -1373,10 +1429,13 @@ impl MatterDomain {
                 .rows(first_tick, frame.ticks, coupled_rows)?
                 .len() as f32;
             self.body_rows = rows;
-            let hash = static_hash(&self.bodies);
+            let (hash, moved) = static_change(&self.bodies, &mut self.static_rows);
             if hash != self.static_hash {
                 self.static_hash = hash;
                 self.static_key = (self.static_key + 1.0) % 16_777_216.0;
+            } else if let Some(moved) = moved {
+                self.moved_box = moved;
+                self.moved_key = (self.moved_key + 1.0) % 16_777_216.0;
             }
             rows
         } else {
@@ -1607,6 +1666,13 @@ impl MatterDomain {
             ("first_tick", first_tick as f32),
             ("dynamic_count", dynamic_count as f32),
             ("static_key", self.static_key),
+            ("moved_key", self.moved_key),
+            ("moved_lo_x", self.moved_box[0][0]),
+            ("moved_lo_y", self.moved_box[0][1]),
+            ("moved_lo_z", self.moved_box[0][2]),
+            ("moved_hi_x", self.moved_box[1][0]),
+            ("moved_hi_y", self.moved_box[1][1]),
+            ("moved_hi_z", self.moved_box[1][2]),
             ("material_rule", material.rule as u32 as f32),
             ("yield_strain", material.yield_strain as f32),
             ("relax_time", material.relax_time as f32),
