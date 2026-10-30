@@ -126,6 +126,9 @@ const MM_EPSILON: f32 = 1.0e-6;
 // Four sweeps (the paper's count) leave up to 0.7% error in U·Σ·Vᵀ on
 // random F near identity; six reach f32 rounding.
 const MM_JACOBI_SWEEPS: u32 = 6u;
+// A sweep stops the Jacobi when FᵀF's off-diagonal is this share of its
+// diagonal (squared sums): f32's rounding, 2⁻²³ each way, squared.
+const MM_SETTLED: f32 = 1.42e-14;
 
 // M·G, G the rotation by (c, s) in plane (p, q): column p becomes
 // c·col p + s·col q, column q becomes −s·col p + c·col q.
@@ -192,6 +195,13 @@ fn matter_svd(f: mat3x3<f32>) -> MatterSvd {
     var s = transpose(f) * f;
     var v = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
     for (var sweep = 0u; sweep < MM_JACOBI_SWEEPS; sweep = sweep + 1u) {
+        // Off the diagonal at f32 rounding already: further sweeps would
+        // leave V as it is.
+        let off = s[1][0] * s[1][0] + s[2][1] * s[2][1] + s[2][0] * s[2][0];
+        let on = s[0][0] * s[0][0] + s[1][1] * s[1][1] + s[2][2] * s[2][2];
+        if off <= MM_SETTLED * on {
+            break;
+        }
         for (var k = 0u; k < 3u; k = k + 1u) {
             // Planes (0, 1), (1, 2), (0, 2).
             let p = select(k, 0u, k == 2u);
