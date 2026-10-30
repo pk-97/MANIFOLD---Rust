@@ -12,6 +12,9 @@
 //! missing default scene, a bad file) returns `Err(String)` here instead,
 //! since this is a production code path, not a test.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::scene::material::{MapSamplerDesc, MaterialMapInfo};
 
@@ -106,38 +109,143 @@ pub(crate) fn parse_document_and_buffers(
 }
 
 /// The exact document and resolved buffers used by a mesh decode. The
-/// identity includes contents, not the location of the owning model file.
+/// identity covers contents, not the location of the owning model file.
 pub(crate) struct GltfBufferSnapshot {
     pub document: gltf::Document,
     pub buffers: Vec<gltf::buffer::Data>,
-    pub identity: [u8; 32],
+    /// The file without its binary chunk: a `.gltf`'s text, a `.glb`'s JSON.
+    json: Vec<u8>,
+    identity: std::sync::OnceLock<[u8; 32]>,
+}
+
+impl GltfBufferSnapshot {
+    /// A SHA-256 of the document and every buffer, worked out the first
+    /// time a loader asks: a mesh drawn indexed never needs it.
+    pub(crate) fn identity(&self) -> [u8; 32] {
+        *self.identity.get_or_init(|| {
+            use sha2::{Digest, Sha256};
+            let mut hash = Sha256::new();
+            hash.update(b"manifold.gltf-buffer-snapshot.v2");
+            hash.update((self.json.len() as u64).to_le_bytes());
+            hash.update(&self.json);
+            hash.update((self.buffers.len() as u64).to_le_bytes());
+            for buffer in &self.buffers {
+                hash.update((buffer.0.len() as u64).to_le_bytes());
+                hash.update(&buffer.0);
+            }
+            hash.finalize().into()
+        })
+    }
+}
+
+/// A file's size and modification time.
+type FileStamp = (u64, Option<std::time::SystemTime>);
+
+fn file_stamp(path: &std::path::Path) -> Option<FileStamp> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.len(), metadata.modified().ok()))
+}
+
+/// One model file's parse while any loader holds it, and the stamp of every
+/// file it read: the model and each external buffer.
+#[derive(Default)]
+struct SharedSnapshot {
+    files: Vec<(std::path::PathBuf, Option<FileStamp>)>,
+    snapshot: std::sync::Weak<GltfBufferSnapshot>,
+}
+
+/// The model files loaders hold, by path. Every part and texture of a model
+/// loads on its own thread at once; this way they read and parse the file
+/// once between them instead of once each.
+fn shared_snapshots()
+-> &'static std::sync::Mutex<HashMap<std::path::PathBuf, Arc<std::sync::Mutex<SharedSnapshot>>>> {
+    static FILES: std::sync::OnceLock<
+        std::sync::Mutex<HashMap<std::path::PathBuf, Arc<std::sync::Mutex<SharedSnapshot>>>>,
+    > = std::sync::OnceLock::new();
+    FILES.get_or_init(Default::default)
 }
 
 /// Resolve dependencies through the canonical importer before consulting the
 /// decoded mesh cache. A missing or changed external buffer must not be hidden
 /// by a cache hit. On a miss the caller flattens these same bytes, without
 /// reopening the model or its buffers under the captured identity.
+///
+/// Loaders asking for the same file while another holds its parse share it;
+/// one asking while the file is being read waits for that read. A model
+/// whose file or any external buffer changed size or modification time
+/// since, or went missing, is read again.
 pub(crate) fn parse_buffer_snapshot(
     path: &std::path::Path,
-) -> Result<GltfBufferSnapshot, String> {
-    use sha2::{Digest, Sha256};
-
+) -> Result<Arc<GltfBufferSnapshot>, String> {
+    use std::sync::PoisonError;
+    let stamp = file_stamp(path);
+    let slot = {
+        let mut files = shared_snapshots()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // Forget files no loader holds or is reading.
+        files.retain(|_, slot| {
+            Arc::strong_count(slot) > 1
+                || slot
+                    .try_lock()
+                    .is_ok_and(|shared| shared.snapshot.strong_count() > 0)
+        });
+        files.entry(path.to_path_buf()).or_default().clone()
+    };
+    let mut shared = slot.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(snapshot) = shared.snapshot.upgrade()
+        && shared
+            .files
+            .iter()
+            .all(|(file, stamp)| stamp.is_some() && file_stamp(file) == *stamp)
+    {
+        return Ok(snapshot);
+    }
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let (document, buffers) = parse_document_and_buffers_from_slice(path, &bytes)?;
-    let mut hash = Sha256::new();
-    hash.update(b"manifold.gltf-buffer-snapshot.v1");
-    hash.update((bytes.len() as u64).to_le_bytes());
-    hash.update(&bytes);
-    hash.update((buffers.len() as u64).to_le_bytes());
-    for buffer in &buffers {
-        hash.update((buffer.0.len() as u64).to_le_bytes());
-        hash.update(&buffer.0);
+    let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
+    let mut files = vec![(path.to_path_buf(), stamp)];
+    for buffer in document.buffers() {
+        if let gltf::buffer::Source::Uri(uri) = buffer.source()
+            && !uri.starts_with("data:")
+        {
+            let external = base.join(urlencoding::decode(uri).map_err(|e| e.to_string())?.as_ref());
+            files.push((external.clone(), file_stamp(&external)));
+        }
     }
-    Ok(GltfBufferSnapshot {
+    let json = if bytes.starts_with(b"glTF") {
+        gltf::Glb::from_slice(&bytes)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .json
+            .into_owned()
+    } else {
+        bytes
+    };
+    let snapshot = Arc::new(GltfBufferSnapshot {
         document,
         buffers,
-        identity: hash.finalize().into(),
-    })
+        json,
+        identity: std::sync::OnceLock::new(),
+    });
+    *shared = SharedSnapshot {
+        files,
+        snapshot: Arc::downgrade(&snapshot),
+    };
+    Ok(snapshot)
+}
+
+/// Run the calling loader thread below the UI and playback threads, so a
+/// model's parts loading at once never take their cores.
+pub(crate) fn lower_loader_priority() {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe extern "C" {
+            fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+        }
+        // QOS_CLASS_USER_INITIATED: under USER_INTERACTIVE, still on the
+        // performance cores.
+        unsafe { pthread_set_qos_class_self_np(0x19, 0) };
+    }
 }
 
 /// The pinned glTF importer unwraps UTF-8 after percent-decoding relative
@@ -1702,14 +1810,25 @@ pub(crate) fn parse_texture_snapshot(
     if manifold_core::materialx::is_materialx(&path.to_string_lossy()) {
         return material_file_snapshot(path, texture_index);
     }
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let picture = image::guess_format(&bytes).or_else(|_| image::ImageFormat::from_path(path));
+    // A picture's signature sits in its first bytes; a model file is read
+    // through the parse its parts share.
+    let mut head = Vec::with_capacity(64);
+    {
+        use std::io::Read;
+        std::fs::File::open(path)
+            .and_then(|file| file.take(64).read_to_end(&mut head))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    let picture = image::guess_format(&head).or_else(|_| image::ImageFormat::from_path(path));
     let (encoded, format) = match picture {
-        Ok(format) => (bytes, Ok(format)),
+        Ok(format) => (
+            std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?,
+            Ok(format),
+        ),
         Err(_) => {
-            let (document, buffers) = parse_document_and_buffers_from_slice(path, &bytes)?;
+            let snapshot = parse_buffer_snapshot(path)?;
             let base = path.parent().unwrap_or_else(|| std::path::Path::new("./"));
-            texture_encoded(&document, &buffers, base, texture_index)?
+            texture_encoded(&snapshot.document, &snapshot.buffers, base, texture_index)?
         }
     };
     let mut hash = Sha256::new();

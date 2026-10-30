@@ -265,24 +265,24 @@ pub struct GltfAnimSet {
 /// on the loader thread; running nodes retain their immutable loaded snapshot.
 fn load_anim_set(path: &Path) -> Result<Arc<LoadedAnimSet>, String> {
     let snapshot = gltf_load::parse_buffer_snapshot(path)?;
-    if let Some(set) = cached(&snapshot.identity) {
+    let identity = snapshot.identity();
+    if let Some(set) = cached(&identity) {
         return Ok(set);
     }
-    let identity = snapshot.identity;
     Ok(insert_cache(
         identity,
-        Arc::new(decode_anim_set(snapshot).into()),
+        Arc::new(decode_anim_set(&snapshot).into()),
     ))
 }
 
 /// Parse the exact snapshot that produced the cache key, without reopening
 /// its files or maintaining another document/buffer parser.
-fn decode_anim_set(snapshot: gltf_load::GltfBufferSnapshot) -> GltfAnimSet {
+fn decode_anim_set(snapshot: &gltf_load::GltfBufferSnapshot) -> GltfAnimSet {
     let gltf_load::GltfBufferSnapshot {
         document, buffers, ..
     } = snapshot;
 
-    let node_parents: Vec<i32> = gltf_load::build_parent_map(&document)
+    let node_parents: Vec<i32> = gltf_load::build_parent_map(document)
         .iter()
         .map(|p| p.map(|i| i as i32).unwrap_or(-1))
         .collect();
@@ -298,7 +298,7 @@ fn decode_anim_set(snapshot: gltf_load::GltfBufferSnapshot) -> GltfAnimSet {
         })
         .collect();
 
-    let clips: Vec<AnimClip> = gltf_load::parse_animations(&document, &buffers)
+    let clips: Vec<AnimClip> = gltf_load::parse_animations(document, buffers)
         .into_iter()
         .map(|info| {
             let mut channels = Vec::new();
@@ -337,7 +337,7 @@ fn decode_anim_set(snapshot: gltf_load::GltfBufferSnapshot) -> GltfAnimSet {
         })
         .collect();
 
-    let skins: Vec<SkinTopology> = gltf_load::parse_skins(&document, &buffers)
+    let skins: Vec<SkinTopology> = gltf_load::parse_skins(document, buffers)
         .into_iter()
         .map(|s| SkinTopology {
             joint_node_indices: s.joint_node_indices.iter().map(|&i| i as u32).collect(),
@@ -386,6 +386,7 @@ pub(crate) fn spawn_load(path: &Path) -> mpsc::Receiver<Result<Arc<LoadedAnimSet
     let path_buf = path.to_path_buf();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
+        gltf_load::lower_loader_priority();
         let _ = tx.send(load_anim_set(&path_buf));
     });
     rx

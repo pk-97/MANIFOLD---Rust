@@ -286,7 +286,11 @@ mod tests {
             assert!(first >= words[2] as usize && first + count <= words.len());
             assert_eq!(count % 3, 0);
             assert!(count <= 3 * CLUSTER_TRIANGLES);
-            assert!(words[first..first + count].iter().all(|&i| (i as usize) < vertices.len()));
+            assert!(
+                words[first..first + count]
+                    .iter()
+                    .all(|&i| (i as usize) < vertices.len())
+            );
             let refined_error = f32::from_bits(r[21]);
             if refined_error == -1.0 {
                 original += count / 3;

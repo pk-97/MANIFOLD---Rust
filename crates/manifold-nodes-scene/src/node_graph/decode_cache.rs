@@ -557,7 +557,7 @@ fn cached_load_gltf_mesh_with_root(
     root: Option<PathBuf>,
 ) -> Result<Vec<MeshVertex>, String> {
     let source = parse_buffer_snapshot(path)?;
-    let file_hash = source.identity;
+    let file_hash = source.identity();
     let selector_str = mesh_selector_key(&selector);
     let key = key_hash("gltf_mesh", &file_hash, selector_str.as_bytes());
 
@@ -1281,7 +1281,7 @@ mod tests {
         let v1 = cached_load_gltf_mesh_with_root(&path, selector.clone(), Some(root.to_path_buf()))
             .unwrap();
 
-        let file_hash = parse_buffer_snapshot(&path).unwrap().identity;
+        let file_hash = parse_buffer_snapshot(&path).unwrap().identity();
         let key = key_hash(
             "gltf_mesh",
             &file_hash,

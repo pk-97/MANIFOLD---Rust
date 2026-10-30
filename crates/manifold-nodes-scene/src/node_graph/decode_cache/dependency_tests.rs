@@ -310,7 +310,7 @@ fn decoded_snapshot_retains_geometry_after_source_changes_and_identity_changes()
     )
     .unwrap();
 
-    assert_ne!(snapshot.identity, changed.identity);
+    assert_ne!(snapshot.identity(), changed.identity());
     assert_eq!(positions(&retained)[2], [0.0, 1.0, 0.0]);
     assert_eq!(positions(&fresh)[2], [0.75, 1.0, 0.0]);
 }

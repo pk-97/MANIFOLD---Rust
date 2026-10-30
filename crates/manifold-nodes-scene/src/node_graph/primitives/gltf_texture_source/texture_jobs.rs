@@ -64,7 +64,10 @@ impl TextureJobs {
             for index in 0..WORKER_COUNT {
                 std::thread::Builder::new()
                     .name(format!("gltf-texture-{index}"))
-                    .spawn(move || self.work())
+                    .spawn(move || {
+                        crate::node_graph::gltf_load::lower_loader_priority();
+                        self.work()
+                    })
                     .expect("start glTF texture decode worker");
             }
         });

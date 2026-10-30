@@ -725,6 +725,7 @@ impl Primitive for GltfMeshSource {
                 let path_buf = std::path::PathBuf::from(path);
                 let (tx, rx) = mpsc::channel();
                 std::thread::spawn(move || {
+                    crate::node_graph::gltf_load::lower_loader_priority();
                     let result = if want_indexed {
                         cached_load_gltf_mesh_indexed(&path_buf, selector).map(
                             |(verts, indices)| {
@@ -916,8 +917,8 @@ impl Primitive for GltfMeshSource {
             let lods_unchanged =
                 lods_dst.is_none_or(|b| self.last_copied_lods_identity == b.identity_key());
             let clusters_dst = ctx.outputs.array("clusters");
-            let clusters_unchanged = clusters_dst
-                .is_none_or(|b| self.last_copied_clusters_identity == b.identity_key());
+            let clusters_unchanged =
+                clusters_dst.is_none_or(|b| self.last_copied_clusters_identity == b.identity_key());
             self.published = self.uploaded
                 && self.last_copied_content_version == self.content_version
                 && self.last_copied_dst_identity == dst.identity_key()
@@ -1173,8 +1174,7 @@ impl Primitive for GltfMeshSource {
                 if let (Some(clusters_staging), Some(clusters_dst)) =
                     (&self.clusters_staging, clusters_dst)
                 {
-                    let clusters_copy_size =
-                        self.clusters_staging_len_bytes.min(clusters_dst.size);
+                    let clusters_copy_size = self.clusters_staging_len_bytes.min(clusters_dst.size);
                     if clusters_copy_size > 0 {
                         ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(
                             clusters_staging,

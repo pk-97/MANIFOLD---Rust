@@ -196,7 +196,7 @@ fn decoding_uses_the_snapshot_even_if_files_change_after_validation() {
     let snapshot = gltf_load::parse_buffer_snapshot(&fixture.model).unwrap();
     fixture.set_keyframe(19.0);
     fixture.set_model_bind_pose(23.0);
-    let captured = decode_anim_set(snapshot);
+    let captured = decode_anim_set(&snapshot);
     assert_eq!(translation_value(&captured), 17.0);
     assert_eq!(captured.node_bind_trs[0].translation[0], 13.0);
     let current = load(&fixture.model).unwrap();
