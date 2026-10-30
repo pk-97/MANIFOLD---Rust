@@ -288,6 +288,13 @@ impl RigidSimulation {
         &self.handles
     }
 
+    /// Each body port's body as the world holds it: what the admission gate
+    /// let in, so a port whose newest description has no shape yet (a mesh
+    /// still loading in an older tick sample) keeps the one it joined with.
+    pub fn installed_bodies(&self) -> &[Option<RigidBody>] {
+        &self.descriptions
+    }
+
     /// Copy group `group`'s installed active copies.
     pub fn native_copy_handles(&self, group: usize) -> &[Option<BodyHandle>] {
         self.groups

@@ -287,7 +287,6 @@ impl LiquidRigidOwner {
             uncoupled,
         } = bind(
             &rigid,
-            &walled,
             world_bodies(
                 &rigid,
                 |slot| colliders.contains_body(slot),
@@ -453,7 +452,6 @@ impl LiquidRigidOwner {
             uncoupled,
         } = bind(
             &self.rigid,
-            &self.walled,
             world_bodies(
                 &self.rigid,
                 |slot| self.colliders.contains_body(slot),
@@ -742,11 +740,11 @@ fn world_bodies<'a>(
 
 /// Each colliding body and copy `colliders` selects, in slot order then each
 /// group's copies, up to `capacity`, with its hull: `known` hands back a
-/// hull already built, else it is built from the world. Returns the bodies,
-/// their hulls, and how many colliding bodies are past the capacity.
+/// hull already built, else it is built from the world and the body it
+/// installed. Returns the bodies, their hulls, and how many colliding bodies
+/// are past the capacity.
 fn bind(
     rigid: &RigidSimulation,
-    walled: &RigidSceneInputs,
     colliders: impl Iterator<Item = (BodyHandle, Source)>,
     capacity: usize,
     known: impl Fn(Source, BodyHandle, u32) -> Option<(Arc<PreparedFluidGeometry>, f32)>,
@@ -776,7 +774,9 @@ fn bind(
             Some(known) => known,
             None => {
                 let body = match source {
-                    Source::Body(index) => walled.bodies.get(index).and_then(Option::as_ref),
+                    Source::Body(index) => {
+                        rigid.installed_bodies().get(index).and_then(Option::as_ref)
+                    }
                     Source::Group(_) => None,
                 };
                 let built = hull_geometry(world, handle, body)?;
@@ -1190,7 +1190,7 @@ impl SharedSolids {
                     .map(|(body, hull)| (Arc::clone(hull), body.face_area))
             };
             let every = world_bodies(rigid, |_| true, 0..groups);
-            let bound = bind(rigid, inputs, every, MAX_LIQUID_BODIES, known)?;
+            let bound = bind(rigid, every, MAX_LIQUID_BODIES, known)?;
             self.world = bound.bodies;
             self.geometries = bound.geometries;
             self.uncoupled = bound.uncoupled;
@@ -1678,6 +1678,80 @@ mod tests {
 
     fn no_reaction(_: PendingTick, _: &[LiquidBody], _: &mut [BodyImpulse]) -> Result<(), String> {
         Ok(())
+    }
+
+    /// A Fixed mesh collider whose shape lands after the start (an imported
+    /// scan still loading) joins the running world; a tick sample from
+    /// before it landed, with no shape yet, then reanchors the owner. The
+    /// rebind takes the mesh the world installed, not the sample's.
+    #[test]
+    fn a_late_mesh_collider_binds_with_the_shape_it_joined_with() {
+        let corners: Vec<[f32; 3]> = (0..8)
+            .map(|i| {
+                [i & 1, (i >> 1) & 1, (i >> 2) & 1].map(|bit| if bit == 1 { 1.0 } else { -1.0 })
+            })
+            .collect();
+        let cube = manifold_physics::TriangleMesh {
+            vertices: corners,
+            triangles: vec![
+                [0, 4, 6],
+                [0, 6, 2],
+                [1, 3, 7],
+                [1, 7, 5],
+                [0, 1, 5],
+                [0, 5, 4],
+                [2, 6, 7],
+                [2, 7, 3],
+                [0, 2, 3],
+                [0, 3, 1],
+                [4, 5, 7],
+                [4, 7, 6],
+            ],
+        };
+        let mut loading = scene();
+        loading.bodies[1] = Some(RigidBody {
+            transform: Transform {
+                pos: [1.5, 0.3, 0.0],
+                scale: [0.6, 0.3, 0.6],
+                ..Transform::default()
+            },
+            kind: 0,
+            collider: None,
+            ..RigidBody::default()
+        });
+        let colliders = RigidImpulseTargets::body(0)
+            .unwrap()
+            .union(RigidImpulseTargets::body(1).unwrap());
+        let mut owner =
+            LiquidRigidOwner::new(&loading, OPEN, &colliders, MAX_LIQUID_BODIES, 1, None).unwrap();
+        assert_eq!(
+            owner.geometries().len(),
+            1,
+            "the loading scan is not in yet"
+        );
+        owner.set_pending(PendingTick {
+            tick: 0,
+            stamp: 0,
+            interval: manifold_physics::stepping::StepInterval::new(Seconds::ZERO, Seconds(TICK)),
+            offline: false,
+        });
+        owner
+            .settle_ready(Some(&loading), |_| true, no_reaction)
+            .unwrap();
+
+        let mut landed = loading.clone();
+        landed.bodies[1].as_mut().unwrap().collider = Some(Arc::new(Solid::Mesh(cube)));
+        assert!(
+            owner
+                .admit(&landed, OPEN, &colliders, MAX_LIQUID_BODIES)
+                .unwrap()
+        );
+        owner.reanchor_start(&loading).unwrap();
+        owner
+            .rebind()
+            .expect("the scan binds with its installed mesh");
+        assert_eq!(owner.geometries().len(), 2);
+        assert_eq!(owner.rows().len(), 2);
     }
 
     #[test]
