@@ -90,6 +90,7 @@ impl MaterialLook {
 pub enum MaterialGroup {
     Surface,
     Opacity,
+    Covers,
     Feature(MaterialFeature),
     Advanced,
 }

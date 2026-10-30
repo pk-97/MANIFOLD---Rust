@@ -69,6 +69,7 @@ mod field_objects;
 mod frame_setup;
 mod frustum;
 mod gas_objects;
+mod material_covers;
 mod gas_volume;
 mod item_pick;
 mod live_draw_args;
@@ -80,7 +81,6 @@ mod rt_changes;
 mod rt_frame;
 mod rt_trace;
 mod selection_mask;
-mod terrain_look;
 mod volume_optics;
 use field_objects::{FieldObject, ObjectMaterial};
 use gas_objects::GasDraw;
@@ -124,7 +124,6 @@ static RENDER_SCENE_WGSL: std::sync::LazyLock<String> = std::sync::LazyLock::new
         include_str!("shaders/look_mist.wgsl"),
         include_str!("shaders/look_thin_water_light.wgsl"),
         include_str!("shaders/look_wet_surface.wgsl"),
-        include_str!("shaders/look_terrain.wgsl"),
         include_str!("shaders/render_scene.wgsl"),
     ]
     .concat()
@@ -1974,10 +1973,11 @@ struct ObjectDraw<'ctx> {
     volume_thickness_map: Option<&'ctx manifold_gpu::GpuTexture>,
     diffuse_transmission_map: Option<&'ctx manifold_gpu::GpuTexture>,
     diffuse_transmission_color_map: Option<&'ctx manifold_gpu::GpuTexture>,
-    /// A Terrain's layer maps (cliff colour, normal, metallic-roughness,
-    /// then the peak's) and their look; off for every other object.
-    terrain_maps: [Option<&'ctx manifold_gpu::GpuTexture>; 6],
-    terrain_look: terrain_look::TerrainLook,
+    /// The Materials covering this draw's own: Cover 1's base colour,
+    /// normal and metallic-roughness maps, then Cover 2's, and where and how
+    /// each lies.
+    cover_maps: [Option<&'ctx manifold_gpu::GpuTexture>; 6],
+    covers: material_covers::MaterialCovers,
     /// This object's per-map-family
     /// sampler settings, order `[base_color, normal, mr, occlusion,
     /// emissive]` — matches `binding_sets`' 22..26 slot order below.
@@ -2932,7 +2932,7 @@ impl RenderScene {
             topology: None,
             field: None,
             gas: None,
-            terrain: None,
+            covers: [None, None],
             base_color_map: inputs.slot_of("base_color_map"),
             normal_map: inputs.slot_of("normal_map"),
             mr_map: inputs.slot_of("mr_map"),

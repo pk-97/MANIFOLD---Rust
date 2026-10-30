@@ -14,9 +14,13 @@
 
 use manifold_foundation::scene_surface::ControlGroup;
 
-use super::fields::{Choice, FieldControl, FieldRow, FieldValue, enabled, wrong_value};
+use super::fields::{
+    Choice, FieldControl, FieldRow, FieldValue, enabled, is_material, wrong_value,
+};
 use super::{Exposure, PropertyRow, Reach, row};
-use crate::scene_doc::{ItemFields, MaterialFields, MaterialType, TextureFeeds, TextureSource};
+use crate::scene_doc::{
+    ItemFields, MaterialFields, MaterialType, TextureFeeds, TextureSource,
+};
 
 /// The family rule for the material node's own params.
 #[derive(Debug, Clone, Copy)]
@@ -254,9 +258,45 @@ pub fn node_type(fields: &MaterialFields) -> &'static str {
     }
 }
 
+fn cover(fields: &ItemFields, slot: usize) -> FieldValue {
+    match fields {
+        ItemFields::Material(m) => FieldValue::Item(m.covers[slot].clone()),
+        _ => FieldValue::Item(None),
+    }
+}
+
+fn set_cover(fields: &mut ItemFields, value: &FieldValue, slot: usize) -> Result<(), String> {
+    match (fields, value) {
+        (ItemFields::Material(m), FieldValue::Item(material)) => {
+            m.covers[slot] = material.clone();
+            Ok(())
+        }
+        _ => Err(wrong_value("cover", value)),
+    }
+}
+
+/// The node param a Cover row sets: `cover1_amount` for Cover 1's Amount.
+/// A Cover's rows show while it has a Material.
+pub fn cover_slot(param: &str) -> Option<usize> {
+    let rest = param.strip_prefix("cover")?;
+    let (digit, _) = rest.split_once('_')?;
+    let slot = digit.parse::<usize>().ok()?.checked_sub(1)?;
+    (slot < crate::scene_doc::MATERIAL_COVERS).then_some(slot)
+}
+
+const COVER_PICKER: FieldControl = FieldControl::Item {
+    items: is_material,
+    none: "None",
+};
+
+fn is_material_item(fields: &ItemFields) -> bool {
+    matches!(fields, ItemFields::Material(_))
+}
+
 /// The texture source is a field; the features are set by the feature menu
-/// (one `Set` with the feature's defaults, so one undo removes it).
-pub static MATERIAL_FIELDS: [FieldRow; 5] = [
+/// (one `Set` with the feature's defaults, so one undo removes it). Each
+/// Cover picks a Material laid over this one.
+pub static MATERIAL_FIELDS: [FieldRow; 7] = [
     FieldRow {
         id: "material_type",
         label: "Type",
@@ -356,5 +396,25 @@ pub static MATERIAL_FIELDS: [FieldRow; 5] = [
             }
             _ => Err(wrong_value("texture_file", value)),
         },
+    },
+    FieldRow {
+        id: "cover1",
+        label: "Cover 1",
+        section: Material,
+        control: COVER_PICKER,
+        applies: is_material_item,
+        disabled: enabled,
+        read: |fields| cover(fields, 0),
+        write: |fields, value| set_cover(fields, value, 0),
+    },
+    FieldRow {
+        id: "cover2",
+        label: "Cover 2",
+        section: Material,
+        control: COVER_PICKER,
+        applies: is_material_item,
+        disabled: enabled,
+        read: |fields| cover(fields, 1),
+        write: |fields, value| set_cover(fields, value, 1),
     },
 ];

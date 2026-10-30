@@ -44,6 +44,58 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) {
     for item in &materials {
         emit(b, item);
     }
+    for item in &materials {
+        cover(b, item);
+    }
+}
+
+/// Each Cover's material port and the ports its base colour, normal and
+/// metallic-roughness maps feed on a `node.scene_object`, Cover 1 then 2.
+const COVER_PORTS: [(&str, [(&str, &str); 3]); 2] = [
+    (
+        "cover1",
+        [
+            ("base_color_map", "cover1_base_color_map"),
+            ("normal_map", "cover1_normal_map"),
+            ("mr_map", "cover1_mr_map"),
+        ],
+    ),
+    (
+        "cover2",
+        [
+            ("base_color_map", "cover2_base_color_map"),
+            ("normal_map", "cover2_normal_map"),
+            ("mr_map", "cover2_mr_map"),
+        ],
+    ),
+];
+
+/// A Material's Covers join its maps: each covering Material's surface and
+/// its base colour, normal and metallic-roughness maps, on the cover ports,
+/// so every draw with the Material wires them as it wires the Material's
+/// own maps. Its rules are the Material's own `cover*` params.
+fn cover(b: &mut Builder<'_>, item: &Item) {
+    let ItemFields::Material(fields) = &item.fields else {
+        return;
+    };
+    let mut wires = Vec::new();
+    for (slot, (port, map_ports)) in COVER_PORTS.iter().enumerate() {
+        let Some(material) = &fields.covers[slot] else {
+            continue;
+        };
+        let Some(surface) = b.id(material.as_str(), MATERIAL_FAMILY.node) else {
+            continue;
+        };
+        wires.push((surface, *port));
+        for (source, own) in b.material_maps.get(material.as_str()).into_iter().flatten() {
+            if let Some((_, cover_port)) = map_ports.iter().find(|(map, _)| map == own) {
+                wires.push((*source, *cover_port));
+            }
+        }
+    }
+    if let Some(maps) = b.material_maps.get_mut(item.id.as_str()) {
+        maps.extend(wires);
+    }
 }
 
 fn emit(b: &mut Builder<'_>, item: &Item) {
@@ -127,6 +179,11 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
         if crate::node_graph::material_inspector::map_port(&meta.name)
             .is_some_and(|port| !fed.contains(&port))
         {
+            facts.role = SurfaceRole::Hidden;
+        }
+        // A Cover's rows hide while it has no Material, and stay declared
+        // so its values survive the Material leaving and coming back.
+        if manifold_core::scene_schema::cover_slot(name).is_some_and(|slot| fields.covers[slot].is_none()) {
             facts.role = SurfaceRole::Hidden;
         }
         if matches!(

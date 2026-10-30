@@ -221,16 +221,8 @@ pub enum Shape {
     Icosahedron,
     Dodecahedron,
     Ocean,
-    /// Land shaped by eroded-looking noise on the GPU each frame. Its own
-    /// material is the ground; `cliff` covers steep ground and `peak` the
-    /// ground above the snow line, when set.
-    #[serde(rename_all = "camelCase")]
-    Terrain {
-        #[serde(default)]
-        cliff: Option<ItemId>,
-        #[serde(default)]
-        peak: Option<ItemId>,
-    },
+    /// Land shaped by noise and carved by simulated rain on the GPU.
+    Terrain,
     /// A built-in curve pushed back into a solid, centred on the curve's plane
     /// (Blender's curve Extrude). `caps` is Fill Caps: a closed outline's
     /// ends are filled.
@@ -451,7 +443,13 @@ pub struct MaterialFields {
     /// The features added from "+ Add feature", in the inspector's order,
     /// each with its mode (section 7.6).
     pub features: Vec<FeatureSetting>,
+    /// Up to two Materials laid over this one where its Cover rows say
+    /// (slope, height, breakup): rock on the steep ground, snow up high.
+    pub covers: [Option<ItemId>; MATERIAL_COVERS],
 }
+
+/// How many Materials can cover one Material.
+pub const MATERIAL_COVERS: usize = 2;
 
 /// How a Material shades: `node.pbr_material`, `node.unlit_material` (flat
 /// colour, no lights) or `node.cel_material` (toon bands).

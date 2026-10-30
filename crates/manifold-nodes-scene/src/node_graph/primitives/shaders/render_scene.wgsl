@@ -533,6 +533,9 @@ fn tbn_for(n: vec3<f32>, p: vec3<f32>, uv: vec2<f32>, tangent: vec4<f32>) -> mat
 // moss, gravel) turns matte with distance as it does in a path tracer
 // instead of reading as one smooth mirror. `resolve_normal` sets it.
 var<private> bump_variance: f32 = 0.0;
+// The surface's height picture (its normal map's alpha) where it was read;
+// a covering Material meets it by height. Mid-height with no normal map.
+var<private> surface_height: f32 = 0.5;
 
 // Toksvig's measure through a von Mises-Fisher lobe: the model loader
 // stores unit normals (`gltf_texture_blit.wgsl` mode 2), so a filtered
@@ -562,8 +565,9 @@ fn resolve_normal(uv: vec4<f32>, vertex_normal: vec3<f32>, world_pos: vec3<f32>,
             return box_normal(n);
         }
         let uv_t = material_uv(uv, 1u);
-        let sampled = textureSampleBias(normal_map, normal_sampler, uv_t, u.render_mode.y).rgb;
-        var tangent_normal = sampled * 2.0 - vec3<f32>(1.0);
+        let texel = textureSampleBias(normal_map, normal_sampler, uv_t, u.render_mode.y);
+        surface_height = texel.a;
+        var tangent_normal = texel.rgb * 2.0 - vec3<f32>(1.0);
         bump_variance = bump_variance_of(length(tangent_normal), u.normal_uv_t.z);
         tangent_normal = vec3<f32>(tangent_normal.xy * u.normal_uv_t.z, tangent_normal.z);
         // glTF TANGENT is the authored normal-map frame. Only meshes
@@ -659,14 +663,14 @@ fn box_turn(v: vec2<f32>, r: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(r.x * v.x - r.y * v.y, r.y * v.x + r.x * v.y);
 }
 
-// One side: its plain coordinate, or its three hex tiles and their blend.
-fn box_side(st: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, t: vec3<f32>, b: vec3<f32>) -> BoxSide {
+// One side: its plain coordinate, or, with Break Repeats `amount` above 0,
+// its three hex tiles and their blend.
+fn box_side(st: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, t: vec3<f32>, b: vec3<f32>, amount: f32) -> BoxSide {
     var side: BoxSide;
     side.dx = dx;
     side.dy = dy;
     side.t = t;
     side.b = b;
-    let amount = u.surface.w;
     if amount <= 0.0 {
         side.st[0] = st;
         side.turn[0] = vec2<f32>(1.0, 0.0);
@@ -747,7 +751,7 @@ fn box_parallax(p: vec3<f32>, px: vec3<f32>, py: vec3<f32>, n: vec3<f32>, s: vec
     let st = box_side_st(p, s, a);
     let dx = box_side_st(px, s, a);
     let dy = box_side_st(py, s, a);
-    let tiles = box_side(st, dx, dy, vec3<f32>(0.0), vec3<f32>(0.0));
+    let tiles = box_side(st, dx, dy, vec3<f32>(0.0), vec3<f32>(0.0), u.surface.w);
     // The strongest tile, picked with constant indices so the tile arrays
     // stay in registers.
     let b = tiles.blend;
@@ -945,15 +949,22 @@ fn begin_surface(box_pos: vec3<f32>, box_normal: vec3<f32>, ax: vec3<f32>, ay: v
     let px = dpdx(p) * bias;
     let py = dpdy(p) * bias;
     let n = normalize(box_normal);
+    box_weights = box_weights_for(n);
+    let s = select(vec3<f32>(-1.0), vec3<f32>(1.0), n >= vec3<f32>(0.0));
+    // parallax trace (only in the parallax pipeline, `PARALLAX_SPECIALIZATIONS`)
+    box_sides[0] = box_side(box_side_st(p, s, 0u), box_side_st(px, s, 0u), box_side_st(py, s, 0u), -s.x * az, ay, u.surface.w);
+    box_sides[1] = box_side(box_side_st(p, s, 1u), box_side_st(px, s, 1u), box_side_st(py, s, 1u), s.y * ax, -az, u.surface.w);
+    box_sides[2] = box_side(box_side_st(p, s, 2u), box_side_st(px, s, 2u), box_side_st(py, s, 2u), s.z * ax, ay, u.surface.w);
+}
+
+// How much each side shows on a surface facing `n` (box frame): sharpened
+// so a face takes one side except near the seams, and a side under 2% is
+// skipped.
+fn box_weights_for(n: vec3<f32>) -> vec3<f32> {
     var w = pow(abs(n), vec3<f32>(4.0));
     w = w / (w.x + w.y + w.z);
     w = select(w, vec3<f32>(0.0), w < vec3<f32>(0.02));
-    box_weights = w / (w.x + w.y + w.z);
-    let s = select(vec3<f32>(-1.0), vec3<f32>(1.0), n >= vec3<f32>(0.0));
-    // parallax trace (only in the parallax pipeline, `PARALLAX_SPECIALIZATIONS`)
-    box_sides[0] = box_side(box_side_st(p, s, 0u), box_side_st(px, s, 0u), box_side_st(py, s, 0u), -s.x * az, ay);
-    box_sides[1] = box_side(box_side_st(p, s, 1u), box_side_st(px, s, 1u), box_side_st(py, s, 1u), s.y * ax, -az);
-    box_sides[2] = box_side(box_side_st(p, s, 2u), box_side_st(px, s, 2u), box_side_st(py, s, 2u), s.z * ax, ay);
+    return w / (w.x + w.y + w.z);
 }
 
 fn box_sample(tex: texture_2d<f32>, samp: sampler) -> vec4<f32> {
@@ -980,11 +991,13 @@ fn box_sample(tex: texture_2d<f32>, samp: sampler) -> vec4<f32> {
 // tile's tangent slope turns back by the tile's own turn, and each side's
 // slope lies along that side's texture right and image up in the world.
 // The bump variance is each read's own, weighed like its normal: blending
-// tiles that disagree is not detail the map averaged away.
+// tiles that disagree is not detail the map averaged away. The map's alpha
+// is the surface's height picture, weighed the same.
 fn box_normal(n: vec3<f32>) -> vec3<f32> {
     var z = 0.0;
     var slope = vec3<f32>(0.0);
     var variance = 0.0;
+    var height = 0.0;
     for (var a = 0u; a < 3u; a++) {
         let w = box_weights[a];
         if w <= 0.0 {
@@ -999,16 +1012,255 @@ fn box_normal(n: vec3<f32>) -> vec3<f32> {
                 continue;
             }
             let r = side.turn[k];
-            let tn = textureSampleGrad(normal_map, normal_sampler, side.st[k], box_turn(side.dx, r), box_turn(side.dy, r)).rgb * 2.0 - vec3<f32>(1.0);
+            let texel = textureSampleGrad(normal_map, normal_sampler, side.st[k], box_turn(side.dx, r), box_turn(side.dy, r));
+            let tn = texel.rgb * 2.0 - vec3<f32>(1.0);
             xy += h * box_turn(tn.xy, r);
             tz += h * tn.z;
             variance += (w * h) * bump_variance_of(length(tn), u.normal_uv_t.z);
+            height += (w * h) * texel.a;
         }
         slope += w * (side.t * xy.x + side.b * xy.y);
         z += w * tz;
     }
     bump_variance = variance;
+    surface_height = height;
     return normalize(n * z + slope * u.normal_uv_t.z);
+}
+
+// ===== Covers =====
+
+// A Material can be covered by up to two others where its Cover rows say:
+// rock on ground steeper than a slope, snow above a height. Each cover reads
+// its own maps box mapped at its own Tile Size and Break Repeats, through
+// the same sides and hex tiles as the material's own. Where it lies is the
+// slope of the ground (the geometric normal against world up) and the world
+// height, each edge softened by its Softness and pushed about by Breakup
+// noise up to three Softnesses, all scaled by Amount. Inside that, the
+// cover and what it covers meet by their height pictures (the normal maps'
+// alpha): the taller wins across a band COVER_EDGE wide, so the edge
+// follows the stones instead of a smooth fade.
+
+struct MaterialCover {
+    // x 1/Tile Size, y Break Repeats, z normal strength, w metallic.
+    surface: vec4<f32>,
+    // rgb base colour, a roughness.
+    color: vec4<f32>,
+    // x, y, z: 1 where the base colour, normal and metal-rough maps are
+    // wired; w Amount, 0 for no cover.
+    maps: vec4<f32>,
+    // x steeper than, y flatter than, z their softness, in radians.
+    slope: vec4<f32>,
+    // x above, y below, z their softness, in world metres.
+    height: vec4<f32>,
+    // x Breakup, y 1/Breakup Size.
+    breakup: vec4<f32>,
+};
+
+struct MaterialCovers {
+    covers: array<MaterialCover, 2>,
+};
+
+@group(0) @binding(69) var<uniform> material_covers: MaterialCovers;
+@group(0) @binding(73) var cover1_base_color_map: texture_2d<f32>;
+@group(0) @binding(74) var cover1_normal_map: texture_2d<f32>;
+@group(0) @binding(75) var cover1_mr_map: texture_2d<f32>;
+@group(0) @binding(76) var cover2_base_color_map: texture_2d<f32>;
+@group(0) @binding(77) var cover2_normal_map: texture_2d<f32>;
+@group(0) @binding(78) var cover2_mr_map: texture_2d<f32>;
+
+const COVER_EDGE: f32 = 0.2;
+
+// The box point, its screen gradients, the box normal and the box axes in
+// the world, taken by `begin_covers` for the covers' own sides.
+var<private> cover_p: vec3<f32>;
+var<private> cover_px: vec3<f32>;
+var<private> cover_py: vec3<f32>;
+var<private> cover_n: vec3<f32>;
+var<private> cover_axes: mat3x3<f32>;
+
+fn covers_on() -> bool {
+    return material_covers.covers[0].maps.w > 0.0 || material_covers.covers[1].maps.w > 0.0;
+}
+
+// Take the box frame for the covers. `fs_pbr` calls it right after
+// `begin_surface`, in uniform control flow, since it takes screen
+// derivatives; a draw with no cover takes none.
+fn begin_covers(box_pos: vec3<f32>, box_normal: vec3<f32>, ax: vec3<f32>, ay: vec3<f32>, az: vec3<f32>) {
+    if !covers_on() {
+        return;
+    }
+    let bias = exp2(u.render_mode.y);
+    cover_p = box_pos;
+    cover_px = dpdx(box_pos) * bias;
+    cover_py = dpdy(box_pos) * bias;
+    cover_n = normalize(box_normal);
+    cover_axes = mat3x3<f32>(ax, ay, az);
+}
+
+fn cover_hash(c: vec2<i32>) -> f32 {
+    return box_hash(c).x;
+}
+
+// Smooth value noise in [-1, 1], two octaves.
+fn cover_noise(p: vec2<f32>) -> f32 {
+    var sum = 0.0;
+    var q = p;
+    var amplitude = 0.65;
+    for (var octave = 0; octave < 2; octave++) {
+        let c = vec2<i32>(floor(q));
+        let f = fract(q);
+        let w = f * f * (3.0 - 2.0 * f);
+        let a = cover_hash(c);
+        let b = cover_hash(c + vec2<i32>(1, 0));
+        let d = cover_hash(c + vec2<i32>(0, 1));
+        let e = cover_hash(c + vec2<i32>(1, 1));
+        sum += amplitude * (mix(mix(a, b, w.x), mix(d, e, w.x), w.y) * 2.0 - 1.0);
+        amplitude = 0.35;
+        q = q * 2.7 + vec2<f32>(17.3, -5.1);
+    }
+    return sum;
+}
+
+// How much of cover `c` lies at world point `p` on ground whose geometric
+// normal points `up` of the way to world up: 0 to Amount.
+fn cover_lies(c: MaterialCover, p: vec3<f32>, up: f32) -> f32 {
+    let push = 3.0 * c.breakup.x * cover_noise(p.xz * c.breakup.y);
+    let angle = acos(clamp(up, -1.0, 1.0)) + push * c.slope.z;
+    let steeper = select(smoothstep(c.slope.x - c.slope.z, c.slope.x + c.slope.z, angle), 1.0, c.slope.x <= 0.0);
+    let flatter = select(1.0 - smoothstep(c.slope.y - c.slope.z, c.slope.y + c.slope.z, angle), 1.0, c.slope.y >= 1.5707);
+    let y = p.y + push * c.height.z;
+    let above = smoothstep(c.height.x - c.height.z, c.height.x + c.height.z, y);
+    let below = 1.0 - smoothstep(c.height.y - c.height.z, c.height.y + c.height.z, y);
+    return steeper * flatter * above * below * c.maps.w;
+}
+
+struct CoverRead {
+    albedo: vec3<f32>,
+    normal: vec3<f32>,
+    mr: vec2<f32>,
+    height: f32,
+    variance: f32,
+};
+
+// Cover `c`'s surface over the ground with world normal `n`: its three maps
+// read box mapped at its own Tile Size and Break Repeats, through
+// `box_side` as the material's own are, in one pass over each side's hex
+// tiles so each tile's coordinates are worked out once. The normal bends
+// and the height and variance weigh as in `box_normal`.
+fn cover_read(c: MaterialCover, color: texture_2d<f32>, normal: texture_2d<f32>, mr: texture_2d<f32>, n: vec3<f32>) -> CoverRead {
+    let p = cover_p * c.surface.x;
+    let px = cover_px * c.surface.x;
+    let py = cover_py * c.surface.x;
+    let s = select(vec3<f32>(-1.0), vec3<f32>(1.0), cover_n >= vec3<f32>(0.0));
+    let ax = cover_axes[0];
+    let ay = cover_axes[1];
+    let az = cover_axes[2];
+    let weights = box_weights_for(cover_n);
+    var albedo = vec3<f32>(0.0);
+    var rm = vec2<f32>(0.0);
+    var z = 0.0;
+    var slope = vec3<f32>(0.0);
+    var variance = 0.0;
+    var height = 0.0;
+    for (var a = 0u; a < 3u; a++) {
+        let w = weights[a];
+        if w <= 0.0 {
+            continue;
+        }
+        let t = select(select(s.z * ax, s.y * ax, a == 1u), -s.x * az, a == 0u);
+        let b = select(ay, -az, a == 1u);
+        let side = box_side(box_side_st(p, s, a), box_side_st(px, s, a), box_side_st(py, s, a), t, b, c.surface.y);
+        var xy = vec2<f32>(0.0);
+        var tz = 0.0;
+        for (var k = 0u; k < 3u; k++) {
+            let h = side.blend[k];
+            if h <= 0.0 {
+                continue;
+            }
+            let r = side.turn[k];
+            let dx = box_turn(side.dx, r);
+            let dy = box_turn(side.dy, r);
+            if c.maps.x > 0.5 {
+                albedo += (w * h) * textureSampleGrad(color, base_color_sampler, side.st[k], dx, dy).rgb;
+            }
+            if c.maps.y > 0.5 {
+                let texel = textureSampleGrad(normal, normal_sampler, side.st[k], dx, dy);
+                let tn = texel.rgb * 2.0 - vec3<f32>(1.0);
+                xy += h * box_turn(tn.xy, r);
+                tz += h * tn.z;
+                variance += (w * h) * bump_variance_of(length(tn), c.surface.z);
+                height += (w * h) * texel.a;
+            }
+            if c.maps.z > 0.5 {
+                let texel = textureSampleGrad(mr, mr_sampler, side.st[k], dx, dy);
+                rm += (w * h) * vec2<f32>(texel.g, texel.b);
+            }
+        }
+        slope += w * (side.t * xy.x + side.b * xy.y);
+        z += w * tz;
+    }
+    var read = CoverRead(c.color.rgb, n, vec2<f32>(c.color.a, c.surface.w), 0.5, 0.0);
+    if c.maps.x > 0.5 {
+        read.albedo *= albedo;
+    }
+    if c.maps.y > 0.5 {
+        read.normal = normalize(n * z + slope * c.surface.z);
+        read.height = height;
+        read.variance = variance;
+    }
+    if c.maps.z > 0.5 {
+        read.mr *= rm;
+    }
+    read.mr = vec2<f32>(max(read.mr.x, 0.01), clamp(read.mr.y, 0.0, 1.0));
+    return read;
+}
+
+// The share of a cover lying `t` over a surface, with the surface's height
+// `under` and the cover's `over`: the taller wins inside COVER_EDGE.
+fn cover_share(under: f32, over: f32, t: f32) -> f32 {
+    let a = under + (1.0 - t);
+    let b = over + t;
+    let top = max(a, b) - COVER_EDGE;
+    let wa = max(a - top, 0.0);
+    let wb = max(b - top, 0.0);
+    return wb / max(wa + wb, 1e-5);
+}
+
+struct Covered {
+    albedo: vec3<f32>,
+    normal: vec3<f32>,
+    mr: vec2<f32>,
+};
+
+// The surface under its covers at world point `p` with geometric normal
+// `geometric`, view `v`: albedo, shading normal and (roughness, metallic).
+// Sets the bump variance and height of what shows.
+fn cover_surface(p: vec3<f32>, geometric: vec3<f32>, v: vec3<f32>, albedo: vec3<f32>, n: vec3<f32>, mr: vec2<f32>) -> Covered {
+    var out = Covered(albedo, n, mr);
+    let world_n = normalize(geometric);
+    let c1 = material_covers.covers[0];
+    let t1 = cover_lies(c1, p, world_n.y);
+    if t1 > 0.0 {
+        let read = cover_read(c1, cover1_base_color_map, cover1_normal_map, cover1_mr_map, world_n);
+        let w = cover_share(surface_height, read.height, t1);
+        out.albedo = mix(out.albedo, read.albedo, w);
+        out.normal = normalize(mix(out.normal, facing_normal(read.normal, geometric, v), w));
+        out.mr = mix(out.mr, read.mr, w);
+        bump_variance = mix(bump_variance, read.variance, w);
+        surface_height = mix(surface_height, read.height, w);
+    }
+    let c2 = material_covers.covers[1];
+    let t2 = cover_lies(c2, p, world_n.y);
+    if t2 > 0.0 {
+        let read = cover_read(c2, cover2_base_color_map, cover2_normal_map, cover2_mr_map, world_n);
+        let w = cover_share(surface_height, read.height, t2);
+        out.albedo = mix(out.albedo, read.albedo, w);
+        out.normal = normalize(mix(out.normal, facing_normal(read.normal, geometric, v), w));
+        out.mr = mix(out.mr, read.mr, w);
+        bump_variance = mix(bump_variance, read.variance, w);
+        surface_height = mix(surface_height, read.height, w);
+    }
+    return out;
 }
 
 // A core map's texel: box-mapped, or at the map's own UVs.
@@ -1454,6 +1706,7 @@ fn fs_unlit(in: VsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     begin_surface(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z, in.world_pos, in.clip_pos.xy, in.uv, in.world_normal);
+    begin_covers(in.box_pos, in.box_normal, in.box_axis_x, in.box_axis_y, in.box_axis_z);
     if u.volume_optics.x > 0.5 {
         let nearest = textureLoad(volume_nearest, vec2<i32>(in.clip_pos.xy), 0);
         if in.clip_pos.z < nearest - max(nearest * 0.00001, 0.0000001) { discard; }
@@ -1472,11 +1725,11 @@ fn fs_pbr(in: VsOut) -> @location(0) vec4<f32> {
     }
     var N = facing_normal(resolve_normal(in.uv, in.world_normal, in.world_pos, in.world_tangent), in.world_normal, V);
     var mr = resolve_mr(in.uv);
-    if terrain.on_tiles.x > 0.5 {
-        let ground = terrain_ground(in.world_pos, normalize(in.world_normal), albedo.rgb, N, mr.x);
-        albedo = vec4<f32>(ground.albedo, albedo.a);
-        N = ground.normal;
-        mr.x = ground.roughness;
+    if covers_on() {
+        let covered = cover_surface(in.world_pos, in.world_normal, V, albedo.rgb, N, mr);
+        albedo = vec4<f32>(covered.albedo, albedo.a);
+        N = covered.normal;
+        mr = covered.mr;
     }
     // Water on the surface darkens it and smooths it, keyed on the pixel
     // because materials are shared. After the cutout test, which stays on

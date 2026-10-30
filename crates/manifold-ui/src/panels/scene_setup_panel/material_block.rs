@@ -57,7 +57,7 @@ pub(super) fn row_feature(row: &ParamRow) -> Option<MaterialFeature> {
 }
 
 /// Where a Material row sits in the block: Surface, Opacity, the features in
-/// the Material's order, then Advanced and the dormant texture rows.
+/// the Material's order, Covers, then Advanced and the dormant texture rows.
 pub(super) fn material_bucket(row: &ParamRow, features: &[MaterialFeature]) -> usize {
     if let Some(feature) = row_feature(row) {
         return 2 + features
@@ -70,6 +70,7 @@ pub(super) fn material_bucket(row: &ParamRow, features: &[MaterialFeature]) -> u
         | Some(MaterialParamRole::Colour(MaterialGroup::Surface, ..)) => 0,
         Some(MaterialParamRole::Scalar(MaterialGroup::Opacity))
         | Some(MaterialParamRole::Colour(MaterialGroup::Opacity, ..)) => 1,
+        Some(MaterialParamRole::Scalar(MaterialGroup::Covers)) => 19,
         Some(MaterialParamRole::Placement(family, ..))
         | Some(MaterialParamRole::Sampler(family, ..)) => 30 + family as usize,
         _ => 20,
@@ -96,6 +97,7 @@ impl ScenePanel {
                 match group {
                     MaterialGroup::Surface => "Surface".to_string(),
                     MaterialGroup::Opacity => "Opacity & Cutout".to_string(),
+                    MaterialGroup::Covers => "Covers".to_string(),
                     MaterialGroup::Feature(feature) => feature_label(feature).to_string(),
                     MaterialGroup::Advanced => "Advanced".to_string(),
                 }

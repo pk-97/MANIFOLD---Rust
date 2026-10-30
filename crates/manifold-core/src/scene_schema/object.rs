@@ -714,7 +714,7 @@ fn shape_key(shape: &Shape) -> &'static str {
         Shape::Icosahedron => "icosahedron",
         Shape::Dodecahedron => "dodecahedron",
         Shape::Ocean => "ocean",
-        Shape::Terrain { .. } => "terrain",
+        Shape::Terrain => "terrain",
         Shape::Extrude { .. } => "extrude",
         Shape::Revolve { .. } => "revolve",
         Shape::Tube { .. } => "tube",
@@ -789,17 +789,7 @@ fn write_shape(fields: &mut ItemFields, value: &FieldValue) -> Result<(), String
         "icosahedron" => Shape::Icosahedron,
         "dodecahedron" => Shape::Dodecahedron,
         "ocean" => Shape::Ocean,
-        // A Terrain keeps its layers through a pick of Terrain again.
-        "terrain" => match &o.shape {
-            Shape::Terrain { cliff, peak } => Shape::Terrain {
-                cliff: cliff.clone(),
-                peak: peak.clone(),
-            },
-            _ => Shape::Terrain {
-                cliff: None,
-                peak: None,
-            },
-        },
+        "terrain" => Shape::Terrain,
         "extrude" => Shape::Extrude { curve, caps },
         "revolve" => Shape::Revolve { curve },
         "tube" => Shape::Tube { curve, caps },
@@ -822,7 +812,7 @@ fn part_of_import(doc: &SceneDoc, item: &Item) -> Option<&'static str> {
     inside.then_some("This part comes from its group's Model File; swap it there")
 }
 
-pub static OBJECT_FIELDS: [FieldRow; 11] = [
+pub static OBJECT_FIELDS: [FieldRow; 9] = [
     FieldRow {
         id: "shape",
         label: "Shape",
@@ -876,8 +866,6 @@ pub static OBJECT_FIELDS: [FieldRow; 11] = [
     super::curves::CURVE_FIELD,
     super::curves::CAPS_FIELD,
     MATERIAL_BINDING,
-    super::terrain::CLIFF_MATERIAL,
-    super::terrain::PEAK_MATERIAL,
     PHYSICS,
     COPIES,
     super::copies::COPIES_SURFACE,

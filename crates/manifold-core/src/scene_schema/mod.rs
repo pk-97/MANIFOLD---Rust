@@ -59,7 +59,7 @@ pub use gas::{FIRE_ROWS, SMOKE_ROWS};
 pub use group::GROUP_ROWS;
 pub use light::LIGHT_ROWS;
 pub use material::{
-    MATERIAL_FAMILY, MATERIAL_ROWS, MaterialFamily, node_type as material_node_type,
+    MATERIAL_FAMILY, MATERIAL_ROWS, MaterialFamily, cover_slot, node_type as material_node_type,
 };
 pub use modifier::{
     HEADER_FIELDS as MODIFIER_HEADER_FIELDS, MODIFIER_TYPES, ModifierTypeEntry, break_unavailable,

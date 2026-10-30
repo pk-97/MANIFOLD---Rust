@@ -610,31 +610,31 @@ impl RenderScene {
                     },
                     GpuBinding::Bytes {
                         binding: 69,
-                        data: bytemuck::bytes_of(&draw.terrain_look),
-                    },
-                    GpuBinding::Texture {
-                        binding: 70,
-                        texture: draw.terrain_maps[0].unwrap_or(dummy),
-                    },
-                    GpuBinding::Texture {
-                        binding: 71,
-                        texture: draw.terrain_maps[1].unwrap_or(dummy),
-                    },
-                    GpuBinding::Texture {
-                        binding: 72,
-                        texture: draw.terrain_maps[2].unwrap_or(dummy),
+                        data: bytemuck::bytes_of(&draw.covers),
                     },
                     GpuBinding::Texture {
                         binding: 73,
-                        texture: draw.terrain_maps[3].unwrap_or(dummy),
+                        texture: draw.cover_maps[0].unwrap_or(dummy),
                     },
                     GpuBinding::Texture {
                         binding: 74,
-                        texture: draw.terrain_maps[4].unwrap_or(dummy),
+                        texture: draw.cover_maps[1].unwrap_or(dummy),
                     },
                     GpuBinding::Texture {
                         binding: 75,
-                        texture: draw.terrain_maps[5].unwrap_or(dummy),
+                        texture: draw.cover_maps[2].unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 76,
+                        texture: draw.cover_maps[3].unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 77,
+                        texture: draw.cover_maps[4].unwrap_or(dummy),
+                    },
+                    GpuBinding::Texture {
+                        binding: 78,
+                        texture: draw.cover_maps[5].unwrap_or(dummy),
                     },
                 ])
             })

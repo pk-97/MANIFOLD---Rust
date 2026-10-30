@@ -199,6 +199,8 @@ pub struct Material {
     /// Metres the height picture (the normal map's alpha) carves a
     /// box-mapped surface, 0 for none: parallax.
     pub depth: f32,
+    /// Where each of the two Materials covering this one lies.
+    pub covers: [CoverRule; 2],
 
     // ---- Cel-specific. Inert when `kind != Cel`. ----
     /// Number of quantization bands `[2, 16]`.
@@ -361,6 +363,48 @@ pub struct Material {
     pub extension_maps: [MaterialMapInfo; 14],
 }
 
+/// Where a covering Material lies over the one it covers: on ground between
+/// two slopes and two world heights, each edge softened and broken up by
+/// noise, the whole scaled by Amount. Box mapped at its own Tile Size, with
+/// the edge following the two materials' height pictures.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CoverRule {
+    /// 0 off, 1 whole.
+    pub amount: f32,
+    /// Degrees from flat: the cover lies on ground steeper than the first
+    /// and flatter than the second.
+    pub steeper_than: f32,
+    pub flatter_than: f32,
+    /// Degrees each slope edge fades over.
+    pub slope_softness: f32,
+    /// World metres: the cover lies above the first and below the second.
+    pub above: f32,
+    pub below: f32,
+    /// Metres each height edge fades over.
+    pub height_softness: f32,
+    /// How far noise pushes the edges about, 0 to 1, and the noise's size
+    /// in metres.
+    pub breakup: f32,
+    pub breakup_size: f32,
+}
+
+impl Default for CoverRule {
+    /// Off, and lying everywhere once turned up.
+    fn default() -> Self {
+        Self {
+            amount: 0.0,
+            steeper_than: 0.0,
+            flatter_than: 90.0,
+            slope_softness: 5.0,
+            above: -10_000.0,
+            below: 10_000.0,
+            height_softness: 10.0,
+            breakup: 0.0,
+            breakup_size: 20.0,
+        }
+    }
+}
+
 impl Material {
     /// Identity-ish unlit-white default. Provided as a no-op fallback for
     /// test fixtures and for the very-narrow case where a backend exposes
@@ -383,6 +427,7 @@ impl Material {
             tile_size: 1.0,
             break_repeats: 0.0,
             depth: 0.0,
+            covers: [CoverRule::default(); 2],
             cel_bands: 4,
             band_low: 0.08,
             band_high: 1.0,

@@ -32,6 +32,7 @@ use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::material::{
+    CoverRule,
     AlphaMode, MapSamplerDesc, Material, MaterialKind, MaterialMapInfo, Subsurface,
 };
 
@@ -274,7 +275,7 @@ manifold_node_engine::primitive! {
             label: "Tile Size (m)",
             ty: ParamType::Float,
             default: ParamValue::Float(1.0),
-            range: Some((0.05, 20.0)),
+            range: Some((0.05, MAX_TILE_SIZE)),
             enum_values: &[],
         },
         ParamDef {
@@ -1245,6 +1246,10 @@ manifold_node_engine::primitive! {
             enum_values: &[],
         },
         ParamDef { name: Cow::Borrowed("subsurface_feature_mode"), label: "Subsurface Feature", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 3.0)), enum_values: &["Follow Values", "Off", "On", "Removed"] },
+        cover_param(0, 0), cover_param(0, 1), cover_param(0, 2), cover_param(0, 3), cover_param(0, 4),
+        cover_param(0, 5), cover_param(0, 6), cover_param(0, 7), cover_param(0, 8),
+        cover_param(1, 0), cover_param(1, 1), cover_param(1, 2), cover_param(1, 3), cover_param(1, 4),
+        cover_param(1, 5), cover_param(1, 6), cover_param(1, 7), cover_param(1, 8),
     ],
     depth_rule: Terminal,
     composition_notes: "Wire `out` into a 3D mesh renderer's `material` input. The renderer ALSO requires a wired `light` AND an `envmap` Texture2D (typically `node.bake_environment`). `metallic = 0` = dielectric (plastic, wood, fabric), `metallic = 1` = pure metal (chrome, gold). `roughness` is clamped to a 0.01 floor at construction (zero is a numerical landmine in GGX). Optional textures: `normal_map`, `base_color_map`, `roughness_map`, `metallic_map`. The PBR shader writes in linear space; the renderer's tone-map runs internally so no downstream `node.reinhard_tone_map` is needed.",
@@ -1255,6 +1260,71 @@ manifold_node_engine::primitive! {
     role: Source,
     aliases: ["pbr", "realistic", "metallic roughness", "material", "Principled BSDF"],
     boundary_reason: NonGpu,
+}
+
+/// The largest Tile Size: a drone scan of ground covers tens of metres.
+const MAX_TILE_SIZE: f32 = 500.0;
+
+/// A Cover param: name, label, default, low, high.
+type CoverParam = (&'static str, &'static str, f32, f32, f32);
+
+/// Each Cover's params in `CoverRule` order, Cover 1 then Cover 2. Cover 1
+/// starts as rock on steep ground, Cover 2 as snow on the gentle ground up
+/// high.
+const COVER_PARAMS: [[CoverParam; 9]; 2] = [
+    [
+        ("cover1_amount", "Cover 1 Amount", 1.0, 0.0, 1.0),
+        ("cover1_steeper_than", "Cover 1 Steeper Than (°)", 35.0, 0.0, 90.0),
+        ("cover1_flatter_than", "Cover 1 Flatter Than (°)", 90.0, 0.0, 90.0),
+        ("cover1_slope_softness", "Cover 1 Slope Softness (°)", 5.0, 0.0, 45.0),
+        ("cover1_above", "Cover 1 Above (m)", -10_000.0, -10_000.0, 10_000.0),
+        ("cover1_below", "Cover 1 Below (m)", 10_000.0, -10_000.0, 10_000.0),
+        ("cover1_height_softness", "Cover 1 Height Softness (m)", 20.0, 0.0, 1000.0),
+        ("cover1_breakup", "Cover 1 Breakup", 0.5, 0.0, 1.0),
+        ("cover1_breakup_size", "Cover 1 Breakup Size (m)", 30.0, 0.1, 1000.0),
+    ],
+    [
+        ("cover2_amount", "Cover 2 Amount", 1.0, 0.0, 1.0),
+        ("cover2_steeper_than", "Cover 2 Steeper Than (°)", 0.0, 0.0, 90.0),
+        ("cover2_flatter_than", "Cover 2 Flatter Than (°)", 50.0, 0.0, 90.0),
+        ("cover2_slope_softness", "Cover 2 Slope Softness (°)", 5.0, 0.0, 45.0),
+        ("cover2_above", "Cover 2 Above (m)", 100.0, -10_000.0, 10_000.0),
+        ("cover2_below", "Cover 2 Below (m)", 10_000.0, -10_000.0, 10_000.0),
+        ("cover2_height_softness", "Cover 2 Height Softness (m)", 20.0, 0.0, 1000.0),
+        ("cover2_breakup", "Cover 2 Breakup", 0.5, 0.0, 1.0),
+        ("cover2_breakup_size", "Cover 2 Breakup Size (m)", 30.0, 0.1, 1000.0),
+    ],
+];
+
+const fn cover_param(slot: usize, k: usize) -> ParamDef {
+    let (name, label, default, low, high) = COVER_PARAMS[slot][k];
+    ParamDef {
+        name: Cow::Borrowed(name),
+        label,
+        ty: ParamType::Float,
+        default: ParamValue::Float(default),
+        range: Some((low, high)),
+        enum_values: &[],
+    }
+}
+
+/// Cover `slot`'s rule from its params, each clamped to its range.
+fn cover_rule(ctx: &EffectNodeContext<'_, '_>, slot: usize) -> CoverRule {
+    let value = |k: usize| {
+        let (name, _, default, low, high) = COVER_PARAMS[slot][k];
+        ctx.scalar_or_param(name, default).clamp(low, high)
+    };
+    CoverRule {
+        amount: value(0),
+        steeper_than: value(1),
+        flatter_than: value(2),
+        slope_softness: value(3),
+        above: value(4),
+        below: value(5),
+        height_softness: value(6),
+        breakup: value(7),
+        breakup_size: value(8),
+    }
 }
 
 impl Primitive for PbrMaterial {
@@ -1310,7 +1380,9 @@ impl Primitive for PbrMaterial {
             Some(ParamValue::Float(f)) => f.round() as i32 == 1,
             _ => false,
         };
-        let tile_size = ctx.scalar_or_param("tile_size", 1.0).clamp(0.05, 20.0);
+        let tile_size = ctx
+            .scalar_or_param("tile_size", 1.0)
+            .clamp(0.05, MAX_TILE_SIZE);
         let break_repeats = ctx.scalar_or_param("break_repeats", 0.0).clamp(0.0, 1.0);
         let depth = ctx.scalar_or_param("depth", 0.0).clamp(0.0, 10.0);
         let mut emission_r = ctx.scalar_or_param("emission_r", 0.0);
@@ -1855,6 +1927,7 @@ impl Primitive for PbrMaterial {
         material.tile_size = tile_size;
         material.break_repeats = break_repeats;
         material.depth = depth * 0.01;
+        material.covers = [0, 1].map(|slot| cover_rule(ctx, slot));
         material.clearcoat = clearcoat;
         material.clearcoat_roughness = clearcoat_roughness;
         material.sheen_color_factor = [sheen_color_r, sheen_color_g, sheen_color_b];

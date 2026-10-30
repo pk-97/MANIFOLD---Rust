@@ -164,7 +164,7 @@ pub static COPIES_ROWS: [PropertyRow; 32] = [
 /// Whether an Object of this shape can be copied: every solid can (built-in,
 /// imported or curve shape), an Ocean or Terrain surface cannot.
 pub fn can_copy(shape: &Shape) -> bool {
-    !matches!(shape, Shape::Ocean | Shape::Terrain { .. })
+    !matches!(shape, Shape::Ocean | Shape::Terrain)
 }
 
 /// Objects below `items` that are one part of a copied group's shape.

@@ -301,8 +301,8 @@ impl RenderScene {
             // these lookups don't hold `ctx` borrowed (`ctx.error`/
             // `ctx.outputs`/`ctx.gpu_encoder()` below still need mutably).
             let inputs = ctx.inputs;
-            let (terrain_maps, terrain_look) =
-                super::terrain_look::resolve(object.terrain.as_ref(), inputs);
+            let (cover_maps, covers) =
+                super::material_covers::resolve(&material, &object.covers, inputs);
             let base_color_map = object
                 .base_color_map
                 .and_then(|s| inputs.texture_2d_slot(s));
@@ -592,8 +592,8 @@ impl RenderScene {
                 volume_thickness_map,
                 diffuse_transmission_map,
                 diffuse_transmission_color_map,
-                terrain_maps,
-                terrain_look,
+                cover_maps,
+                covers,
                 sampler_descs,
                 instances,
                 instance_count,

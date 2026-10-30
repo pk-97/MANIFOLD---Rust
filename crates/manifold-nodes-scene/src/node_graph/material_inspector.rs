@@ -36,8 +36,11 @@ pub fn material_param_role(type_id: &str, param_name: &str) -> Option<MaterialPa
 
     let scalar_group = match param_name {
         "color_a" | "alpha_mode" | "alpha_cutoff" => Some(MaterialGroup::Opacity),
+        name if manifold_core::scene_schema::cover_slot(name).is_some() => {
+            Some(MaterialGroup::Covers)
+        }
         "color_r" | "color_g" | "color_b" | "metallic" | "roughness" | "mapping" | "tile_size"
-        | "break_repeats" | "depth" => Some(MaterialGroup::Surface),
+        | "break_repeats" | "depth" | "grain" => Some(MaterialGroup::Surface),
         "ambient" | "specular" | "baked_look" | "normal_scale" | "occlusion_strength" => {
             Some(MaterialGroup::Advanced)
         }
@@ -281,7 +284,7 @@ mod tests {
     #[test]
     fn material_inspector_schema_covers_pbr() {
         let params = PbrMaterial::PARAMS;
-        assert_eq!(params.len(), 299);
+        assert_eq!(params.len(), 317);
         let mut names = std::collections::HashSet::<&str>::new();
         let mut feature_modes = 0;
         let mut map_families = [0usize; 5];

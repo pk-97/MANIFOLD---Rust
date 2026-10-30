@@ -66,6 +66,7 @@ fn group(value: core::MaterialGroup) -> ui::MaterialGroup {
     match value {
         core::MaterialGroup::Surface => ui::MaterialGroup::Surface,
         core::MaterialGroup::Opacity => ui::MaterialGroup::Opacity,
+        core::MaterialGroup::Covers => ui::MaterialGroup::Covers,
         core::MaterialGroup::Feature(f) => ui::MaterialGroup::Feature(feature(f)),
         core::MaterialGroup::Advanced => ui::MaterialGroup::Advanced,
     }

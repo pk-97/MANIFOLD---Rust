@@ -48,6 +48,8 @@ pub const MATERIAL_FEATURE_MODE_PARAMS: &[&str] = &[
 pub enum MaterialGroup {
     Surface,
     Opacity,
+    /// Where the Materials covering this one lie.
+    Covers,
     Feature(MaterialFeature),
     Advanced,
 }
@@ -60,6 +62,7 @@ pub enum MaterialGroup {
 enum MaterialGroupWire {
     Surface,
     Opacity,
+    Covers,
     Subsurface,
     Feature(MaterialFeature),
     Advanced,
@@ -73,6 +76,7 @@ impl<'de> Deserialize<'de> for MaterialGroup {
         Ok(match MaterialGroupWire::deserialize(deserializer)? {
             MaterialGroupWire::Surface => Self::Surface,
             MaterialGroupWire::Opacity => Self::Opacity,
+            MaterialGroupWire::Covers => Self::Covers,
             MaterialGroupWire::Subsurface => Self::Feature(MaterialFeature::Subsurface),
             MaterialGroupWire::Feature(feature) => Self::Feature(feature),
             MaterialGroupWire::Advanced => Self::Advanced,
