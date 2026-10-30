@@ -61,6 +61,8 @@
 //! to end. Frames are tiled horizontally into one PNG.
 //! With `--benchmark-frames` the sweep is timed instead: the first five frames
 //! warm up, the rest report GPU time, and only the last frame is written.
+//! `--passes` adds each GPU pass's median time to a benchmark, by its dispatch
+//! label; timing every dispatch costs a little, so totals read slightly high.
 //!
 //! Exit codes: 0 = PNG written after convergence; 2 = never converged
 //! (prints the last non-black fraction); 3 = import error (parse/build
@@ -123,6 +125,8 @@ struct Args {
     anim_frames: Option<u32>,
     /// Optional bounded static warm-frame benchmark after normal convergence.
     benchmark_frames: Option<u32>,
+    /// Time each GPU pass of a benchmark.
+    passes: bool,
     /// Route the imported scene through the production app compositor and
     /// presentation pipeline before encoding the PNG.
     app_presentation: bool,
@@ -324,6 +328,7 @@ where
         anim_end: None,
         anim_frames: None,
         benchmark_frames: None,
+        passes: false,
         app_presentation: false,
     };
     while let Some(flag) = argv.next() {
@@ -334,6 +339,10 @@ where
             }
             "--app-presentation" => {
                 args.app_presentation = true;
+                continue;
+            }
+            "--passes" => {
+                args.passes = true;
                 continue;
             }
             _ => {}
@@ -409,6 +418,9 @@ fn parse_benchmark_frames(value: &str) -> Result<u32, String> {
 }
 
 fn validate_benchmark_mode(args: &Args) -> Result<(), String> {
+    if args.passes && args.benchmark_frames.is_none() {
+        return Err("--passes times a benchmark; add --benchmark-frames N".to_string());
+    }
     if args.benchmark_frames.is_some() && args.app_presentation {
         return Err("--benchmark-frames measures generator work only; use the app's perf-soak command for content-path timing".to_string());
     }
@@ -741,6 +753,7 @@ fn main() {
     // Sequence phase: render N consecutive frames with param advancing.
     let mut filmstrip_frames = Vec::with_capacity(anim_frames as usize);
     let mut anim_gpu_ms = Vec::new();
+    let mut pass_times = PassTimes::new(&device, args.passes);
     let warmup_end_frame = args.frames_max; // Warmup converges by frames_max (300), not exact.
     for i in 0..anim_frames {
         let param_value =
@@ -775,6 +788,7 @@ fn main() {
             trigger_count: 0,
         };
         let mut enc = device.create_encoder("anim-frame");
+        pass_times.enable(&mut enc, &device);
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &device);
             runtime.render(&mut gpu, &target.texture, &ctx, &seq_manifest);
@@ -784,6 +798,7 @@ fn main() {
         if args.benchmark_frames.is_some() {
             if i >= 5 {
                 anim_gpu_ms.push(profile.total_ms);
+                pass_times.add(&profile);
             }
             if i + 1 < anim_frames {
                 continue;
@@ -811,13 +826,14 @@ fn main() {
     }
 
     if !anim_gpu_ms.is_empty() {
-        let benchmark = serde_json::json!({
+        let mut benchmark = serde_json::json!({
             "width": args.width,
             "height": args.height,
             "frames": anim_gpu_ms.len(),
             "gpu_median_ms": percentile_ms(&anim_gpu_ms, 0.50),
             "gpu_p95_ms": percentile_ms(&anim_gpu_ms, 0.95),
         });
+        pass_times.report(&mut benchmark);
         println!("benchmark: {benchmark}");
     }
 
@@ -888,6 +904,75 @@ fn percentile_ms(samples: &[f64], percentile: f64) -> f64 {
     }
 }
 
+/// Each GPU pass's time per measured frame, keyed by dispatch label, when
+/// `--passes` asks for it.
+struct PassTimes {
+    sampler: Option<manifold_gpu::GpuTimestampSampler>,
+    frames: std::collections::BTreeMap<String, Vec<f64>>,
+}
+
+impl PassTimes {
+    /// Spans one frame of an import graph can use.
+    const MAX_SPANS: usize = 2048;
+
+    fn new(device: &GpuDevice, on: bool) -> Self {
+        let sampler = on.then(|| {
+            device
+                .create_timestamp_sampler(Self::MAX_SPANS)
+                .unwrap_or_else(|| {
+                    eprintln!("render-import: this GPU can't time single dispatches");
+                    std::process::exit(2);
+                })
+        });
+        Self {
+            sampler,
+            frames: Default::default(),
+        }
+    }
+
+    fn enable(&self, encoder: &mut manifold_gpu::GpuEncoder, device: &GpuDevice) {
+        if let Some(sampler) = &self.sampler {
+            encoder.enable_dispatch_profiling(sampler.clone(), device);
+        }
+    }
+
+    fn add(&mut self, profile: &manifold_gpu::GpuFrameProfile) {
+        if self.sampler.is_none() {
+            return;
+        }
+        if profile.overflow > 0 {
+            eprintln!(
+                "render-import: {} dispatches ran untimed; raise PassTimes::MAX_SPANS",
+                profile.overflow
+            );
+        }
+        let mut frame = std::collections::BTreeMap::<&str, f64>::new();
+        for span in &profile.spans {
+            *frame.entry(span.label.as_str()).or_default() += span.millis;
+        }
+        for (label, ms) in frame {
+            self.frames.entry(label.to_owned()).or_default().push(ms);
+        }
+    }
+
+    /// Adds `passes`, longest median first.
+    fn report(&self, benchmark: &mut serde_json::Value) {
+        if self.sampler.is_none() {
+            return;
+        }
+        let mut rows: Vec<(&String, f64)> = self
+            .frames
+            .iter()
+            .map(|(label, ms)| (label, percentile_ms(ms, 0.50)))
+            .collect();
+        rows.sort_by(|a, b| b.1.total_cmp(&a.1));
+        benchmark["passes"] = rows
+            .into_iter()
+            .map(|(label, ms)| serde_json::json!({ "label": label, "median_ms": ms }))
+            .collect();
+    }
+}
+
 /// Run a bounded static benchmark after convergence. The five warm frames
 /// settle command-buffer/resource state and are deliberately excluded from
 /// the reported samples. No readback occurs inside the measured section.
@@ -920,18 +1005,20 @@ fn benchmark_static_frames(
 
     let mut gpu_ms = Vec::with_capacity(frames as usize);
     let mut frame_ms = Vec::with_capacity(frames as usize);
+    let mut pass_times = PassTimes::new(device, args.passes);
     for offset in 0..frames as i64 {
         let context = benchmark_context(args, warmup_start + 5 + offset, time);
         let wall_start = std::time::Instant::now();
         let mut encoder = device.create_encoder("render-import-benchmark");
+        pass_times.enable(&mut encoder, device);
         {
             let mut gpu = RendererGpuEncoder::new(&mut encoder, device);
             runtime.render(&mut gpu, &target.texture, &context, manifest);
         }
         // This headless path leaves GpuEncoder::chunking_enabled false, so
-        // each frame is one command buffer. Profiling therefore reports the
-        // complete command-buffer GPU time without dispatch timestamp setup.
+        // each frame is one command buffer and the profile covers all of it.
         let profile = encoder.commit_and_wait_profiled(device);
+        pass_times.add(&profile);
         let wall = wall_start.elapsed().as_secs_f64() * 1000.0;
         if runtime.io_pending() {
             return Err(format!("IO became pending during measured frame {offset}"));
@@ -951,7 +1038,7 @@ fn benchmark_static_frames(
         frame_ms.push(wall);
     }
 
-    let benchmark = serde_json::json!({
+    let mut benchmark = serde_json::json!({
         "width": args.width,
         "height": args.height,
         "frames": frames,
@@ -960,6 +1047,7 @@ fn benchmark_static_frames(
         "frame_median_ms": percentile_ms(&frame_ms, 0.50),
         "frame_p95_ms": percentile_ms(&frame_ms, 0.95),
     });
+    pass_times.report(&mut benchmark);
     println!(
         "benchmark: {}",
         serde_json::to_string(&benchmark).map_err(|e| format!("serialize benchmark: {e}"))?
