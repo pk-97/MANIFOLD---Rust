@@ -20,6 +20,7 @@ use manifold_core::scene_schema::{
 use manifold_core::scene_surface::FieldPick;
 use manifold_core::types::LayerType;
 use manifold_core::{GraphTarget, LayerId};
+use manifold_nodes_scene::node_graph::scene_compile::{SET_BY_HDRI_SUN, hdri_sun_pair};
 use manifold_ui::panels::scene_setup_panel::{
     AddEntryVm, FieldControlVm, FieldOptionVm, FieldRowVm, MaterialBlockVm, SceneItemVm,
     SceneSetupState, SceneSetupVm,
@@ -259,6 +260,23 @@ fn row_reasons(
     }
     if let Some(reason) = break_unavailable(doc, item) {
         reasons.push((param_id(&item.id, "shatter"), reason.to_owned()));
+    }
+    // The Sun that Sun From HDRI places: its direction and shadow come from
+    // the HDRI. Whether this HDRI has a sun is known only to the content
+    // thread, so the reason says how to place the Sun by hand either way.
+    if let Some((sun, environment)) = hdri_sun_pair(doc)
+        && sun.id == item.id
+        && inst
+            .params
+            .get(&param_id(&environment.id, "sun_from_hdri"))
+            .is_some_and(|follow| follow.base > 0.5)
+    {
+        for property in SET_BY_HDRI_SUN {
+            reasons.push((
+                param_id(&item.id, property),
+                "Set by the HDRI's sun. Turn off Sun From HDRI to place it by hand".to_owned(),
+            ));
+        }
     }
     reasons
 }
@@ -625,6 +643,78 @@ mod tests {
         let block = block.expect("the Swarm's card shows its Material");
         assert_eq!(block.item, material);
         assert_eq!(block.used_by, 2, "the cube and the Swarm both draw with it");
+    }
+
+    /// Under an HDRI with Sun From HDRI on, the Sun it places (the first in
+    /// compile order, siblings by id) dims its direction and shadow rows; a
+    /// second Sun keeps them, and turning the switch off gives them back.
+    #[test]
+    fn sun_from_hdri_dims_the_placed_suns_direction() {
+        use manifold_core::scene_doc::{EnvironmentSource, LightFields};
+        let mut project = Project::default();
+        let index = project
+            .timeline
+            .add_layer("A", LayerType::Generator, PresetTypeId::SCENE);
+        let layer = project.timeline.layers[index].layer_id.clone();
+        let mut doc = project.scene_of(&layer).expect("a scene layer").clone();
+        for item in &mut doc.items {
+            if let ItemFields::Light(LightFields {
+                light: LightType::Environment { source },
+            }) = &mut item.fields
+            {
+                *source = EnvironmentSource::Hdri {
+                    file: "sky.exr".to_owned(),
+                };
+            }
+        }
+        // Last in the list, first by id.
+        doc.items.push(Item::new(
+            ItemId::new("a-sun"),
+            "Low Sun",
+            ItemFields::Light(LightFields {
+                light: LightType::Sun,
+            }),
+        ));
+        let inst = project.timeline.layers[index]
+            .gen_params_mut()
+            .expect("scene params");
+        inst.install_scene_document(doc)
+            .expect("the scene compiles");
+        let dimmed = |project: &Project, sun: &str| {
+            let SceneSetupState::Live(vm) = scene_state(
+                project,
+                Some(&project.timeline.layers[index]),
+                &Default::default(),
+                &[],
+            ) else {
+                panic!("the scene tab is live");
+            };
+            let item = vm
+                .items
+                .into_iter()
+                .find(|item| item.id.as_str() == sun)
+                .expect("the Sun");
+            let mut ids: Vec<String> = item.row_reasons.into_iter().map(|(id, _)| id).collect();
+            ids.sort();
+            ids
+        };
+        let mut placed: Vec<String> = SET_BY_HDRI_SUN
+            .iter()
+            .map(|property| param_id(&ItemId::new("a-sun"), property))
+            .collect();
+        placed.sort();
+        assert_eq!(dimmed(&project, "a-sun"), placed);
+        assert!(dimmed(&project, "sun").is_empty(), "only one Sun follows");
+
+        let follow = param_id(&ItemId::new("environment"), "sun_from_hdri");
+        project.timeline.layers[index]
+            .gen_params_mut()
+            .expect("scene params")
+            .set_base_param(&follow, 0.0);
+        assert!(
+            dimmed(&project, "a-sun").is_empty(),
+            "off, the Sun is placed by hand"
+        );
     }
 
     /// The Scene Loop card hides the rows only a Loop camera reads and offers

@@ -41,6 +41,7 @@ mod water;
 mod world;
 
 pub(crate) use builder::Builder;
+pub use light::{SET_BY_HDRI_SUN, hdri_sun_pair};
 pub use material::fed_map_ports;
 
 use manifold_core::effect_graph_def::EffectGraphDef;
@@ -100,17 +101,30 @@ fn in_compile_order(doc: &SceneDoc) -> SceneDoc {
                 children: sorted(&item.children),
             })
             .collect();
-        // Stable: every Modifier card shares one key, so the chain keeps its order.
-        items.sort_by(|a, b| key(a).cmp(&key(b)));
+        items.sort_by(|a, b| compile_key(a).cmp(&compile_key(b)));
         items
-    }
-    fn key(item: &Item) -> Option<&str> {
-        (item.kind() != ItemKind::Modifier).then(|| item.id.as_str())
     }
     SceneDoc {
         items: sorted(&doc.items),
         models: doc.models.clone(),
         next_cut: doc.next_cut,
+    }
+}
+
+/// Where an item sorts among its siblings. Stable: every Modifier card
+/// shares one key, so the chain keeps its order.
+fn compile_key(item: &Item) -> Option<&str> {
+    (item.kind() != ItemKind::Modifier).then(|| item.id.as_str())
+}
+
+/// Each of `items` and their children, depth-first, in the order `compile`
+/// reads them ([`in_compile_order`]), without copying the document.
+fn walk_in_compile_order<'a>(items: &'a [Item], f: &mut impl FnMut(&'a Item)) {
+    let mut sorted: Vec<&'a Item> = items.iter().collect();
+    sorted.sort_by(|a, b| compile_key(a).cmp(&compile_key(b)));
+    for item in sorted {
+        f(item);
+        walk_in_compile_order(&item.children, f);
     }
 }
 

@@ -87,6 +87,38 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) {
     }
 }
 
+/// The rows of a Sun that Sun From HDRI sets from the HDRI's sun: its
+/// direction and its shadow's softness and size
+/// (`bake_equirect_envmap::followed_sun`). Its aim and distance stay its own.
+pub const SET_BY_HDRI_SUN: [&str; 5] = ["pos_x", "pos_y", "pos_z", "shadow_softness", "light_size"];
+
+/// The Sun an HDRI's sun can place and the Environment holding that HDRI,
+/// as `emit_all` pairs them: the first Sun and the first Environment, when
+/// that Environment reads an HDRI file.
+pub fn hdri_sun_pair(doc: &SceneDoc) -> Option<(&Item, &Item)> {
+    let mut sun = None;
+    let mut environment = None;
+    super::walk_in_compile_order(&doc.items, &mut |item| {
+        let ItemFields::Light(fields) = &item.fields else {
+            return;
+        };
+        match &fields.light {
+            LightType::Sun if sun.is_none() => sun = Some(item),
+            LightType::Environment { .. } if environment.is_none() => environment = Some(item),
+            _ => {}
+        }
+    });
+    let environment = environment.filter(|item| {
+        matches!(&item.fields, ItemFields::Light(fields) if matches!(
+            fields.light,
+            LightType::Environment {
+                source: EnvironmentSource::Hdri { .. } | EnvironmentSource::SeaHorizon { .. }
+            }
+        ))
+    })?;
+    Some((sun?, environment))
+}
+
 /// Whether the scene's environment (its first, as `emit_all` takes it) is
 /// the Daylight sky, whose fog takes the sky's own colour.
 pub(crate) fn daylight(doc: &SceneDoc) -> bool {
