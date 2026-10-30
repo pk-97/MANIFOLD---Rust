@@ -49,7 +49,7 @@ fn ripple_node_velocity(i: u32) -> vec3<f32> {
 
 // The water's velocity at an object-space point: the trilinear of the node velocities.
 fn ripple_velocity_at(p: vec3<f32>) -> vec3<f32> {
-    field_pool = ripple.tiles.xy;
+    field_pool = ripple.tiles.x;
     let q = field_node_coord(p, ripple.field.x);
     field_enter(q);
     let c = field_corners(q);

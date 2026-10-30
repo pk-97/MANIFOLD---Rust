@@ -19,7 +19,7 @@ fn vs_cover(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4<f32> {
 // No opaque stop: the pick's depth test does the occluding and the mask wants
 // the whole silhouette.
 fn cover_depth(frag: vec4<f32>) -> f32 {
-    field_pool = u.tiles.xy;
+    field_pool = u.tiles.x;
     let uv = frag.xy / u.target_size.xy;
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
     let origin_w = unproject(ndc, 1.0);

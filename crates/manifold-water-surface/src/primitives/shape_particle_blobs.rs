@@ -12,7 +12,7 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::fluid_particles::{CellRange, FluidBlob};
 use manifold_water_liquid::tile_pool::tile_pool;
@@ -34,7 +34,7 @@ struct Uniforms {
     particle_scale: f32,
     count: u32,
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     _pad0: u32,
     _pad1: u32,
 }
@@ -145,7 +145,7 @@ impl Primitive for ShapeParticleBlobs {
             particle_scale,
             count,
             pool_tiles: pool.pool_tiles,
-            entries: table_entries(pool.pool_tiles),
+            _pad_h: 0,
             _pad0: 0,
             _pad1: 0,
         };

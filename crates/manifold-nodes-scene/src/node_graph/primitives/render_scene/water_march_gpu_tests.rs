@@ -634,7 +634,7 @@ fn field_tile_dry(slot: u32) -> bool { return false; }\n\
 @group(0) @binding(91) var<storage, read> probe_in: array<vec4<f32>>;\n\
 @compute @workgroup_size(1)\n\
 fn cs_probe(@builtin(global_invocation_id) id: vec3<u32>) {\n\
-    field_pool = u.tiles.xy;\n\
+    field_pool = u.tiles.x;\n\
     let o = probe_in[2u * id.x].xyz;\n\
     let d = normalize(probe_in[2u * id.x + 1u].xyz);\n\
     let ahead = field_ahead(o, d);\n\

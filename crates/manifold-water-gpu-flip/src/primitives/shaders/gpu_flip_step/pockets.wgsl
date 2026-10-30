@@ -461,7 +461,7 @@ const NO_LEADER: u32 = 0xffffffffu;
 // The tile a held slot of the level holds (its slot row, as ts_slot_tile
 // reads the fine table's).
 fn pocket_level_tile(slot: u32) -> vec3<i32> {
-    let row = 2u * pocket_level.entries + WT_SLOT_WORDS * slot;
+    let row = WT_HEADER + 2u * pocket_level.entries + WT_SLOT_WORDS * slot;
     return bitcast<vec3<i32>>(vec3<u32>(pocket_level_table[row], pocket_level_table[row + 1u], pocket_level_table[row + 2u]));
 }
 

@@ -427,7 +427,7 @@ impl Primitive for GpuFlipStep {
                 // The force and impulse lattices start at the domain's scene box,
                 // which bounds_lo carries.
                 field_min: bounds_lo,
-                table_entries: manifold_water_liquid::tile_storage::table_entries(pool),
+                _pad_h: 0,
                 emit_sites,
                 kill_height,
                 narrow_band,

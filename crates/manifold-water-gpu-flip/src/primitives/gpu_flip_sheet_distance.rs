@@ -62,10 +62,10 @@ const fn ceil_cells(x: f64) -> u32 {
 struct Params {
     h: f32,
     depth: f32,
-    /// The tile pool's capacity P and the table's entries H
-    /// (gpu_flip_sheet_distance.wgsl ts_pool_tiles, ts_table_entries).
+    /// The tile pool's capacity P (gpu_flip_sheet_distance.wgsl
+    /// ts_pool_tiles); H is the table's own.
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
 }
 
 /// The sheeter's depth, in metres.
@@ -184,7 +184,7 @@ impl SheetDistance {
             h,
             depth: (self.cells * f64::from(h)) as f32,
             pool_tiles: tiles.pool_tiles(),
-            entries: tiles.table_entries(),
+            _pad_h: 0,
         };
         let held = allocated_args_offset(tiles.reach().ring_max);
         let mut pass = |entry: usize,

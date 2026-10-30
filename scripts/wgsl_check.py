@@ -40,7 +40,6 @@ SIM_READ = WORLD_READ.read_text().replace("ts_", "sim_ts_").replace("WT_", "SIM_
 # The read side's includer contract, as a hand shader defines it.
 WORLD_READ_STUB = """@group(0) @binding(0) var<storage, read> ts_table: array<u32>;
 fn ts_pool_tiles() -> u32 { return 3u; }
-fn ts_table_entries() -> u32 { return 16u; }
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
 """
 # The key sources `sort_particles_into_cells.rs` composes before the sort body
@@ -53,7 +52,6 @@ SORT_DENSE_KEYS = """fn sort_key_of(p: vec3<f32>) -> u32 {
 """
 SORT_POOLED_KEYS = """@group(0) @binding(9) var<storage, read> ts_table: array<u32>;
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
-fn ts_table_entries() -> u32 { return params.table_entries; }
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
 fn sort_key_of(p: vec3<f32>) -> u32 { return ts_cell_at(ts_world_cell(p, params.bin_min, params.inv_cell)); }
 """

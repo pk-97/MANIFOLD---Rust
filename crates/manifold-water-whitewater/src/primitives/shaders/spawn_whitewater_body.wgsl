@@ -28,7 +28,6 @@ const SW_TWO_PI: f32 = 6.28318;
 
 var<private> ww_pool_tiles: u32;
 fn ts_pool_tiles() -> u32 { return ww_pool_tiles; }
-fn ts_table_entries() -> u32 { let n = 4u * max(ww_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
 fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 fn sw_mul_div(a: u32, b: u32, c: u32) -> u32 {
     // floor(a·b / c) for a < c, through the 64-bit product.

@@ -21,7 +21,7 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::ports::ArrayType;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::active_elements;
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, lattice_origin, table_entries};
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, lattice_origin};
 use manifold_water_liquid::primitives::prefix_scan::{ScanLabels, open_gate};
 use manifold_water_liquid::primitives::sort_particles_into_cells::{
     ParticleSorter, SortCount, SortJob, SortLabels, block_keys, record_read,
@@ -63,8 +63,7 @@ pub(crate) struct P2gParams {
     pub(crate) substep_in_tick: u32,
     pub(crate) momentum_unit: f32,
     pub(crate) pool_tiles: u32,
-    pub(crate) table_entries: u32,
-    pub(crate) _pad: [u32; 4],
+    pub(crate) _pad: [u32; 5],
 }
 
 manifold_node_engine::primitive! {
@@ -344,8 +343,7 @@ impl Primitive for MatterToGrid {
             substep_in_tick,
             momentum_unit,
             pool_tiles: pool,
-            table_entries: table_entries(pool),
-            _pad: [0; 4],
+            _pad: [0; 5],
         };
         let bindings = [
             GpuBinding::Bytes {
@@ -420,8 +418,7 @@ fn encode_clear(
         substep_in_tick: 0,
         momentum_unit: 0.0,
         pool_tiles: pool,
-        table_entries: table_entries(pool),
-        _pad: [0; 4],
+        _pad: [0; 5],
     };
     enc.dispatch_compute_indirect(
         clear,

@@ -8,7 +8,7 @@
 // sweep reads, so no sweep looks for crossings or signs again. Every kernel runs
 // over the cells of the held slots, 512 threads a slot, and sees a tile that
 // holds no slot as no neighbour at all.
-struct Params { h: f32, depth: f32, pool_tiles: u32, entries: u32 };
+struct Params { h: f32, depth: f32, pool_tiles: u32, _pad_h: u32 };
 // The FLIP clock plan (gpu_flip_step/common.wgsl ClockPlan). An inactive substep slot
 // (live clock, zero step) does no work.
 struct ClockPlan {
@@ -39,7 +39,6 @@ fn clock_active() -> bool {
 }
 
 fn ts_pool_tiles() -> u32 { return u.pool_tiles; }
-fn ts_table_entries() -> u32 { return u.entries; }
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
 fn sign_of(v: f32) -> f32 { return select(-1.0, 1.0, v >= 0.0); }
 // The face neighbour of `c` along `axis` by `d` (-1 or 1) as a pool index, or

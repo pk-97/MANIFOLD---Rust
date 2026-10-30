@@ -8,8 +8,9 @@ use super::Stream;
 use manifold_gpu::BufferUse;
 use manifold_gpu::GpuBuffer;
 use manifold_node_engine::scene::world_tiles::{
-    EMPTY, NONE, find, insert, local_index, neighbour_row_word, pool_len, slot_row_word,
-    table_entries, table_words, tile_key, tile_of_cell,
+    EMPTY, HEADER_WORDS, NONE, entry_slot_word, find, insert, local_index, neighbour_row_word,
+    pool_len, slot_row_word, table_entries, table_header, table_keys, table_words, tile_key,
+    tile_of_cell,
 };
 use manifold_node_engine::testkit::array_harness::read;
 use manifold_water_liquid::fluid_particles::FaceSample;
@@ -87,7 +88,6 @@ fn lattice(tiles: &Tiles) -> StepParams {
         ring_max: 1,
         impulse_tick: -1,
         pool_tiles: tiles.tiles.len() as u32,
-        table_entries: table_entries(tiles.tiles.len() as u32),
         ..StepParams::default()
     }
 }
@@ -133,17 +133,17 @@ impl Tiles {
         let entries = table_entries(p);
         let h = entries as usize;
         let mut words = vec![NONE; table_words(p) as usize];
-        words[..h].fill(EMPTY);
+        let first = HEADER_WORDS as usize;
+        words[..first].copy_from_slice(&table_header(entries));
+        let keys = &mut words[first..first + h];
+        keys.fill(EMPTY);
         for &t in &tiles {
-            assert!(
-                insert(&mut words[..h], tile_key(t)),
-                "the table holds every tile"
-            );
+            assert!(insert(keys, tile_key(t)), "the table holds every tile");
         }
         for (slot, t) in tiles.iter().enumerate() {
             let entry =
-                find(&words[..h], tile_key(*t)).expect("an inserted tile is found") as usize;
-            words[h + entry] = slot as u32;
+                find(table_keys(&words), tile_key(*t)).expect("an inserted tile is found");
+            words[entry_slot_word(entries, entry) as usize] = slot as u32;
             let row = slot_row_word(entries, slot as u32) as usize;
             for a in 0..3 {
                 words[row + a] = t[a] as u32;

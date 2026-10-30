@@ -13,7 +13,7 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::field_build::{
     BLOB_CENTRE_SMOOTHING, BLOB_MAX_STRETCH, BLOB_NEIGHBOUR_CELLS, FILM_BLEND, FILM_HALF_CELLS, FILM_REACH_CELLS, FILM_WIDE_CELLS, WEIGHT_FADE_END,
     WEIGHT_FADE_START, display_stride, expected_bulk_neighbours,
@@ -37,7 +37,7 @@ struct Uniforms {
     cell_size: f32,
     blob_reach: f32,
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     window: f32,
     run: u32,
     fade_start: f32,
@@ -248,7 +248,7 @@ impl Primitive for ParticleVolume {
             cell_size: pool.cell_size,
             blob_reach: reach,
             pool_tiles: pool.pool_tiles,
-            entries: table_entries(pool.pool_tiles),
+            _pad_h: 0,
             window,
             run: walk_run(stride),
             fade_start: WEIGHT_FADE_START * bulk,

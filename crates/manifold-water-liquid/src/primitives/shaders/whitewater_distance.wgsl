@@ -4,7 +4,7 @@
 // cell arrays on the step's world tiles (world_tiles_read.wgsl composes
 // before this file): `source`, `current`, `candidate` and `valid` hold one
 // element per pool index, the canonical element last.
-struct Params { count: u32, pool_tiles: u32, entries: u32, iteration: u32, h: f32, _pad0: u32, _pad1: u32, _pad2: u32 };
+struct Params { count: u32, pool_tiles: u32, _pad_h: u32, iteration: u32, h: f32, _pad0: u32, _pad1: u32, _pad2: u32 };
 @group(0) @binding(0) var<uniform> u: Params;
 @group(0) @binding(1) var<storage, read> source: array<f32>;
 @group(0) @binding(2) var<storage, read_write> current: array<f32>;
@@ -28,7 +28,6 @@ struct ClockPlan {
 @group(0) @binding(9) var<storage, read> ts_table: array<u32>;
 
 fn ts_pool_tiles() -> u32 { return u.pool_tiles; }
-fn ts_table_entries() -> u32 { return u.entries; }
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
 
 fn clock_active() -> bool {

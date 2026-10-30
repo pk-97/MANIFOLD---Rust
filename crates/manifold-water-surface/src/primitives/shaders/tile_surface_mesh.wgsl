@@ -29,7 +29,7 @@
 struct Params {
     cell_size: f32,
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     // Triangles the vertex buffer holds.
     capacity: u32,
     // The frame's length, seconds: how far back sm_motion looks.
@@ -62,7 +62,6 @@ struct MeshVertex {
 @group(0) @binding(6) var<storage, read_write> prev_positions: array<vec4<f32>>;
 
 fn ts_pool_tiles() -> u32 { return u.pool_tiles; }
-fn ts_table_entries() -> u32 { return u.entries; }
 fn ts_table_word(i: u32) -> u32 { return tiles[i]; }
 
 // Window nodes per axis: the tile's 8, one below and two above.

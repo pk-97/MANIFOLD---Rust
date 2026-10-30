@@ -300,8 +300,9 @@ fn publish_counts() {
 
 // Influence belongs to world tiles but lives in pool slots, and the table may
 // give a slot to another tile between frames. `restart_table` is this frame's
-// table: its slot rows start at word 2 * entries, a tile (x, y, z) and an
-// entry per slot. `restart_rows` is the same rows as last frame left them.
+// table: its slot rows start at word 4 + 2 * entries (past the header), a tile
+// (x, y, z) and an entry per slot. `restart_rows` is the same rows as last
+// frame left them.
 // A slot that is free now is never read and keeps its value; a slot that was
 // free or held a different tile last frame starts over at the base level.
 struct RestartParams {
@@ -325,7 +326,7 @@ fn restart_moved_influence(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let slot = i >> 9u;
-    let now = 2u * restart.entries + 4u * slot;
+    let now = 4u + 2u * restart.entries + 4u * slot;
     if restart_table[now + 3u] == RESTART_NONE {
         return;
     }

@@ -58,11 +58,11 @@ struct P2gParams {
     substep_in_tick: u32,
     momentum_unit: f32,
     pool_tiles: u32,
-    table_entries: u32,
     _pad0: u32,
     _pad1: u32,
     _pad2: u32,
     _pad3: u32,
+    _pad4: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: P2gParams;
@@ -77,7 +77,6 @@ struct P2gParams {
 @group(0) @binding(6) var<storage, read> held: array<u32>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
-fn ts_table_entries() -> u32 { return params.table_entries; }
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
 
 const GROUP: u32 = 256u;

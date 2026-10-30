@@ -15,7 +15,7 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::{
-    CANON_ELEMENTS, READ_SIDE, TILE_CELLS, pool_len, table_entries, table_words,
+    CANON_ELEMENTS, READ_SIDE, TILE_CELLS, pool_len, table_words,
 };
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::tile_pool::tile_pool;
@@ -45,8 +45,8 @@ struct FillUniforms {
     sim_cell: f32,
     pool_tiles: u32,
     sim_pool_tiles: u32,
-    entries: u32,
-    sim_entries: u32,
+    _pad_h: u32,
+    _pad_sim_h: u32,
     shrink: f32,
     elements: u32,
 }
@@ -174,8 +174,8 @@ impl Primitive for InteriorFill {
             sim_cell,
             pool_tiles: pool.pool_tiles,
             sim_pool_tiles: sim_pool,
-            entries: table_entries(pool.pool_tiles),
-            sim_entries: table_entries(sim_pool),
+            _pad_h: 0,
+            _pad_sim_h: 0,
             shrink: FILL_DEPTH_CELLS * sim_cell,
             elements: elements as u32,
         };
@@ -295,8 +295,8 @@ mod gpu_tests {
             sim_cell: h,
             pool_tiles: display.pool_tiles,
             sim_pool_tiles: sim.pool_tiles,
-            entries: table_entries(display.pool_tiles),
-            sim_entries: table_entries(sim.pool_tiles),
+            _pad_h: 0,
+            _pad_sim_h: 0,
             shrink: FILL_DEPTH_CELLS * h,
             elements: elements as u32,
         };

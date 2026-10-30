@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 
 use manifold_gpu::testkit::test_device;
 use manifold_node_engine::scene::world_tiles::{
-    NEIGHBOURS, find, key_hash, lattice_origin, local_index, neighbour_index, neighbour_row_word,
-    slot_row_word, table_entries, tile_key, tile_of_cell,
+    NEIGHBOURS, entry_slot_word, find, key_hash, lattice_origin, local_index, neighbour_index,
+    neighbour_row_word, slot_row_word, table_entries, table_keys, tile_key, tile_of_cell,
 };
 
 use super::mirror::{Built, Mirror};
@@ -139,11 +139,13 @@ fn check(tiles: &WorldTiles, want: &Built, replay: u32, step: &str) {
     let h = tiles.table_entries();
     let p = tiles.pool_tiles();
     let r = tiles.reach().ring_max;
-    let (hu, pu) = (h as usize, p as usize);
+    let pu = p as usize;
     let table = read(tiles.table(), table_words(p) as usize);
-    assert_eq!(table[..hu], want.keys[..], "{step}: keys");
+    assert_eq!(table[0], h, "{step}: the header's H");
+    assert_eq!(table_keys(&table), &want.keys[..], "{step}: keys");
+    let slots = entry_slot_word(h, 0) as usize;
     assert_eq!(
-        table[hu..2 * hu],
+        table[slots..slots + h as usize],
         want.entry_slot[..],
         "{step}: entry slots"
     );
@@ -161,7 +163,7 @@ fn check(tiles: &WorldTiles, want: &Built, replay: u32, step: &str) {
                 "{step}: slot {s}'s tile"
             );
             assert_eq!(
-                table[hu + entry as usize],
+                table[entry_slot_word(h, entry) as usize],
                 s,
                 "{step}: slot {s}'s entry points back"
             );
@@ -562,8 +564,8 @@ fn alias_and_full_table_are_reported() {
     );
     let counts = read(tiles.counts(), count_words(0) as usize);
     assert_ne!(counts[exhausted_word(0)] & ALIAS, 0, "alias reported");
-    let keys = read(tiles.table(), tiles.table_entries() as usize);
-    let held: Vec<u32> = keys.into_iter().filter(|&k| k != 0).collect();
+    let words = read(tiles.table(), table_words(tiles.pool_tiles()) as usize);
+    let held: Vec<u32> = table_keys(&words).iter().copied().filter(|&k| k != 0).collect();
     assert_eq!(held, [tile_key([0, 0, 0])], "one key for both tiles");
 
     let mut tiny = WorldTiles::new(&device, 1, reach, LIQUID_POINTS).expect("world tiles");
@@ -577,7 +579,8 @@ fn alias_and_full_table_are_reported() {
         "full table and short pool reported"
     );
     let all: BTreeSet<u32> = cells.iter().map(|&c| tile_key(tile_of_cell(c))).collect();
-    let keys = read(tiny.table(), tiny.table_entries() as usize);
+    let words = read(tiny.table(), table_words(tiny.pool_tiles()) as usize);
+    let keys = table_keys(&words);
     assert_eq!(keys.len(), 4);
     assert!(
         keys.iter().all(|k| all.contains(k)),
@@ -606,7 +609,6 @@ const PROBE: &str = "struct Probe { pool_tiles: u32, entries: u32, homes: u32, c
 @group(0) @binding(2) var<storage, read> homes: array<u32>;\n\
 @group(0) @binding(3) var<storage, read_write> out: array<u32>;\n\
 fn ts_pool_tiles() -> u32 { return probe.pool_tiles; }\n\
-fn ts_table_entries() -> u32 { return probe.entries; }\n\
 fn ts_table_word(i: u32) -> u32 { return table[i]; }\n\
 @compute @workgroup_size(256)\n\
 fn probe_cells(@builtin(global_invocation_id) gid: vec3<u32>) {\n\
@@ -651,8 +653,8 @@ fn cell_lookup_paths_agree_over_a_block_of_tiles() {
 
     let h = tiles.table_entries();
     let table = read(tiles.table(), table_words(pool) as usize);
-    let slot_of = |t: [i32; 3]| match find(&table[..h as usize], tile_key(t)) {
-        Some(e) => table[(h + e) as usize],
+    let slot_of = |t: [i32; 3]| match find(table_keys(&table), tile_key(t)) {
+        Some(e) => table[entry_slot_word(h, e) as usize],
         None => NONE,
     };
     for t in &block {

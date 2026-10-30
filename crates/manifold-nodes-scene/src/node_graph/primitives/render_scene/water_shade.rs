@@ -5,7 +5,7 @@
 use std::sync::LazyLock;
 
 use manifold_gpu::*;
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 
 use super::ripple_detail::FLOW_PERIOD_SECONDS;
 use super::{FIELD_TILES_WGSL, FieldObject, mat4_inverse};
@@ -63,7 +63,7 @@ pub(super) fn shade_uniforms(
 pub(super) struct RippleUniforms {
     world_to_local: [[f32; 4]; 4],
     local_to_world: [[f32; 4]; 4],
-    /// x pool tiles, y table entries, z 1 when a foam mask is bound.
+    /// x pool tiles, y unused, z 1 when a foam mask is bound.
     tiles: [u32; 4],
     /// x display cell size in metres, y tile side in metres (0: no ripples),
     /// z strength override.
@@ -93,7 +93,7 @@ pub(super) fn ripple_uniforms(
         local_to_world: field.model,
         tiles: [
             field.pool_tiles,
-            table_entries(field.pool_tiles),
+            0,
             u32::from(has_foam),
             0,
         ],

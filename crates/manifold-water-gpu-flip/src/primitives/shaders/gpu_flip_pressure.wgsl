@@ -57,10 +57,11 @@
 // same weights.
 
 struct Params {
-    // The dispatched level's pool P and table entries H (the fine side of a
-    // transfer or coarsening): the level the read side looks cells up in.
+    // The dispatched level's pool P (the fine side of a transfer or
+    // coarsening): the level the read side looks cells up in, whose H is the
+    // table's own.
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     // The coarse side of a transfer or coarsening: its P and H.
     coarse_pool_tiles: u32,
     coarse_entries: u32,
@@ -160,9 +161,6 @@ fn ts_pool_tiles() -> u32 {
     return u.pool_tiles;
 }
 
-fn ts_table_entries() -> u32 {
-    return u.entries;
-}
 
 fn ts_table_word(i: u32) -> u32 {
     return ts_table[i];
@@ -320,12 +318,12 @@ fn max_of_partials(li: u32, count: u32) -> f32 {
 // The coarse side's table: the read side's slot rows, neighbour rows and
 // lookup over the words at binding 23.
 fn coarse_slot_tile(slot: u32) -> vec3<i32> {
-    let row = 2u * u.coarse_entries + WT_SLOT_WORDS * slot;
+    let row = WT_HEADER + 2u * u.coarse_entries + WT_SLOT_WORDS * slot;
     return bitcast<vec3<i32>>(vec3<u32>(coarse_table[row], coarse_table[row + 1u], coarse_table[row + 2u]));
 }
 
 fn coarse_neighbour_slot(slot: u32, k: u32) -> u32 {
-    let rows = 2u * u.coarse_entries + WT_SLOT_WORDS * u.coarse_pool_tiles;
+    let rows = WT_HEADER + 2u * u.coarse_entries + WT_SLOT_WORDS * u.coarse_pool_tiles;
     return coarse_table[rows + WT_NEIGHBOURS * slot + k];
 }
 
@@ -336,9 +334,9 @@ fn coarse_hash_slot(t: vec3<i32>) -> u32 {
     let key = ts_tile_key(t);
     var i = ts_hash(key, entries);
     for (var walked = 0u; walked < entries; walked = walked + 1u) {
-        let c = coarse_table[i];
+        let c = coarse_table[WT_HEADER + i];
         if c == key {
-            let slot = coarse_table[entries + i];
+            let slot = coarse_table[WT_HEADER + entries + i];
             if slot == WT_NONE || any(coarse_slot_tile(slot) != t) {
                 return WT_NONE;
             }

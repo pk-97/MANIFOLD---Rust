@@ -24,7 +24,7 @@ use manifold_node_engine::mesh::{MeshVertex, Vec4Vertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::live_extent::{LiveExtent, LiveExtentOutput};
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::tile_pool::tile_pool;
 
@@ -64,7 +64,7 @@ const COUNTS_BYTES: u64 = 16;
 struct MeshUniforms {
     cell_size: f32,
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     capacity: u32,
     frame_seconds: f32,
     _pad: [u32; 3],
@@ -410,7 +410,7 @@ impl Primitive for TileSurfaceMesh {
         let uniforms = MeshUniforms {
             cell_size: pool.cell_size,
             pool_tiles: pool.pool_tiles,
-            entries: table_entries(pool.pool_tiles) as u32,
+            _pad_h: 0,
             capacity: mesh.capacity as u32,
             frame_seconds: ctx.time.delta.0 as f32,
             _pad: [0; 3],

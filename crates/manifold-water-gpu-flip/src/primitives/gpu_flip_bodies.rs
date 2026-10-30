@@ -115,10 +115,10 @@ struct Params {
     accumulate: u32,
     /// impulse_finalize inside a round: the gate's solve-live triple; 0 runs always.
     live: u32,
-    /// The tile pool's capacity P and the table's entries H
-    /// (gpu_flip_bodies.wgsl ts_pool_tiles, ts_table_entries).
+    /// The tile pool's capacity P (gpu_flip_bodies.wgsl ts_pool_tiles); H
+    /// is the table's own.
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     _pad0: u32,
     _pad1: u32,
     _pad2: u32,
@@ -281,7 +281,7 @@ impl BodyPasses {
             body_count: bodies.count,
             accumulate: u32::from(accumulate),
             pool_tiles: bodies.tiles.pool_tiles(),
-            entries: bodies.tiles.table_entries(),
+            _pad_h: 0,
             ..Params::default()
         }
     }

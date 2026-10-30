@@ -49,7 +49,6 @@ struct Point {
 @group(0) @binding(6) var<storage, read_write> extent: array<f32>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
-fn ts_table_entries() -> u32 { let n = 4u * max(params.pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
 fn ts_table_word(i: u32) -> u32 { return tiles[i]; }
 
 // The step's grid interior (negative under water) on its own table.
@@ -57,7 +56,6 @@ fn ts_table_word(i: u32) -> u32 { return tiles[i]; }
 @group(0) @binding(8) var<storage, read> interior_tiles: array<u32>;
 
 fn sim_ts_pool_tiles() -> u32 { return params.sim_pool_tiles; }
-fn sim_ts_table_entries() -> u32 { let n = 4u * max(params.sim_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
 fn sim_ts_table_word(i: u32) -> u32 { return interior_tiles[i]; }
 
 // Past every tile coordinate.

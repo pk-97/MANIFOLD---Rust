@@ -7,12 +7,13 @@
 //! ([`from_pool_under`]).
 
 use manifold_node_engine::scene::world_tiles::{
-    EMPTY, NONE, TILE, TILE_CELLS, find, insert, local_index, neighbour_index, neighbour_row_word,
-    pool_len, slot_row_word, table_entries, table_words, tile_key, tile_of_cell,
+    EMPTY, HEADER_WORDS, NONE, TILE, TILE_CELLS, entry_slot_word, find, insert, local_index,
+    neighbour_index, neighbour_row_word, pool_len, slot_row_word, table_entries, table_header,
+    table_keys, table_words, tile_key, tile_of_cell,
 };
 
 /// The table words of a pool of `pool_tiles` slots holding `held`, a (tile,
-/// slot) each: the keys, each entry's slot, each held slot's tile and entry
+/// slot) each: the header, the keys, each entry's slot, each held slot's tile and entry
 /// and its 27 neighbour slots. Every other slot is free, every absent
 /// neighbour `NONE`. Panics on a slot past the pool or a full table.
 pub fn table_words_of(pool_tiles: u32, held: &[([i32; 3], u32)]) -> Vec<u32> {
@@ -27,10 +28,12 @@ pub fn table_words_of(pool_tiles: u32, held: &[([i32; 3], u32)]) -> Vec<u32> {
         );
         assert!(insert(&mut keys, tile_key(tile)), "the table is full");
     }
-    words[..h].copy_from_slice(&keys);
+    let first = HEADER_WORDS as usize;
+    words[..first].copy_from_slice(&table_header(entries));
+    words[first..first + h].copy_from_slice(&keys);
     for &(tile, slot) in held {
         let entry = find(&keys, tile_key(tile)).expect("an inserted key is found");
-        words[h + entry as usize] = slot;
+        words[entry_slot_word(entries, entry) as usize] = slot;
         let row = slot_row_word(entries, slot) as usize;
         for (a, c) in tile.into_iter().enumerate() {
             words[row + a] = c as u32;
@@ -152,10 +155,10 @@ impl BoxTable {
 /// `pool_tiles` slots: its slot's element, or the canonical element (the
 /// last) when the table holds no slot for its tile.
 pub fn pool_index_under(words: &[u32], pool_tiles: u32, p: [i32; 3]) -> usize {
-    let entries = table_entries(pool_tiles) as usize;
-    match find(&words[..entries], tile_key(tile_of_cell(p))) {
+    match find(table_keys(words), tile_key(tile_of_cell(p))) {
         Some(entry) => {
-            words[entries + entry as usize] as usize * TILE_CELLS as usize + local_index(p) as usize
+            words[entry_slot_word(words[0], entry) as usize] as usize * TILE_CELLS as usize
+                + local_index(p) as usize
         }
         None => pool_len(pool_tiles) as usize - 1,
     }

@@ -14,7 +14,7 @@ use manifold_gpu::{GpuBinding, GpuComputePipeline};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use std::borrow::Cow;
 
 /// The kernel after the world-tile read side, its staged region (side 8 + 2
@@ -37,7 +37,7 @@ struct Uniforms {
     smoothness: f32,
     band_cells: f32,
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     stride: u32,
     sim_cell_size: f32,
     keep_sheets: u32,
@@ -157,7 +157,7 @@ impl Primitive for FieldSmoothBlend {
             smoothness,
             band_cells,
             pool_tiles: pool.pool_tiles,
-            entries: table_entries(pool.pool_tiles),
+            _pad_h: 0,
             stride,
             sim_cell_size,
             keep_sheets: u32::from(!matches!(

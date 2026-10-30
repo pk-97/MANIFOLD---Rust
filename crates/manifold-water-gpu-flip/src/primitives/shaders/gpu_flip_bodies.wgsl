@@ -49,10 +49,10 @@ struct Params {
     // impulse_finalize inside a round: the gate's solve-live triple
     // (`armed` is the gate there); 0 outside rounds, where it always runs.
     live: u32,
-    // The tile pool's capacity P and the table's entries H
-    // (world_tiles_read.wgsl ts_pool_tiles, ts_table_entries).
+    // The tile pool's capacity P (world_tiles_read.wgsl ts_pool_tiles); H is
+    // the table's own.
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     _pad0: u32,
     _pad1: u32,
     _pad2: u32,
@@ -131,9 +131,6 @@ fn ts_pool_tiles() -> u32 {
     return u.pool_tiles;
 }
 
-fn ts_table_entries() -> u32 {
-    return u.entries;
-}
 
 fn ts_table_word(i: u32) -> u32 {
     return ts_table[i];

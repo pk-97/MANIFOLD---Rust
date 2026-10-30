@@ -56,8 +56,8 @@ struct SortParams {
     pool_tiles: u32,
     // The word of `counts` holding the slots in use, or NO_COUNT_WORD.
     count_word: u32,
-    // H of the world-tile table (`ts_table_entries`); 0 when dense.
-    table_entries: u32,
+    // Padding where H was: a pooled sort's table carries its own.
+    _pad_h: u32,
     // 1 when a point keyed to the last, canonical, bin (its tile has no slot)
     // is left out of the sort instead of counted there.
     drop_absent: u32,

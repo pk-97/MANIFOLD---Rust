@@ -13,7 +13,7 @@
 // zero and is no neighbour. Every per-cell pass runs over the held slots, 512
 // threads a slot, and calls `ts_home` once.
 struct Params {
-    pool_tiles: u32, entries: u32, capacity: u32, steps: u32,
+    pool_tiles: u32, _pad_h: u32, capacity: u32, steps: u32,
     ox: f32, oy: f32, oz: f32, h: f32,
     inv_h: f32, inv_sub: f32, half_h: f32, sub_dx: f32,
     max_depth: f32, step_distance: f32, max_seed_depth: f32, max_radius: f32,
@@ -98,7 +98,6 @@ fn clock_active() -> bool {
 fn slots_in_use() -> u32 { return record[3]; }
 
 fn ts_pool_tiles() -> u32 { return u.pool_tiles; }
-fn ts_table_entries() -> u32 { return u.entries; }
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }
 // Grid3d::positionToGridIndex floors the f64 product of the widened position
 // and the f64 reciprocal. Emulated exactly in integers: the 24-bit mantissa

@@ -52,7 +52,6 @@ struct Params {
 @group(0) @binding(8) var<storage, read_write> stash: array<f32>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
-fn ts_table_entries() -> u32 { return params.entries; }
 fn ts_table_word(i: u32) -> u32 { return tables[params.row * params.table_words + i]; }
 
 @compute @workgroup_size(1)
@@ -88,7 +87,7 @@ fn capture_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     let e = gid.x;
     if e >= params.pool_len { return; }
     let slot = e >> 9u;
-    if slot < params.pool_tiles && live_table[2u * params.entries + 4u * slot + 3u] == WT_NONE { return; }
+    if slot < params.pool_tiles && live_table[WT_HEADER + 2u * params.entries + 4u * slot + 3u] == WT_NONE { return; }
     let s = faces[e];
     let at = (params.row * params.pool_len + e) * 4u;
     history[at] = select(0.0, s.face_velocity.x, s.face_weight.x > 0.0);
@@ -120,7 +119,7 @@ fn remap_row(@builtin(global_invocation_id) gid: vec3<u32>) {
     var src = params.pool_len - 1u;
     let slot = e >> 9u;
     if slot < params.pool_tiles {
-        let word = 2u * params.entries + 4u * slot;
+        let word = WT_HEADER + 2u * params.entries + 4u * slot;
         if live_table[word + 3u] != WT_NONE {
             let tile = bitcast<vec3<i32>>(vec3<u32>(live_table[word], live_table[word + 1u], live_table[word + 2u]));
             let held = ts_hash_slot(tile);

@@ -17,7 +17,7 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 use manifold_water_liquid::field_build::display_stride;
 use manifold_water_liquid::float_param;
 use manifold_water_liquid::tile_pool::tile_pool;
@@ -33,7 +33,7 @@ static BODY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
 struct Uniforms {
     cell_size: f32,
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     widest: u32,
     stride: u32,
     _pad0: u32,
@@ -160,7 +160,6 @@ impl Primitive for FieldClose {
         let (Some(grown), Some(field)) = (self.grown.as_ref(), self.closed.as_ref()) else {
             return;
         };
-        let entries = table_entries(pool.pool_tiles);
         for (widest, src, out, label) in [
             (0, levelset, grown, "node.field_close grow"),
             (1, grown, field, "node.field_close shrink"),
@@ -168,7 +167,7 @@ impl Primitive for FieldClose {
             let uniforms = Uniforms {
                 cell_size: pool.cell_size,
                 pool_tiles: pool.pool_tiles,
-                entries,
+                _pad_h: 0,
                 widest,
                 stride,
                 _pad0: 0,

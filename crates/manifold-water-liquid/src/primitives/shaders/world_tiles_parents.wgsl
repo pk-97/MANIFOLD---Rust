@@ -1,7 +1,7 @@
 // The points of a parents build:
 // a coarse level's tiles are the parents (tile >> 1) of the level below's
 // held tiles. Point i is the level below's slot i, read from its table at
-// binding 13 (its H and P are `child_entries` and `child_pool_tiles`); its
+// binding 13 (its P is `child_pool_tiles`, its H `child_entries`); its
 // cell is the first cell of its parent tile, so with cell_reach 0 every
 // parent tile is rank 0. Adds the children rows (`wt_children`).
 
@@ -12,7 +12,7 @@
 @group(0) @binding(14) var<storage, read_write> wt_child_rows: array<u32>;
 
 fn wt_child_row(slot: u32) -> u32 {
-    return 2u * wt.child_entries + WT_SLOT_WORDS * slot;
+    return WT_HEADER + 2u * wt.child_entries + WT_SLOT_WORDS * slot;
 }
 
 fn wt_child_tile(slot: u32) -> vec3<i32> {
@@ -35,9 +35,9 @@ fn wt_child_slot(t: vec3<i32>) -> u32 {
     let key = ts_tile_key(t);
     var i = ts_hash(key, entries);
     for (var walked = 0u; walked < entries; walked = walked + 1u) {
-        let c = wt_child[i];
+        let c = wt_child[WT_HEADER + i];
         if c == key {
-            let slot = wt_child[entries + i];
+            let slot = wt_child[WT_HEADER + entries + i];
             if slot == WT_NONE || any(wt_child_tile(slot) != t) {
                 return WT_NONE;
             }

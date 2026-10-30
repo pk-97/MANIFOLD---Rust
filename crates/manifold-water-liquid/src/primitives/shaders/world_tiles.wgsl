@@ -103,10 +103,6 @@ fn ts_pool_tiles() -> u32 {
     return wt.pool_tiles;
 }
 
-fn ts_table_entries() -> u32 {
-    return wt.entries;
-}
-
 fn ts_table_word(i: u32) -> u32 {
     return atomicLoad(&wt_table[i]);
 }
@@ -203,8 +199,18 @@ fn wt_stack_word(i: u32) -> u32 {
     return 2u * wt.pool_tiles + i;
 }
 
+// Word of the table holding entry e's key.
+fn wt_key_word(e: u32) -> u32 {
+    return WT_HEADER + e;
+}
+
+// Word of the table holding entry e's slot.
+fn wt_entry_slot_word(e: u32) -> u32 {
+    return WT_HEADER + wt.entries + e;
+}
+
 fn wt_slot_row(s: u32) -> u32 {
-    return 2u * wt.entries + WT_SLOT_WORDS * s;
+    return WT_HEADER + 2u * wt.entries + WT_SLOT_WORDS * s;
 }
 
 // The replay range's word in the args: the even word after the triples.
@@ -254,12 +260,12 @@ fn wt_insert(key: u32) {
             wt_flag(WT_TABLE_FULL);
             return;
         }
-        let c = atomicLoad(&wt_table[i]);
+        let c = atomicLoad(&wt_table[wt_key_word(i)]);
         if c == k {
             return;
         }
         if c < k {
-            let swap = atomicCompareExchangeWeak(&wt_table[i], c, k);
+            let swap = atomicCompareExchangeWeak(&wt_table[wt_key_word(i)], c, k);
             if !swap.exchanged {
                 // Lost to another writer (or a spurious failure): read the
                 // word again.
@@ -365,8 +371,8 @@ fn wt_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     if e >= wt.entries {
         return;
     }
-    atomicStore(&wt_table[e], WT_EMPTY);
-    atomicStore(&wt_table[wt.entries + e], WT_NONE);
+    atomicStore(&wt_table[wt_key_word(e)], WT_EMPTY);
+    atomicStore(&wt_table[wt_entry_slot_word(e)], WT_NONE);
     atomicStore(&wt_entry[wt_ring_word(e)], wt.ring_max + 1u);
     atomicStore(&wt_entry[wt_near_word(e)], wt.cell_reach + 1u);
     for (var axis = 0u; axis < 3u; axis = axis + 1u) {
@@ -515,7 +521,7 @@ fn wt_carry(@builtin(global_invocation_id) gid: vec3<u32>) {
         let e = ts_entry_of(ts_tile_key(t));
         if e != WT_NONE && atomicLoad(&wt_entry[wt_ring_word(e)]) <= wt.alloc_ring
             && all(wt_entry_tile(e) == t) {
-            atomicStore(&wt_table[wt.entries + e], s);
+            atomicStore(&wt_table[wt_entry_slot_word(e)], s);
             atomicStore(&wt_table[row + 3u], e);
             wt_slot[wt_state_word(s)] = WT_CARRIED;
             atomicAdd(&wt_build[wt_hist_word(wt_entry_rank(e))], 1u);
@@ -532,7 +538,8 @@ fn wt_carry(@builtin(global_invocation_id) gid: vec3<u32>) {
 // alloc_ring). A short pool so fills C first, and no empty band tile takes
 // the slot a tile holding points needs.
 fn wt_want(e: u32) -> u32 {
-    if atomicLoad(&wt_table[e]) == WT_EMPTY || atomicLoad(&wt_table[wt.entries + e]) != WT_NONE {
+    if atomicLoad(&wt_table[wt_key_word(e)]) == WT_EMPTY
+        || atomicLoad(&wt_table[wt_entry_slot_word(e)]) != WT_NONE {
         return 2u;
     }
     let ring = atomicLoad(&wt_entry[wt_ring_word(e)]);
@@ -609,7 +616,7 @@ fn wt_allocate(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let slot = wt_slot[wt_stack_word(avail - 1u - j)];
-    atomicStore(&wt_table[wt.entries + e], slot);
+    atomicStore(&wt_table[wt_entry_slot_word(e)], slot);
     let row = wt_slot_row(slot);
     for (var axis = 0u; axis < 3u; axis = axis + 1u) {
         atomicStore(&wt_table[row + axis], atomicLoad(&wt_entry[wt_coord_word(e, axis)]));
@@ -628,7 +635,7 @@ fn wt_slots(@builtin(global_invocation_id) gid: vec3<u32>) {
     if wt_off() || s >= wt.pool_tiles {
         return;
     }
-    let rows = 2u * wt.entries + WT_SLOT_WORDS * wt.pool_tiles + WT_NEIGHBOURS * s;
+    let rows = wt_slot_row(wt.pool_tiles) + WT_NEIGHBOURS * s;
     let e = atomicLoad(&wt_table[wt_slot_row(s) + 3u]);
     if e == WT_NONE {
         for (var k = 0u; k < WT_NEIGHBOURS; k = k + 1u) {

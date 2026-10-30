@@ -4,7 +4,7 @@
 //! FLIP Fluids particlelevelset.cpp / levelsetsolver.cpp, MIT; see notices.
 use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len, table_entries};
+use manifold_node_engine::scene::world_tiles::{READ_SIDE, pool_len};
 use {
     super::upwind_distance::UpwindDistance, super::upwind_distance::UpwindUniforms,
     manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline,
@@ -131,9 +131,8 @@ impl SurfaceDistance {
         let [current, candidate, valid, slot_flags, state, args, _] =
             self.buffers.as_ref().expect("distance reserved");
         let count = pool_len(pool_tiles) as u32;
-        let entries = table_entries(pool_tiles);
         let pass = |enc: &mut GpuEncoder, entry: usize, iteration: u32, work: u32| {
-            let words = [count, pool_tiles, entries, iteration, h.to_bits(), 0, 0, 0];
+            let words = [count, pool_tiles, 0, iteration, h.to_bits(), 0, 0, 0];
             enc.dispatch_compute(
                 &self.pipelines[entry],
                 &[

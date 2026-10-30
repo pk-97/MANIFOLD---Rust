@@ -207,7 +207,7 @@ fn step_params_match_the_shader_uniform() {
     assert_eq!(std::mem::offset_of!(StepParams, open_faces), 164);
     assert_eq!(std::mem::offset_of!(StepParams, pool_tiles), 172);
     assert_eq!(std::mem::offset_of!(StepParams, field_min), 176);
-    assert_eq!(std::mem::offset_of!(StepParams, table_entries), 188);
+    assert_eq!(std::mem::offset_of!(StepParams, _pad_h), 188);
     assert_eq!(std::mem::offset_of!(StepParams, emit_sites), 192);
     assert_eq!(std::mem::offset_of!(StepParams, kill_height), 196);
     assert_eq!(std::mem::offset_of!(StepParams, wall_velocity_lo), 208);

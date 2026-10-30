@@ -41,9 +41,34 @@ pub const EMPTY: u32 = 0;
 pub const HASH_MULTIPLIER: u32 = 2_654_435_769;
 
 /// The WGSL helpers (`world_tiles_read.wgsl`): pack, hash, lookup, home and
-/// the `ts_*` cell helpers. The including shader defines `ts_pool_tiles()`,
-/// `ts_table_entries()` and `ts_table_word(i)`.
+/// the `ts_*` cell helpers. The including shader defines `ts_pool_tiles()`
+/// and `ts_table_word(i)`; H comes from the table's header.
 pub const READ_SIDE: &str = include_str!("world_tiles_read.wgsl");
+
+/// Words before the keys: H, then zeros. A table carries its own H so a
+/// reader needs only its own P, whatever pools H was sized for.
+pub const HEADER_WORDS: u32 = 4;
+
+/// The header of a table of `entries`.
+pub fn table_header(entries: u32) -> [u32; HEADER_WORDS as usize] {
+    [entries, 0, 0, 0]
+}
+
+/// The keys of a table's words (`entries` of them, after the header).
+pub fn table_keys(words: &[u32]) -> &[u32] {
+    let first = HEADER_WORDS as usize;
+    &words[first..first + words[0] as usize]
+}
+
+/// Word of the table holding entry `entry`'s key.
+pub fn key_word(entry: u32) -> u64 {
+    u64::from(HEADER_WORDS) + u64::from(entry)
+}
+
+/// Word of the table holding entry `entry`'s slot.
+pub fn entry_slot_word(entries: u32, entry: u32) -> u64 {
+    key_word(entries) + u64::from(entry)
+}
 
 /// Elements of a pooled field with room for `pool_tiles` tiles.
 pub fn pool_len(pool_tiles: u32) -> u64 {
@@ -59,7 +84,7 @@ pub fn table_entries(pool_tiles: u32) -> u32 {
 /// Word of the table where slot `slot`'s row starts (its tile, then its
 /// entry).
 pub fn slot_row_word(entries: u32, slot: u32) -> u64 {
-    2 * u64::from(entries) + u64::from(SLOT_WORDS) * u64::from(slot)
+    entry_slot_word(entries, entries) + u64::from(SLOT_WORDS) * u64::from(slot)
 }
 
 /// Word of the table where slot `slot`'s 27 neighbour slots start.
@@ -67,8 +92,8 @@ pub fn neighbour_row_word(entries: u32, pool_tiles: u32, slot: u32) -> u64 {
     slot_row_word(entries, pool_tiles) + u64::from(NEIGHBOURS) * u64::from(slot)
 }
 
-/// Words of the whole table: keys and entry slots (2H), then the slot rows
-/// and neighbour rows (31P).
+/// Words of the whole table: the header, keys and entry slots (2H), then the
+/// slot rows and neighbour rows (31P).
 pub fn table_words(pool_tiles: u32) -> u64 {
     neighbour_row_word(table_entries(pool_tiles), pool_tiles, pool_tiles)
 }
@@ -280,8 +305,12 @@ mod tests {
         assert_eq!(table_entries(1), 4);
         assert_eq!(table_entries(16), 64);
         assert_eq!(pool_len(3), 3 * 512 + 1);
-        assert_eq!(table_words(16), 2 * 64 + 31 * 16);
-        assert_eq!(neighbour_row_word(64, 16, 2), 2 * 64 + 4 * 16 + 27 * 2);
+        assert_eq!(table_words(16), 4 + 2 * 64 + 31 * 16);
+        assert_eq!(neighbour_row_word(64, 16, 2), 4 + 2 * 64 + 4 * 16 + 27 * 2);
+        assert_eq!(entry_slot_word(64, 3), 4 + 64 + 3);
+        let mut words = vec![7; table_words(16) as usize];
+        words[..4].copy_from_slice(&table_header(64));
+        assert_eq!(table_keys(&words).len(), 64);
         assert_eq!(tile_of_cell([-1, 7, 8]), [-1, 0, 1]);
         assert_eq!(local_index([-1, 7, 8]), 7 + 8 * 7);
         assert_eq!(neighbour_index([0, 0, 0]), 13);
@@ -290,7 +319,6 @@ mod tests {
 
     const STUB: &str = "@group(0) @binding(0) var<storage, read> ts_table: array<u32>;\n\
         fn ts_pool_tiles() -> u32 { return 3u; }\n\
-        fn ts_table_entries() -> u32 { return 16u; }\n\
         fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }\n";
 
     #[test]

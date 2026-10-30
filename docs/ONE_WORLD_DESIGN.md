@@ -64,6 +64,13 @@ Plan, each stage compiling and bit-identical until 3c:
 3. **3c.** Matter's Points to Grid builds its layer of the World table; its own table goes.
 4. **3d.** Phase 4's exchanges read the other material's slot through the shared entry instead of rescattering particles.
 
+**3a in code.** Every table carries H in a four-word header (`HEADER_WORDS`, `table_header`): keys start at word 4, and the read side's `ts_table_entries()` reads word 0, so an including shader defines only `ts_pool_tiles()` and `ts_table_word(i)`. The build writes the header when it creates the table; `slot_row_word`, `entry_slot_word` and `table_keys` place everything past it. The uniforms that carried H for the read side are padding now (`_pad_h`). Readers of a second table (the pressure's coarse side, the pockets' level, the whitewater restart, the parents build's child) still take that table's H from a uniform.
+
+**What 3b must still change, found doing 3a:**
+- **Pools move.** Both pools follow their material (`tile_pool::next_pool`, Matter's growth with spread), so the World's H moves with them: H is the table size for the sum of the current pools, and a change in either restarts every layer's table (each material rebuilds its grid from its particles every substep, so only the tables start over, as on a material's own growth today).
+- **CPU sites that size the water's table from its own P.** The whitewater restart copies the slot rows from `slot_row_word(table_entries(P), 0)`, and the substep history copies whole tables of `table_words(P)`. Both must take H from whoever sized the table (a published scalar beside `pool_tiles`) before the water's table can be shared.
+- **Each layer keeps the key words.** The cheapest layout that leaves every reader as it is: each material keeps its own table buffer (header, keys, entry column, rows), and a build writes the keys into its own and copies them into the others' before re-pointing them, so an entry means the same tile in every layer.
+
 ## Phase 4 in code: water pushes Matter within the tick
 
 Landed before the table, on the tick loop:

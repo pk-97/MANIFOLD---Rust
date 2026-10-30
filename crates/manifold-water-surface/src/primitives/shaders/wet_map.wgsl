@@ -71,7 +71,6 @@ struct WetParticle {
 @group(0) @binding(6) var<storage, read_write> sand_share: array<atomic<u32>>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
-fn ts_table_entries() -> u32 { let n = 4u * max(params.pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
 fn ts_table_word(i: u32) -> u32 { return tiles[i]; }
 
 // A particle marks the surface it is within this many radii of.

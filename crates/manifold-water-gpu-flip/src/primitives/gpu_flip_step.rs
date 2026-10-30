@@ -336,8 +336,8 @@ pub(crate) struct StepParams {
     pub(crate) pool_tiles: u32,
     /// The force and impulse lattices' first node in metres.
     pub(crate) field_min: [f32; 3],
-    /// The table's entries.
-    pub(crate) table_entries: u32,
+    /// Padding where H was: the table carries its own.
+    pub(crate) _pad_h: u32,
     /// Sites the inflows of one tick enumerate at most (`region_site_total`).
     pub(crate) emit_sites: u32,
     /// The move removes a particle that ends below this height in metres;
@@ -802,10 +802,9 @@ impl StepParams {
         self
     }
 
-    /// The pool and table the passes read through.
+    /// The pool the passes read through.
     pub fn with_pool_for_test(mut self, pool_tiles: u32) -> Self {
         self.pool_tiles = pool_tiles;
-        self.table_entries = manifold_node_engine::scene::world_tiles::table_entries(pool_tiles);
         self
     }
 

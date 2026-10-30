@@ -58,7 +58,6 @@ struct Params {
 @group(0) @binding(5) var<storage, read> materials: array<f32>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
-fn ts_table_entries() -> u32 { let n = 4u * max(params.pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
 fn ts_table_word(i: u32) -> u32 { return tiles[i]; }
 
 // The water's velocity and the share under water at grid position q.

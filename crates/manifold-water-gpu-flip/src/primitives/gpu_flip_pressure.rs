@@ -261,10 +261,10 @@ impl<'a> Water<'a> {
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
-    /// The dispatched level's pool P and table entries H: the level the
-    /// read side looks cells up in.
+    /// The dispatched level's pool P: the level the read side looks cells up
+    /// in (its H is the table's own).
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     /// A transfer's or coarsening's coarse side: its P and H.
     coarse_pool_tiles: u32,
     coarse_entries: u32,
@@ -307,7 +307,6 @@ impl Params {
     /// The level the dispatch looks its cells up in.
     fn table_of(mut self, tiles: &WorldTiles) -> Self {
         self.pool_tiles = tiles.pool_tiles();
-        self.entries = tiles.table_entries();
         self
     }
 

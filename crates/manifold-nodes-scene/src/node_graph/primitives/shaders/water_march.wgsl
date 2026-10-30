@@ -176,7 +176,7 @@ fn cs_march(@builtin(global_invocation_id) gid: vec3<u32>) {
     if gid.x >= width || gid.y >= height { return; }
     let pix = vec2<i32>(gid.xy);
     let idx = gid.y * width + gid.x;
-    field_pool = u.tiles.xy;
+    field_pool = u.tiles.x;
 
     let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(u.target_size.xy);
     let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);

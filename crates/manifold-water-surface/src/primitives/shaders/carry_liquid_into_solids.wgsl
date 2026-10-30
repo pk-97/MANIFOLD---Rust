@@ -33,7 +33,6 @@ struct CarryParams {
 
 var<private> ww_pool_tiles: u32;
 fn ts_pool_tiles() -> u32 { return ww_pool_tiles; }
-fn ts_table_entries() -> u32 { let n = 4u * max(ww_pool_tiles, 1u); return 1u << (32u - countLeadingZeros(n - 1u)); }
 fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 
 // FIELD_FAR_CELLS (scene_object), the level set where no tile is held.

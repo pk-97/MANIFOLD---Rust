@@ -30,7 +30,7 @@
 struct Params {
     cell_size: f32,
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     // 0 takes the least value round each node, 1 the greatest.
     widest: u32,
     // Display nodes per simulation cell along an axis, 1 to 3.
@@ -48,7 +48,6 @@ struct Params {
 @group(0) @binding(4) var<storage, read> raw: array<f32>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
-fn ts_table_entries() -> u32 { return params.entries; }
 fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 
 const FC_THREADS: u32 = 256u;

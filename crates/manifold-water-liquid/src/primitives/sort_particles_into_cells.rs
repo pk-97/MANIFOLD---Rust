@@ -27,7 +27,7 @@ use manifold_node_engine::particles::{FLUID_PARTICLE_SPECS, FluidParticle};
 use manifold_node_engine::ports::{ArrayType, ChannelElementType, std430_channel};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::{
-    READ_SIDE, lattice_origin, pool_len, table_entries, table_words,
+    READ_SIDE, lattice_origin, pool_len, table_words,
 };
 
 /// The sort's passes. Composed after a key source: [`DENSE_KEYS`],
@@ -49,7 +49,6 @@ const DENSE_KEYS: &str = "fn sort_key_of(p: vec3<f32>) -> u32 {\n\
 /// table; a point in a tile it does not hold keys to the canonical element.
 const POOLED_KEYS: &str = "@group(0) @binding(9) var<storage, read> ts_table: array<u32>;\n\
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }\n\
-fn ts_table_entries() -> u32 { return params.table_entries; }\n\
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }\n\
 fn sort_key_of(p: vec3<f32>) -> u32 { return ts_cell_at(ts_world_cell(p, params.bin_min, params.inv_cell)); }\n";
 
@@ -60,7 +59,6 @@ fn sort_key_of(p: vec3<f32>) -> u32 { return ts_cell_at(ts_world_cell(p, params.
 /// point's stencil base node (bin_min +h/2).
 const BLOCK_KEYS: &str = "@group(0) @binding(9) var<storage, read> ts_table: array<u32>;\n\
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }\n\
-fn ts_table_entries() -> u32 { return params.table_entries; }\n\
 fn ts_table_word(i: u32) -> u32 { return ts_table[i]; }\n\
 fn sort_key_of(p: vec3<f32>) -> u32 {\n\
     let node = ts_world_cell(p, params.bin_min, params.inv_cell);\n\
@@ -146,8 +144,8 @@ struct SortParams {
     /// The word of the count record (binding 10) holding the slots in use, or
     /// [`NO_COUNT_WORD`] when `count` is the slot count.
     count_word: u32,
-    /// H of a pooled sort's table; 0 when dense.
-    table_entries: u32,
+    /// Padding where H was: a pooled sort's table carries its own.
+    _pad_h: u32,
     /// 1 when a point whose tile the table does not hold is not counted.
     drop_absent: u32,
     /// Words of each slot's companion record; 0 when the job has none.
@@ -472,7 +470,7 @@ impl ParticleSorter {
             live_rule: read.live_rule,
             pool_tiles: pool.map_or(0, |(_, pool_tiles)| pool_tiles),
             count_word,
-            table_entries: pool.map_or(0, |(_, pool_tiles)| table_entries(pool_tiles)),
+            _pad_h: 0,
             drop_absent: u32::from(self.rule == KeyRule::PooledCellsHeld),
             companion_words: job.companion.map_or(0, |c| c.words),
             _pad0: 0,

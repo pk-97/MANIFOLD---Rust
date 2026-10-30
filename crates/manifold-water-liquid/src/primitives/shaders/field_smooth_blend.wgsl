@@ -38,7 +38,7 @@ struct Params {
     smoothness: f32,
     band_cells: f32,
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     // Display nodes per simulation cell along an axis, 1 to 3.
     stride: u32,
     sim_cell_size: f32,
@@ -54,7 +54,6 @@ struct Params {
 @group(0) @binding(5) var<storage, read_write> field: array<f32>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
-fn ts_table_entries() -> u32 { return params.entries; }
 fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 
 const FS_THREADS: u32 = 256u;

@@ -15,13 +15,12 @@
 // `scene_object.rs`).
 const FIELD_FAR_CELLS: f32 = 3.0;
 
-// The pool size and table entries of the field the running entry point reads.
-// The entry point, or the look hook that reads a field, sets it from its
-// uniforms before the first read.
-var<private> field_pool: vec2<u32>;
+// The pool size of the field the running entry point reads (its H is the
+// table's own). The entry point, or the look hook that reads a field, sets it
+// from its uniforms before the first read.
+var<private> field_pool: u32;
 
-fn ts_pool_tiles() -> u32 { return field_pool.x; }
-fn ts_table_entries() -> u32 { return field_pool.y; }
+fn ts_pool_tiles() -> u32 { return field_pool; }
 fn ts_table_word(i: u32) -> u32 { return field_tiles[i]; }
 
 fn field_extent_min() -> vec3<f32> {

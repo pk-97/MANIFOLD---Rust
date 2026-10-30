@@ -9,8 +9,8 @@ struct Params {
     sim_cell: f32,
     pool_tiles: u32,
     sim_pool_tiles: u32,
-    entries: u32,
-    sim_entries: u32,
+    _pad_h: u32,
+    _pad_sim_h: u32,
     // Metres the grid water is shrunk by before it fills.
     shrink: f32,
     elements: u32,
@@ -27,10 +27,8 @@ struct Params {
 @group(0) @binding(5) var<storage, read_write> out: array<f32>;
 
 fn ts_pool_tiles() -> u32 { return u.pool_tiles; }
-fn ts_table_entries() -> u32 { return u.entries; }
 fn ts_table_word(i: u32) -> u32 { return tiles[i]; }
 fn sim_ts_pool_tiles() -> u32 { return u.sim_pool_tiles; }
-fn sim_ts_table_entries() -> u32 { return u.sim_entries; }
 fn sim_ts_table_word(i: u32) -> u32 { return interior_tiles[i]; }
 
 // A free slot and the canonical element keep the level set's value. Display

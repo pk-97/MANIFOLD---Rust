@@ -10,7 +10,8 @@ use crate::contracts::water::primitives::gpu_flip_scene_tests::Run;
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::world_tiles::{
-    EMPTY, TILE, find, neighbour_index, neighbour_row_word, slot_row_word, table_entries, tile_key,
+    EMPTY, TILE, entry_slot_word, find, neighbour_index, neighbour_row_word, slot_row_word,
+    table_entries, table_keys, tile_key,
 };
 use manifold_node_engine::testkit::array_harness::{Harness, params, read};
 use manifold_nodes_water::presets::gpu_flip::WaterScene;
@@ -85,9 +86,9 @@ fn gpu_flip_step_tiles_two_particles_across_the_origin() {
     let entries = table_entries(pool);
     let table = words_of(&h.device, &h.buffer(tiles.0));
     let slot_of = |tile: [i32; 3]| -> u32 {
-        let entry = find(&table[..entries as usize], tile_key(tile))
+        let entry = find(table_keys(&table), tile_key(tile))
             .unwrap_or_else(|| panic!("tile {tile:?} holds a slot"));
-        table[(entries + entry) as usize]
+        table[entry_slot_word(entries, entry) as usize]
     };
     let (low, high) = (slot_of([-1, 0, 0]), slot_of([0, 0, 0]));
     assert_ne!(low, high, "one slot a tile");
@@ -257,7 +258,7 @@ fn gpu_flip_sparse_step_survives_poison() {
         "the canonical distance"
     );
     let pool = (faces.len() as u32 - 1) / TILE.pow(3);
-    let held = table[..table_entries(pool) as usize]
+    let held = table_keys(&table)
         .iter()
         .filter(|&&key| key != EMPTY)
         .count();

@@ -29,7 +29,7 @@ fn cs_tile_flags(
     @builtin(local_invocation_index) lane: u32,
 ) {
     let slot = group.x;
-    field_pool = u.tiles.xy;
+    field_pool = u.tiles.x;
     if lane == 0u {
         wg_held = u32(ts_slot_entry(slot) != WT_NONE);
         atomicStore(&wg_bits, 0u);

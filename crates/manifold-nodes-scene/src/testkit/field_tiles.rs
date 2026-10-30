@@ -5,8 +5,9 @@
 //! straddle the origin and leave a tile unheld between two that are.
 
 use manifold_node_engine::scene::world_tiles::{
-    EMPTY, NONE, TILE, TILE_CELLS, find, insert, local_index, neighbour_index, neighbour_row_word,
-    pool_len, slot_row_word, table_entries, table_words, tile_key, tile_of_cell,
+    EMPTY, HEADER_WORDS, NONE, TILE, TILE_CELLS, entry_slot_word, find, insert, local_index,
+    neighbour_index, neighbour_row_word, pool_len, slot_row_word, table_entries, table_header,
+    table_words, tile_key, tile_of_cell,
 };
 
 /// A pool of `pool_tiles` slots holding `held` (slot i holds `held[i]`), of
@@ -32,12 +33,15 @@ impl FieldTable {
         for &tile in held {
             assert!(insert(&mut keys, tile_key(tile)), "the table is full");
         }
-        words[..h].copy_from_slice(&keys);
+        let first = HEADER_WORDS as usize;
+        words[..first].copy_from_slice(&table_header(entries));
+        words[first..first + h].copy_from_slice(&keys);
         for (slot, &tile) in held.iter().enumerate() {
             let slot = slot as u32;
             let entry = find(&keys, tile_key(tile)).expect("an inserted key is found");
-            assert_eq!(words[h + entry as usize], NONE, "tile {tile:?} held twice");
-            words[h + entry as usize] = slot;
+            let at = entry_slot_word(entries, entry) as usize;
+            assert_eq!(words[at], NONE, "tile {tile:?} held twice");
+            words[at] = slot;
             let row = slot_row_word(entries, slot) as usize;
             for (axis, c) in tile.into_iter().enumerate() {
                 words[row + axis] = c as u32;
@@ -157,12 +161,14 @@ mod tests {
         // The free fourth slot holds the canonical value too.
         assert!(pool[3 * TILE_CELLS as usize..].iter().all(|&v| v == -7.0));
         // The words find each tile where the build would put it.
-        let h = table_entries(4) as usize;
+        let keys = manifold_node_engine::scene::world_tiles::table_keys(&table.words);
+        assert_eq!(keys.len() as u32, table_entries(4));
         for (slot, &tile) in held.iter().enumerate() {
-            let entry = find(&table.words[..h], tile_key(tile)).expect("held tile found");
-            assert_eq!(table.words[h + entry as usize], slot as u32);
+            let entry = find(keys, tile_key(tile)).expect("held tile found");
+            let at = entry_slot_word(table_entries(4), entry) as usize;
+            assert_eq!(table.words[at], slot as u32);
         }
-        assert_eq!(find(&table.words[..h], tile_key([0, 0, 0])), None);
+        assert_eq!(find(keys, tile_key([0, 0, 0])), None);
     }
 
     #[test]

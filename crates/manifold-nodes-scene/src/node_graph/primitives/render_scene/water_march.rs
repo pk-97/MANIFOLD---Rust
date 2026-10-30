@@ -11,7 +11,7 @@ use manifold_gpu::BufferUse;
 use std::sync::LazyLock;
 
 use manifold_gpu::*;
-use manifold_node_engine::scene::world_tiles::{READ_SIDE, table_entries};
+use manifold_node_engine::scene::world_tiles::READ_SIDE;
 
 use super::{FIELD_TILES_WGSL, mat4_inverse};
 
@@ -64,7 +64,7 @@ pub(super) struct MarchUniforms {
     prev_local_to_world: [[f32; 4]; 4],
     /// x display cell size in metres, y frame delta in seconds.
     cell: [f32; 4],
-    /// x pool tiles, y table entries, z slot + 1.
+    /// x pool tiles, y unused, z slot + 1.
     tiles: [u32; 4],
     /// x width, y height, z 1 when a velocity array is bound.
     target_size: [f32; 4],
@@ -177,7 +177,7 @@ pub(super) fn march_uniforms(
         cell: [field.cell_size, view.frame_seconds, 0.0, 0.0],
         tiles: [
             field.pool_tiles,
-            table_entries(field.pool_tiles),
+            0,
             field.slot + 1,
             0,
         ],

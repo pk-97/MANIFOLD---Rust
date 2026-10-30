@@ -28,7 +28,7 @@ use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 use manifold_node_engine::particles::FluidParticle;
 use manifold_node_engine::scene::world_tiles::{
-    EMPTY, NONE, READ_SIDE, TILE, table_entries, table_words,
+    EMPTY, HEADER_WORDS, NONE, READ_SIDE, TILE, table_entries, table_header, table_words,
 };
 
 use crate::primitives::prefix_scan::{PrefixScan, ScanLabels, storage_words};
@@ -415,7 +415,9 @@ impl WorldTiles {
         let p = pool_tiles as usize;
         let h = entries as usize;
         let mut table = vec![NONE; table_words(pool_tiles) as usize];
-        table[..h].fill(EMPTY);
+        let keys = HEADER_WORDS as usize;
+        table[..keys].copy_from_slice(&table_header(entries));
+        table[keys..keys + h].fill(EMPTY);
         let mut counts = vec![0; count_words(reach.ring_max) as usize];
         counts[free_top_word(reach.ring_max)] = pool_tiles;
         // State and rank zero; the free stack every slot, slot 0 on top.

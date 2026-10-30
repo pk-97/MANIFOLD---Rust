@@ -109,8 +109,8 @@ struct Params {
     pool_tiles: u32,
     // The force and impulse lattices' first node in metres.
     field_min: vec3<f32>,
-    // The table's entries (H).
-    table_entries: u32,
+    // Padding where H was: the table carries its own.
+    _pad_h: u32,
     // Half-cell sites the inflows of one tick enumerate at most: the
     // emission passes' thread count (`region_sites`).
     emit_sites: u32,
@@ -310,9 +310,6 @@ fn ts_pool_tiles() -> u32 {
     return u.pool_tiles;
 }
 
-fn ts_table_entries() -> u32 {
-    return u.table_entries;
-}
 
 fn ts_table_word(i: u32) -> u32 {
     return ts_table[i];

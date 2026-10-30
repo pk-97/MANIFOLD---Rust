@@ -197,10 +197,10 @@ pub(crate) const FILL_THRESHOLD: f32 = -0.95;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
-    /// The tile pool's capacity P and the table's entries H
-    /// (gpu_flip_sheeting.wgsl ts_pool_tiles, ts_table_entries).
+    /// The tile pool's capacity P (gpu_flip_sheeting.wgsl ts_pool_tiles); H
+    /// is the table's own.
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     capacity: u32,
     steps: u32,
     ox: f32,
@@ -648,7 +648,7 @@ impl GpuSheeting {
         let step_distance = (DEPTH_TEST_STEP_CELLS * dx) as f32;
         let params = Params {
             pool_tiles: tiles.pool_tiles(),
-            entries: tiles.table_entries(),
+            _pad_h: 0,
             capacity: self.capacity,
             steps: (test_distance / step_distance).ceil() as u32,
             ox: origin[0],

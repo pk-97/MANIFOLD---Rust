@@ -76,7 +76,7 @@ struct Params {
     cell_size: f32,
     blob_reach: f32,
     pool_tiles: u32,
-    entries: u32,
+    _pad_h: u32,
     // How far a blob reaches from its particle's cell, metres.
     window: f32,
     // Cells per run of the walk, 1 to 8.
@@ -126,7 +126,6 @@ struct CellRange {
 @group(0) @binding(9) var<storage, read_write> velocity: array<f32>;
 
 fn ts_pool_tiles() -> u32 { return params.pool_tiles; }
-fn ts_table_entries() -> u32 { return params.entries; }
 fn ts_table_word(i: u32) -> u32 { return buf_tiles[i]; }
 
 const PV_THREADS: u32 = 256u;
