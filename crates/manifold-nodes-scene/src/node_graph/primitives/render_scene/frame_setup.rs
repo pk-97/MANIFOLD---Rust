@@ -6,10 +6,10 @@ use super::*;
 use manifold_gpu::BufferUse;
 
 /// Bytes of one `InstanceTransform` record.
-const INSTANCE_RECORD_BYTES: u64 = std::mem::size_of::<InstanceTransform>() as u64;
+pub(super) const INSTANCE_RECORD_BYTES: u64 = std::mem::size_of::<InstanceTransform>() as u64;
 
 /// `slot`'s buffer, reallocated only when it holds fewer than `bytes`.
-fn grown_buffer(
+pub(super) fn grown_buffer(
     slot: &mut Option<manifold_gpu::GpuBuffer>,
     device: &manifold_gpu::GpuDevice,
     bytes: u64,
@@ -677,6 +677,7 @@ impl RenderScene {
                 bounds,
                 copy_bounds,
                 camera_cull: None,
+                shadow_block: None,
                 in_view,
             });
         }
@@ -691,10 +692,13 @@ impl RenderScene {
             .count();
         if live + live_meshes > 0 {
             let culled = draws.iter().filter(|d| d.culls_copies()).count();
+            // Each culled draw also gets one block per shadow caster, after
+            // the water meshes' blocks.
+            let casters = pre.casters.len();
             let gpu = ctx.gpu_encoder();
             let args = self
                 .live_draw_args
-                .prepare(gpu.device, live + culled + live_meshes);
+                .prepare(gpu.device, live + culled + live_meshes + culled * casters);
             for (slot, draw) in draws
                 .iter_mut()
                 .filter(|d| d.live_extent.is_some() || d.trims_instances())
@@ -773,6 +777,12 @@ impl RenderScene {
                 );
                 mesh.live_args = Some((args.clone(), block * live_draw_args::ARGS_BYTES));
                 block += 1;
+            }
+            // Then each culled draw's shadow blocks, one per caster.
+            let mut shadow_block = (live + culled + live_meshes) as u64;
+            for draw in draws.iter_mut().filter(|d| d.culls_copies()) {
+                draw.shadow_block = Some(shadow_block);
+                shadow_block += casters as u64;
             }
         }
         // A field draws in Pass B, so it needs every resource the glass gate

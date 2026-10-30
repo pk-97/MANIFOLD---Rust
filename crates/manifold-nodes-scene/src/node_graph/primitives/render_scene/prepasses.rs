@@ -172,6 +172,71 @@ impl RenderScene {
                             .is_some_and(|b| box_outside_clip(&vp, &d.uniforms.model, &b))
                     })
                     .collect();
+                // A draw that culls its copies drops the ones outside this
+                // light's clip volume too: its survivors land in a buffer of
+                // its own for this caster, counted into this caster's block.
+                let shadow_culls: Vec<Option<(manifold_gpu::GpuBuffer, u64)>> = {
+                    let gpu = ctx.gpu_encoder();
+                    let mut culled_any = false;
+                    let culls =
+                        lit.iter()
+                            .map(|d| {
+                                let (
+                                    Some(first),
+                                    Some(bounds),
+                                    Some(source),
+                                    Some((_, live_offset)),
+                                ) = (
+                                    d.shadow_block,
+                                    d.copy_bounds.as_ref(),
+                                    d.instances,
+                                    d.live_args.as_ref(),
+                                )
+                                else {
+                                    return None;
+                                };
+                                let per_caster =
+                                    self.culled_shadow_instances.get_mut(d.slot as usize)?;
+                                if per_caster.len() <= slot {
+                                    per_caster.resize_with(slot + 1, || None);
+                                }
+                                let bytes = u64::from(d.instance_count)
+                                    * super::frame_setup::INSTANCE_RECORD_BYTES;
+                                let survivors = super::frame_setup::grown_buffer(
+                                    &mut per_caster[slot],
+                                    gpu.device,
+                                    bytes,
+                                );
+                                if !culled_any {
+                                    // The trim wrote the instance words the blocks copy.
+                                    gpu.native_enc.compute_memory_barrier_buffers();
+                                    culled_any = true;
+                                }
+                                let block = first + slot as u64;
+                                self.live_draw_args.cull(
+                                    gpu.native_enc,
+                                    &live_draw_args::CullDraw {
+                                        clip: &vp,
+                                        model: &d.uniforms.model,
+                                        inner: &d.uniforms.instance_inner,
+                                        bounds,
+                                        count: d.instance_count,
+                                        live_block: (live_offset / live_draw_args::ARGS_BYTES)
+                                            as u32,
+                                        view_block: block as u32,
+                                        instances: source,
+                                        out_instances: &survivors,
+                                        prev: None,
+                                    },
+                                );
+                                Some((survivors, block * live_draw_args::ARGS_BYTES))
+                            })
+                            .collect();
+                    if culled_any {
+                        gpu.native_enc.compute_memory_barrier_buffers();
+                    }
+                    culls
+                };
                 let shadow_uniforms: Vec<ShadowUniforms> = lit
                     .iter()
                     .map(|d| ShadowUniforms::for_draw(vp, d))
@@ -179,7 +244,8 @@ impl RenderScene {
                 let shadow_bindings: Vec<[GpuBinding; 6]> = lit
                     .iter()
                     .zip(&shadow_uniforms)
-                    .map(|(d, su)| {
+                    .zip(&shadow_culls)
+                    .map(|((d, su), cull)| {
                         [
                             GpuBinding::Bytes {
                                 binding: 0,
@@ -192,7 +258,10 @@ impl RenderScene {
                             },
                             GpuBinding::Buffer {
                                 binding: 2,
-                                buffer: d.instances.unwrap_or(identity_stub),
+                                buffer: cull.as_ref().map_or(
+                                    d.instances.unwrap_or(identity_stub),
+                                    |(survivors, _)| survivors,
+                                ),
                                 offset: 0,
                             },
                             GpuBinding::Buffer {
@@ -218,8 +287,9 @@ impl RenderScene {
                     .iter()
                     .zip(&shadow_uniforms)
                     .zip(&shadow_bindings)
-                    .map(|((d, su), b)| {
-                        d.live(manifold_gpu::Draw::new(
+                    .zip(&shadow_culls)
+                    .map(|(((d, su), b), cull)| {
+                        let draw = manifold_gpu::Draw::new(
                             if su.discard_free() {
                                 solid_pipeline
                             } else {
@@ -228,7 +298,13 @@ impl RenderScene {
                             b,
                             d.vertex_count,
                             d.instance_count,
-                        ))
+                        );
+                        match (cull, &d.live_args) {
+                            (Some((_, offset)), Some((args, _))) => {
+                                d.with_args(draw, Some((args, *offset)))
+                            }
+                            _ => d.live(draw),
+                        }
                     })
                     .collect();
                 // Shadow maps share one layer size; a light asking for less

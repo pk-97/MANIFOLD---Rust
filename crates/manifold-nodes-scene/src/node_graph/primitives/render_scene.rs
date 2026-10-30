@@ -69,10 +69,10 @@ mod field_objects;
 mod frame_setup;
 mod frustum;
 mod gas_objects;
-mod material_covers;
 mod gas_volume;
 mod item_pick;
 mod live_draw_args;
+mod material_covers;
 mod pass2_draw;
 mod post_passes;
 mod prepasses;
@@ -1419,6 +1419,9 @@ pub struct RenderScene {
     /// their previous-frame records. Grown when too small, never shrunk.
     culled_instances: Vec<Option<manifold_gpu::GpuBuffer>>,
     culled_prev: Vec<Option<manifold_gpu::GpuBuffer>>,
+    /// Per-object-slot, per-caster instance records that survived a shadow
+    /// light's cull. Grown when too small, never shrunk.
+    culled_shadow_instances: Vec<Vec<Option<manifold_gpu::GpuBuffer>>>,
     /// E2b: per-layer camera depth scratch, seeded from the opaque snapshot
     /// before each transmissive draw. Allocated only when transmission is
     /// present.
@@ -2040,6 +2043,9 @@ struct ObjectDraw<'ctx> {
     /// counting them, when the draw culls its copies. Camera passes read it
     /// through the `camera_*` accessors; every other pass reads the full array.
     camera_cull: Option<CameraCull>,
+    /// The arguments block of this draw's cull for shadow caster 0, when it
+    /// culls its copies; caster `c` uses the block `c` after it.
+    shadow_block: Option<u64>,
     /// False when `bounds` lies wholly outside the camera's clip volume,
     /// jitter included. Only the main pass and the camera depth snapshot skip
     /// such a draw; every other pass still sees it.
@@ -2110,14 +2116,15 @@ impl ObjectDraw<'_> {
         self.instances.is_some() && self.instance_count > 0 && !self.points
     }
 
-    /// Whether camera passes draw only the copies that reach the view: a
-    /// trimmed draw of a large array with a known mesh box. A blended or
-    /// transmissive draw keeps every copy in order, and compaction reorders
-    /// them.
+    /// Whether camera and shadow passes draw only the copies that reach their
+    /// view: a trimmed draw whose copies add up to enough vertices, with a
+    /// known mesh box. A blended or transmissive draw keeps every copy in
+    /// order, and compaction reorders them.
     fn culls_copies(&self) -> bool {
         self.trims_instances()
             && !self.routes_to_transparent()
-            && self.instance_count >= live_draw_args::CULL_MIN_INSTANCES
+            && u64::from(self.instance_count) * u64::from(self.vertex_count)
+                >= live_draw_args::CULL_MIN_VERTICES
             && self.copy_bounds.is_some()
     }
 

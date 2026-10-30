@@ -79,7 +79,9 @@ pub(super) fn resolve<'ctx>(
         if rule.amount <= 0.0 {
             continue;
         }
-        let maps = cover.maps.map(|map| map.and_then(|s| inputs.texture_2d_slot(s)));
+        let maps = cover
+            .maps
+            .map(|map| map.and_then(|s| inputs.texture_2d_slot(s)));
         textures[slot * 3..slot * 3 + 3].copy_from_slice(&maps);
         uniform.covers[slot] = look(rule, &cover.material, maps.map(|m| m.is_some()));
     }

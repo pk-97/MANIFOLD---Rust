@@ -2,7 +2,7 @@
 
 <!-- index: How render_scene stops paying for triangles nobody sees: indexed terrain, culled copies in shadows, small patches culled on the GPU, detail levels by screen size, terrain tiles by distance, and NVIDIA cluster ray tracing with the Vulkan port. -->
 
-**Status:** DESIGN, Peter approved the direction on 2026-10-30. P1 is specified and next; P2 to P7 are specified at their phase start, against the code as it stands then.
+**Status:** IN PROGRESS. P1 and P2 landed 2026-10-30; P3 is next. P3 to P7 are specified at their phase start, against the code as it stands then.
 **Companions:** [RAYTRACING_DESIGN.md](RAYTRACING_DESIGN.md) (acceleration structures), [VULKAN_BACKEND_DESIGN.md](VULKAN_BACKEND_DESIGN.md) (P7 ray tracing), [GLB_IMPORT_OPTIMIZATION_GUIDE.md](GLB_IMPORT_OPTIMIZATION_GUIDE.md) (the manual decimation this replaces).
 
 ## The claim
@@ -39,7 +39,9 @@ Measured (terrain session, M4 Max, 1080p, flat 512² terrain): 13 ms GPU a frame
 
 ## Phases
 
-### P1 Indexed terrain, and a settled terrain costs nothing
+### P1 Indexed terrain, and a settled terrain costs nothing (landed)
+
+Measured on the k6b terrain scene, M4 Max, 1080p: frame GPU time about 22 ms to 15 ms, stills identical within the rain's run-to-run noise.
 
 Same look, same triangles; each grid point is shaded once instead of six times, and `make_triangles` leaves the terrain path.
 
@@ -54,13 +56,15 @@ Check: terrain still identical; `perf-soak` on a terrain scene; one test that `n
 
 The Ocean draws its 640×360 projected grid through `make_triangles` every frame too (`scene_compile/ocean.rs`). It takes the same cut once terrain is proven: `node.grid_indices` for the indices, with the finite-difference normals written by a pass over the displaced grid.
 
-### P2 Copies culled in shadows
+### P2 Copies culled in shadows (landed)
 
-`cull_instances` also runs for each shadow light's view, against that light's clip volume. Same look. Spec at phase start.
+Measured: swarmTestv3 shadows 3.7 to 3.0 ms, with the cull itself 0.5 ms dearer, so about 0.2 ms net; sceneLoopBugs unchanged on a fixed frame clock. Stills identical. The cull kernel's per-copy cost now matters as much as the copies it drops; P3's per-patch cull replaces it for meshes with patches.
+
+`cull_instances` also runs for each shadow light's view, against that light's clip volume. The 1024-copy threshold (`CULL_MIN_INSTANCES`) becomes a work threshold, copies × triangles, so a Scene Loop corridor of a few dozen cells of a heavy scan is culled too. Same look. Spec at phase start.
 
 ### P3 Patches and GPU frustum and cone culling
 
-Static indexed meshes (imports) get patches at load. A compute pass per view writes visible patches' triangles into the view's index buffer and the draw's indirect arguments. It covers the camera depth snapshot, Pass A, subsurface and each shadow light. The CPU per-object frustum test stays as the first reject.
+Static indexed meshes (imports) get patches at load. A compute pass per view writes visible patches' triangles into the view's index buffer and the draw's indirect arguments. It covers the camera depth snapshot, Pass A, subsurface and each shadow light. The CPU per-object frustum test stays as the first reject. Instanced draws (copies, swarms, Scene Loop cells) cull each patch of each instance, so a corridor cell half in view draws only its visible half.
 
 ### P4 Occlusion culling
 

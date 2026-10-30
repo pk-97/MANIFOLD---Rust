@@ -117,6 +117,7 @@ impl RenderScene {
             live_draw_args: live_draw_args::LiveDrawArgs::default(),
             culled_instances: Vec::new(),
             culled_prev: Vec::new(),
+            culled_shadow_instances: Vec::new(),
             opaque_depth_snapshot: None,
             opaque_depth_snapshot_width: 0,
             opaque_depth_snapshot_height: 0,
@@ -470,6 +471,7 @@ impl RenderScene {
         self.prev_instances = (0..n_obj).map(|_| None).collect();
         self.culled_instances = (0..n_obj).map(|_| None).collect();
         self.culled_prev = (0..n_obj).map(|_| None).collect();
+        self.culled_shadow_instances = (0..n_obj).map(|_| Vec::new()).collect();
         self.prev_view_proj = None;
         self.prev_cam_state = None;
 

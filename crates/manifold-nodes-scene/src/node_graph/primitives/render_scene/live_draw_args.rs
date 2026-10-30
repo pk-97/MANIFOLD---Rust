@@ -45,8 +45,10 @@ const CULL_SHADER: &str = concat!(
     include_str!("../shaders/cull_instances.wgsl"),
 );
 
-/// Fewest copies worth a cull pass; a smaller array is cheaper to draw whole.
-pub(super) const CULL_MIN_INSTANCES: u32 = 1024;
+/// Fewest vertices a draw's copies must add up to for a cull pass to pay: a
+/// lighter draw is cheaper to draw whole. About a thousand cubes; one heavy
+/// scan repeated a few dozen times (a Scene Loop corridor) passes easily.
+pub(super) const CULL_MIN_VERTICES: u64 = 32 * 1024;
 
 /// `CullArgs` in `cull_instances.wgsl`.
 #[repr(C)]

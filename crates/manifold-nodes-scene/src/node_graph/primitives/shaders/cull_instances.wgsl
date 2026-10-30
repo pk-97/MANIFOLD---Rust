@@ -1,11 +1,12 @@
-// node.render_scene: per-copy view cull for the camera passes. An instanced
+// node.render_scene: per-copy view cull for the camera and shadow passes. An instanced
 // draw can place copies all around the view; the ones whose mesh box lies
 // wholly outside the camera's clip volume draw nothing, so they are dropped
 // before the vertex stage. Surviving copies are compacted into a second
 // instance array (and a matching previous-record array when the velocity
 // pass reads one) and counted into the draw's own view block of the
 // arguments buffer, a copy of the live block with its instance word raised
-// one survivor at a time. Shadow passes keep the full array.
+// one survivor at a time. Each shadow caster culls the same way against its
+// own clip volume, into blocks and survivor buffers of its own.
 //
 // The test is `box_outside_clip` (render_scene/frustum.rs) on the matrix
 // clip * model * T_instance * instance_inner, where T_instance is placed
