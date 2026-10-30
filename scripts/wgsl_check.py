@@ -207,6 +207,7 @@ STACKS = {
                           "const BLACKBODY_ENTRIES: u32 = 64u;\nconst NOISE_LATTICE_CELLS: f32 = 32.0;\n",
                           SCENE / "gas_volume.wgsl"]),
     "scene_gas_compute": (False, [SCENE / "gas_light.wgsl"]),
+    "scene_glow": (False, [SCENE / "glow_gather.wgsl"]),
 }
 
 

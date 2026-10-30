@@ -70,6 +70,7 @@ mod frame_setup;
 mod frustum;
 mod gas_objects;
 mod gas_volume;
+mod glow;
 mod item_pick;
 mod live_draw_args;
 mod material_covers;
@@ -1434,6 +1435,8 @@ pub struct RenderScene {
     water_shade: water_shade::WaterShade,
     /// Smoke and fire: their 3D textures, light volumes and the march.
     gas_pass: gas_volume::GasPass,
+    /// Glowing surfaces' light without ray tracing.
+    glow: glow::GlowPass,
     ripple_detail: ripple_detail::RippleDetail,
     live_draw_args: live_draw_args::LiveDrawArgs,
     /// Per-object-slot instance records that survived the camera cull, and
@@ -3248,6 +3251,12 @@ impl RenderScene {
         if draws.is_empty() && fields.is_empty() && gases.is_empty() {
             self.clear_empty_frame(ctx);
             return;
+        }
+        if pre.rt_gi_enabled {
+            self.glow.clear();
+        } else {
+            let gpu = ctx.gpu_encoder();
+            self.glow.gather(gpu.device, gpu.native_enc, &draws);
         }
 
         let mut scattering = 0u32;

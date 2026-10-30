@@ -1227,6 +1227,13 @@ impl RenderScene {
                 light_data.extend_from_slice(&light.packed(-1.0));
             }
         }
+        // Glowing surfaces light the scene through soft lights over their
+        // glow (`glow.rs`), read back a few frames late. Empty while ray
+        // traced light gathers the glow itself.
+        for light in self.glow.lights() {
+            light_count += 1;
+            light_data.extend_from_slice(&light.packed(-1.0));
+        }
         // D4: `@binding(8)` must ALWAYS be bound (the fragment shaders
         // declare it unconditionally), so a zero-light scene binds one
         // zeroed entry the shader never reads (`light_count == 0`). Skipping
