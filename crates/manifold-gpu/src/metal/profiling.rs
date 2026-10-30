@@ -114,7 +114,39 @@ impl ProfileState {
         let (buffer, start) = self.sampler.slot(idx);
         Some((buffer.clone(), start, start + 1))
     }
+
+    /// Reserve a render pass as two spans, `"<label> vertex"` then
+    /// `"<label> fragment"`: the buffer and the pass's four sample indices
+    /// (vertex start, vertex end, fragment start, fragment end). `None` when
+    /// the four don't fit in one buffer, and the pass takes one whole span.
+    pub(crate) fn reserve_stages(&mut self, label: &str) -> Option<StagesSlot> {
+        #[cfg(feature = "gpu-proofs")]
+        if self.next_label.is_some() {
+            return None;
+        }
+        let idx = self.spans.len() * 2;
+        let per_buffer = self.sampler.per_buffer;
+        if idx + 3 >= self.sampler.capacity || idx % per_buffer + 4 > per_buffer {
+            return None;
+        }
+        for stage in ["vertex", "fragment"] {
+            self.spans.push(PendingSpan {
+                tag: self.tag.clone(),
+                label: format!("{label} {stage}"),
+                kind: GpuWorkKind::Render,
+                threadgroup_bytes: 0,
+            });
+        }
+        let (buffer, start) = self.sampler.slot(idx);
+        Some((buffer.clone(), [start, start + 1, start + 2, start + 3]))
+    }
 }
+
+/// A render pass's sample buffer and its vertex and fragment stage indices.
+pub(crate) type StagesSlot = (
+    Retained<ProtocolObject<dyn MTLCounterSampleBuffer>>,
+    [usize; 4],
+);
 
 /// A reserved span's sample buffer and its start/end sample indices.
 pub(crate) type SpanSlot = (

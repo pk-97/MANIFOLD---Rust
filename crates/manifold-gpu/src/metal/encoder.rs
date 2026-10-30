@@ -499,16 +499,27 @@ impl GpuEncoder {
         desc: &MTLRenderPassDescriptor,
         label: &str,
     ) -> Retained<ProtocolObject<dyn MTLRenderCommandEncoder>> {
-        if let Some((sample_buffer, start, end)) = self
-            .profile
-            .as_mut()
-            .and_then(|p| p.reserve(label, GpuWorkKind::Render, 0))
-        {
-            unsafe {
-                let att = desc.sampleBufferAttachments().objectAtIndexedSubscript(0);
-                att.setSampleBuffer(Some(&sample_buffer));
-                att.setStartOfVertexSampleIndex(start);
-                att.setEndOfFragmentSampleIndex(end);
+        // Vertex and fragment stages as their own spans: on a tiled GPU a
+        // pass bins all its geometry before it shades, so the two show
+        // whether the pass costs triangles or pixels.
+        if let Some(profile) = self.profile.as_mut() {
+            let att = unsafe { desc.sampleBufferAttachments().objectAtIndexedSubscript(0) };
+            if let Some((sample_buffer, [vs, ve, fs, fe])) = profile.reserve_stages(label) {
+                unsafe {
+                    att.setSampleBuffer(Some(&sample_buffer));
+                    att.setStartOfVertexSampleIndex(vs);
+                    att.setEndOfVertexSampleIndex(ve);
+                    att.setStartOfFragmentSampleIndex(fs);
+                    att.setEndOfFragmentSampleIndex(fe);
+                }
+            } else if let Some((sample_buffer, start, end)) =
+                profile.reserve(label, GpuWorkKind::Render, 0)
+            {
+                unsafe {
+                    att.setSampleBuffer(Some(&sample_buffer));
+                    att.setStartOfVertexSampleIndex(start);
+                    att.setEndOfFragmentSampleIndex(end);
+                }
             }
         }
         if cfg!(debug_assertions) {

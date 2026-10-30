@@ -2,7 +2,7 @@
 
 <!-- index: How render_scene stops paying for triangles nobody sees: indexed terrain, culled copies in shadows, small patches culled on the GPU, detail levels by screen size, terrain tiles by distance, and NVIDIA cluster ray tracing with the Vulkan port. -->
 
-**Status:** IN PROGRESS. P1, P2, P3, P5a and P5 landed 2026-10-30; P4 is next. P4, P6 and P7 are specified at their phase start, against the code as it stands then.
+**Status:** IN PROGRESS. P1, P2, P3, P5a and P5 landed 2026-10-30. P4 and P6 are on hold: on the Mac the measured landscape is pixel-bound (see Findings). P7 waits for the 5080.
 **Companions:** [RAYTRACING_DESIGN.md](RAYTRACING_DESIGN.md) (acceleration structures), [VULKAN_BACKEND_DESIGN.md](VULKAN_BACKEND_DESIGN.md) (P7 ray tracing), [GLB_IMPORT_OPTIMIZATION_GUIDE.md](GLB_IMPORT_OPTIMIZATION_GUIDE.md) (the manual decimation this replaces).
 
 ## The claim
@@ -76,7 +76,7 @@ A mesh producer may publish `lods: Array(u32)` (layout in `primitives/mesh_lods.
 
 The scene pass draws into memoryless MSAA targets, which cannot spill when the tiler's parameter buffer fills; the GPU fault ends the session. A frame that can submit more than 16M triangles (falling back below 8M) uses real targets instead (`resources.rs` `TILE_TRIANGLE_BUDGET`). Measured: 8000 copies of a 35k-triangle tree render at 150 ms instead of aborting; the 80k-copy terrain keeps 19.8 ms and pays about 140 MB.
 
-### P4 Occlusion culling
+### P4 Occlusion culling (on hold)
 
 Depth pyramid and the two-phase draw of D3, camera views only.
 
@@ -86,7 +86,7 @@ Measured on the 943k-triangle coastal cliff scan alone, M4 Max, 1080p: render_sc
 
 As built: `node.gltf_mesh_source` publishes `clusters: Array(u32)` (layout in `primitives/mesh_clusters.rs`) on its loader thread with meshoptimizer's clusterlod, UV seams protected. The scene compiler wires it for an imported mesh drawn once, not as copies, when it is big enough (`worth_clusters`). The patch cull (`cull_patches.wgsl`) then runs one workgroup per cluster from the array's own dispatch words, instead of runs of the index buffer: a cluster draws when its own group's error projects over a pixel and the group it was refined from projects at or under one (D4), each view by its own size, so the camera and each shadow map pick their own cut. The view's index buffer keeps the full mesh's size, so a cut that would overflow it is clamped. A mesh the hierarchy can't be built for is laid out as runs that are always on the cut. RT, picking and unculled passes keep the full mesh.
 
-### P6 Terrain tiles by distance
+### P6 Terrain tiles by distance (on hold)
 
 D5's quadtree reads the height map (`node.terrain` gains the height output in the same change). It replaces P1's single grid.
 
@@ -94,7 +94,9 @@ D5's quadtree reads the height map (`node.terrain` gains the height output in th
 
 With the Vulkan ray tracing port: per-patch acceleration structures and a partitioned top level for large changing scenes.
 
-## Findings (2026-10-30, after P3)
+## Findings (2026-10-30)
+
+- The terrain landscape is pixel-bound, not geometry-bound. frame-time splits each render pass into vertex and fragment spans (`Render <label> vertex` / `fragment`). On a low 1080p shot of the d1 terrain the main pass is 49.7 ms fragment against 0.13 ms vertex bare, and 45.0 ms against 1.3 ms with its 80k copies (profiled, so ratios only). Occlusion culling (P4) and terrain tiles (P6) cut vertex work, so neither pays here; the cost is the terrain material's shading.
 
 - Imported parts stay indexed under the per-vertex modifier types (`ModifierTypeEntry::per_vertex`: Bend, Twist, Taper, Rotate, Morph, Boil, Ripple, Melt, Slice, Voxelize, Fold, Wave Shear, Shake, Spatial Echoes, Elastic Sculpture, Math View). Types whose stages read whole triangles or hash the vertex index (Inflate, Displace by Texture, Surface Waves, Facet Normals, Shatter Mesh, Cut Out Box, Glitch Jitter, the fragment types), morphs and fragment cuts still flatten them (`scene_compile/mesh.rs` `use_indexed`).
 - In an RT scan scene the ray tracer, not triangle count, was the cost (83 ms AO+GI, 56 ms reflections, 13 ms raster); RT reuse waits for the 5080.
