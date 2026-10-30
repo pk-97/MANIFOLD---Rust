@@ -115,8 +115,10 @@ pub fn decode_reaction(
     for (index, (row, impulse)) in rows.iter().zip(impulses.iter_mut()).enumerate() {
         if takes_reaction(row) {
             let base = (offset + index) * REACTION_FLOATS;
-            impulse.linear = std::array::from_fn(|axis| reaction[base + axis]);
-            impulse.angular = std::array::from_fn(|axis| reaction[base + 4 + axis]);
+            for axis in 0..3 {
+                impulse.linear[axis] += reaction[base + axis];
+                impulse.angular[axis] += reaction[base + 4 + axis];
+            }
         }
     }
     Ok(())
@@ -215,6 +217,12 @@ impl DomainWalls {
     }
 }
 
+/// What another liquid taking the owner's solids pushed the bodies over its
+/// last frame: it adds its impulse to each of the owner's rows, once that
+/// frame's GPU work has retired.
+pub type ObservedPush =
+    Box<dyn FnOnce(&[LiquidBody], &mut [BodyImpulse]) -> Result<(), String> + Send>;
+
 /// A coupled domain's rigid world, stepped only by settled liquid ticks.
 pub struct LiquidRigidOwner {
     rigid: RigidSimulation,
@@ -246,6 +254,13 @@ pub struct LiquidRigidOwner {
     /// start ([`Self::rebind`]), once the pending reaction has decoded
     /// against the old ones.
     rebind: bool,
+    /// The other liquids' pushes over the frame the pending tick ends,
+    /// added to the next settled tick's reaction.
+    observed: Vec<ObservedPush>,
+    /// Colliders seen moving: each is rebound with a moving solid, sampled
+    /// from its own lattice, so its motion no longer rebuilds every static
+    /// solid each liquid caches.
+    moving: Vec<BodyHandle>,
 }
 
 impl LiquidRigidOwner {
@@ -294,6 +309,7 @@ impl LiquidRigidOwner {
             ),
             capacity,
             known,
+            |_| false,
         )?;
         let mut frame = RigidFrame::default();
         layout.prepare_output(&mut frame);
@@ -321,6 +337,8 @@ impl LiquidRigidOwner {
             pending: None,
             capacity,
             rebind: false,
+            observed: Vec::new(),
+            moving: Vec::new(),
         };
         set_friction(&mut owner.bodies, inputs);
         let world = owner.rigid.native_world().expect("prepared above");
@@ -439,11 +457,16 @@ impl LiquidRigidOwner {
                 "Liquid coupling: settle the pending reaction before rebinding bodies".into(),
             );
         }
+        let moving = |handle: BodyHandle| self.moving.contains(&handle);
         let known = |_: Source, handle: BodyHandle, revision: u32| {
             self.bodies
                 .iter()
                 .zip(&self.geometries)
-                .find(|(body, _)| body.handle == handle && body.revision == revision)
+                .find(|(body, geometry)| {
+                    body.handle == handle
+                        && body.revision == revision
+                        && !(geometry.is_fixed() && moving(handle))
+                })
                 .map(|(body, geometry)| (Arc::clone(geometry), body.face_area))
         };
         let Bound {
@@ -459,6 +482,7 @@ impl LiquidRigidOwner {
             ),
             self.capacity,
             known,
+            moving,
         )?;
         self.bodies = bodies;
         self.geometries = geometries;
@@ -589,6 +613,14 @@ impl LiquidRigidOwner {
         )
     }
 
+    /// Another liquid's push over its last frame, added when the next tick
+    /// settles. Every liquid in the scene then pushes the bodies, not only
+    /// the owner's: the others run after the owner, so their push reaches
+    /// Box3D with the owner's reaction of the frame's last tick.
+    pub fn add_observed_push(&mut self, push: ObservedPush) {
+        self.observed.push(push);
+    }
+
     /// Finish a required tick boundary after the caller waits for the GPU.
     /// Decode one reaction and step Box3D toward the sampled tick-end scene.
     /// Missing samples or reactions fail rather than reducing the tick rate.
@@ -598,6 +630,8 @@ impl LiquidRigidOwner {
         complete: impl FnOnce(u64) -> bool,
         decode: impl FnOnce(PendingTick, &[LiquidBody], &mut [BodyImpulse]) -> Result<(), String>,
     ) -> Result<(), String> {
+        // Pushes from a frame with no pending tick belong to no tick.
+        let observed = std::mem::take(&mut self.observed);
         let Some(pending) = self.pending else {
             return Ok(());
         };
@@ -628,6 +662,9 @@ impl LiquidRigidOwner {
                 angular: [0.0; 3],
             }));
         decode(pending, &self.rows, &mut self.impulses)?;
+        for push in observed {
+            push(&self.rows, &mut self.impulses)?;
+        }
         let mut rows = self.rows.iter();
         self.impulses
             .retain(|_| rows.next().is_some_and(takes_reaction));
@@ -661,6 +698,16 @@ impl LiquidRigidOwner {
             .advance_worker_interval(&self.walled, pending.interval, &[], &mut coupling)?;
         if !coupling.finished {
             return Err("Liquid coupling: the rigid owner did not step the settled tick".into());
+        }
+        for ((body, row), geometry) in self.bodies.iter().zip(&self.rows).zip(&self.geometries) {
+            let moved = row.linear_velocity[..3]
+                .iter()
+                .chain(&row.angular_velocity[..3])
+                .any(|&v| v != 0.0);
+            if body.fixed && moved && geometry.is_fixed() && !self.moving.contains(&body.handle) {
+                self.moving.push(body.handle);
+                self.rebind = true;
+            }
         }
         self.completed += 1;
         self.completed_time = pending.interval.end;
@@ -741,13 +788,15 @@ fn world_bodies<'a>(
 /// Each colliding body and copy `colliders` selects, in slot order then each
 /// group's copies, up to `capacity`, with its hull: `known` hands back a
 /// hull already built, else it is built from the world and the body it
-/// installed. Returns the bodies, their hulls, and how many colliding bodies
-/// are past the capacity.
+/// installed; a Collider `moving` names is built as a moving solid. Returns
+/// the bodies, their hulls, and how many colliding bodies are past the
+/// capacity.
 fn bind(
     rigid: &RigidSimulation,
     colliders: impl Iterator<Item = (BodyHandle, Source)>,
     capacity: usize,
     known: impl Fn(Source, BodyHandle, u32) -> Option<(Arc<PreparedFluidGeometry>, f32)>,
+    moving: impl Fn(BodyHandle) -> bool,
 ) -> Result<Bound, String> {
     let world = rigid
         .native_world()
@@ -779,7 +828,7 @@ fn bind(
                     }
                     Source::Group(_) => None,
                 };
-                let built = hull_geometry(world, handle, body)?;
+                let built = hull_geometry(world, handle, body, moving(handle))?;
                 if let Source::Group(group) = source {
                     group_hull = Some((group, Arc::clone(&built.0), built.1));
                 }
@@ -811,17 +860,20 @@ struct Bound {
 }
 
 /// A body's installed solid about its centre of mass, and its largest local
-/// box face: its hulls, or for a static collider its exact mesh at its scale.
+/// box face: its hulls, or for a Collider its exact mesh at its scale. A
+/// still Collider is a static solid; a `moving` one is a moving solid with
+/// its own lattice, as a body is.
 fn hull_geometry(
     world: &PhysicsWorld,
     handle: BodyHandle,
     body: Option<&RigidBody>,
+    moving: bool,
 ) -> Result<(Arc<PreparedFluidGeometry>, f32), String> {
     let exact = body.and_then(|body| match body.collider.as_deref() {
         Some(Solid::Mesh(mesh)) => Some(scaled_mesh(mesh, body.transform.scale)),
         _ => None,
     });
-    let fixed = exact.is_some();
+    let fixed = exact.is_some() && !moving;
     let mut meshes = match exact {
         Some(mesh) => vec![mesh],
         None => world
@@ -1087,13 +1139,14 @@ fn quaternion_angle(a: [f32; 4], b: [f32; 4]) -> f32 {
         .atan2(r[3].abs())
 }
 
-/// The solids one Water's rigid owner shares with every other Water and
-/// every Smoke and Fire in its scene (SCENE_DOCUMENT_DESIGN.md section 7.8
-/// (Physics and collision shapes)): each Collider's and Body's hull and its
-/// row at the first tick of this frame, held to its motion (no inverse mass
-/// or inertia). The others flow round them; only the owner's water pushes
-/// the bodies back, since Box3D steps inside one liquid's ticks. With no
-/// water to own it, the World runs free and a gas takes its solids from it
+/// The solids one liquid's rigid owner shares with every other Water and
+/// Sand and every Smoke and Fire in its scene (SCENE_DOCUMENT_DESIGN.md
+/// section 7.8 (Physics and collision shapes)): each Collider's and Body's
+/// hull and its row at the first tick of this frame. A liquid keeps the
+/// bodies' mass and pushes them: its push reaches Box3D through the owner
+/// ([`LiquidRigidOwner::add_observed_push`]). A gas holds them to their
+/// motion (no inverse mass or inertia) and only flows round them. With no
+/// liquid to own it, the World runs free and a gas takes its solids from it
 /// ([`Self::copy_from_world`]).
 #[derive(Default)]
 pub struct SharedSolids {
@@ -1101,6 +1154,8 @@ pub struct SharedSolids {
     rows: Vec<LiquidBody>,
     contacts: Vec<BodySupports>,
     uncoupled: usize,
+    /// Each row's largest face, m²: how hard the liquid can push it.
+    face_areas: Vec<f32>,
     /// Copied from the owner this frame, before this water runs.
     fresh: bool,
     /// The rows are a free-running world's latest state, at the end of this
@@ -1130,11 +1185,14 @@ fn held(row: &LiquidBody) -> LiquidBody {
 }
 
 impl SharedSolids {
-    /// Take the owner water's solids for this frame, or none.
-    pub fn copy_from(&mut self, owner: Option<&LiquidRigidOwner>) {
+    /// Take the owner's solids for this frame, or none. A taker that
+    /// `pushes` keeps the bodies' mass; one that does not holds them to their
+    /// motion.
+    pub fn copy_from(&mut self, owner: Option<&LiquidRigidOwner>, pushes: bool) {
         self.geometries.clear();
         self.rows.clear();
         self.contacts.clear();
+        self.face_areas.clear();
         self.uncoupled = 0;
         self.fresh = true;
         self.at_frame_end = false;
@@ -1142,7 +1200,12 @@ impl SharedSolids {
         self.refused = None;
         let Some(owner) = owner else { return };
         self.geometries.extend(owner.geometries().iter().cloned());
-        self.rows.extend(owner.rows().iter().map(held));
+        if pushes {
+            self.rows.extend_from_slice(owner.rows());
+            self.face_areas.extend(owner.face_areas());
+        } else {
+            self.rows.extend(owner.rows().iter().map(held));
+        }
         self.contacts
             .resize(self.rows.len(), [[0.0; 4]; super::bodies::SUPPORT_VEC4S]);
         self.uncoupled = owner.uncoupled();
@@ -1156,6 +1219,7 @@ impl SharedSolids {
     pub fn copy_from_world(&mut self, rigid: &RigidSimulation, inputs: &RigidSceneInputs) {
         self.rows.clear();
         self.contacts.clear();
+        self.face_areas.clear();
         self.fresh = true;
         self.at_frame_end = true;
         self.refused = self.take_world(rigid, inputs).err();
@@ -1190,7 +1254,7 @@ impl SharedSolids {
                     .map(|(body, hull)| (Arc::clone(hull), body.face_area))
             };
             let every = world_bodies(rigid, |_| true, 0..groups);
-            let bound = bind(rigid, every, MAX_LIQUID_BODIES, known)?;
+            let bound = bind(rigid, every, MAX_LIQUID_BODIES, known, |_| false)?;
             self.world = bound.bodies;
             self.geometries = bound.geometries;
             self.uncoupled = bound.uncoupled;
@@ -1263,6 +1327,12 @@ impl SharedSolids {
         &self.advanced
     }
 
+    /// Each row's largest face, m², when the taker pushes the bodies; empty
+    /// otherwise.
+    pub fn face_areas(&self) -> &[f32] {
+        &self.face_areas
+    }
+
     /// The frame's water has used them; the next frame takes them anew.
     pub fn used(&mut self) {
         self.fresh = false;
@@ -1273,8 +1343,21 @@ impl SharedSolids {
 pub trait SharesSolids {
     /// The rigid owner, when this water couples its scene's world.
     fn rigid_owner(&self) -> Option<&LiquidRigidOwner>;
+    fn rigid_owner_mut(&mut self) -> Option<&mut LiquidRigidOwner> {
+        None
+    }
     /// Where this water takes another water's solids.
     fn shared_solids_mut(&mut self) -> &mut SharedSolids;
+    /// Whether it pushes the bodies it takes (a liquid), or only flows round
+    /// them (a gas).
+    fn pushes_bodies(&self) -> bool {
+        false
+    }
+    /// Its push on the owner's bodies over its last frame, once; None when
+    /// that frame pushed nothing.
+    fn take_observed_push(&mut self) -> Option<ObservedPush> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -1680,19 +1763,15 @@ mod tests {
         Ok(())
     }
 
-    /// A Fixed mesh collider whose shape lands after the start (an imported
-    /// scan still loading) joins the running world; a tick sample from
-    /// before it landed, with no shape yet, then reanchors the owner. The
-    /// rebind takes the mesh the world installed, not the sample's.
-    #[test]
-    fn a_late_mesh_collider_binds_with_the_shape_it_joined_with() {
-        let corners: Vec<[f32; 3]> = (0..8)
+    /// A two-metre cube mesh about the origin.
+    fn cube_mesh() -> manifold_physics::TriangleMesh {
+        let vertices = (0..8)
             .map(|i| {
                 [i & 1, (i >> 1) & 1, (i >> 2) & 1].map(|bit| if bit == 1 { 1.0 } else { -1.0 })
             })
             .collect();
-        let cube = manifold_physics::TriangleMesh {
-            vertices: corners,
+        manifold_physics::TriangleMesh {
+            vertices,
             triangles: vec![
                 [0, 4, 6],
                 [0, 6, 2],
@@ -1707,7 +1786,72 @@ mod tests {
                 [4, 5, 7],
                 [4, 7, 6],
             ],
+        }
+    }
+
+    /// A mesh Collider binds as a static solid each liquid caches. Once a
+    /// tick moves it, the owner rebinds it once as a moving solid, sampled
+    /// from its own lattice; a Collider that stays put stays static.
+    #[test]
+    fn a_collider_seen_moving_rebinds_as_a_moving_solid() {
+        let mut inputs = scene();
+        for (slot, x) in [(1, 1.5), (2, -1.5)] {
+            inputs.bodies[slot] = Some(RigidBody {
+                transform: Transform {
+                    pos: [x, 0.3, 0.0],
+                    scale: [0.6, 0.3, 0.6],
+                    ..Transform::default()
+                },
+                kind: 0,
+                collider: Some(Arc::new(Solid::Mesh(cube_mesh()))),
+                ..RigidBody::default()
+            });
+        }
+        let colliders = [1, 2]
+            .into_iter()
+            .fold(RigidImpulseTargets::body(0).unwrap(), |all, slot| {
+                all.union(RigidImpulseTargets::body(slot).unwrap())
+            });
+        let mut owner =
+            LiquidRigidOwner::new(&inputs, OPEN, &colliders, MAX_LIQUID_BODIES, 1, None).unwrap();
+        let fixed = |owner: &LiquidRigidOwner| -> Vec<bool> {
+            owner.geometries().iter().map(|g| g.is_fixed()).collect()
         };
+        assert_eq!(fixed(&owner), [false, true, true]);
+        let tick = |owner: &mut LiquidRigidOwner, tick: u64, scene: &RigidSceneInputs| {
+            owner.set_pending(PendingTick {
+                tick,
+                stamp: 0,
+                interval: manifold_physics::stepping::StepInterval::new(
+                    Seconds(tick as f64 * TICK),
+                    Seconds((tick + 1) as f64 * TICK),
+                ),
+                offline: true,
+            });
+            owner.settle_ready(Some(scene), |_| true, no_reaction).unwrap();
+        };
+        tick(&mut owner, 0, &inputs);
+        assert!(!owner.wants_rebind(), "standing Colliders stay static");
+        let mut paddle = inputs.clone();
+        paddle.bodies[1].as_mut().unwrap().transform.pos[0] += 0.1;
+        tick(&mut owner, 1, &paddle);
+        assert!(owner.wants_rebind());
+        owner.rebind().unwrap();
+        assert_eq!(fixed(&owner), [false, false, true]);
+        let moving = Arc::clone(&owner.geometries()[1]);
+        paddle.bodies[1].as_mut().unwrap().transform.pos[0] += 0.1;
+        tick(&mut owner, 2, &paddle);
+        assert!(!owner.wants_rebind(), "a moving solid rebinds once");
+        assert!(Arc::ptr_eq(&moving, &owner.geometries()[1]));
+    }
+
+    /// A Fixed mesh collider whose shape lands after the start (an imported
+    /// scan still loading) joins the running world; a tick sample from
+    /// before it landed, with no shape yet, then reanchors the owner. The
+    /// rebind takes the mesh the world installed, not the sample's.
+    #[test]
+    fn a_late_mesh_collider_binds_with_the_shape_it_joined_with() {
+        let cube = cube_mesh();
         let mut loading = scene();
         loading.bodies[1] = Some(RigidBody {
             transform: Transform {
@@ -1921,6 +2065,53 @@ mod tests {
                 .abs()
                 < 1e-3
         );
+    }
+
+    /// Another liquid's push over its frame adds to the owner's reaction of
+    /// the tick that settles next: the owner's +1 m/s and the other's
+    /// +0.5 m/s reach Box3D together. A push handed over with no pending
+    /// tick belongs to no tick and is dropped.
+    #[test]
+    fn every_liquid_pushes_the_bodies_through_the_owner() {
+        let scene = scene();
+        let colliders = RigidImpulseTargets::body(0).unwrap();
+        let mut owner = LiquidRigidOwner::new(&scene, OPEN, &colliders, MAX_LIQUID_BODIES, 3, None)
+            .expect("owner");
+        let push = |dv: f32| -> ObservedPush {
+            Box::new(move |rows, impulses| {
+                impulses[0].linear[1] += dv / rows[0].position_inv_mass[3];
+                Ok(())
+            })
+        };
+        owner.add_observed_push(push(100.0));
+        owner
+            .settle_ready(Some(&scene), |_| true, no_reaction)
+            .unwrap();
+        let tick = |tick: u64| PendingTick {
+            tick,
+            stamp: 0,
+            interval: manifold_physics::stepping::StepInterval::new(
+                manifold_core::Seconds(tick as f64 * TICK),
+                manifold_core::Seconds((tick + 1) as f64 * TICK),
+            ),
+            offline: true,
+        };
+        owner.set_pending(tick(0));
+        owner.add_observed_push(push(0.5));
+        owner
+            .settle_ready(Some(&scene), |_| true, |_, rows, impulses| {
+                impulses[0].linear[1] += 1.0 / rows[0].position_inv_mass[3];
+                Ok(())
+            })
+            .unwrap();
+        let v = owner.rows()[0].linear_velocity[1];
+        assert!((v - (1.5 - 9.81 * TICK as f32)).abs() < 1e-3, "{v}");
+        owner.set_pending(tick(1));
+        owner
+            .settle_ready(Some(&scene), |_| true, no_reaction)
+            .unwrap();
+        let after = owner.rows()[0].linear_velocity[1];
+        assert!((after - (v - 9.81 * TICK as f32)).abs() < 1e-3, "{after}");
     }
 
     /// A float reaction of m·(1 m/s) up, read past one leading row,

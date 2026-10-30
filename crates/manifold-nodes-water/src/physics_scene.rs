@@ -104,19 +104,29 @@ fn shares_solids_mut(node: &mut dyn EffectNode) -> Option<&mut dyn SharesSolids>
 impl NodePairBehavior for SharedSolidsPair {
     fn set_enabled(&self, _node: &mut dyn EffectNode, _enabled: bool) {}
 
+    /// Before the owner settles its pending tick, hand it what the other
+    /// liquid pushed the bodies over its last frame.
     fn before_first(
         &self,
-        _owner: &mut dyn EffectNode,
-        _water: &mut dyn EffectNode,
+        owner: &mut dyn EffectNode,
+        water: &mut dyn EffectNode,
         _inputs: Option<&mut EffectNodeContext<'_, '_>>,
         _step: manifold_node_engine::exec::effect_node::SimStep,
     ) {
+        let Some(push) = shares_solids_mut(water).and_then(SharesSolids::take_observed_push)
+        else {
+            return;
+        };
+        if let Some(owner) = shares_solids_mut(owner).and_then(SharesSolids::rigid_owner_mut) {
+            owner.add_observed_push(push);
+        }
     }
 
     fn after_first(&self, owner: &dyn EffectNode, water: &mut dyn EffectNode) {
         let owner = shares_solids(owner).and_then(SharesSolids::rigid_owner);
         if let Some(water) = shares_solids_mut(water) {
-            water.shared_solids_mut().copy_from(owner);
+            let pushes = water.pushes_bodies();
+            water.shared_solids_mut().copy_from(owner, pushes);
         }
     }
 }
@@ -147,7 +157,7 @@ impl NodePairBehavior for WorldSolidsPair {
             Some((world, observation)) => {
                 solids.copy_from_world(&world.simulation, &observation.inputs)
             }
-            None => solids.copy_from(None),
+            None => solids.copy_from(None, false),
         }
     }
 }

@@ -271,12 +271,6 @@ fn static_direct(x: vec3<f32>) -> vec2<f32> {
             continue;
         }
         let local = liquid_rotate(vec4<f32>(-bd.rotation.xyz, bd.rotation.w), x - bd.position_inv_mass.xyz);
-        let root = 4u * sh.tree_node;
-        let lo = cb_node(root).xyz - vec3<f32>(band);
-        let hi = cb_node(root + 1u).xyz + vec3<f32>(band);
-        if any(local < lo) || any(local > hi) {
-            continue;
-        }
         let d = cb_phi(sh.tree_node, sh.tree_triangle, local, band, u.cell_size);
         if d < phi {
             phi = d;

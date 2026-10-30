@@ -5,7 +5,7 @@ use manifold_physics::BodyImpulse;
 
 use super::{MAX_SUBSTEPS, REACTION_WORDS, substeps_per_tick};
 use manifold_water_liquid::bodies::LiquidBody;
-use manifold_water_liquid::coupling::{LiquidRigidOwner, takes_reaction};
+use manifold_water_liquid::coupling::{LiquidRigidOwner, SharedSolids, takes_reaction};
 
 /// How a pending tick's reaction words decode.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -40,8 +40,10 @@ pub fn decode(
         let mass = 1.0 / f64::from(row.position_inv_mass[3]);
         let at = |word: usize, factor: f64| (f64::from(words[base + word]) * unit * factor) as f32;
         let arm = f64::from(scale.cell_size);
-        impulse.linear = [at(0, mass), at(1, mass), at(2, mass)];
-        impulse.angular = [at(6, mass * arm), at(7, mass * arm), at(8, mass * arm)];
+        for axis in 0..3 {
+            impulse.linear[axis] += at(axis, mass);
+            impulse.angular[axis] += at(6 + axis, mass * arm);
+        }
     }
     Ok(())
 }
@@ -50,14 +52,14 @@ pub fn decode(
 /// dynamic coupled bodies, with `c` the wave speed and ρ0 the material's
 /// density. Errors, naming the body, when it needs more than
 /// [`MAX_SUBSTEPS`] substeps with `dt_f`.
-fn body_limit_details(
-    owner: &LiquidRigidOwner,
+fn body_limit_details<'a>(
+    bodies: impl Iterator<Item = (f32, &'a LiquidBody)>,
     cell_size: f32,
     wave: f32,
     density: f32,
 ) -> Option<(f32, usize, f32)> {
     let mut limit: Option<(f32, usize, f32)> = None;
-    for (index, (face_area, row)) in owner.face_areas().zip(owner.rows()).enumerate() {
+    for (index, (face_area, row)) in bodies.enumerate() {
         if !takes_reaction(row) {
             continue;
         }
@@ -83,7 +85,25 @@ pub fn live_body_limit(
     wave: f32,
     density: f32,
 ) -> Option<f32> {
-    body_limit_details(owner, cell_size, wave, density).map(|(dt, _, _)| dt)
+    body_limit_details(owner.face_areas().zip(owner.rows()), cell_size, wave, density)
+        .map(|(dt, _, _)| dt)
+}
+
+/// The same limit over the bodies a Matter that takes another liquid's
+/// solids pushes.
+pub fn taken_body_limit(
+    solids: &SharedSolids,
+    cell_size: f32,
+    wave: f32,
+    density: f32,
+) -> Option<f32> {
+    body_limit_details(
+        solids.face_areas().iter().copied().zip(solids.rows()),
+        cell_size,
+        wave,
+        density,
+    )
+    .map(|(dt, _, _)| dt)
 }
 
 pub fn body_limit(
@@ -93,7 +113,9 @@ pub fn body_limit(
     density: f32,
     v_est: f32,
 ) -> Result<Option<f32>, String> {
-    let Some((dt, index, face_area)) = body_limit_details(owner, cell_size, wave, density) else {
+    let Some((dt, index, face_area)) =
+        body_limit_details(owner.face_areas().zip(owner.rows()), cell_size, wave, density)
+    else {
         return Ok(None);
     };
     if substeps_per_tick(cell_size, wave, v_est, Some(dt), None) > MAX_SUBSTEPS {

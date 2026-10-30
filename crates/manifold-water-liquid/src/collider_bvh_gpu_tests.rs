@@ -95,8 +95,13 @@ fn shared(device: &GpuDevice, data: &[[f32; 4]]) -> GpuBuffer {
     buffer
 }
 
-/// The design's rule (WATER_COLLIDERS_DESIGN.md C3) on the CPU queries.
+/// The design's rule (WATER_COLLIDERS_DESIGN.md C3) on the CPU queries; past
+/// the band round the root's box, the band.
 fn cpu_phi(bvh: &MeshBvh, p: [f32; 3], band: f32, shell: f32) -> f32 {
+    let [lo, hi] = bvh.bounds();
+    if (0..3).any(|a| p[a] < lo[a] - band || p[a] > hi[a] + band) {
+        return band;
+    }
     let d = bvh.nearest(p, band);
     let w = bvh.winding(p).abs();
     if (w - 0.5).abs() < 0.25 {

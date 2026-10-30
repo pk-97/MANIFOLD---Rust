@@ -20,12 +20,12 @@ use manifold_nodes_physics::force_lattice::felt_field;
 use manifold_physics::FieldValue;
 use manifold_physics::force_lattice::ForceLattice;
 
-use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
+use crate::matter::coupling::{ReactionScale, decode, live_body_limit, taken_body_limit};
 use crate::matter::{
-    ACOUSTIC_CFL, MAX_MATTER_SLOTS, MAX_SUBSTEPS, MatterMaterial, RADIUS_SCALE, REACTION_WORDS, SAND_DENSITY,
-    SAND_FRICTION_ANGLE, SNOW_HARDENING_MAX, field_min, free_fall_speed, matter_nodes,
-    matter_pool_ceiling, matter_pool_tiles, momentum_unit, stiffness_room, substeps_for_interval,
-    substeps_per_tick, viscous_limit,
+    ACOUSTIC_CFL, MAX_MATTER_SLOTS, MAX_SUBSTEPS, MatterMaterial, RADIUS_SCALE, REACTION_WORDS,
+    SAND_DENSITY, SAND_FRICTION_ANGLE, SNOW_HARDENING_MAX, field_min, free_fall_speed,
+    matter_nodes, matter_pool_ceiling, matter_pool_tiles, momentum_unit, stiffness_room,
+    substeps_for_interval, substeps_per_tick, viscous_limit,
 };
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_core::fluid_domain::{
@@ -55,7 +55,8 @@ use manifold_water_liquid::bounds::{
 };
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{
-    DomainWalls, LiquidRigidOwner, PendingTick, SharedSolids, SharesSolids, takes_reaction,
+    DomainWalls, LiquidRigidOwner, ObservedPush, PendingTick, SharedSolids, SharesSolids,
+    takes_reaction,
 };
 use manifold_water_liquid::fluid_role::{FluidRole, FluidRoleKind, InitialFill, take_initial_fill};
 use manifold_water_liquid::gizmos::SetupReport;
@@ -670,6 +671,9 @@ pub struct Coupling {
     step: manifold_water_rigid::physics::SimStep,
     /// How the owner's pending tick's reaction words decode.
     scale: Option<ReactionScale>,
+    /// Taking another liquid's solids: how this frame's push on its bodies
+    /// decodes, for that owner's next settle.
+    push: Option<ReactionScale>,
     /// The owner was built since the clock last restarted: the next frame
     /// restarts the liquid with it.
     owner_fresh: bool,
@@ -1077,6 +1081,7 @@ impl Primitive for MatterDomain {
         // zero ticks. Before the first good frame there is nothing to hold,
         // so the outputs are declared pending.
         self.coupled.exchange = None;
+        self.coupled.push = None;
         self.schedule.clear();
         let computed = if self.role_pending {
             Ok(None)
@@ -1107,6 +1112,7 @@ impl Primitive for MatterDomain {
             }
             Err(error) => {
                 self.coupled.failed = true;
+                self.coupled.push = None;
                 ctx.error(error);
                 (held(), false)
             }
@@ -1160,8 +1166,24 @@ impl SharesSolids for MatterDomain {
         self.coupled.owner.as_ref()
     }
 
+    fn rigid_owner_mut(&mut self) -> Option<&mut LiquidRigidOwner> {
+        self.coupled.owner.as_mut()
+    }
+
     fn shared_solids_mut(&mut self) -> &mut SharedSolids {
         &mut self.observed
+    }
+
+    fn pushes_bodies(&self) -> bool {
+        true
+    }
+
+    fn take_observed_push(&mut self) -> Option<ObservedPush> {
+        let scale = self.coupled.push.take()?;
+        let reaction = self.reaction.clone()?;
+        Some(Box::new(move |rows, impulses| {
+            decode(scale, rows, reaction_words(Some(&reaction)), impulses)
+        }))
     }
 }
 
@@ -1435,7 +1457,9 @@ impl MatterDomain {
         });
         // A coupled tick sums its reaction from zero; the words stay put
         // until the next tick so the owner reads them once the frame retires.
-        if ticks && self.coupled.owner.is_some() {
+        // A Matter that takes another liquid's solids sums its push over the
+        // frame, which that owner reads at its next settle.
+        if ticks && (self.coupled.owner.is_some() || self.coupled.push.is_some()) {
             gpu.native_enc.clear_buffer(reaction);
         }
         if self
@@ -1475,7 +1499,13 @@ impl MatterDomain {
                     ctx.inputs.transform("domain"),
                     &columns,
                 )
-                .map(|geometry| (geometry, columns, fills.map(|fill| fill.and_then(|fill| fill.shape))))
+                .map(|geometry| {
+                    (
+                        geometry,
+                        columns,
+                        fills.map(|fill| fill.and_then(|fill| fill.shape)),
+                    )
+                })
             });
         let (geometry, columns, shaped) = match geometry {
             Ok(found) => found,
@@ -1715,11 +1745,11 @@ impl MatterDomain {
         let wave = built.max(ctx.scalar_or_param("snow_wave", 0.0) * packing.sqrt() as f32);
         let body_limit = match &self.coupled.owner {
             Some(owner) => live_body_limit(owner, cell_size, wave, density),
-            None => None,
+            None => taken_body_limit(&self.observed, cell_size, wave, density),
         };
         let diffusivity = f64::from(ctx.scalar_or_param("diffusivity", 0.0));
-        let viscous = (diffusivity > 0.0)
-            .then(|| viscous_limit(diffusivity, f64::from(cell_size)) as f32);
+        let viscous =
+            (diffusivity > 0.0).then(|| viscous_limit(diffusivity, f64::from(cell_size)) as f32);
         let nominal_substeps =
             substeps_per_tick(cell_size, wave, v_est as f32, body_limit, viscous);
         let wave_reach = ACOUSTIC_CFL * f64::from(cell_size);
@@ -1757,6 +1787,14 @@ impl MatterDomain {
             || momentum_unit(cell_size, duration / f64::from(substeps)),
             |record| record.scalars[1].1,
         );
+        // Taking another liquid's solids, this frame's push reaches the
+        // bodies through that liquid's owner.
+        self.coupled.push = (self.coupled.owner.is_none() && frame.ticks > 0 && dynamic_count > 0)
+            .then(|| ReactionScale {
+                unit,
+                cell_size,
+                offset: self.bodies.count() - self.observed.rows().len(),
+            });
         let mut display_time = frame.display_time;
         if let Some(owner) = &mut self.coupled.owner {
             if frame.ticks > 0 {
@@ -1910,17 +1948,15 @@ impl MatterDomain {
         if geometry.setup.bounds {
             return (geometry.bounds_box, NO_KILL_HEIGHT);
         }
-        let floor = self
-            .source_floor
-            .of_epoch(epoch, || {
-                lowest_source(
-                    None,
-                    fills
-                        .iter()
-                        .flatten()
-                        .map(|fill| fill.pos[1] - 0.5 * fill.scale[1]),
-                )
-            });
+        let floor = self.source_floor.of_epoch(epoch, || {
+            lowest_source(
+                None,
+                fills
+                    .iter()
+                    .flatten()
+                    .map(|fill| fill.pos[1] - 0.5 * fill.scale[1]),
+            )
+        });
         let v0 =
             (geometry.setup.cell_size.powi(3) / f64::from(geometry.setup.points_per_cell)) as f32;
         let kill = kill_height(
@@ -2402,8 +2438,7 @@ mod gizmo_tests {
                 |name: &str, default: f32| if name == "fill_height" { fill } else { default };
             let mut fills = [None; MAX_MATTER_SLOTS];
             fills[0] = column;
-            matter_geometry(read, &ParamValues::default(), None, &fills)
-                .expect("fits or is fitted")
+            matter_geometry(read, &ParamValues::default(), None, &fills).expect("fits or is fitted")
         };
         let top = geometry(4.0, None);
         assert_eq!(geometry(9.0, None).pool_cells, top.pool_cells);
@@ -2459,7 +2494,10 @@ mod gizmo_tests {
             Ok(EXACT_F32_COUNT)
         );
         let error = fill_points([256, 33, 256], 33, &empty, 8).unwrap_err();
-        assert!(error.contains("exact f32 range") && error.contains("Cell Size"), "{error}");
+        assert!(
+            error.contains("exact f32 range") && error.contains("Cell Size"),
+            "{error}"
+        );
     }
 
     /// Two Sands' fills on one solver: the grid covers both, each keeps its
@@ -2480,7 +2518,13 @@ mod gizmo_tests {
         let geometry = matter_geometry(read, &params, None, &fills).expect("fills");
         let layout = geometry.layout;
         assert!(layout.min[0] < -3.25 && layout.min[0] + layout.size[0] > 3.25);
-        assert!(geometry.columns.iter().take(2).all(|c| c.iter().all(|[lo, hi]| hi > lo)));
+        assert!(
+            geometry
+                .columns
+                .iter()
+                .take(2)
+                .all(|c| c.iter().all(|[lo, hi]| hi > lo))
+        );
         let ranges = geometry.slot_ranges();
         assert_eq!(ranges[0][0], 0);
         assert_eq!(ranges[1][0], ranges[0][1]);
@@ -2500,8 +2544,7 @@ mod gizmo_tests {
         let read = |name: &str, default: f32| if name == "fill_height" { 0.16 } else { default };
         let mut fills = [None; MAX_MATTER_SLOTS];
         fills[0] = Some(column);
-        let geometry =
-            matter_geometry(read, &ParamValues::default(), None, &fills).expect("fills");
+        let geometry = matter_geometry(read, &ParamValues::default(), None, &fills).expect("fills");
         let mut domain = MatterDomain::new();
         (domain.setup, domain.layout) = (Some(geometry.setup), Some(geometry.layout));
         domain.fill_cells = (geometry.pool_cells, geometry.columns);

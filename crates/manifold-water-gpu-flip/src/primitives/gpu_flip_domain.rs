@@ -59,8 +59,8 @@ use manifold_water_liquid::bounds::{
 };
 use manifold_water_liquid::clock::LiquidClock;
 use manifold_water_liquid::coupling::{
-    DomainWalls, LiquidRigidOwner, PendingTick, REACTION_FLOATS, SharedSolids, SharesSolids,
-    decode_reaction, takes_reaction,
+    DomainWalls, LiquidRigidOwner, ObservedPush, PendingTick, REACTION_FLOATS, SharedSolids,
+    SharesSolids, decode_reaction, takes_reaction,
 };
 use manifold_water_liquid::fluid_role::{
     FluidRole, FluidRoleKind, InitialFill, PreparedFluidGeometry, take_initial_fill,
@@ -435,6 +435,9 @@ pub struct Coupling {
     /// Rows before the pending tick's first coupled body's, so its
     /// reaction decodes against the bodies it ran with.
     offset: Option<usize>,
+    /// Taking another liquid's solids: the rows before the first of its
+    /// bodies this frame pushed, for that owner's next settle.
+    push: Option<usize>,
     /// The owner was built since the clock last restarted: the next frame
     /// restarts the liquid with it.
     owner_fresh: bool,
@@ -815,6 +818,7 @@ impl Primitive for GpuFlipDomain {
         // repeat with zero ticks and no impulse. Before the first good frame
         // there is nothing to hold, so the outputs are declared pending.
         self.coupled.exchange = None;
+        self.coupled.push = None;
         self.scheduled_frame = None;
         let computed = if self.role_pending {
             Ok(None)
@@ -845,6 +849,7 @@ impl Primitive for GpuFlipDomain {
             }
             Err(error) => {
                 self.coupled.failed = true;
+                self.coupled.push = None;
                 ctx.error(error);
                 (held(), false)
             }
@@ -871,8 +876,11 @@ impl Primitive for GpuFlipDomain {
             });
             // A coupled tick sums its reaction from zero; the floats stay put
             // until the next tick so the owner reads them once the frame
-            // retires.
-            if values[TICKS] > 0.0 && self.coupled.owner.is_some() {
+            // retires. Water that takes another liquid's solids sums its push
+            // over the frame, which that owner reads at its next settle.
+            if values[TICKS] > 0.0
+                && (self.coupled.owner.is_some() || self.coupled.push.is_some())
+            {
                 gpu.native_enc.clear_buffer(reaction);
             }
             let bodies_uploaded = self.body_buffers.upload(
@@ -919,8 +927,24 @@ impl SharesSolids for GpuFlipDomain {
         self.coupled.owner.as_ref()
     }
 
+    fn rigid_owner_mut(&mut self) -> Option<&mut LiquidRigidOwner> {
+        self.coupled.owner.as_mut()
+    }
+
     fn shared_solids_mut(&mut self) -> &mut SharedSolids {
         &mut self.observed
+    }
+
+    fn pushes_bodies(&self) -> bool {
+        true
+    }
+
+    fn take_observed_push(&mut self) -> Option<ObservedPush> {
+        let offset = self.coupled.push.take()?;
+        let reaction = self.reaction.clone()?;
+        Some(Box::new(move |rows, impulses| {
+            decode_reaction(offset, rows, reaction_floats(Some(&reaction)), impulses)
+        }))
     }
 }
 
@@ -1341,6 +1365,10 @@ impl GpuFlipDomain {
             .iter()
             .filter(|row| takes_reaction(row))
             .count();
+        // Taking another liquid's solids, this frame's push reaches the
+        // bodies through that liquid's owner.
+        self.coupled.push = (self.coupled.owner.is_none() && frame.ticks > 0 && dynamic_bodies > 0)
+            .then(|| self.bodies.count() - self.observed.rows().len());
         // Another water's bodies move on through each later tick of this frame.
         if row_ticks > 0 && self.coupled.owner.is_none() && !self.observed.rows().is_empty() {
             let mut seconds = 0.0;

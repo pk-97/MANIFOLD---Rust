@@ -168,8 +168,14 @@ fn cb_winding(node_base: u32, triangle_base: u32, p: vec3<f32>) -> f32 {
 // (searched up to band) and winding number w. Where |w| is within a quarter of
 // a half (beside a hole or open sheet) the point is a shell, d - shell, so an
 // open surface is `shell` thick each side; otherwise inside (|w| > 1/2) is -d
-// and outside d. Results saturate at +-band (band - shell for a shell).
+// and outside d. Results saturate at +-band (band - shell for a shell). Past
+// the band round the root's box no triangle is within reach: the distance is
+// the band there, with no winding walk.
 fn cb_phi(node_base: u32, triangle_base: u32, p: vec3<f32>, band: f32, shell: f32) -> f32 {
+    let root = 4u * node_base;
+    if any(p < cb_node(root).xyz - vec3<f32>(band)) || any(p > cb_node(root + 1u).xyz + vec3<f32>(band)) {
+        return band;
+    }
     let d = cb_nearest(node_base, triangle_base, p, band);
     let w = cb_winding(node_base, triangle_base, p);
     if abs(abs(w) - 0.5) < 0.25 {
