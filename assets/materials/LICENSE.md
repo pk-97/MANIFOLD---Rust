@@ -1,7 +1,8 @@
 # Starter materials: licence
 
-Every material in this folder comes from [ambientCG](https://ambientcg.com)
-or [Poly Haven](https://polyhaven.com) and is released under the
+Every material in this folder but PineTwig (made here, below) comes from
+[ambientCG](https://ambientcg.com) or [Poly Haven](https://polyhaven.com)
+and is released under the
 [Creative Commons CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
 licence. That covers the pictures, the `.mtlx` files and the preview renders.
 
@@ -61,6 +62,13 @@ Creative Commons CC0 1.0 Universal License.
 Leaf001 has an opacity picture, so it is a cut-out: one leaf drawn across
 each leaf card's own UVs, never repeated, so its `.mtlx` is left as
 downloaded. Give it to a Tree's Leaves as their Material.
+
+## Made here
+
+PineTwig is a fir frond drawn from scratch by `scripts/pine_twig.py`, with
+no photograph in it, and released under CC0 1.0 like the rest. It is a
+cut-out like Leaf001: give it to a Tree's Leaves for spruces and firs. Far
+away, the tree's detail levels stretch it over whole branches and crowns.
 
 The Poly Haven materials are drone scans of ground tens of metres across,
 for terrain seen from the air. From each 4K download we kept the colour,

@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<materialx version="1.39" fileprefix="./">
+  <open_pbr_surface type="surfaceshader" name="PineTwig_2K_JPG_OpenPbrSurface">
+    <input type="color3" name="base_color" nodename="PineTwig_2K_JPG_Color" />
+    <input type="vector3" name="geometry_normal" nodename="NormalMap" />
+    <input type="float" name="geometry_opacity" nodename="PineTwig_2K_JPG_Opacity" />
+    <input type="float" name="specular_roughness" nodename="PineTwig_2K_JPG_Roughness" />
+  </open_pbr_surface>
+  <surfacematerial type="material" name="PineTwig_2K_JPG">
+    <input type="surfaceshader" name="surfaceshader" nodename="PineTwig_2K_JPG_OpenPbrSurface" />
+    <input type="displacementshader" name="displacementshader" nodename="displacement" />
+  </surfacematerial>
+  <tiledimage type="color3" name="PineTwig_2K_JPG_Color">
+    <input type="filename" name="file" colorspace="srgb_texture" value="PineTwig_2K-JPG_Color.jpg" />
+    <input type="vector2" name="uvtiling" value="1.0, 1.0" />
+  </tiledimage>
+  <tiledimage type="float" name="PineTwig_2K_JPG_Displacement">
+    <input type="filename" name="file" value="PineTwig_2K-JPG_Displacement.jpg" />
+    <input type="vector2" name="uvtiling" value="1.0, 1.0" />
+  </tiledimage>
+  <displacement type="displacementshader" name="displacement">
+    <input type="float" name="displacement" nodename="PineTwig_2K_JPG_Displacement" />
+    <input type="float" name="scale" value="1.0" />
+  </displacement>
+  <tiledimage type="vector3" name="PineTwig_2K_JPG_NormalGL">
+    <input type="filename" name="file" value="PineTwig_2K-JPG_NormalGL.jpg" />
+    <input type="vector2" name="uvtiling" value="1.0, 1.0" />
+  </tiledimage>
+  <normalmap type="vector3" name="NormalMap">
+    <input type="vector3" name="in" nodename="PineTwig_2K_JPG_NormalGL" />
+    <input type="float" name="scale" value="1.0" />
+  </normalmap>
+  <tiledimage type="float" name="PineTwig_2K_JPG_Opacity">
+    <input type="filename" name="file" value="PineTwig_2K-JPG_Opacity.jpg" />
+    <input type="vector2" name="uvtiling" value="1.0, 1.0" />
+  </tiledimage>
+  <tiledimage type="float" name="PineTwig_2K_JPG_Roughness">
+    <input type="filename" name="file" value="PineTwig_2K-JPG_Roughness.jpg" />
+    <input type="vector2" name="uvtiling" value="1.0, 1.0" />
+  </tiledimage>
+</materialx>
