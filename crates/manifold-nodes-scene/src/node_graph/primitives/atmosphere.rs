@@ -215,6 +215,7 @@ mod tests {
             ("fog_color_r", 0.5),
             ("fog_color_g", 0.55),
             ("fog_color_b", 0.65),
+            ("sky_fog", 0.0),
             ("fog_density", 0.0),
             ("height_falloff", 0.0),
             ("ambient_tint_r", 1.0),
