@@ -21,17 +21,20 @@ struct FrameParams {
     count: u32,
     previous_count: u32,
     radius_scale: f32,
-    _pad0: u32,
+    first: u32,
 }
 
 manifold_node_engine::primitive! {
     name: MatterFrame,
     type_id: "node.matter_frame",
-    purpose: "Publish a matter domain as particle frames for the liquid surface: after every simulated tick, write the points as an id-sorted Array(FluidParticle) frame B (the previous one becomes A), with the blend and span of the one-tick-behind display clock. A tick with non-finite values is never published as particles.",
+    purpose: "Publish a matter domain as particle frames for the liquid surface: after every simulated tick, write the count points from first (one Matter item's run, or all of them) as an id-sorted Array(FluidParticle) frame B (the previous one becomes A), with the blend and span of the one-tick-behind display clock. A tick with non-finite values is never published as particles.",
     inputs: {
         points: Array(MatterPoint) required,
         stats: Array(u32) required,
         count: ScalarF32 optional,
+        // The run's first point: node.matter_domain's first_<slot> for one
+        // item's draw, 0 for every point.
+        first: ScalarF32 optional,
         simulation_time: ScalarF32 optional,
         display_time: ScalarF32 optional,
         epoch: ScalarF32 optional,
@@ -43,7 +46,7 @@ manifold_node_engine::primitive! {
     },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "Reads node.matter_state's out and stats after the region; count, simulation_time, display_time and epoch come from node.matter_fill and node.matter_domain. Its outputs are the particle-frame seam node.fluid_surface also publishes, so the Liquid Surface atoms and node.particles_to_copies read either solver unchanged. identity_a/b carry the domain epoch.",
+    composition_notes: "Reads node.matter_state's out and stats after the region; count, simulation_time, display_time and epoch come from node.matter_fill and node.matter_domain; with several Matter items in one solver, each item's draw takes first and count from the domain's first_<slot> and points_<slot>, and the frame the water and gas read takes every point. Its outputs are the particle-frame seam node.fluid_surface also publishes, so the Liquid Surface atoms and node.particles_to_copies read either solver unchanged. identity_a/b carry the domain epoch.",
     examples: ["SandColumn"],
     picker: { label: "Matter Frame", category: Atom },
     summary: "Hands the simulated liquid particles to the liquid surface, one frame per simulation tick.",
@@ -89,6 +92,7 @@ impl Primitive for MatterFrame {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let count = ctx.scalar_or_param("count", 0.0).round().max(0.0) as u32;
+        let first = ctx.scalar_or_param("first", 0.0).round().max(0.0) as u32;
         let simulation_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));
         let display_time = f64::from(ctx.scalar_or_param("display_time", 0.0));
         let epoch = ctx.scalar_or_param("epoch", 0.0).round().max(0.0) as u32;
@@ -116,10 +120,13 @@ impl Primitive for MatterFrame {
                 .as_ref()
                 .expect("matter frame pipeline prepared at install");
             let params = FrameParams {
-                count: count.min((points.size / std::mem::size_of::<MatterPoint>() as u64) as u32),
+                count: count.min(
+                    ((points.size / std::mem::size_of::<MatterPoint>() as u64) as u32)
+                        .saturating_sub(first),
+                ),
                 previous_count: slot.previous_count,
                 radius_scale: crate::matter::RADIUS_SCALE,
-                _pad0: 0,
+                first,
             };
             if params.count > 0 {
                 gpu.native_enc.dispatch_compute(

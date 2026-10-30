@@ -8,7 +8,11 @@ use std::mem::size_of;
 
 fn matter_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let count = x.count("count", 0.0)?;
-    x.covers("points", u64::from(count) * size_of::<MatterPoint>() as u64)?;
+    let first = x.count("first", 0.0)?;
+    x.covers(
+        "points",
+        (u64::from(first) + u64::from(count)) * size_of::<MatterPoint>() as u64,
+    )?;
     x.covers("stats", u64::from(STATS_WORDS) * 4)?;
     let particles = u64::from(count.max(1)) * size_of::<FluidParticle>() as u64;
     x.provide("particles_a", particles);

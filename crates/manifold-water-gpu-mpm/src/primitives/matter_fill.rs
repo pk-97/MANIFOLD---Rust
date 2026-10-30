@@ -1,5 +1,7 @@
-//! `node.matter_fill` — seed a matter domain's points: a pool of the lowest authored cells plus one
-//! box, in cell order, the box kept to a shaped fill's shape.
+//! `node.matter_fill` — seed a matter domain's points: a pool of the lowest
+//! authored cells, then each Matter item's box in slot order (the domain's
+//! fill table), each point tagged with its slot, a shaped fill's box kept to
+//! its shape.
 
 use manifold_gpu::BufferUse;
 use std::borrow::Cow;
@@ -7,12 +9,12 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
 use super::matter_common::{COLLIDER_BVH, MATTER_TREE};
-use crate::matter::MatterPoint;
+use crate::matter::{MAX_MATTER_SLOTS, MatterPoint};
+use crate::primitives::matter_domain::FILL_ROW_WORDS;
 use manifold_core::fluid_domain::MAX_LIQUID_BODIES;
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::primitives::standalone_pipeline::standalone_pipeline;
 use manifold_water_liquid::bodies::{
@@ -91,32 +93,28 @@ struct FillUniforms {
     fill_cells_y: i32,
     fill_cells_z: i32,
     pool_cells: i32,
-    column_x0: i32,
-    column_x1: i32,
-    column_y0: i32,
-    column_y1: i32,
-    column_z0: i32,
-    column_z1: i32,
     points_per_cell: i32,
     seed: i32,
     body_count: i32,
     epoch: i32,
-    fill_region: i32,
+    region_rows: i32,
     dispatch_count: u32,
+    _pad0: u32,
+    _pad1: u32,
 }
 
 manifold_node_engine::primitive! {
     name: MatterFill,
     type_id: "node.matter_fill",
-    purpose: "Seed material points at rest in cell order: every authored cell below the pool height, then one box of cells above it. Each cell holds 2³ or 3³ points, one per sub-cell, jittered by a seeded hash; ids count births from 1. A shaped fill (fill_region's row of regions) keeps only the box seeds inside its shape. Outputs the points and their count.",
+    purpose: "Seed material points at rest in cell order: every authored cell below the pool height (slot 0's), then each slot's box of cells above it, in slot order, from node.matter_domain's fill table. Each cell holds 2³ or 3³ points, one per sub-cell, jittered by a seeded hash; ids count births from 1 and each point keeps its slot in affine_z.w, the row of the material table it reads. A shaped fill (its row's region in regions) keeps only the box seeds inside its shape. Outputs the points and their count.",
     inputs: {
         fill_min_x: ScalarF32 optional, fill_min_y: ScalarF32 optional, fill_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
         fill_cells_x: ScalarF32 optional, fill_cells_y: ScalarF32 optional, fill_cells_z: ScalarF32 optional,
         pool_cells: ScalarF32 optional,
-        column_x0: ScalarF32 optional, column_x1: ScalarF32 optional,
-        column_y0: ScalarF32 optional, column_y1: ScalarF32 optional,
-        column_z0: ScalarF32 optional, column_z1: ScalarF32 optional,
+        // The points the pool and every box seed (node.matter_domain's
+        // fill_points).
+        fill_points: ScalarF32 optional,
         points_per_cell: ScalarF32 optional,
         seed: ScalarF32 optional,
         bodies: Array(LiquidBody) optional,
@@ -125,7 +123,9 @@ manifold_node_engine::primitive! {
         collider_nodes: Array(Vec4Vertex) optional,
         collider_triangles: Array(Vec4Vertex) optional,
         regions: Array(LiquidBody) optional,
-        fill_region: ScalarF32 optional,
+        // node.matter_domain's fill table: each slot's box, shape and first
+        // point.
+        fills: Array(u32) required,
         body_count: ScalarF32 optional,
         epoch: ScalarF32 optional,
     },
@@ -142,20 +142,15 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("fill_cells_y"), label: "Fill Cells Y", ty: ParamType::Int, default: ParamValue::Float(64.0), range: Some((1.0, MAX_FILL_CELLS as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fill_cells_z"), label: "Fill Cells Z", ty: ParamType::Int, default: ParamValue::Float(64.0), range: Some((1.0, MAX_FILL_CELLS as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("pool_cells"), label: "Pool Height (cells)", ty: ParamType::Int, default: ParamValue::Float(3.0), range: Some((0.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("column_x0"), label: "Box Min X (cell)", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("column_x1"), label: "Box Max X (cell)", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("column_y0"), label: "Box Min Y (cell)", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("column_y1"), label: "Box Max Y (cell)", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("column_z0"), label: "Box Min Z (cell)", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("column_z1"), label: "Box Max Z (cell)", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("points_per_cell"), label: "Particles per Cell", ty: ParamType::Int, default: ParamValue::Float(8.0), range: Some((8.0, 27.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("seed"), label: "Seed", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_215.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, MAX_LIQUID_BODIES as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("epoch"), label: "Epoch", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_215.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("fill_region"), label: "Fill Region", ty: ParamType::Int, default: ParamValue::Float(-1.0), range: Some((-1.0, 16_777_215.0)), enum_values: &[] },
+        // Rows of `regions` a shaped fill may name; 0 reads no shape.
+        ParamDef { name: Cow::Borrowed("region_rows"), label: "Region Rows", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_215.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Feeds node.matter_state's seed (copied in when the domain's epoch changes) and its count. Cell boxes are in the authored domain's cells, from node.matter_domain's fill outputs (fill_min, fill_cells); the box is clipped above the pool so no cell seeds twice. Points per Cell is 8 or 27. Wire regions and fill_region from node.matter_domain beside the collider arrays; without them the box fills whole.",
+    composition_notes: "Feeds node.matter_state's seed (copied in when the domain's epoch changes) and its count. Cell boxes are in the authored domain's cells, from node.matter_domain's fill outputs (fill_min, fill_cells, fill_points and the fills table); each box is clipped above the pool so no pool cell seeds twice. Points per Cell is 8 or 27. Wire regions from node.matter_domain beside the collider arrays; without them every box fills whole.",
     examples: ["SandColumn"],
     picker: { label: "Matter Fill", category: Atom },
     summary: "Places the liquid's starting particles in the domain: a pool on the floor plus one box.",
@@ -164,41 +159,12 @@ manifold_node_engine::primitive! {
     aliases: ["seed matter", "matter fill", "initial fill", "pool"],
     fusion_kind: Source,
     wgsl_body: include_str!("shaders/matter_fill_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER, COLLIDER_BVH, MATTER_TREE, LIQUID_FILL_SHAPE],
     extra_fields: {
         buffer: Option<GpuBuffer> = None,
-        filled: Option<([u32; 19], usize)> = None,
+        filled: Option<([u32; 14], usize, usize)> = None,
     },
-}
-
-/// Cells a pool plus clipped box fill, per the kernel's enumeration.
-pub(crate) fn fill_cells(cells: [u32; 3], pool: u32, column: [[u32; 2]; 3]) -> u64 {
-    let pool = pool.min(cells[1]);
-    let pool_count = u64::from(cells[0]) * u64::from(pool) * u64::from(cells[2]);
-    let y0 = column[1][0].max(pool);
-    let extent = |lo: u32, hi: u32| u64::from(hi.saturating_sub(lo));
-    let column_count = extent(column[0][0], column[0][1])
-        * extent(y0, column[1][1])
-        * extent(column[2][0], column[2][1]);
-    pool_count + column_count
-}
-
-/// Points a fill seeds at `points_per_cell`, refused by name past the count
-/// the `count` wire carries exactly.
-pub(crate) fn fill_count(
-    cells: [u32; 3],
-    pool: u32,
-    column: [[u32; 2]; 3],
-    points_per_cell: u32,
-) -> Result<u32, String> {
-    let count = fill_cells(cells, pool, column) * u64::from(points_per_cell);
-    match u32::try_from(count) {
-        Ok(count) if count <= EXACT_F32_COUNT => Ok(count),
-        _ => Err(format!(
-            "Matter fill: {count} points exceeds the exact f32 range of the count wire ({EXACT_F32_COUNT}). Raise Cell Size, or lower Particles per Cell or the fill."
-        )),
-    }
 }
 
 impl Primitive for MatterFill {
@@ -231,11 +197,8 @@ impl Primitive for MatterFill {
         let int =
             |name: &str, default: f32| ctx.scalar_or_param(name, default).round().max(0.0) as u32;
         let pool = int("pool_cells", 3.0);
-        let column = [
-            [int("column_x0", 0.0), int("column_x1", 0.0)],
-            [int("column_y0", 0.0), int("column_y1", 0.0)],
-            [int("column_z0", 0.0), int("column_z1", 0.0)],
-        ];
+        let count = int("fill_points", 0.0);
+        let epoch = int("epoch", 0.0);
         let ppc = if int("points_per_cell", 8.0) >= 27 {
             27
         } else {
@@ -250,25 +213,15 @@ impl Primitive for MatterFill {
             ctx.inputs.array("collider_triangles"),
         );
         let body_count = int("body_count", 0.0).min(MAX_LIQUID_BODIES as u32) as i32;
-        let fill_region = ctx.scalar_or_param("fill_region", -1.0).round();
         let regions = ctx.inputs.array("regions");
-        // With colliders or a shaped fill the seeds depend on their pose at
-        // the epoch's start.
-        let epoch = if body_count > 0 || fill_region >= 0.0 {
-            int("epoch", 0.0)
-        } else {
-            0
-        };
+        let fills = ctx.inputs.array("fills");
         let cells = grid.cells;
-        let column =
-            std::array::from_fn(|d| [column[d][0].min(cells[d]), column[d][1].min(cells[d])]);
         let pool = pool.min(cells[1]);
-        let count = match fill_count(cells, pool, column, ppc) {
-            Ok(count) => count,
-            Err(error) => {
-                ctx.error(error);
-                return;
-            }
+        let Some(fills) = fills.filter(|fills| {
+            fills.size >= (FILL_ROW_WORDS * MAX_MATTER_SLOTS * 4) as u64
+        }) else {
+            ctx.error("Matter Fill: the fill table holds fewer than one row a slot");
+            return;
         };
         ctx.outputs
             .set_scalar("count", ParamValue::Float(count as f32));
@@ -315,16 +268,12 @@ impl Primitive for MatterFill {
             collider_triangles,
             body_count,
             regions,
-            fill_region,
+            region_rows,
         ) = match (colliders, regions) {
             ((Some(bodies), Some(shapes), Some(atlas), Some(nodes), Some(triangles)), regions) => {
-                let (regions, fill_region) = match regions {
-                    Some(regions)
-                        if fill_region >= 0.0 && (fill_region as u64) < row_count(regions) =>
-                    {
-                        (regions, fill_region as i32)
-                    }
-                    _ => (buffer, -1),
+                let (regions, region_rows) = match regions {
+                    Some(regions) => (regions, row_count(regions).min(i32::MAX as u64) as i32),
+                    None => (buffer, 0),
                 };
                 (
                     bodies,
@@ -334,10 +283,17 @@ impl Primitive for MatterFill {
                     triangles,
                     body_count.min(row_count(bodies) as i32),
                     regions,
-                    fill_region,
+                    region_rows,
                 )
             }
-            _ => (buffer, buffer, buffer, buffer, buffer, 0, buffer, -1),
+            _ => (buffer, buffer, buffer, buffer, buffer, 0, buffer, 0),
+        };
+        // With colliders or a shaped fill the seeds depend on their pose at
+        // the epoch's start.
+        let epoch = if body_count > 0 || region_rows > 0 {
+            epoch
+        } else {
+            0
         };
         let key = [
             grid.min[0].to_bits(),
@@ -348,20 +304,17 @@ impl Primitive for MatterFill {
             cells[1],
             cells[2],
             pool,
-            column[0][0],
-            column[0][1],
-            column[1][0],
-            column[1][1],
-            column[2][0],
-            column[2][1],
+            count,
             ppc,
             seed,
             body_count as u32,
             epoch,
-            fill_region as u32,
+            region_rows as u32,
         ];
-        // A pure function of its params: refill only when one changes.
-        if self.filled == Some((key, buffer.identity_key())) {
+        // A pure function of its params and the table (a new buffer when it
+        // changes): refill only when one changes.
+        let filled = (key, buffer.identity_key(), fills.identity_key());
+        if self.filled == Some(filled) {
             return;
         }
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -374,18 +327,14 @@ impl Primitive for MatterFill {
             fill_cells_y: cells[1] as i32,
             fill_cells_z: cells[2] as i32,
             pool_cells: pool as i32,
-            column_x0: column[0][0] as i32,
-            column_x1: column[0][1] as i32,
-            column_y0: column[1][0] as i32,
-            column_y1: column[1][1] as i32,
-            column_z0: column[2][0] as i32,
-            column_z1: column[2][1] as i32,
             points_per_cell: ppc as i32,
             seed: seed as i32,
             body_count,
             epoch: epoch as i32,
-            fill_region,
+            region_rows,
             dispatch_count: count,
+            _pad0: 0,
+            _pad1: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -426,6 +375,11 @@ impl Primitive for MatterFill {
                 },
                 GpuBinding::Buffer {
                     binding: 7,
+                    buffer: fills,
+                    offset: 0,
+                },
+                GpuBinding::Buffer {
+                    binding: 8,
                     buffer,
                     offset: 0,
                 },
@@ -433,44 +387,13 @@ impl Primitive for MatterFill {
             [count.div_ceil(256), 1, 1],
             "node.matter_fill",
         );
-        self.filled = Some((key, buffer.identity_key()));
+        self.filled = Some(filled);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn matter_fill_counts_pool_plus_clipped_box() {
-        // 64³ cells, pool 3 cells, box x 10..29, y 0..33 (clipped to 3..33),
-        // z 4..60.
-        let cells = fill_cells([64; 3], 3, [[10, 29], [0, 33], [4, 60]]);
-        assert_eq!(cells, 64 * 3 * 64 + 19 * 30 * 56);
-        // An empty box adds nothing; the pool never exceeds the domain.
-        assert_eq!(fill_cells([8; 3], 20, [[0, 0], [0, 0], [0, 0]]), 8 * 8 * 8);
-    }
-
-    /// The count crosses to every point atom as an f32 wire: 2^24 points is
-    /// the last fill it carries exactly, one cell more is refused by name.
-    #[test]
-    fn matter_fill_refuses_counts_past_the_exact_f32_range() {
-        let empty = [[0, 0]; 3];
-        assert_eq!(
-            fill_count([256, 32, 256], 32, empty, 8),
-            Ok(EXACT_F32_COUNT)
-        );
-        let error = fill_count([256, 33, 256], 33, empty, 8).unwrap_err();
-        assert!(
-            error.contains("exact f32 range") && error.contains("Cell Size"),
-            "{error}"
-        );
-        assert!(
-            fill_count([512; 3], 512, empty, 27)
-                .unwrap_err()
-                .contains("exact f32 range")
-        );
-    }
 
     /// Wires no domain could have produced are refused by their name instead
     /// of clamping to a one-cell box.

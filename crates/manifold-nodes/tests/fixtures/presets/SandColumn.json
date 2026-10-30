@@ -1329,42 +1329,6 @@
           },
           {
             "fromNode": 1,
-            "fromPort": "column_x0",
-            "toNode": 2,
-            "toPort": "column_x0"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "column_x1",
-            "toNode": 2,
-            "toPort": "column_x1"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "column_y0",
-            "toNode": 2,
-            "toPort": "column_y0"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "column_y1",
-            "toNode": 2,
-            "toPort": "column_y1"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "column_z0",
-            "toNode": 2,
-            "toPort": "column_z0"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "column_z1",
-            "toNode": 2,
-            "toPort": "column_z1"
-          },
-          {
-            "fromNode": 1,
             "fromPort": "points_per_cell",
             "toNode": 2,
             "toPort": "points_per_cell"
@@ -1626,12 +1590,6 @@
             "fromPort": "regions",
             "toNode": 2,
             "toPort": "regions"
-          },
-          {
-            "fromNode": 1,
-            "fromPort": "fill_region",
-            "toNode": 2,
-            "toPort": "fill_region"
           },
           {
             "fromNode": 1,
@@ -2538,6 +2496,18 @@
             "fromPort": "hardened",
             "toNode": 1,
             "toPort": "hardened"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "fills",
+            "toNode": 2,
+            "toPort": "fills"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "fill_points",
+            "toNode": 2,
+            "toPort": "fill_points"
           }
         ]
       }

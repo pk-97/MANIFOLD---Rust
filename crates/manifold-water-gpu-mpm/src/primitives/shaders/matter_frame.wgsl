@@ -33,7 +33,8 @@ struct FrameParams {
     count: u32,
     previous_count: u32,
     radius_scale: f32,
-    _pad0: u32,
+    // The run's first point: one Matter item's, or 0 for every point.
+    first: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: FrameParams;
@@ -60,7 +61,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         return;
     }
-    let p = points[i];
+    let p = points[params.first + i];
     if p.id == 0u {
         f.position_radius = vec4<f32>(p.position, 0.0);
         f.velocity = vec3<f32>(0.0);

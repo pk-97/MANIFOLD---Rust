@@ -28,6 +28,10 @@ pub const LIQUID_DOMAIN_TYPE_IDS: &[&str] = &[
 /// water's surface, so the surface walk never follows them.
 pub const SAND_INPUTS: [&str; 2] = ["sand", "sand_count"];
 
+/// Most Matter items (Sands) one solver holds: its material table's rows.
+/// A scene runs one Matter solver for each group of this many.
+pub const MAX_MATTER_SLOTS: usize = 8;
+
 /// The input a Sand's state takes the water on: last frame's push at each
 /// grain. The water is not part of the sand's surface either.
 pub const WATER_PUSH_INPUT: &str = "water_push";

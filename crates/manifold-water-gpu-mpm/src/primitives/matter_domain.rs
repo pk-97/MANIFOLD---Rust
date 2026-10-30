@@ -22,7 +22,7 @@ use manifold_physics::force_lattice::ForceLattice;
 
 use crate::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::matter::{
-    ACOUSTIC_CFL, MAX_SUBSTEPS, MatterMaterial, RADIUS_SCALE, REACTION_WORDS, SAND_DENSITY,
+    ACOUSTIC_CFL, MAX_MATTER_SLOTS, MAX_SUBSTEPS, MatterMaterial, RADIUS_SCALE, REACTION_WORDS, SAND_DENSITY,
     SAND_FRICTION_ANGLE, SNOW_HARDENING_MAX, field_min, free_fall_speed, matter_nodes,
     matter_pool_ceiling, matter_pool_tiles, momentum_unit, stiffness_room, substeps_for_interval,
     substeps_per_tick, viscous_limit,
@@ -40,6 +40,7 @@ use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::exec::substeps::{SubstepClockOutput, SubstepInterval};
 use manifold_node_engine::mesh::Vec4Vertex;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
+use manifold_node_engine::ports::EXACT_F32_COUNT;
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::transform::Transform;
 use manifold_nodes_physics::tick_sampled::{TickSampled, TickSampledRegistration};
@@ -75,8 +76,9 @@ pub struct MatterSetup {
     pub(crate) cell_size: f64,
     pub(crate) bounds: bool,
     pub(crate) fill_height: f32,
-    /// The Initial Fill's box as placed (min then max).
-    pub(crate) initial_fill: Option<[[f32; 3]; 2]>,
+    /// Each Matter item's Initial Fill box as placed (min then max), by
+    /// slot.
+    pub(crate) fills: [Option<[[f32; 3]; 2]>; MAX_MATTER_SLOTS],
     pub(crate) points_per_cell: u32,
     pub(crate) seed: u32,
 }
@@ -91,10 +93,14 @@ pub(crate) struct MatterGeometry {
     /// The Water item's box exactly as placed (min then max): the Bounds box.
     pub(crate) bounds_box: [[f32; 3]; 2],
     pub(crate) setup: MatterSetup,
-    /// The pool's height in cells and the Initial Fill's cell range per axis
-    /// in this frame's grid box (empty without one).
+    /// The pool's height in cells and each slot's Initial Fill cell range
+    /// per axis in this frame's grid box (empty without one).
     pub(crate) pool_cells: u32,
-    pub(crate) column: [[u32; 2]; 3],
+    pub(crate) columns: [[[u32; 2]; 3]; MAX_MATTER_SLOTS],
+    /// The points the pool and every fill seed.
+    pub(crate) points: u32,
+    /// The first slot whose fill did not fit the domain, as `fit` reports.
+    pub(crate) misfit: Option<usize>,
     /// Tiles of the grid's world tile pool.
     pub(crate) pool_tiles: u32,
     /// What the fill changed to fit the domain, on the values this frame ran.
@@ -103,11 +109,11 @@ pub(crate) struct MatterGeometry {
 
 impl MatterGeometry {
     /// The scalar outputs fixed by this frame's geometry, by name.
-    pub(crate) fn outputs(&self) -> [(&'static str, f32); 21] {
+    pub(crate) fn outputs(&self) -> [(&'static str, f32); 32] {
         let MatterGeometry {
             layout,
             pool_cells,
-            column,
+            points,
             pool_tiles,
             setup,
             ..
@@ -118,6 +124,7 @@ impl MatterGeometry {
             seed,
             ..
         } = setup;
+        let ranges = self.slot_ranges();
         [
             ("fill_min_x", layout.min[0]),
             ("fill_min_y", layout.min[1]),
@@ -141,15 +148,48 @@ impl MatterGeometry {
                 } as f32,
             ),
             ("pool_cells", pool_cells as f32),
-            ("column_x0", column[0][0] as f32),
-            ("column_x1", column[0][1] as f32),
-            ("column_y0", column[1][0] as f32),
-            ("column_y1", column[1][1] as f32),
-            ("column_z0", column[2][0] as f32),
-            ("column_z1", column[2][1] as f32),
+            ("fill_points", points as f32),
             ("points_per_cell", points_per_cell as f32),
             ("fill_seed", seed as f32),
+            ("first_0", ranges[0][0] as f32),
+            ("first_1", ranges[1][0] as f32),
+            ("first_2", ranges[2][0] as f32),
+            ("first_3", ranges[3][0] as f32),
+            ("first_4", ranges[4][0] as f32),
+            ("first_5", ranges[5][0] as f32),
+            ("first_6", ranges[6][0] as f32),
+            ("first_7", ranges[7][0] as f32),
+            ("points_0", ranges[0][1] as f32),
+            ("points_1", ranges[1][1] as f32),
+            ("points_2", ranges[2][1] as f32),
+            ("points_3", ranges[3][1] as f32),
+            ("points_4", ranges[4][1] as f32),
+            ("points_5", ranges[5][1] as f32),
+            ("points_6", ranges[6][1] as f32),
+            ("points_7", ranges[7][1] as f32),
         ]
+    }
+
+    /// Each slot's first point and count: the points never move in the
+    /// array, so an item's are the run its fill seeded, the pool counted as
+    /// slot 0's.
+    pub(crate) fn slot_ranges(&self) -> [[u32; 2]; MAX_MATTER_SLOTS] {
+        let ppc = self.setup.points_per_cell;
+        let rows = fill_table(
+            self.layout.cells,
+            self.pool_cells,
+            &self.columns,
+            [-1; MAX_MATTER_SLOTS],
+            ppc,
+        );
+        std::array::from_fn(|slot| {
+            let count = box_points(&rows[slot], ppc);
+            if slot == 0 {
+                [0, rows[0][7] + count]
+            } else {
+                [rows[slot][7], count]
+            }
+        })
     }
 
     /// The cell size as every Matter atom reads it.
@@ -177,16 +217,17 @@ impl MatterGeometry {
     }
 }
 
-/// The fill in the layout's cells: the pool's height in cells and the
-/// Initial Fill's cell range per axis (empty without one). A height past the
-/// top is capped there and a volume past a wall is clipped to the domain, one
-/// wholly outside fills nothing (`manifold_core::liquid_setup`); an unusable
-/// height or a volume that is not an axis-aligned finite box is refused by name.
+/// The fill in the layout's cells: the pool's height in cells and each
+/// slot's Initial Fill cell range per axis (empty without one), with the
+/// first slot whose fill did not fit. A height past the top is capped there
+/// and a volume past a wall is clipped to the domain, one wholly outside
+/// fills nothing (`manifold_core::liquid_setup`); an unusable height or a
+/// volume that is not an axis-aligned finite box is refused by name.
 pub(crate) fn fill_region(
     layout: &FluidDomainLayout,
     fill_height: f32,
-    initial_fill: Option<Transform>,
-) -> Result<(u32, [[u32; 2]; 3], SetupFit), String> {
+    fills: &[Option<Transform>; MAX_MATTER_SLOTS],
+) -> Result<FilledCells, String> {
     // The f32 cell size, as every matter atom reads it.
     let dx = f64::from(layout.cell_size as f32);
     let filled =
@@ -199,8 +240,12 @@ pub(crate) fn fill_region(
     };
     let fill_height = filled.height();
     let pool_cells = ((f64::from(fill_height) / dx).round() as u32).min(layout.cells[1]);
-    let mut column = [[0u32; 2]; 3];
-    if let Some(volume) = initial_fill {
+    let mut columns = [[[0u32; 2]; 3]; MAX_MATTER_SLOTS];
+    let mut misfit = None;
+    for (slot, (volume, column)) in fills.iter().zip(&mut columns).enumerate() {
+        let Some(volume) = volume else {
+            continue;
+        };
         if volume.billboard
             || volume
                 .rot_euler
@@ -211,7 +256,10 @@ pub(crate) fn fill_region(
         }
         let (edges, outcome) = fit_column(layout, volume.pos, volume.scale)
             .map_err(|reason| format!("Matter: {reason}"))?;
-        fit.column = outcome;
+        if outcome != ColumnOutcome::Fits && misfit.is_none() {
+            fit.column = outcome;
+            misfit = Some(slot);
+        }
         if let Some((lo, hi)) = edges {
             for (d, range) in column.iter_mut().enumerate() {
                 // The f32 edges, as every matter atom reads them.
@@ -225,13 +273,133 @@ pub(crate) fn fill_region(
             }
         }
     }
-    Ok((pool_cells, column, fit))
+    Ok(FilledCells {
+        pool_cells,
+        columns,
+        fit,
+        misfit,
+    })
+}
+
+/// What [`fill_region`] fits in a layout's cells.
+pub(crate) struct FilledCells {
+    pub(crate) pool_cells: u32,
+    pub(crate) columns: [[[u32; 2]; 3]; MAX_MATTER_SLOTS],
+    pub(crate) fit: SetupFit,
+    pub(crate) misfit: Option<usize>,
+}
+
+/// Words of one row of the fill table node.matter_fill reads.
+pub(crate) const FILL_ROW_WORDS: usize = 8;
+
+/// The fill table, one row a slot: its box's cells (x0, x1, y0, y1, z0, z1,
+/// the box above the pool and inside the grid), the shaped fill's region row
+/// (i32 bits, -1 for a box) and the first point the row seeds. The pool's
+/// points come first, slot 0's, then each slot's box in slot order.
+pub(crate) fn fill_table(
+    cells: [u32; 3],
+    pool: u32,
+    columns: &[[[u32; 2]; 3]; MAX_MATTER_SLOTS],
+    regions: [i32; MAX_MATTER_SLOTS],
+    points_per_cell: u32,
+) -> [[u32; FILL_ROW_WORDS]; MAX_MATTER_SLOTS] {
+    let pool = pool.min(cells[1]);
+    let mut start = cells[0] * pool * cells[2] * points_per_cell;
+    std::array::from_fn(|slot| {
+        let clip = |d: usize, lo: u32| {
+            let hi = columns[slot][d][1].min(cells[d]);
+            [lo.min(hi), hi]
+        };
+        let [x, z] = [0, 2].map(|d| clip(d, columns[slot][d][0]));
+        let y = clip(1, columns[slot][1][0].max(pool));
+        let row = [
+            x[0],
+            x[1],
+            y[0],
+            y[1],
+            z[0],
+            z[1],
+            regions[slot] as u32,
+            start,
+        ];
+        start += box_points(&row, points_per_cell);
+        row
+    })
+}
+
+/// The points a fill-table row's box seeds.
+pub(crate) fn box_points(row: &[u32; FILL_ROW_WORDS], points_per_cell: u32) -> u32 {
+    (row[1] - row[0]) * (row[3] - row[2]) * (row[5] - row[4]) * points_per_cell
+}
+
+/// Points the pool and every slot's box seed at `points_per_cell`, refused
+/// by name past the count the `count` wire carries exactly.
+pub(crate) fn fill_points(
+    cells: [u32; 3],
+    pool: u32,
+    columns: &[[[u32; 2]; 3]; MAX_MATTER_SLOTS],
+    points_per_cell: u32,
+) -> Result<u32, String> {
+    let pool = u64::from(pool.min(cells[1]));
+    let mut count = u64::from(cells[0]) * pool * u64::from(cells[2]);
+    for column in columns {
+        let y0 = column[1][0].max(pool as u32);
+        let extent = |lo: u32, hi: u32| u64::from(hi.saturating_sub(lo));
+        count += extent(column[0][0], column[0][1])
+            * extent(y0, column[1][1])
+            * extent(column[2][0], column[2][1]);
+    }
+    let count = count * u64::from(points_per_cell);
+    match u32::try_from(count) {
+        Ok(count) if count <= EXACT_F32_COUNT => Ok(count),
+        _ => Err(format!(
+            "Matter fill: {count} points exceeds the exact f32 range of the count wire ({EXACT_F32_COUNT}). Raise Cell Size, or lower Particles per Cell or the fill."
+        )),
+    }
+}
+
+/// The role ports each slot's sources take: the `roles_per_slot` param, or
+/// every one of `roles` when it is 0.
+pub(crate) fn roles_per_slot(params: &ParamValues, roles: usize) -> usize {
+    match params.get("roles_per_slot") {
+        Some(ParamValue::Float(value)) if *value >= 1.0 => value.round() as usize,
+        _ => roles.max(1),
+    }
+}
+
+/// Each Matter item's Initial Fill, by slot: the role ports in runs of the
+/// `roles_per_slot` param, slot k's run from port k·roles_per_slot (every
+/// port slot 0's when it is 0). A slot takes one Initial Fill
+/// ([`take_initial_fill`]); a shaped one keeps its port, where its region
+/// row is.
+pub(crate) fn take_slot_fills(
+    roles: &mut [Option<FluidRole>],
+    params: &ParamValues,
+) -> Result<[Option<InitialFill>; MAX_MATTER_SLOTS], String> {
+    let per_slot = roles_per_slot(params, roles.len());
+    let mut fills = [None; MAX_MATTER_SLOTS];
+    for (slot, run) in roles.chunks_mut(per_slot).enumerate() {
+        let Some(fill) = take_initial_fill(run)? else {
+            continue;
+        };
+        let Some(kept) = fills.get_mut(slot) else {
+            return Err(format!(
+                "one Matter solver holds {MAX_MATTER_SLOTS} Sand items"
+            ));
+        };
+        *kept = Some(InitialFill {
+            shape: fill.shape.map(|port| slot * per_slot + port),
+            ..fill
+        });
+    }
+    Ok(fills)
 }
 
 /// The domain box, pool and fill from the domain's params and
 /// wires (`read` is `scalar_or_param`; the Bounds switch and the enums come
 /// from `params`), the grid box moved onto whole world cells and the Bounds
-/// box as placed. With Bounds off the grid starts from the Fill's own box,
+/// box as placed. With Bounds off the grid starts from the box round every
+/// slot's Fill,
 /// else the hidden one ([`unbounded_seed`]) and Fill Height, which fills the
 /// Bounds box from its floor, is 0. Refused by name when the box holds more
 /// tiles than a World counts or the fill is not a usable shape.
@@ -239,7 +407,7 @@ pub(crate) fn matter_geometry(
     read: impl Fn(&str, f32) -> f32,
     params: &ParamValues,
     domain: Option<Transform>,
-    initial_fill: Option<Transform>,
+    fills: &[Option<Transform>; MAX_MATTER_SLOTS],
 ) -> Result<MatterGeometry, String> {
     let bounds = bounds_enabled(params);
     let domain_size = read("domain_size", 4.0);
@@ -250,9 +418,16 @@ pub(crate) fn matter_geometry(
         false => Some(unbounded_seed(
             world.map(Into::into),
             domain_size,
-            initial_fill
-                .as_ref()
-                .map(|volume| box_about(volume.pos, volume.scale)),
+            fills
+                .iter()
+                .flatten()
+                .map(|volume| box_about(volume.pos, volume.scale))
+                .reduce(|a, b| {
+                    [
+                        std::array::from_fn(|i| a[0][i].min(b[0][i])),
+                        std::array::from_fn(|i| a[1][i].max(b[1][i])),
+                    ]
+                }),
             cell_size,
         )),
     };
@@ -269,7 +444,12 @@ pub(crate) fn matter_geometry(
     } else {
         0.0
     };
-    let (pool_cells, column, fit) = fill_region(&layout, fill_height, initial_fill)?;
+    let FilledCells {
+        pool_cells,
+        columns,
+        fit,
+        misfit,
+    } = fill_region(&layout, fill_height, fills)?;
     let points_per_cell = match params.get("points_per_cell") {
         Some(ParamValue::Enum(1)) => 27,
         _ => 8,
@@ -282,17 +462,20 @@ pub(crate) fn matter_geometry(
         cell_size: layout.cell_size,
         bounds,
         fill_height,
-        initial_fill: initial_fill.map(|volume| box_about(volume.pos, volume.scale)),
+        fills: fills.map(|fill| fill.map(|volume| box_about(volume.pos, volume.scale))),
         points_per_cell,
         seed: seed.round().clamp(0.0, 16_777_215.0) as u32,
     };
     let pool_tiles = matter_pool_tiles(nodes)?;
+    let points = fill_points(layout.cells, pool_cells, &columns, points_per_cell)?;
     Ok(MatterGeometry {
         layout,
         bounds_box,
         setup,
         pool_cells,
-        column,
+        columns,
+        points,
+        misfit,
         pool_tiles,
         fit,
     })
@@ -333,9 +516,14 @@ manifold_node_engine::primitive! {
         closed_faces: ScalarF32,
         gravity_x: ScalarF32, gravity: ScalarF32, gravity_z: ScalarF32,
         pool_cells: ScalarF32,
-        column_x0: ScalarF32, column_x1: ScalarF32,
-        column_y0: ScalarF32, column_y1: ScalarF32,
-        column_z0: ScalarF32, column_z1: ScalarF32,
+        // The points the pool and every slot's fill seed, and each slot's
+        // first point and count (the pool is slot 0's): a slot's draw
+        // publishes its own run.
+        fill_points: ScalarF32,
+        first_0: ScalarF32, first_1: ScalarF32, first_2: ScalarF32, first_3: ScalarF32,
+        first_4: ScalarF32, first_5: ScalarF32, first_6: ScalarF32, first_7: ScalarF32,
+        points_0: ScalarF32, points_1: ScalarF32, points_2: ScalarF32, points_3: ScalarF32,
+        points_4: ScalarF32, points_5: ScalarF32, points_6: ScalarF32, points_7: ScalarF32,
         points_per_cell: ScalarF32,
         fill_seed: ScalarF32,
         ticks: ScalarF32,
@@ -372,7 +560,8 @@ manifold_node_engine::primitive! {
         field_spacing: ScalarF32,
         force_lattices: ScalarF32,
         impulse_tick: ScalarF32,
-        fill_region: ScalarF32,
+        // The fill table (`fill_table`), one row a slot.
+        fills: Array(u32),
         bodies: Array(LiquidBody), regions: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
         collider_nodes: Array(Vec4Vertex), collider_triangles: Array(Vec4Vertex),
         reaction: Array(i32),
@@ -398,6 +587,10 @@ manifold_node_engine::primitive! {
         ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("points_per_cell"), label: "Particles per Cell", ty: ParamType::Enum, default: ParamValue::Enum(0), range: Some((0.0, 1.0)), enum_values: &["8", "27"] },
         ParamDef { name: Cow::Borrowed("roles"), label: "Sources", ty: ParamType::Int, default: ParamValue::Float(manifold_water_liquid::DEFAULT_ROLE_PORTS as f32), range: None, enum_values: &[] },
+        // Every Matter item in a scene shares this solver: slot k's sources
+        // are the `roles_per_slot` ports from k·roles_per_slot. 0 is one item,
+        // every source its.
+        ParamDef { name: Cow::Borrowed("roles_per_slot"), label: "Sources per Item", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 64.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "The Live Matter group's source of truth: wire its fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, cell size, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Friction Angle, Cohesion and Density are live. Stiffness sets how firm the grains are and costs substeps (Stiffness 0.5 → 14, 1 → 21, 2 → 35 at 64³ in 4 m); the material leaves as mu, lambda, alpha, cohesion (a tensile log strain) and softening for node.grid_to_matter, mu and lambda for node.matter_stats, and wall_friction (tan of the Friction Angle) for node.matter_grid_update and node.matter_body_reaction; a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most two ticks per display frame and reports dropped time; export runs every tick. Bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.liquid_solid_distance. Until every body's distance lattice is built the liquid holds. An Initial Fill seeds the water; Inflow and Outflow roles are refused. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most two ticks per display frame; live and export wait for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Scene forces arrive on acceleration_field and scene impulses through the impulse hooks; both are sampled on a coarse field lattice (a quarter of the cells per axis): wire forces, impulses and the six field scalars into node.matter_grid_update and node.matter_body_reaction. Forces act every substep; an impulse changes the water's velocity once, on the first substep of impulse_tick, the first tick after the frame it was fired. A hit fired while paused or at Simulation Speed 0 is discarded, never replayed on resume; a restart cancels hits not yet applied. Rigid targets of an impulse reach the coupled bodies.",
@@ -417,8 +610,13 @@ manifold_node_engine::primitive! {
         setup_report: SetupReport = SetupReport::default(),
         // The domain box of the accepted setup.
         layout: Option<FluidDomainLayout> = None,
-        // The fill's pool height and Initial Fill range in that box's cells.
-        fill_cells: (u32, [[u32; 2]; 3]) = (0, [[0; 2]; 3]),
+        // The fill's pool height and each slot's Initial Fill range in that
+        // box's cells.
+        fill_cells: (u32, [[[u32; 2]; 3]; MAX_MATTER_SLOTS]) = (0, [[[0; 2]; 3]; MAX_MATTER_SLOTS]),
+        // The fill table as last written and the shared buffer holding it: a
+        // new buffer when it changes, so a frame in flight keeps its own.
+        fill_rows: [[u32; FILL_ROW_WORDS]; MAX_MATTER_SLOTS] = [[0; FILL_ROW_WORDS]; MAX_MATTER_SLOTS],
+        fill_table: Option<([[u32; FILL_ROW_WORDS]; MAX_MATTER_SLOTS], GpuBuffer)> = None,
         limited: bool = false,
         published: Option<[f32; OUTPUTS.len()]> = None,
         // A shaped fill's role is a region row, so the fill reads its shape.
@@ -592,7 +790,7 @@ impl Coupling {
 }
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 72] = [
+const OUTPUTS: [&str; 82] = [
     "fill_min_x",
     "fill_min_y",
     "fill_min_z",
@@ -607,14 +805,25 @@ const OUTPUTS: [&str; 72] = [
     "gravity",
     "gravity_z",
     "pool_cells",
-    "column_x0",
-    "column_x1",
-    "column_y0",
-    "column_y1",
-    "column_z0",
-    "column_z1",
+    "fill_points",
     "points_per_cell",
     "fill_seed",
+    "first_0",
+    "first_1",
+    "first_2",
+    "first_3",
+    "first_4",
+    "first_5",
+    "first_6",
+    "first_7",
+    "points_0",
+    "points_1",
+    "points_2",
+    "points_3",
+    "points_4",
+    "points_5",
+    "points_6",
+    "points_7",
     "ticks",
     "substeps_per_tick",
     "epoch",
@@ -655,7 +864,6 @@ const OUTPUTS: [&str; 72] = [
     "wall_velocity_hi_x",
     "wall_velocity_hi_y",
     "wall_velocity_hi_z",
-    "fill_region",
     "static_key",
     "moved_key",
     "moved_lo_x",
@@ -666,9 +874,9 @@ const OUTPUTS: [&str; 72] = [
     "moved_hi_z",
     "pool_ceiling",
 ];
-const TICKS: usize = 22;
-const EPOCH: usize = 24;
-const IMPULSE_TICK: usize = 42;
+const TICKS: usize = 33;
+const EPOCH: usize = 35;
+const IMPULSE_TICK: usize = 53;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
 const _: () = assert!(matches!(OUTPUTS[EPOCH].as_bytes(), b"epoch"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
@@ -701,7 +909,8 @@ impl Primitive for MatterDomain {
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(
             port,
-            "bodies"
+            "fills"
+                | "bodies"
                 | "regions"
                 | "shapes"
                 | "atlas"
@@ -716,6 +925,7 @@ impl Primitive for MatterDomain {
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
         match port {
             "reaction" => return self.reaction.as_ref(),
+            "fills" => return self.fill_table.as_ref().map(|(_, buffer)| buffer),
             "forces" => return self.fields.forces_buffer(),
             "impulses" => return self.fields.impulses_buffer(),
             _ => {}
@@ -729,6 +939,9 @@ impl Primitive for MatterDomain {
         _params: &manifold_node_engine::exec::effect_node::ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
+        if port_name == "fills" {
+            return Some((FILL_ROW_WORDS * MAX_MATTER_SLOTS) as u32);
+        }
         // Provided storage: a one-record hint, grown at run time.
         matches!(
             port_name,
@@ -810,9 +1023,9 @@ impl Primitive for MatterDomain {
         }
         let role_pending = self.role_ports.read(&ctx.inputs);
         let mut roles = self.role_ports.take();
-        // The Initial Fill seeds the sand; a box fill never reaches the
-        // bodies, and a shaped one stays as a region row for its shape. Sand
-        // only fills, so an Inflow or Outflow is refused by name.
+        // Each item's Initial Fill seeds its slot; a box fill never reaches
+        // the bodies, and a shaped one stays as a region row for its shape.
+        // Sand only fills, so an Inflow or Outflow is refused by name.
         let flows = |role: &Option<FluidRole>| {
             role.as_ref()
                 .is_some_and(|role| role.kind != FluidRoleKind::InitialFill)
@@ -823,7 +1036,7 @@ impl Primitive for MatterDomain {
             }
             Err("Sand fills only; Inflow and Drain are Water's".to_owned())
         } else {
-            take_initial_fill(&mut roles)
+            take_slot_fills(&mut roles, ctx.params)
         };
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
@@ -968,13 +1181,13 @@ impl PhysicsNode for MatterDomain {
         ))
     }
 
-    /// The pool and the initial column as the fill seeds them (whole
+    /// The pool and each slot's initial column as the fill seeds them (whole
     /// cells), then bodies and forces.
     fn write_physics_gizmos(&self, out: &mut Vec<PhysicsGizmo>) {
         let Some(layout) = self.layout else {
             return;
         };
-        let (pool_cells, column) = self.fill_cells;
+        let (pool_cells, columns) = self.fill_cells;
         // The f32 cell size, as `fill_region` counts cells.
         let dx = layout.cell_size as f32;
         let max: [f32; 3] = std::array::from_fn(|i| layout.min[i] + layout.size[i]);
@@ -986,7 +1199,10 @@ impl PhysicsNode for MatterDomain {
                 [max[0], top, max[2]],
             ));
         }
-        if column.iter().all(|[lo, hi]| hi > lo) {
+        for column in columns
+            .iter()
+            .filter(|column| column.iter().all(|[lo, hi]| hi > lo))
+        {
             let corner =
                 |end: usize| std::array::from_fn(|i| layout.min[i] + column[i][end] as f32 * dx);
             out.push(PhysicsGizmo::aabb(
@@ -1222,6 +1438,17 @@ impl MatterDomain {
         if ticks && self.coupled.owner.is_some() {
             gpu.native_enc.clear_buffer(reaction);
         }
+        if self
+            .fill_table
+            .as_ref()
+            .is_none_or(|(rows, _)| *rows != self.fill_rows)
+        {
+            let bytes = (FILL_ROW_WORDS * MAX_MATTER_SLOTS * 4) as u64;
+            let buffer = gpu.device.create_buffer(bytes, BufferUse::Upload);
+            // SAFETY: a new shared buffer no GPU work has seen yet.
+            unsafe { buffer.write(0, bytemuck::cast_slice(&self.fill_rows)) };
+            self.fill_table = Some((self.fill_rows, buffer));
+        }
         if let Err(error) =
             self.body_buffers
                 .upload(gpu, &self.bodies, rows_fresh, "node.matter_domain.bodies")
@@ -1236,21 +1463,21 @@ impl MatterDomain {
         &mut self,
         ctx: &EffectNodeContext<'_, '_>,
         roles: &[Option<FluidRole>],
-        fill: Result<Option<InitialFill>, String>,
+        fills: Result<[Option<InitialFill>; MAX_MATTER_SLOTS], String>,
     ) -> Result<Option<[f32; OUTPUTS.len()]>, String> {
-        let geometry = fill
+        let geometry = fills
             .map_err(|reason| format!("Matter: {reason}"))
-            .and_then(|fill| {
-                let column = fill.map(|fill| fill.column);
+            .and_then(|fills| {
+                let columns = fills.map(|fill| fill.map(|fill| fill.column));
                 matter_geometry(
                     |name, default| ctx.scalar_or_param(name, default),
                     ctx.params,
                     ctx.inputs.transform("domain"),
-                    column,
+                    &columns,
                 )
-                .map(|geometry| (geometry, column, fill.and_then(|fill| fill.shape)))
+                .map(|geometry| (geometry, columns, fills.map(|fill| fill.and_then(|fill| fill.shape))))
             });
-        let (geometry, column, shaped) = match geometry {
+        let (geometry, columns, shaped) = match geometry {
             Ok(found) => found,
             Err(reason) => {
                 self.setup_report.refuse(&reason);
@@ -1261,8 +1488,13 @@ impl MatterDomain {
             layout, setup, fit, ..
         } = geometry;
         let cell_size = geometry.cell_size();
-        self.setup_report
-            .accept(fit, column.map(|column| (column.pos, column.scale)));
+        self.setup_report.accept(
+            fit,
+            geometry
+                .misfit
+                .and_then(|slot| columns[slot])
+                .map(|column| (column.pos, column.scale)),
+        );
         let speed = ctx.scalar_or_param("speed", 1.0);
         let live = [
             "gravity_x",
@@ -1371,7 +1603,20 @@ impl MatterDomain {
         }
         self.setup = Some(setup);
         self.layout = Some(layout);
-        self.fill_cells = (geometry.pool_cells, geometry.column);
+        self.fill_cells = (geometry.pool_cells, geometry.columns);
+        // A shaped fill's region row in a tick, -1 for a box or none: the
+        // fill seeds only the box cells inside its shape.
+        let regions = shaped.map(|port| {
+            port.and_then(|port| self.bodies.region_of(port))
+                .map_or(-1, |row| row as i32)
+        });
+        self.fill_rows = fill_table(
+            layout.cells,
+            geometry.pool_cells,
+            &geometry.columns,
+            regions,
+            setup.points_per_cell,
+        );
         let frame = self.clock.advance(
             ctx.played(),
             ctx.sim_step.interval.0,
@@ -1558,7 +1803,7 @@ impl MatterDomain {
         )?;
 
         let (scene, kill) = within_key_span(
-            self.scene(&geometry, column, frame.epoch),
+            self.scene(&geometry, &columns, frame.epoch),
             geometry.setup.cell_size,
         )?;
         let simulated: f64 = (0..u64::from(frame.ticks))
@@ -1625,14 +1870,6 @@ impl MatterDomain {
             ("moved_hi_x", self.moved_box[1][0]),
             ("moved_hi_y", self.moved_box[1][1]),
             ("moved_hi_z", self.moved_box[1][2]),
-            // The shaped fill's region row in a tick, -1 for a box or none:
-            // the fill seeds only the box cells inside its shape.
-            (
-                "fill_region",
-                shaped
-                    .and_then(|slot| self.bodies.region_of(slot))
-                    .map_or(-1.0, |row| row as f32),
-            ),
         ];
         let mut values = [0.0; OUTPUTS.len()];
         let mut written = 0u128;
@@ -1667,7 +1904,7 @@ impl MatterDomain {
     fn scene(
         &mut self,
         geometry: &MatterGeometry,
-        column: Option<Transform>,
+        fills: &[Option<Transform>; MAX_MATTER_SLOTS],
         epoch: u32,
     ) -> ([[f32; 3]; 2], f32) {
         if geometry.setup.bounds {
@@ -1675,7 +1912,15 @@ impl MatterDomain {
         }
         let floor = self
             .source_floor
-            .of_epoch(epoch, || lowest_source(column, []));
+            .of_epoch(epoch, || {
+                lowest_source(
+                    None,
+                    fills
+                        .iter()
+                        .flatten()
+                        .map(|fill| fill.pos[1] - 0.5 * fill.scale[1]),
+                )
+            });
         let v0 =
             (geometry.setup.cell_size.powi(3) / f64::from(geometry.setup.points_per_cell)) as f32;
         let kill = kill_height(
@@ -1689,7 +1934,12 @@ impl MatterDomain {
             .bodies
             .body_boxes()
             .map(|(_, placed)| placed)
-            .chain(column.map(|fill| box_about(fill.pos, fill.scale)));
+            .chain(
+                fills
+                    .iter()
+                    .flatten()
+                    .map(|fill| box_about(fill.pos, fill.scale)),
+            );
         (union_box(placed).unwrap_or(geometry.bounds_box), kill)
     }
 
@@ -2147,7 +2397,10 @@ mod gizmo_tests {
         let geometry = |fill: f32, column: Option<Transform>| {
             let read =
                 |name: &str, default: f32| if name == "fill_height" { fill } else { default };
-            matter_geometry(read, &ParamValues::default(), None, column).expect("fits or is fitted")
+            let mut fills = [None; MAX_MATTER_SLOTS];
+            fills[0] = column;
+            matter_geometry(read, &ParamValues::default(), None, &fills)
+                .expect("fits or is fitted")
         };
         let top = geometry(4.0, None);
         assert_eq!(geometry(9.0, None).pool_cells, top.pool_cells);
@@ -2164,15 +2417,72 @@ mod gizmo_tests {
             ..Transform::default()
         };
         assert_eq!(
-            geometry(0.16, Some(past_wall)).column,
-            geometry(0.16, Some(at_wall)).column
+            geometry(0.16, Some(past_wall)).columns[0],
+            geometry(0.16, Some(at_wall)).columns[0]
         );
         let away = Transform {
             pos: [9.0, 1.0, 0.0],
             scale: [1.0; 3],
             ..Transform::default()
         };
-        assert_eq!(geometry(0.16, Some(away)).column, [[0; 2]; 3]);
+        assert_eq!(geometry(0.16, Some(away)).columns[0], [[0; 2]; 3]);
+    }
+
+    /// Each slot's box seeds after the pool and the slots before it, its
+    /// first point and count the run its draw publishes; a box under the
+    /// pool top starts above it, and the count crosses as an exact f32 wire.
+    #[test]
+    fn each_slot_seeds_its_own_run_after_the_pool() {
+        let mut columns = [[[0u32; 2]; 3]; MAX_MATTER_SLOTS];
+        // 64³ cells, pool 3 cells. Slot 0: x 10..29, y 0..33 (above the
+        // pool from 3), z 4..60; slot 2: a 5³ box; slot 1 empty.
+        columns[0] = [[10, 29], [0, 33], [4, 60]];
+        columns[2] = [[40, 45], [20, 25], [40, 45]];
+        let rows = fill_table([64; 3], 3, &columns, [-1, -1, 7, -1, -1, -1, -1, -1], 8);
+        let pool = 64 * 3 * 64 * 8;
+        let slot0 = 19 * 30 * 56 * 8;
+        assert_eq!(rows[0], [10, 29, 3, 33, 4, 60, u32::MAX, pool]);
+        assert_eq!(box_points(&rows[1], 8), 0);
+        assert_eq!(rows[2][6], 7);
+        assert_eq!(rows[2][7], pool + slot0);
+        assert_eq!(rows[3][7], pool + slot0 + 125 * 8);
+        assert_eq!(
+            fill_points([64; 3], 3, &columns, 8),
+            Ok(pool + slot0 + 125 * 8)
+        );
+        let empty = [[[0, 0]; 3]; MAX_MATTER_SLOTS];
+        assert_eq!(
+            fill_points([256, 32, 256], 32, &empty, 8),
+            Ok(EXACT_F32_COUNT)
+        );
+        let error = fill_points([256, 33, 256], 33, &empty, 8).unwrap_err();
+        assert!(error.contains("exact f32 range") && error.contains("Cell Size"), "{error}");
+    }
+
+    /// Two Sands' fills on one solver: the grid covers both, each keeps its
+    /// own box, and the draws' runs tile every point.
+    #[test]
+    fn two_fills_share_one_grid() {
+        let place = |x: f32| Transform {
+            pos: [x, 1.0, 0.0],
+            scale: [0.5; 3],
+            ..Transform::default()
+        };
+        let mut fills = [None; MAX_MATTER_SLOTS];
+        fills[0] = Some(place(-3.0));
+        fills[1] = Some(place(3.0));
+        let read = |_: &str, default: f32| default;
+        let mut params = ParamValues::default();
+        params.insert("bounds".into(), ParamValue::Bool(false));
+        let geometry = matter_geometry(read, &params, None, &fills).expect("fills");
+        let layout = geometry.layout;
+        assert!(layout.min[0] < -3.25 && layout.min[0] + layout.size[0] > 3.25);
+        assert!(geometry.columns.iter().take(2).all(|c| c.iter().all(|[lo, hi]| hi > lo)));
+        let ranges = geometry.slot_ranges();
+        assert_eq!(ranges[0][0], 0);
+        assert_eq!(ranges[1][0], ranges[0][1]);
+        assert_eq!(ranges[1][0] + ranges[1][1], geometry.points);
+        assert_eq!(ranges[0][1], ranges[1][1]);
     }
 
     /// The fill gizmos are the cells the fill seeds: the pool up to its cell
@@ -2185,11 +2495,13 @@ mod gizmo_tests {
             ..Transform::default()
         };
         let read = |name: &str, default: f32| if name == "fill_height" { 0.16 } else { default };
+        let mut fills = [None; MAX_MATTER_SLOTS];
+        fills[0] = Some(column);
         let geometry =
-            matter_geometry(read, &ParamValues::default(), None, Some(column)).expect("fills");
+            matter_geometry(read, &ParamValues::default(), None, &fills).expect("fills");
         let mut domain = MatterDomain::new();
         (domain.setup, domain.layout) = (Some(geometry.setup), Some(geometry.layout));
-        domain.fill_cells = (geometry.pool_cells, geometry.column);
+        domain.fill_cells = (geometry.pool_cells, geometry.columns);
         assert_eq!(
             domain.fluid_domain_snapshot().unwrap().accepted_layout,
             Some(geometry.layout)

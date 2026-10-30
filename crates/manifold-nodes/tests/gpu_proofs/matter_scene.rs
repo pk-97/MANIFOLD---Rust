@@ -182,12 +182,8 @@ impl MatterScene {
         }
         for port in [
             "pool_cells",
-            "column_x0",
-            "column_x1",
-            "column_y0",
-            "column_y1",
-            "column_z0",
-            "column_z1",
+            "fill_points",
+            "fills",
             "points_per_cell",
         ] {
             wire(&mut graph, (domain, port), (fill, port));

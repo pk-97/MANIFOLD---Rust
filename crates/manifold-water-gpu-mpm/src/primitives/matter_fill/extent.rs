@@ -1,28 +1,17 @@
 //! Buffer extent rule owned by this node.
 use crate::matter::MatterPoint;
-use crate::primitives::matter_fill::{FillGrid, fill_count};
+use crate::matter::MAX_MATTER_SLOTS;
+use crate::primitives::matter_domain::FILL_ROW_WORDS;
+use crate::primitives::matter_fill::FillGrid;
 use manifold_node_engine::exec::extent::{AtomExtent, ExtentRule, Verdict};
 use manifold_water_liquid::extent::whole;
 use std::mem::size_of;
 
 fn matter_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = FillGrid::read(|name, default| x.scalar(name, default))
-        .map_err(Verdict::Refused)?
-        .cells;
-    let pool = whole(x, "pool_cells", 3.0).min(cells[1]);
-    let column = [
-        ["column_x0", "column_x1"],
-        ["column_y0", "column_y1"],
-        ["column_z0", "column_z1"],
-    ]
-    .map(|[lo, hi]| [whole(x, lo, 0.0), whole(x, hi, 0.0)]);
-    let column = std::array::from_fn(|d| [column[d][0].min(cells[d]), column[d][1].min(cells[d])]);
-    let ppc = if whole(x, "points_per_cell", 8.0) >= 27 {
-        27
-    } else {
-        8
-    };
-    let count = fill_count(cells, pool, column, ppc).map_err(Verdict::Refused)?;
+    // The grid wires are refused by name as the node refuses them.
+    FillGrid::read(|name, default| x.scalar(name, default)).map_err(Verdict::Refused)?;
+    let count = whole(x, "fill_points", 0.0);
+    x.covers("fills", (FILL_ROW_WORDS * MAX_MATTER_SLOTS * 4) as u64)?;
     x.publish("count", count as f32);
     let points = u64::from(count.max(1)) * size_of::<MatterPoint>() as u64;
     x.provide("points", points);

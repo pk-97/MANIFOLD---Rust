@@ -11,6 +11,11 @@
 //! and the water follows the group's visibility. The domain stays
 //! axis-aligned: a turned group moves the box but does not turn it.
 //!
+//! Every Sand in a scene shares one Matter solver (MATTER_SAND_DESIGN.md
+//! section 7), up to `MAX_MATTER_SLOTS` to a solver: the first splices the
+//! whole template, each later one only its material and draw, reading the
+//! first's solver, and its Fill takes the solver's role ports for its slot.
+//!
 //! The water draws with its Material, as any object does; with none it
 //! keeps the template's water look. Solids reach the water through the
 //! World (section 7.8): the coupling install pairs every Water with the
@@ -19,6 +24,7 @@
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, SerializedParamValue};
+use manifold_core::liquid_domain::MAX_MATTER_SLOTS;
 use manifold_core::scene_doc::{Item, ItemFields, ItemKind, Quality, SceneDoc, SourceShape};
 use manifold_core::scene_schema::{
     DOMAIN_ROLE, PHYSICS_VIEW_SWITCHES, SOLID, SURFACE_DETAIL_NODES, SURFACE_DETAIL_OFFSET,
@@ -65,6 +71,48 @@ const SAND_STATE: &str = "state";
 const SAND_DOMAIN: &str = "domain";
 /// The Sand template's `node.matter_material`: what the Sand is made of.
 const MATTER_MATERIAL: &str = "material";
+/// The Sand template's solver nodes. A later Sand splices none of them and
+/// reads the first's.
+const MATTER_SOLVER: [&str; 10] = [
+    SAND_DOMAIN,
+    "matter_fill",
+    SAND_STATE,
+    "matter_points_to_grid",
+    "matter_grid_update",
+    "matter_grid_to_points",
+    "matter_tick_stats",
+    "matter_move_bodies",
+    "matter_body_reaction",
+    "matter_static_solid",
+];
+/// A material node's folds, each fed to the next slot's (`node.matter_material`).
+const MATERIAL_CHAIN: [(&str, &str); 6] = [
+    ("materials", "materials_in"),
+    ("wave", "wave_in"),
+    ("snow_wave", "snow_wave_in"),
+    ("diffusivity", "diffusivity_in"),
+    ("density", "density_in"),
+    ("wall_friction", "wall_friction_in"),
+];
+/// The frame inputs a draw frame reads from the solver.
+const FRAME_INPUTS: [&str; 6] = [
+    "points",
+    "stats",
+    "count",
+    "simulation_time",
+    "display_time",
+    "epoch",
+];
+
+/// Where a Sand sits in its Matter solver: its slot, how many Sands the
+/// solver runs, the role ports each slot's sources take, and the first
+/// Sand's nodes, which a later one reads.
+struct MatterSlot<'a> {
+    slot: usize,
+    items: usize,
+    per_slot: usize,
+    solver: Option<&'a BTreeMap<String, u32>>,
+}
 const WATER_SAND_READERS: [&str; 2] = ["step", "water_wetness"];
 const WATER_WETNESS: &str = "water_wetness";
 
@@ -77,37 +125,83 @@ pub(crate) struct MatterFrames {
 }
 
 /// Emit every Water and Sand and its sources. With no water solver linked,
-/// they draw nothing. The first Sand is porous to every Water: its particles
-/// this frame reach each water's step, which slows the water inside the
-/// sand, so water soaks into a pile instead of passing through it, and each
-/// water's wet map, which marks the sand where the water touches it. The
-/// first Water drags the first Sand back ([`water_on_sand`]).
+/// they draw nothing. The Sands run on one Matter solver a group of
+/// `MAX_MATTER_SLOTS`; the first solver's every grain is porous to every
+/// Water: its particles this frame reach each water's step, which slows the
+/// water inside the sand, so water soaks into a pile instead of passing
+/// through it, and each water's wet map, which marks the sand where the
+/// water touches it. The first Water drags those grains back
+/// ([`water_on_sand`]).
 pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
-    let mut sand: Option<BTreeMap<String, u32>> = None;
+    let all = waters(b.doc);
+    let sources = |item: &Item| {
+        item.children
+            .iter()
+            .filter(|child| matches!(child.fields, ItemFields::WaterSource(_)))
+            .count()
+    };
+    let sands: Vec<usize> = all
+        .iter()
+        .filter(|(item, _)| item.kind() == ItemKind::Sand && water_family(&item.fields).is_some())
+        .map(|(item, _)| sources(item))
+        .collect();
+    let per_slot = sands.iter().copied().max().unwrap_or(0).max(1);
+    let mut solvers: Vec<Solver> = Vec::new();
     let mut water_ids = Vec::new();
-    for (item, group) in waters(b.doc) {
-        if let Some(family) = water_family(&item.fields) {
-            let ids = emit(b, &item, group.as_ref(), &family);
-            match item.kind() {
-                ItemKind::Sand if sand.is_none() => sand = Some(ids),
-                ItemKind::Water => water_ids.push((item.id.as_str().to_owned(), ids)),
-                _ => {}
+    for (item, group) in all {
+        let Some(family) = water_family(&item.fields) else {
+            continue;
+        };
+        if item.kind() != ItemKind::Sand {
+            let ids = emit(b, &item, group.as_ref(), &family, None);
+            if item.kind() == ItemKind::Water {
+                water_ids.push((item.id.as_str().to_owned(), ids));
             }
+            continue;
+        }
+        let index = solvers.iter().map(|solver| solver.slots.len()).sum::<usize>();
+        let slot = index % MAX_MATTER_SLOTS;
+        let items = (sands.len() - (index - slot)).min(MAX_MATTER_SLOTS);
+        let solver = solvers.last().filter(|_| slot > 0).map(|solver| &solver.ids);
+        let place = MatterSlot {
+            slot,
+            items,
+            per_slot,
+            solver,
+        };
+        let ids = emit(b, &item, group.as_ref(), &family, Some(place));
+        let owned = ids.clone();
+        if slot == 0 {
+            solvers.push(Solver {
+                owner: item.id.as_str().to_owned(),
+                ids,
+                slots: Vec::new(),
+            });
+        }
+        let solver = solvers.last_mut().expect("a solver for every Sand");
+        solver.slots.push((
+            owned.get(MATTER_MATERIAL).copied(),
+            owned.get(SAND_FRAME).copied(),
+        ));
+    }
+    let couples = !water_ids.is_empty() || !super::gas::gases(b.doc).is_empty();
+    let mut sand = None;
+    for (index, solver) in solvers.iter().enumerate() {
+        let coupling = join_slots(b, solver, couples && index == 0);
+        if index == 0 {
+            sand = coupling;
         }
     }
     let mut frames = MatterFrames {
         water: water_ids
             .first()
             .and_then(|(_, ids)| ids.get(SAND_FRAME).copied()),
-        sand: None,
+        sand,
     };
-    let Some(sand) = sand else {
+    let (Some(solver), Some(frame)) = (solvers.first(), sand) else {
+        frames.sand = None;
         return frames;
     };
-    let Some(&frame) = sand.get(SAND_FRAME) else {
-        return frames;
-    };
-    frames.sand = Some(frame);
     let [points, count] = manifold_core::liquid_domain::SAND_INPUTS;
     for (_, ids) in &water_ids {
         for reader in WATER_SAND_READERS
@@ -120,12 +214,62 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
     }
     if let (Some((owner, ids)), Some(&state), Some(&domain)) = (
         water_ids.first(),
-        sand.get(SAND_STATE),
-        sand.get(SAND_DOMAIN),
+        solver.ids.get(SAND_STATE),
+        solver.ids.get(SAND_DOMAIN),
     ) {
         water_on_sand(b, owner, ids, [frame, state, domain]);
     }
     frames
+}
+
+/// One Matter solver as emitted: the first Sand's id and node ids, and each
+/// Sand's material and draw frame, by slot.
+struct Solver {
+    owner: String,
+    ids: BTreeMap<String, u32>,
+    slots: Vec<(Option<u32>, Option<u32>)>,
+}
+
+/// Join a solver's Sands: chain their materials in slot order, the last one
+/// feeding the solver, and give each draw its own run of points. With
+/// `couples`, add the frame of every point the water and gas read (the first
+/// Sand's frame when it runs alone); returns it.
+fn join_slots(b: &mut Builder<'_>, solver: &Solver, couples: bool) -> Option<u32> {
+    let (Some(&domain), Some(&(_, Some(first_frame)))) =
+        (solver.ids.get(SAND_DOMAIN), solver.slots.first())
+    else {
+        return None;
+    };
+    if solver.slots.len() < 2 {
+        return Some(first_frame);
+    }
+    let coupling = couples.then(|| {
+        let frame = b.add(&solver.owner, "coupling_frame", "node.matter_frame");
+        for port in FRAME_INPUTS {
+            if let Some((from, from_port)) = b.input(first_frame, port) {
+                b.wire(from, &from_port, frame, port);
+            }
+        }
+        frame
+    });
+    let materials: Vec<u32> = solver.slots.iter().filter_map(|(material, _)| *material).collect();
+    if let (Some(&first), Some(&last)) = (materials.first(), materials.last()) {
+        for (port, _) in MATERIAL_CHAIN {
+            b.splice(first, port, last, port);
+        }
+        for pair in materials.windows(2) {
+            for (port, into) in MATERIAL_CHAIN {
+                b.wire(pair[0], port, pair[1], into);
+            }
+        }
+    }
+    for (slot, (_, frame)) in solver.slots.iter().enumerate() {
+        if let Some(frame) = *frame {
+            b.rewire(domain, &format!("points_{slot}"), frame, "count");
+            b.wire(domain, &format!("first_{slot}"), frame, "first");
+        }
+    }
+    coupling
 }
 
 /// The water at each grain of the Sand (`node.water_on_sand`), from the
@@ -179,9 +323,14 @@ fn emit(
     item: &Item,
     group: Option<&ItemId>,
     family: &WaterFamily,
+    matter: Option<MatterSlot<'_>>,
 ) -> BTreeMap<String, u32> {
     let owner = item.id.as_str();
-    let ids = splice(b, owner, family);
+    let solver = matter.as_ref().and_then(|place| place.solver);
+    let ids = match solver {
+        Some(solver) => splice_member(b, owner, family, solver),
+        None => splice(b, owner, family),
+    };
     let node = |name: &str| ids.get(name).copied();
     for role in template_roles(rows(item.kind()))
         .chain(PHYSICS_VIEW_SWITCHES)
@@ -191,36 +340,11 @@ fn emit(
             b.adopt(owner, role, id);
         }
     }
-    let Some(domain) = node(DOMAIN_ROLE) else {
+    let Some(domain) = solver.map_or_else(|| node(DOMAIN_ROLE), |solver| solver.get(DOMAIN_ROLE).copied()) else {
         return ids;
     };
     let frame = group.and_then(|group| b.group_frames.get(group).copied());
     let visible = group.and_then(|group| b.group_visible.get(group).copied());
-    let transform = b.add(owner, "transform", "node.transform_3d");
-    if let Some(frame) = frame {
-        b.wire(frame, "transform", transform, "parent");
-    }
-    b.wire(transform, "transform", domain, "domain");
-
-    // The World's Cell Size reaches it in `follow_world`; a scene with no
-    // World runs at the default cell.
-    let cell_size = b.add(owner, "cell_size", "node.value");
-    b.set_number(
-        cell_size,
-        "value",
-        manifold_core::fluid_domain::DEFAULT_CELL_SIZE,
-    );
-    b.wire(cell_size, "out", domain, "cell_metres");
-    let bounds = match &item.fields {
-        ItemFields::Water(water) => water.bounds,
-        ItemFields::Sand(sand) => sand.bounds,
-        _ => false,
-    };
-    b.set(
-        domain,
-        "bounds",
-        SerializedParamValue::Bool { value: bounds },
-    );
     if let (ItemFields::Sand(sand), Some(material)) = (&item.fields, node(MATTER_MATERIAL)) {
         b.set(
             material,
@@ -229,14 +353,18 @@ fn emit(
                 value: sand.matter.index(),
             },
         );
+        if let Some(place) = &matter {
+            b.set(
+                material,
+                "slot",
+                SerializedParamValue::Int {
+                    value: place.slot as i32,
+                },
+            );
+        }
     }
-
-    // Every water runs at the World's Speed, as the bodies do: one clock for
-    // everything that touches. A per-region speed would feed the domain's
-    // `speed` input here.
-    for (control, role) in WORLD_INPUTS.iter().zip(WORLD_FOLLOWS) {
-        let value = b.add(owner, role, "node.value");
-        b.wire(value, "out", domain, control.input);
+    if solver.is_none() {
+        solver_setup(b, item, domain, frame);
     }
 
     let sources: Vec<&Item> = item
@@ -244,15 +372,41 @@ fn emit(
         .iter()
         .filter(|child| matches!(child.fields, ItemFields::WaterSource(_)))
         .collect();
-    b.set(
-        domain,
-        "roles",
-        SerializedParamValue::Int {
-            value: sources.len() as i32,
-        },
-    );
+    // One Sand alone takes a role port a source; Sands sharing a solver take
+    // `per_slot` ports each, from their slot's.
+    let first_port = match &matter {
+        Some(place) if place.items > 1 => {
+            if place.slot == 0 {
+                b.set(
+                    domain,
+                    "roles",
+                    SerializedParamValue::Int {
+                        value: (place.items * place.per_slot) as i32,
+                    },
+                );
+                b.set(
+                    domain,
+                    "roles_per_slot",
+                    SerializedParamValue::Int {
+                        value: place.per_slot as i32,
+                    },
+                );
+            }
+            place.slot * place.per_slot
+        }
+        _ => {
+            b.set(
+                domain,
+                "roles",
+                SerializedParamValue::Int {
+                    value: sources.len() as i32,
+                },
+            );
+            0
+        }
+    };
     for (port, source) in sources.into_iter().enumerate() {
-        emit_source(b, source, domain, port, frame);
+        emit_source(b, source, domain, first_port + port, frame);
     }
 
     // The water's look is its Material's, as for any object.
@@ -294,6 +448,45 @@ fn emit(
         }
     }
     ids
+}
+
+/// The domain's own nodes, for a Water or the first Sand of a solver: its
+/// box (the item's Transform, in its group's frame), the World's cell, the
+/// Bounds switch and the World's clock and gravity.
+fn solver_setup(b: &mut Builder<'_>, item: &Item, domain: u32, frame: Option<u32>) {
+    let owner = item.id.as_str();
+    let transform = b.add(owner, "transform", "node.transform_3d");
+    if let Some(frame) = frame {
+        b.wire(frame, "transform", transform, "parent");
+    }
+    b.wire(transform, "transform", domain, "domain");
+
+    // The World's Cell Size reaches it in `follow_world`; a scene with no
+    // World runs at the default cell.
+    let cell_size = b.add(owner, "cell_size", "node.value");
+    b.set_number(
+        cell_size,
+        "value",
+        manifold_core::fluid_domain::DEFAULT_CELL_SIZE,
+    );
+    b.wire(cell_size, "out", domain, "cell_metres");
+    let bounds = match &item.fields {
+        ItemFields::Water(water) => water.bounds,
+        ItemFields::Sand(sand) => sand.bounds,
+        _ => false,
+    };
+    b.set(
+        domain,
+        "bounds",
+        SerializedParamValue::Bool { value: bounds },
+    );
+    // Every water runs at the World's Speed, as the bodies do: one clock for
+    // everything that touches. A per-region speed would feed the domain's
+    // `speed` input here.
+    for (control, role) in WORLD_INPUTS.iter().zip(WORLD_FOLLOWS) {
+        let value = b.add(owner, role, "node.value");
+        b.wire(value, "out", domain, control.input);
+    }
 }
 
 /// One source: its Transform places a `node.fluid_role_source` (a unit box,
@@ -355,7 +548,50 @@ fn splice(b: &mut Builder<'_>, owner: &str, family: &WaterFamily) -> BTreeMap<St
     let mut ids = BTreeMap::new();
     let mut nodes = family.nodes.clone();
     let mut wires = family.wires.clone();
-    renumber(b, owner, &mut nodes, &mut wires, &mut ids, true);
+    renumber(b, owner, &mut nodes, &mut wires, &mut ids, true, &BTreeMap::new());
+    for node in nodes {
+        b.push_node(node);
+    }
+    for wire in wires {
+        b.wire(wire.from_node, &wire.from_port, wire.to_node, &wire.to_port);
+    }
+    ids
+}
+
+/// A later Sand's copy of the template: all but the solver nodes, which are
+/// the first Sand's (`solver`). What the solver fed now reads the first
+/// Sand's nodes; nothing of this copy feeds the solver.
+fn splice_member(
+    b: &mut Builder<'_>,
+    owner: &str,
+    family: &WaterFamily,
+    solver: &BTreeMap<String, u32>,
+) -> BTreeMap<String, u32> {
+    let shared: BTreeMap<u32, u32> = family
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            let name = node.node_id.as_str();
+            MATTER_SOLVER
+                .contains(&name)
+                .then(|| solver.get(name).map(|&id| (node.id, id)))
+                .flatten()
+        })
+        .collect();
+    let mut ids = BTreeMap::new();
+    let mut nodes: Vec<EffectGraphNode> = family
+        .nodes
+        .iter()
+        .filter(|node| !shared.contains_key(&node.id))
+        .cloned()
+        .collect();
+    let mut wires: Vec<EffectGraphWire> = family
+        .wires
+        .iter()
+        .filter(|wire| !shared.contains_key(&wire.to_node))
+        .cloned()
+        .collect();
+    renumber(b, owner, &mut nodes, &mut wires, &mut ids, true, &shared);
     for node in nodes {
         b.push_node(node);
     }
@@ -372,6 +608,7 @@ fn renumber(
     wires: &mut [EffectGraphWire],
     ids: &mut BTreeMap<String, u32>,
     top: bool,
+    shared: &BTreeMap<u32, u32>,
 ) {
     let mut level = BTreeMap::new();
     for node in nodes.iter_mut() {
@@ -389,12 +626,22 @@ fn renumber(
             node.node_id = manifold_core::NodeId::new(scoped);
         }
         if let Some(body) = node.group.as_deref_mut() {
-            renumber(b, owner, &mut body.nodes, &mut body.wires, ids, false);
+            renumber(
+                b,
+                owner,
+                &mut body.nodes,
+                &mut body.wires,
+                ids,
+                false,
+                &BTreeMap::new(),
+            );
         }
     }
+    // A wire from a shared node reads the solver's copy of it.
     for wire in wires.iter_mut() {
         wire.from_node = level
             .get(&wire.from_node)
+            .or_else(|| shared.get(&wire.from_node))
             .copied()
             .unwrap_or(wire.from_node);
         wire.to_node = level.get(&wire.to_node).copied().unwrap_or(wire.to_node);

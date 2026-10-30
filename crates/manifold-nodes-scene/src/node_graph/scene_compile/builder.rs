@@ -419,6 +419,14 @@ impl<'d> Builder<'d> {
         self.wires.push(wire(from, from_port, to, to_port));
     }
 
+    /// Feed `to`'s `to_port` from `from`'s `from_port` instead of whatever
+    /// fed it.
+    pub(crate) fn rewire(&mut self, from: u32, from_port: &str, to: u32, to_port: &str) {
+        self.wires
+            .retain(|wire| !(wire.to_node == to && wire.to_port == to_port));
+        self.wire(from, from_port, to, to_port);
+    }
+
     /// Whether something already feeds `to`'s `to_port`.
     pub(crate) fn wired_into(&self, to: u32, to_port: &str) -> bool {
         self.wires

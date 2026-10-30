@@ -583,8 +583,7 @@ impl MatterMaterial {
     }
 }
 
-/// Most Matter items one scene's solver holds: its material table's rows.
-pub const MAX_MATTER_SLOTS: usize = 8;
+pub use manifold_core::liquid_domain::MAX_MATTER_SLOTS;
 
 /// Floats in one material table row ([`MatterMaterial::row`]).
 pub const MATERIAL_ROW_FLOATS: usize = 16;
