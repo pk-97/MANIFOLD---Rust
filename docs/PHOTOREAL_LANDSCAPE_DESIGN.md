@@ -31,7 +31,11 @@ step upgrades a system that already exists; nothing here runs beside one.
   for conifers, crown-bent normals and crown shade in its vertex colour,
   a box for culling, and four detail levels (one card a leaf, cards per
   branch, three crown cards, nothing). Copies On Surface scatter by the
-  same rules as Covers. No grass blades, no wind on plants.
+  same rules as Covers; on a Terrain each copy takes a hashed place on the
+  map, so it rides the ground as it wears. Reach (metres) fills a window of
+  cells round the camera instead, full to half the Reach and thinning to
+  none at it; each cell keeps its slot as the camera moves, so nothing
+  swims. No wind on plants.
 - Cost (50k spruces, 1080p, stills profile): cut-out cards are shaded at
   every layer, since `discard` defeats hidden-surface removal; the Lumen
   session is adding a depth pass for cut-out draws. The terrain's Depth
@@ -96,10 +100,8 @@ All inside `node.terrain` and the shared `CoverRule`.
 
 ## Phase 4: Density
 
-- **Copies On Surface by distance.** Copies thin with distance from the
-  camera, placed by a stable hash per triangle so they never swim, which
-  allows millions near the camera: grass clumps, pebbles, ferns, by the same
-  grow rules.
+- **Copies On Surface by distance.** Built as Reach on a Terrain (see What
+  exists). Open: past 65,536 copies a layer, which the copies body caps.
 - **Trees and rocks by the hundred thousand.** `node.tree` publishes
   `lods` (fewer segments and leaves) in the Lumen session's layout; its
   last level, a stand-in card baked per variety from many angles (an

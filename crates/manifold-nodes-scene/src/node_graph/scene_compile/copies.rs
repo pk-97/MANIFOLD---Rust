@@ -223,6 +223,15 @@ fn place_on_surfaces(b: &mut Builder<'_>) {
         if let Some((node, port)) = indices {
             b.wire(node, port, scatter, "indices");
         }
+        // A Terrain places copies by map position, so they ride its ground;
+        // Reach fills the cells round the camera, in the surface's frame.
+        if is_terrain(target) {
+            b.set(scatter, "grid", SerializedParamValue::Bool { value: true });
+        }
+        if let Some(lens) = b.active_lens {
+            b.wire(lens, "out", scatter, "camera");
+        }
+        b.wire(frame, "transform", scatter, "frame");
         b.set_number(scatter, "max_capacity", MAX_COPIES as f32);
         b.follow(body, "copy_count", scatter, "count");
         b.apply_rows(
@@ -269,14 +278,16 @@ fn place_on_surfaces(b: &mut Builder<'_>) {
 /// indices, else the first mesh at or below it as a triangle list.
 fn surface_mesh(b: &Builder<'_>, target: &Item) -> Option<Surface> {
     let owner = target.id.as_str();
-    if let ItemFields::Object(object) = &target.fields
-        && object.shape == Shape::Terrain
-    {
+    if is_terrain(target) {
         let grid = b.id(owner, "terrain")?;
         let indices = b.id(owner, "indices")?;
         return Some(((grid, "vertices"), Some((indices, "indices"))));
     }
     super::swarm::first_mesh(b, target).map(|mesh| (mesh, None))
+}
+
+fn is_terrain(item: &Item) -> bool {
+    matches!(&item.fields, ItemFields::Object(object) if object.shape == Shape::Terrain)
 }
 
 /// A surface's vertices and, when it draws indexed, its triangle indices.

@@ -577,6 +577,8 @@ mod tests {
                     instances: &source,
                     out_instances: &out,
                     prev: with_prev.then_some((&prev_source, &out_prev)),
+                    lods: None,
+                    viewport: [64, 64],
                 },
             );
             encoder.commit_and_wait().expect("GPU work completes");

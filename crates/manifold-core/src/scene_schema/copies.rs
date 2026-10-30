@@ -64,7 +64,7 @@ const fn internal(property: &'static str, param: &'static str, why: &'static str
     card(property, param, Exposure::Internal(why))
 }
 
-pub static COPIES_ROWS: [PropertyRow; 42] = [
+pub static COPIES_ROWS: [PropertyRow; 44] = [
     card("count", "copy_count", perform(CardBand::Scene, 0))
         .default(START_COUNT)
         .tip(crate::copies_body::MAX_COPIES_REASON),
@@ -102,6 +102,10 @@ pub static COPIES_ROWS: [PropertyRow; 42] = [
         perform(CardBand::Scene, 6),
     )
     .name("Size Max"),
+    surface("surface_reach", "reach", perform(CardBand::Scene, 7))
+        .name("Reach")
+        .unit(Unit::Metres)
+        .tip("Fill this far round the camera on a Terrain, thinning out toward the edge. 0 spreads the copies over the whole surface"),
     // Where the copies grow, as a Material's Covers lie: the defaults grow
     // them everywhere.
     surface("surface_steeper_than", "steeper_than", setup())
@@ -139,6 +143,11 @@ pub static COPIES_ROWS: [PropertyRow; 42] = [
         "surface_capacity",
         "max_capacity",
         Exposure::Internal("the most copies one world makes"),
+    ),
+    surface(
+        "surface_grid",
+        "grid",
+        Exposure::Internal("set when the surface is a Terrain"),
     ),
     auto(
         "copies_enabled",

@@ -33,6 +33,9 @@ use manifold_node_engine::mesh::{InstanceTransform, MeshVertex};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use manifold_node_engine::scene::material::CoverRule;
+use manifold_node_engine::scene::transform::{IDENTITY_MAT4, transform_point};
+
+use super::render_scene::mat4_inverse;
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -52,13 +55,17 @@ struct ScatterOnMeshUniforms {
     // 1 when `indices` lists the triangles, 0 when the vertices are a
     // triangle list.
     indexed: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+    // Reach (`near_spot`): the Terrain grid's vertices per side, the copy
+    // window's cells per side, and the reach; all 0 over the whole surface.
+    grid: u32,
+    cells: u32,
+    reach: f32,
     // Where copies grow: `CoverRule::packed`.
     rule_slope: [f32; 4],
     rule_height: [f32; 4],
     rule_breakup: [f32; 4],
+    // The camera in the surface's own frame, for Reach.
+    camera: [f32; 4],
 }
 
 /// Where copies grow, as a Material's Covers lie (`cover_rule.wgsl`): name,
@@ -151,6 +158,9 @@ manifold_node_engine::primitive! {
         seed: ScalarF32 optional,
         scale_min: ScalarF32 optional,
         scale_max: ScalarF32 optional,
+        // For Reach: the camera, and the surface's frame the copies sit in.
+        camera: Camera optional,
+        frame: Transform optional,
         // Optional execution gate: when wired, the scatter only RECOMPUTES
         // on this value's integer edges (+ the first frame) — same contract
         // as node.spawn_from_mesh's reset_trigger. Unwired -> recompute
@@ -207,6 +217,22 @@ manifold_node_engine::primitive! {
             ty: ParamType::Bool,
             default: ParamValue::Bool(false),
             range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("grid"),
+            label: "Grid",
+            ty: ParamType::Bool,
+            default: ParamValue::Bool(false),
+            range: None,
+            enum_values: &[],
+        },
+        ParamDef {
+            name: Cow::Borrowed("reach"),
+            label: "Reach (m)",
+            ty: ParamType::Float,
+            default: ParamValue::Float(0.0),
+            range: Some((0.0, 10_000.0)),
             enum_values: &[],
         },
         grow_param(0),
@@ -310,6 +336,42 @@ impl Primitive for ScatterOnMesh {
             return;
         }
         let count = count_runtime.min(capacity);
+        // A Terrain's square grid places copies by map position.
+        let grid = if matches!(ctx.params.get("grid"), Some(ParamValue::Bool(true))) {
+            let grid = vertex_count.isqrt();
+            if grid < 2 || grid * grid != vertex_count {
+                ctx.error("Scatter On Mesh: Grid needs a square grid of vertices");
+                return;
+            }
+            grid
+        } else {
+            0
+        };
+        // Reach: the copies fill cells round the camera on the grid, so they
+        // need the camera in the grid's frame.
+        let reach = ctx.scalar_or_param("reach", 0.0).max(0.0);
+        let (cells, camera) = if reach > 0.0 {
+            if grid == 0 {
+                ctx.error("Scatter On Mesh: Reach needs a Terrain");
+                return;
+            }
+            let Some(camera) = ctx.inputs.camera("camera") else {
+                ctx.error("Scatter On Mesh: Reach needs the scene's camera");
+                return;
+            };
+            let frame = ctx
+                .inputs
+                .transform("frame")
+                .map_or(IDENTITY_MAT4, |frame| frame.world());
+            let Some(inverse) = mat4_inverse(frame) else {
+                ctx.error("Scatter On Mesh: the surface's frame is flat");
+                return;
+            };
+            let [x, y, z] = transform_point(&inverse, camera.pos);
+            (capacity.isqrt(), [x, y, z, 0.0])
+        } else {
+            (0, [0.0; 4])
+        };
         let triangle_count = match indices {
             Some(indices) => (indices.size / 4 / 3) as u32,
             None => vertex_count / 3,
@@ -324,12 +386,13 @@ impl Primitive for ScatterOnMesh {
             align_to_normal: u32::from(align_to_normal),
             capacity,
             indexed: u32::from(indices.is_some()),
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
+            grid,
+            cells,
+            reach,
             rule_slope,
             rule_height,
             rule_breakup,
+            camera,
         };
 
         // The table is summed again only when the triangles change; with no
@@ -432,7 +495,7 @@ impl Primitive for ScatterOnMesh {
         // area -> scan -> place, each pass reads what the previous wrote,
         // so a barrier between every stage (same shape as
         // spawn_from_mesh's surface mode).
-        if triangle_count > 0 && (resum || needs_alloc) {
+        if grid == 0 && triangle_count > 0 && (resum || needs_alloc) {
             gpu.native_enc.dispatch_compute(
                 area_pipeline,
                 &bindings,
@@ -457,7 +520,8 @@ impl Primitive for ScatterOnMesh {
             [capacity.div_ceil(256), 1, 1],
             "node.scatter_on_mesh.place",
         );
-        self.summed = summed;
+        // A grid reads no area table, so a later place by area sums one.
+        self.summed = if grid == 0 { summed } else { None };
         self.placed = placed;
     }
 }
@@ -556,21 +620,8 @@ mod gpu_tests {
     ) -> Vec<InstanceTransform> {
         let vertex_count = vertices.len() as u32;
         let triangle_count = vertex_count / 3;
-
-        let vbuf = device.create_buffer(std::mem::size_of_val(vertices) as u64, BufferUse::Upload);
-        unsafe {
-            vbuf.write(0, bytemuck::cast_slice(vertices));
-        }
-        let ibuf = device.create_buffer(
-            capacity as u64 * std::mem::size_of::<InstanceTransform>() as u64,
-            BufferUse::Readback,
-        );
-        let cumulative =
-            device.create_buffer(u64::from(triangle_count.max(1)) * 4, BufferUse::Upload);
-
         // Grow everywhere.
         let [rule_slope, rule_height, rule_breakup] = CoverRule::default().packed();
-        let no_indices = device.create_buffer(4, BufferUse::Upload);
         let uniforms = ScatterOnMeshUniforms {
             count,
             seed,
@@ -581,13 +632,38 @@ mod gpu_tests {
             align_to_normal: u32::from(align_to_normal),
             capacity,
             indexed: 0,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
+            grid: 0,
+            cells: 0,
+            reach: 0.0,
             rule_slope,
             rule_height,
             rule_breakup,
+            camera: [0.0; 4],
         };
+        dispatch(device, wgsl, vertices, &uniforms)
+    }
+
+    /// Run the place pass over `uniforms.capacity` slots, after the area
+    /// table when the copies spread over the whole surface.
+    fn dispatch(
+        device: &manifold_gpu::GpuDevice,
+        wgsl: &str,
+        vertices: &[MeshVertex],
+        uniforms: &ScatterOnMeshUniforms,
+    ) -> Vec<InstanceTransform> {
+        let capacity = uniforms.capacity;
+        let triangle_count = uniforms.triangle_count;
+        let vbuf = device.create_buffer(std::mem::size_of_val(vertices) as u64, BufferUse::Upload);
+        unsafe {
+            vbuf.write(0, bytemuck::cast_slice(vertices));
+        }
+        let ibuf = device.create_buffer(
+            capacity as u64 * std::mem::size_of::<InstanceTransform>() as u64,
+            BufferUse::Readback,
+        );
+        let cumulative =
+            device.create_buffer(u64::from(triangle_count.max(1)) * 4, BufferUse::Upload);
+        let no_indices = device.create_buffer(4, BufferUse::Upload);
 
         let bindings = [
             GpuBinding::Buffer {
@@ -597,7 +673,7 @@ mod gpu_tests {
             },
             GpuBinding::Bytes {
                 binding: 1,
-                data: bytemuck::bytes_of(&uniforms),
+                data: bytemuck::bytes_of(uniforms),
             },
             GpuBinding::Buffer {
                 binding: 2,
@@ -617,7 +693,7 @@ mod gpu_tests {
         ];
 
         let mut enc = device.create_encoder("scatter-on-mesh-test");
-        if triangle_count > 0 {
+        if uniforms.grid == 0 && triangle_count > 0 {
             let area = device.create_compute_pipeline(wgsl, "area_main", "scatter-area-test");
             enc.dispatch_compute(
                 &area,
@@ -867,6 +943,79 @@ mod gpu_tests {
                 "instance {i}: flat ground must keep instances upright, got up={mapped_up:?} from euler=({rx}, {ry}, {rz})"
             );
         }
+    }
+
+    /// Reach: copies sit on the Terrain grid's own triangles, and a camera
+    /// moving one cell along x re-places only the column of slots whose
+    /// cell left the window; every other copy keeps its slot and its spot.
+    #[test]
+    fn reach_copies_sit_on_the_grid_and_keep_their_slots_as_the_camera_moves() {
+        let device = manifold_gpu::testkit::test_device();
+        const RES: u32 = 17;
+        let height = |x: f32, z: f32| 0.02 * x * z + 0.3 * x;
+        let vertices: Vec<MeshVertex> = (0..RES * RES)
+            .map(|i| {
+                let x = (i % RES) as f32 * 2.0 - 16.0;
+                let z = (i / RES) as f32 * 2.0 - 16.0;
+                mk_vertex([x, height(x, z), z])
+            })
+            .collect();
+        // The height on grid_indices.wgsl's split of each 2 m quad.
+        let on_grid = |x: f32, z: f32| {
+            let (gx, gz) = ((x + 16.0) / 2.0, (z + 16.0) / 2.0);
+            let (cx, cz) = (gx.floor(), gz.floor());
+            let (fx, fz) = (gx - cx, gz - cz);
+            let at = |dx: f32, dz: f32| height((cx + dx) * 2.0 - 16.0, (cz + dz) * 2.0 - 16.0);
+            if fx + fz <= 1.0 {
+                at(0.0, 0.0) * (1.0 - fx - fz) + at(0.0, 1.0) * fz + at(1.0, 0.0) * fx
+            } else {
+                at(1.0, 1.0) * (fx + fz - 1.0)
+                    + at(0.0, 1.0) * (1.0 - fx)
+                    + at(1.0, 0.0) * (1.0 - fz)
+            }
+        };
+        let [rule_slope, rule_height, rule_breakup] = CoverRule::default().packed();
+        let place = |camera_x: f32| {
+            let uniforms = ScatterOnMeshUniforms {
+                count: 256,
+                seed: 3,
+                vertex_count: RES * RES,
+                triangle_count: 0,
+                scale_min: 1.0,
+                scale_max: 1.0,
+                align_to_normal: 0,
+                capacity: 256,
+                indexed: 0,
+                grid: RES,
+                cells: 16,
+                reach: 8.0,
+                rule_slope,
+                rule_height,
+                rule_breakup,
+                camera: [camera_x, 0.5, -0.4, 0.0],
+            };
+            dispatch(&device, SHADER_SRC, &vertices, &uniforms)
+        };
+        // Cells are 1 m: the window runs from cell -8 to 7, then -7 to 8,
+        // and cell -8's slots (column 8) take cell 8.
+        let before = place(0.3);
+        let after = place(1.3);
+        let mut kept = 0;
+        for (slot, (a, b)) in before.iter().zip(&after).enumerate() {
+            for copy in [a, b] {
+                let [x, y, z, size] = copy.pos_scale;
+                if size > 0.0 {
+                    let want = on_grid(x, z);
+                    assert!((y - want).abs() < 1e-3, "slot {slot}: {y} against {want}");
+                }
+            }
+            if a.pos_scale[3] > 0.0 && b.pos_scale[3] > 0.0 {
+                let same = a.pos_scale[..3] == b.pos_scale[..3];
+                assert_eq!(same, slot % 16 != 8, "slot {slot}");
+                kept += usize::from(same);
+            }
+        }
+        assert!(kept > 50, "{kept} copies kept their spot");
     }
 
     #[test]
