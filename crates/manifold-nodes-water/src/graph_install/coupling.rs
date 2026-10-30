@@ -12,7 +12,8 @@ use manifold_core::scene_impulse::{ImpulseTarget, RigidImpulseTargets};
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::primitive::PrimitiveSpec;
 
-use manifold_gas::primitives::gas_volume::GasVolume;
+use manifold_gas::primitives::gas_domain::GasDomain;
+use manifold_gas::primitives::gas_ticks::{GAS_TICKS_PORTS, GasTicks};
 
 use manifold_node_engine::load::expand::SceneModifierExpandError;
 use manifold_node_engine::load::expand::impulse_recipients_with_index;
@@ -188,7 +189,8 @@ fn scene_fluids(
     Ok(fluids)
 }
 
-/// A scene's gas solvers in draw order: what its objects' `gas_state` reads.
+/// A scene's gas domains in draw order: the clock of the tick loop each
+/// object's `gas_state` reads.
 fn scene_gases(
     index: &FlatSceneIndex,
     scene: &NodeId,
@@ -198,8 +200,18 @@ fn scene_gases(
         let Some(wire) = index.input(&object, "gas_state")? else {
             continue;
         };
+        let Some(ticks) = index.by_id.get(&wire.from_node) else {
+            continue;
+        };
+        if index.node(ticks)?.type_id != <GasTicks as PrimitiveSpec>::TYPE_ID {
+            continue;
+        }
+        let clock = GAS_TICKS_PORTS.clock.expect("the gas loop has a clock");
+        let Some(wire) = index.input(ticks, clock)? else {
+            continue;
+        };
         if let Some(gas) = index.by_id.get(&wire.from_node)
-            && index.node(gas)?.type_id == <GasVolume as PrimitiveSpec>::TYPE_ID
+            && index.node(gas)?.type_id == <GasDomain as PrimitiveSpec>::TYPE_ID
             && !gases.contains(gas)
         {
             gases.push(gas.clone());

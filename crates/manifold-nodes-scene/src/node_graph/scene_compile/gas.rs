@@ -1,11 +1,14 @@
 //! Smoke and Fire (docs/SMOKE_AND_FIRE_MAP.md): each is a transform that is the
-//! box, a value node that is the cell, one `node.gas_volume` that simulates
-//! the gas in the box, and one `node.scene_object` that draws the solver's
-//! fields as a volume. The cell follows the World's Cell Size times the
-//! item's Quality (`water::follow_cell`), and the solver follows the World's
-//! gravity, speed and reset through value nodes. Scene forces and hits reach
-//! the solver at load (`load/expand/acceleration.rs` follows the object's
-//! `gas_state`); a gas pushes nothing back.
+//! box, a value node that is the cell, a `node.gas_domain` that places the box
+//! in its World and runs the World's clock, a `node.gas_ticks` loop that
+//! repeats one `node.gas_volume` step a tick, and one `node.scene_object` that
+//! draws the published fields as a volume. The cell follows the World's Cell
+//! Size times the item's Quality (`water::follow_cell`); the domain follows
+//! the World's speed and reset and the step its gravity, through value nodes.
+//! Inside each tick the step reads the first Water's tiles and the first
+//! Sand's grains as that tick left them. Scene forces and hits reach the
+//! domain at load (`load/expand/acceleration.rs` follows the object's
+//! `gas_state` to the loop's clock); a gas pushes nothing back.
 //!
 //! Inside a Group, the box sits in the group's frame and the gas follows the
 //! group's visibility. The box stays axis-aligned: a turned group moves it
@@ -17,6 +20,8 @@ use manifold_core::scene_schema::WORLD_FOLLOWS;
 use manifold_core::scene_world_controls::{WORLD_INPUTS, WorldControlInput};
 use manifold_foundation::ItemId;
 
+use manifold_core::liquid_domain::{SAND_INPUTS, WATER_PUSH_STEP};
+
 use super::builder::Builder;
 use super::water::{MatterFrames, follow_cell, items_of};
 
@@ -27,8 +32,9 @@ const FIRE: f32 = 1.0;
 /// The World control a gas leaves alone: still air does not move it.
 const AIR_RESISTANCE: &str = "air_resistance";
 
-/// The solver's scalar outputs and the scene object's inputs they feed: the
-/// box in the world, and the fire's light. The two fields go beside them.
+/// The domain's scalar outputs and the scene object's inputs they feed: the
+/// box in the world, and the fire's light. The two fields come from the tick
+/// loop.
 const SCALARS: [(&str, &str); 12] = [
     ("cell_size", "gas_cell_size"),
     ("origin_x", "gas_origin_x"),
@@ -58,8 +64,43 @@ fn world_controls() -> impl Iterator<Item = (WorldControlInput, &'static str)> {
         .filter(|(control, _)| control.world != AIR_RESISTANCE)
 }
 
+/// The fine grid the domain lays, which the loop sizes its fields to and the
+/// step steps on.
+const DIMS: [&str; 3] = ["dims_x", "dims_y", "dims_z"];
+
+/// What the domain hands the step: the box, each tick's scalars, the frame's
+/// state and the arrays of forces, hits, bodies and light.
+const DOMAIN_TO_STEP: [&str; 26] = [
+    "cell_size",
+    "origin_x",
+    "origin_y",
+    "origin_z",
+    "dims_x",
+    "dims_y",
+    "dims_z",
+    "tick_dt",
+    "tick_index",
+    "tick_last",
+    "tick_forces",
+    "tick_impulses",
+    "tick_solid_base",
+    "tick_solid_count",
+    "restarted",
+    "solids_move",
+    "static_epoch",
+    "forces",
+    "impulses",
+    "bodies",
+    "shapes",
+    "atlas",
+    "collider_nodes",
+    "collider_triangles",
+    "moving",
+    "light",
+];
+
 /// Emit every Smoke and Fire, in tree order. Each flows round the first
-/// Water and the first Sand: their particles a frame back are solids to it.
+/// Water and the first Sand as each tick leaves them.
 pub(crate) fn emit_all(b: &mut Builder<'_>, matter: MatterFrames) {
     for (item, group) in gases(b.doc) {
         emit(b, &item, group.as_ref(), matter);
@@ -85,30 +126,61 @@ fn emit(b: &mut Builder<'_>, item: &Item, group: Option<&ItemId>, matter: Matter
     let cell_size = b.add(owner, "cell_size", "node.value");
     b.set_number(cell_size, "value", DEFAULT_CELL_SIZE);
 
+    let domain = b.add(owner, "domain", "node.gas_domain");
+    b.wire(transform, "transform", domain, "domain");
+    b.wire(cell_size, "out", domain, "cell_metres");
+    let ticks = b.add(owner, "ticks", "node.gas_ticks");
+    b.wire(domain, "interval_duration", ticks, "clock");
+    b.wire(domain, "ticks", ticks, "ticks");
+    for port in DIMS {
+        b.wire(domain, port, ticks, port);
+    }
     let gas = b.add(owner, "gas", "node.gas_volume");
     b.set_number(gas, "kind", kind);
     b.set_number(gas, "quality", quality.index() as f32);
-    b.wire(transform, "transform", gas, "domain");
-    b.wire(cell_size, "out", gas, "cell_metres");
+    for port in DOMAIN_TO_STEP {
+        b.wire(domain, port, gas, port);
+    }
+    for port in ["state", "velocity"] {
+        b.wire(ticks, port, gas, port);
+        b.wire(gas, &format!("{port}_out"), ticks, &format!("{port}_in"));
+    }
+    // Gravity moves the air each tick; speed and reset run the clock.
     for (control, role) in world_controls() {
         let value = b.add(owner, role, "node.value");
-        b.wire(value, "out", gas, control.input);
+        let to = if control.input.starts_with("gravity") {
+            gas
+        } else {
+            domain
+        };
+        b.wire(value, "out", to, control.input);
     }
-    for (frame, points, count) in [
-        (matter.water, "water", "water_count"),
-        (matter.sand, "sand", "sand_count"),
-    ] {
-        if let Some(frame) = frame {
-            b.wire(frame, "particles_b", gas, points);
-            b.wire(frame, "count_b", gas, count);
+    // The water and sand step in the World's loop: with no World they run
+    // their own clocks, and the gas cannot read them inside a tick.
+    let matter = if b.doc.world().is_some() {
+        matter
+    } else {
+        MatterFrames::default()
+    };
+    if let Some(step) = matter.water_step {
+        for port in WATER_PUSH_STEP {
+            b.wire(step, port, gas, port);
         }
+        if let Some((cell, port)) = b.input(step, "cell_size") {
+            b.wire(cell, &port, gas, "water_cell");
+        }
+    }
+    if let Some(stats) = matter.grains {
+        let [points, count] = SAND_INPUTS;
+        b.wire(stats, "grain_view", gas, points);
+        b.wire(stats, "view_count", gas, count);
     }
 
     let object = b.add(owner, "object", "node.scene_object");
-    b.wire(gas, "state", object, "gas_state");
-    b.wire(gas, "velocity", object, "gas_velocity");
+    b.wire(ticks, "state", object, "gas_state");
+    b.wire(ticks, "velocity", object, "gas_velocity");
     for (output, input) in SCALARS {
-        b.wire(gas, output, object, input);
+        b.wire(domain, output, object, input);
     }
     b.set_number(object, "gas_quality", quality.index() as f32);
     if let Some(visible) = visible {
@@ -197,11 +269,11 @@ mod tests {
         doc
     }
 
-    /// A Fire and a Smoke each compile to one gas node of their kind and a
-    /// scene object that draws it, in a Group or not; the cell is the World's
-    /// times the item's Quality, the solver follows gravity, speed and reset
-    /// but not still air, and a Group's frame and visibility reach the box
-    /// and the object.
+    /// A Fire and a Smoke each compile to a domain, a tick loop round one
+    /// step of their kind, and a scene object that draws the loop's fields,
+    /// in a Group or not; the cell is the World's times the item's Quality,
+    /// the domain follows speed and reset and the step gravity, neither still
+    /// air, and a Group's frame and visibility reach the box and the object.
     #[test]
     fn each_gas_compiles_to_a_solver_and_the_object_that_draws_it() {
         for (kind, kind_value, quality, grouped) in [
@@ -221,22 +293,33 @@ mod tests {
             assert_eq!(number(&gas.params["kind"]), kind_value);
             assert_eq!(number(&gas.params["quality"]), quality.index() as f32);
 
+            let domain = node(&def, "gas:domain");
+            assert_eq!(domain.type_id, "node.gas_domain");
+            let ticks = node(&def, "gas:ticks");
+            assert_eq!(ticks.type_id, "node.gas_ticks");
+            assert!(wired(&def, (domain, "interval_duration"), (ticks, "clock")));
+            assert!(wired(&def, (domain, "tick_dt"), (gas, "tick_dt")));
+            assert!(wired(&def, (ticks, "state"), (gas, "state")));
+            assert!(wired(&def, (gas, "state_out"), (ticks, "state_in")));
+            assert!(wired(&def, (gas, "velocity_out"), (ticks, "velocity_in")));
+
             let object = node(&def, "gas:object");
             assert_eq!(object.type_id, "node.scene_object");
             assert_eq!(
                 number(&object.params["gas_quality"]),
                 quality.index() as f32
             );
+            for (output, input) in [("state", "gas_state"), ("velocity", "gas_velocity")] {
+                assert!(wired(&def, (ticks, output), (object, input)), "{output}");
+            }
             for (output, input) in [
-                ("state", "gas_state"),
-                ("velocity", "gas_velocity"),
                 ("cell_size", "gas_cell_size"),
                 ("origin_y", "gas_origin_y"),
                 ("dims_z", "gas_dims_z"),
                 ("light_power", "gas_light_power"),
                 ("light_temperature", "gas_light_temperature"),
             ] {
-                assert!(wired(&def, (gas, output), (object, input)), "{output}");
+                assert!(wired(&def, (domain, output), (object, input)), "{output}");
             }
             let render = node(&def, "scene:render");
             assert!(
@@ -253,7 +336,7 @@ mod tests {
 
             // One grid per World: the cell is the World's, scaled by Quality.
             let cell = node(&def, "gas:cell_size");
-            assert!(wired(&def, (cell, "out"), (gas, "cell_metres")));
+            assert!(wired(&def, (cell, "out"), (domain, "cell_metres")));
             assert_eq!(
                 number(&cell.params["value"]),
                 DEFAULT_CELL_SIZE * quality.cell_scale()
@@ -268,17 +351,16 @@ mod tests {
             assert!(wired(
                 &def,
                 (node(&def, "gas:world_speed"), "out"),
-                (gas, "speed")
+                (domain, "speed")
             ));
             assert!(wired(
                 &def,
                 (node(&def, "gas:world_reset"), "out"),
-                (gas, "reset")
+                (domain, "reset")
             ));
             assert!(
-                def.wires
-                    .iter()
-                    .all(|wire| wire.to_node != gas.id || wire.to_port != "air_resistance"),
+                def.wires.iter().all(|wire| ![gas.id, domain.id].contains(&wire.to_node)
+                    || wire.to_port != "air_resistance"),
                 "still air does not move a gas"
             );
             assert!(
@@ -290,7 +372,7 @@ mod tests {
 
             // A Group's frame places the box and its visibility hides the gas.
             let transform = node(&def, "gas:transform");
-            assert!(wired(&def, (transform, "transform"), (gas, "domain")));
+            assert!(wired(&def, (transform, "transform"), (domain, "domain")));
             let framed = def
                 .wires
                 .iter()

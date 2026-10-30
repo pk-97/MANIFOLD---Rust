@@ -48,7 +48,7 @@ Phase 1 landed: the lead's clock reaches every taker through `SharedSolids::foll
 - **Rules inside a group.** A member's body may read another member's body or boundary outputs; outside a group a body wire still may not leave its region, and one region still may not feed another.
 - **Runner.** `run_substep_region` is split into open (boundary frame run, restart, pending), one iteration (begin, finish) and release. `run_region_group` opens every member, then for each tick runs each member's iterations whose clock interval `ordinal` is that tick, in group order, then releases every member's held resources together. The interleaved run is one replay span; the async lane is off inside a group until the optimise pass.
 - **Matter to water inside the tick.** The water step's `sand` reads `node.matter_stats`' `grain_view`: every grain as a `MatterGrain` (its bulk's sphere, velocity and solid share) at the end of each tick, written only while read (`matter_grain_view.wgsl`). `water_wetness` and gas still read `matter_frame` once a frame.
-- **Gas** keeps encoding all its ticks in one run after the group; it joins the loop when it moves onto the table (phase 5).
+- **Gas** joined the loop after the table (below).
 
 ## Phase 3 in code: what one table needs
 
@@ -87,6 +87,15 @@ Landed before the table, on the tick loop:
 - **One wait per tick boundary.** A co-iterated group waits for the GPU once between two ticks, before any member starts the next one (`settle_group_tick`, `exec/execution/substep_region.rs`), when a member's clock owner asks for a host step. The lead's host step settles the tick that ended and steps Box3D over it. A region outside a group still waits inside its own iterations.
 - **Pairs around the host step.** `NodePairBehavior::before_tick` and `after_tick` run around those host steps for each co-iterating pair. `SharedSolidsPair` (`nodes-water/src/physics_scene.rs`) hands the owner the other liquid's push over the tick that ended (`SharesSolids::tick_push`) before it settles, then hands the other liquid the owner's rows for the next tick (`SharesSolids::take_tick`), which it writes into its body rows and starts its push from zero.
 - **So** every liquid pushes the bodies each tick, and every liquid meets them where Box3D put them that tick, not where the first tick's rows carried them. The frame's last tick still reaches the owner through `take_observed_push` before its frame-start settle. Bodies stay one tick behind the liquids' push (explicit coupling); Box3D steps once per tick.
+
+## Gas in the loop
+
+Smoke and Fire are built as water and Matter are: `node.gas_domain` (clock owner, outside the loop: the box, the lead's clock, forces, hits, body rows, light readback), `node.gas_ticks` (the substep boundary; it owns the published state and velocity) and `node.gas_volume` (the body: one tick of the fields). The `SharedSolidsPair` from the World's lead to the gas domain co-iterates, so the gas's region joins the World's group: each tick runs the Matter's, then the water's, then the gas's.
+
+- **Per tick.** The domain's `substep_clock_interval` gives one interval a tick with its scalars (`tick_dt`, `tick_index`, `tick_last`, `tick_forces`, `tick_impulses`, `tick_solid_base`, `tick_solid_count`). The moving Colliders' bits are a domain array (`moving`), not uniforms, so the step needs no CPU data the domain holds.
+- **Water and sand within the tick.** The step reads the first Water's step (`faces`, `distance`, `tiles`, `pool_tiles` and its cell) through the water's own tiles at every gas cell (`gas_water`, the Matter water push's sampling), and the first Sand's `grain_view` each tick. The frame-late particle frames and their state captures are gone. With no World item nothing is grouped, so the gas reads neither.
+- **Published.** The step writes the fine state and velocity into the loop's arrays on the frame's last tick (`cs_publish_velocity`), and the light sums into the domain's ring slot.
+- **Not yet.** The gas is still a dense box at its own cell, not on the table (phase 5). Sand reaches it as grains spread onto its cells, not through the Matter's slots.
 
 ## Porous sand in the pressure solve
 

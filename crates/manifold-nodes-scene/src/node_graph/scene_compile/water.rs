@@ -176,12 +176,14 @@ const WATER_WETNESS: &str = "water_wetness";
 /// `grain_view` holds every grain at the end of each tick.
 const MATTER_TICK_STATS: &str = "matter_tick_stats";
 
-/// The particle frames of the first Water and the first Sand, which Smoke
-/// and Fire flow round (`gas::emit_all`).
+/// What Smoke and Fire flow round inside each tick of the World's loop
+/// (`gas::emit_all`): the first Water's step, whose tiles hold its water as
+/// the tick left it, and the first Sand's tick-end stats, whose `grain_view`
+/// holds its grains.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct MatterFrames {
-    pub(crate) water: Option<u32>,
-    pub(crate) sand: Option<u32>,
+    pub(crate) water_step: Option<u32>,
+    pub(crate) grains: Option<u32>,
 }
 
 /// Emit every Water and Sand and its sources. With no water solver linked,
@@ -277,7 +279,7 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
             owned.get(SAND_FRAME).copied(),
         ));
     }
-    let couples = !water_ids.is_empty() || !super::gas::gases(b.doc).is_empty();
+    let couples = !water_ids.is_empty();
     let mut sand = None;
     for (index, solver) in solvers.iter().enumerate() {
         let coupling = join_slots(b, solver, couples && index == 0);
@@ -285,14 +287,15 @@ pub(crate) fn emit_all(b: &mut Builder<'_>) -> MatterFrames {
             sand = coupling;
         }
     }
-    let mut frames = MatterFrames {
-        water: water_ids
+    let frames = MatterFrames {
+        water_step: water_ids
             .first()
-            .and_then(|(_, ids)| ids.get(SAND_FRAME).copied()),
-        sand,
+            .and_then(|(_, ids)| ids.get("step").copied()),
+        grains: solvers
+            .first()
+            .and_then(|solver| solver.ids.get(MATTER_TICK_STATS).copied()),
     };
     let (Some(solver), Some(frame)) = (solvers.first(), sand) else {
-        frames.sand = None;
         return frames;
     };
     let [points, count] = manifold_core::liquid_domain::SAND_INPUTS;
@@ -326,8 +329,8 @@ struct Solver {
 
 /// Join a solver's Sands: chain their materials in slot order, the last one
 /// feeding the solver, and give each draw its own run of points. With
-/// `couples`, add the frame of every point the water and gas read (the first
-/// Sand's frame when it runs alone); returns it.
+/// `couples`, add the frame of every point the water's wet map reads (the
+/// first Sand's frame when it runs alone); returns it.
 fn join_slots(b: &mut Builder<'_>, solver: &Solver, couples: bool) -> Option<u32> {
     let (Some(&domain), Some(&(_, Some(first_frame)))) =
         (solver.ids.get(SAND_DOMAIN), solver.slots.first())

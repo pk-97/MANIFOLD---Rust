@@ -3,7 +3,7 @@
 //! solids, and a free-running world and each gas taking its solids.
 
 use manifold_core::scene_impulse::RigidImpulseTargets;
-use manifold_gas::primitives::gas_volume::GasVolume;
+use manifold_gas::primitives::gas_domain::GasDomain;
 use manifold_node_engine::exec::effect_node::{EffectNode, EffectNodeContext, NodeInstanceId};
 use manifold_node_engine::exec::node_pairs::NodePairBehavior;
 use manifold_node_engine::graph::Graph;
@@ -92,9 +92,9 @@ fn shares_solids_mut(node: &mut dyn EffectNode) -> Option<&mut dyn SharesSolids>
             .downcast_mut::<GpuFlipDomain>()
             .map(|domain| domain as &mut dyn SharesSolids);
     }
-    if any.is::<GasVolume>() {
+    if any.is::<GasDomain>() {
         return any
-            .downcast_mut::<GasVolume>()
+            .downcast_mut::<GasDomain>()
             .map(|gas| gas as &mut dyn SharesSolids);
     }
     any.downcast_mut::<MatterDomain>()
@@ -177,7 +177,7 @@ impl NodePairBehavior for WorldSolidsPair {
     }
 
     fn after_first(&self, world: &dyn EffectNode, gas: &mut dyn EffectNode) {
-        let Some(gas) = gas.as_any_mut().downcast_mut::<GasVolume>() else {
+        let Some(gas) = gas.as_any_mut().downcast_mut::<GasDomain>() else {
             return;
         };
         let solids = gas.shared_solids_mut();

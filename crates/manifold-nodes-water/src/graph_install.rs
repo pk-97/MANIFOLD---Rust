@@ -12,7 +12,7 @@ use manifold_node_engine::load::instantiation::GraphInstantiationHook;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::primitive::PrimitiveSpec;
 
-use manifold_gas::primitives::gas_volume::GasVolume;
+use manifold_gas::primitives::gas_domain::GasDomain;
 
 pub mod coupling;
 
@@ -59,7 +59,7 @@ fn install_coupled_scenes(
     let has_gas = def
         .nodes
         .iter()
-        .any(|node| node.type_id == <GasVolume as PrimitiveSpec>::TYPE_ID);
+        .any(|node| node.type_id == <GasDomain as PrimitiveSpec>::TYPE_ID);
     if has_fluid && has_rigid {
         let bindings = coupling::prepare_coupled_scenes(def, registry)
             .map_err(GraphBuildError::SceneModifier)?;

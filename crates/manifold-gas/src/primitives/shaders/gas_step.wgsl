@@ -1,5 +1,5 @@
 // The gas solver's step: one box of cells holding smoke or fire, advanced one
-// frame by the kernels below in command order (the host composes the
+// tick by the kernels below in command order (the host composes the
 // BLACKBODY_*, LIGHT_FIXED_SCALE, LIGHT_WORDS and SOLIDS constants ahead of
 // this source; it builds the kernels once with SOLIDS and once without, so a
 // box with no solid in the scene runs none of their code).
@@ -17,11 +17,11 @@
 // averaged back onto its own cells (`state_a`). A cell inside one of the
 // scene's solids holds no gas, its faces move with the solid, and the
 // pressure solve treats it as a wall. Water and sand are solids too: a cell
-// at least half full of them moves with their mean velocity there
-// (cs_matter, cs_solids).
+// the water fills, read through the water's own tiles, or at least half full
+// of grains, moves with them (cs_matter, cs_solids).
 //
 // Roles rotate: the host names three velocity and three fine state buffers
-// and binds them as vel_in/fine_in (last frame's result), vel_a/fine_a and
+// and binds them as vel_in/fine_in (last tick's result), vel_a/fine_a and
 // vel_b/fine_b. Advection reads the first and writes the others; after it,
 // the step's working fields R are bound at vel_a/fine_a for every later
 // kernel.
@@ -69,15 +69,12 @@ struct Params {
     // row `solid_base` of `bodies`.
     solid_base: u32,
     solid_count: u32,
-    // This frame's water and sand particles (SOLIDS): the first
-    // `water_count` of `water`, then the first `sand_count` of `sand`.
-    water_count: u32,
+    // The water this tick (SOLIDS): its tiles' pool, 0 while none reaches the
+    // gas, and its cell in metres; and the first `sand_count` grains of
+    // `sand`.
+    water_pool: u32,
     sand_count: u32,
-    pad4: u32,
-    // One bit a body row (bit b % 32 of word b / 32): a Collider that moves
-    // this frame, laid each tick by cs_solids and left out of the static
-    // solids.
-    moving: array<vec4<u32>, 2>,
+    water_cell: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -96,8 +93,8 @@ struct Params {
 // pressure solve leaves alone. It costs the divergence a millionth of itself.
 @group(0) @binding(9) var<storage, read_write> divergence: array<f32>;
 @group(0) @binding(10) var<storage, read_write> fine_b: array<u32>;
-// The air's velocity at each fine cell's centre, published: two words, halves
-// (u, v) then (w, 0).
+// The air's velocity at each fine cell's centre, published on the frame's
+// last tick: two words, halves (u, v) then (w, 0).
 @group(0) @binding(11) var<storage, read_write> velocity_out: array<u32>;
 @group(0) @binding(12) var<storage, read_write> light_sums: array<atomic<u32>>;
 @group(0) @binding(13) var<storage, read> blackbody: array<vec4<f32>>;
@@ -147,22 +144,72 @@ struct LiquidShape {
 // in cells less the lowest air cell of the column through the source's
 // centre (cs_solids_static), so the largest is the lowest.
 @group(0) @binding(22) var<storage, read_write> source_floor: array<atomic<u32>>;
-// Four words a cell, in units of 1 / MATTER_SCALE: how full of water and
-// sand the cell is (its volume's fraction), then that fraction times their
-// velocity, x y z, as two's complement sums (cs_matter).
+// Four words a cell, in units of 1 / MATTER_SCALE: how full of grains the
+// cell is (its volume's fraction), then that fraction times their velocity,
+// x y z, as two's complement sums (cs_matter).
 @group(0) @binding(23) var<storage, read_write> matter: array<atomic<u32>>;
-// node.liquid_frame's and node.matter_frame's particles: position and
-// radius, velocity, id.
-struct GasParticle {
-    position_radius: vec4<f32>,
-    velocity: vec3<f32>,
-    id: u32,
+// The first Water's step as this tick left it: its pooled faces and
+// distance (metres, negative inside the water) on its world tiles.
+struct FaceSample {
+    face_velocity: vec4<f32>,
+    face_weight: vec4<f32>,
 }
-@group(0) @binding(24) var<storage, read> water: array<GasParticle>;
-@group(0) @binding(25) var<storage, read> sand: array<GasParticle>;
+@group(0) @binding(24) var<storage, read> water_faces: array<FaceSample>;
+@group(0) @binding(28) var<storage, read> water_distance: array<f32>;
+@group(0) @binding(29) var<storage, read> water_tiles: array<u32>;
+// The first Sand's grains at this tick's end (node.matter_stats'
+// grain_view): its bulk's sphere, velocity and solid share.
+struct GasGrain {
+    position_radius: vec4<f32>,
+    velocity_solid: vec4<f32>,
+}
+@group(0) @binding(25) var<storage, read> sand: array<GasGrain>;
+// One bit a body row (bit b % 32 of word b / 32): a Collider that moves this
+// frame, laid each tick by cs_solids and left out of the static solids.
+@group(0) @binding(26) var<storage, read> moving: array<u32>;
+// The fine state published on the frame's last tick, as fine_a holds it.
+@group(0) @binding(27) var<storage, read_write> state_out: array<u32>;
 const MATTER_SCALE: f32 = 65536.0;
-// A cell at least this full of water or sand is a solid to the gas.
+// A cell at least this full of water or grains is a solid to the gas.
 const MATTER_FULL: f32 = 0.5;
+
+fn ts_pool_tiles() -> u32 { return params.water_pool; }
+fn ts_table_word(i: u32) -> u32 { return water_tiles[i]; }
+
+// The water's velocity and the share of the water's cell it fills at world
+// position x: FLIP's MAC trilinear on the faces, and the distance trilinear
+// at cell centres, 1 half a cell inside the surface, 0 half a cell out. A
+// cell the water's tiles do not hold has no water.
+fn gas_water(x: vec3<f32>) -> vec4<f32> {
+    let q = ww_cell_position(x, params.water_cell);
+    let cell = vec3<i32>(floor(q));
+    ts_home(ts_cell_at(cell));
+    if !ts_cell_stored(cell) {
+        return vec4<f32>(0.0);
+    }
+    var v = vec3<f32>(0.0);
+    for (var axis = 0u; axis < 3u; axis = axis + 1u) {
+        let s = lf_stencil(q, axis);
+        let lower = floor(s);
+        let f = s - lower;
+        let base = vec3<i32>(lower);
+        var sum = 0.0;
+        for (var corner = 0u; corner < 8u; corner = corner + 1u) {
+            let face = water_faces[ts_face(base + vec3<i32>(ww_corner(corner)))];
+            sum = sum + ww_corner_weight(f, corner) * lf_face_velocity(face.face_velocity, face.face_weight, axis);
+        }
+        v[axis] = sum;
+    }
+    let s = q - vec3<f32>(0.5);
+    let lower = floor(s);
+    let f = s - lower;
+    let base = vec3<i32>(lower);
+    var d = 0.0;
+    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
+        d = d + ww_corner_weight(f, corner) * water_distance[ts_cell_at(base + vec3<i32>(ww_corner(corner)))];
+    }
+    return vec4<f32>(v, clamp(0.5 - d / params.water_cell, 0.0, 1.0));
+}
 
 fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(atlas[index / 2u]);
@@ -775,7 +822,7 @@ fn cs_fine_maccormack(@builtin(global_invocation_id) gid: vec3<u32>) {
 // Whether the Collider at body row `b` moves this frame (`moving_trees` in
 // gas_volume.rs).
 fn tree_moves(b: u32) -> bool {
-    return ((params.moving[b >> 7u][(b >> 5u) & 3u] >> (b & 31u)) & 1u) != 0u;
+    return ((moving[b >> 5u] >> (b & 31u)) & 1u) != 0u;
 }
 
 // The signed distance from `x` to a Collider's mesh in `body`'s pose, read
@@ -825,23 +872,19 @@ fn cs_solids_static(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// Each water or sand particle's volume, spread over the eight cells round it
-// by its trilinear weights, with its velocity: once a frame, from the
-// frame's particles, before the ticks. Dead particles (radius 0) add nothing.
+// Each grain's bulk volume, spread over the eight cells round it by its
+// trilinear weights, with its velocity: each tick, from the grains as the
+// Sand's tick left them. Unused slots (radius 0) add nothing.
 @compute @workgroup_size(64, 1, 1)
 fn cs_matter(
     @builtin(global_invocation_id) gid: vec3<u32>,
     @builtin(num_workgroups) groups: vec3<u32>,
 ) {
     let n = gid.x + gid.y * groups.x * 64u;
-    var p: GasParticle;
-    if n < params.water_count {
-        p = water[n];
-    } else if n - params.water_count < params.sand_count {
-        p = sand[n - params.water_count];
-    } else {
+    if n >= params.sand_count {
         return;
     }
+    let p = sand[n];
     let r = p.position_radius.w;
     let g = (p.position_radius.xyz - params.origin) / params.h - vec3<f32>(0.5);
     let base = vec3<i32>(floor(g));
@@ -861,7 +904,7 @@ fn cs_matter(
         let share = w.x * w.y * w.z * volume;
         let i = 4u * cell_index(vec3<u32>(c));
         atomicAdd(&matter[i], u32(share + 0.5));
-        let v = vec3<i32>(round(share * p.velocity));
+        let v = vec3<i32>(round(share * p.velocity_solid.xyz));
         atomicAdd(&matter[i + 1u], bitcast<u32>(v.x));
         atomicAdd(&matter[i + 2u], bitcast<u32>(v.y));
         atomicAdd(&matter[i + 3u], bitcast<u32>(v.z));
@@ -871,8 +914,8 @@ fn cs_matter(
 // The moving solids at this tick's start: a cell inside a body, a Collider's
 // hull or a moving Collider's mesh takes the velocity of the one it is
 // deepest in (kind 2); a cell inside a still Collider's mesh keeps it; a cell
-// at least half full of water or sand takes their mean velocity (kind 3), and
-// the rest is air.
+// the water fills at least half takes the water's velocity, else one at least
+// half full of grains their mean velocity (kind 3); the rest is air.
 @compute @workgroup_size(4, 4, 4)
 fn cs_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !inside(gid) {
@@ -919,7 +962,14 @@ fn cs_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
             );
         }
     }
-    if kind == 0.0 && params.water_count + params.sand_count > 0u {
+    if kind == 0.0 && params.water_pool > 0u {
+        let water = gas_water(x);
+        if water.w >= MATTER_FULL {
+            kind = 3.0;
+            velocity = water.xyz;
+        }
+    }
+    if kind == 0.0 && params.sand_count > 0u {
         let full = f32(atomicLoad(&matter[4u * i]));
         if full >= MATTER_FULL * MATTER_SCALE {
             kind = 3.0;
@@ -1475,8 +1525,8 @@ fn cs_publish(
     }
 }
 
-// The air's velocity at each fine cell's centre (from cs_centres_a),
-// published beside the fine state so both share one layout.
+// The air's velocity at each fine cell's centre (from cs_centres_a) and the
+// fine state the tick ended with, published in one layout.
 @compute @workgroup_size(4, 4, 4)
 fn cs_publish_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !inside_fine(gid) {
@@ -1486,6 +1536,8 @@ fn cs_publish_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let v = centres_at(fine_to_cells(vec3<f32>(gid)));
     velocity_out[2u * i] = pack_half(v.x, v.y);
     velocity_out[2u * i + 1u] = pack_half(v.z, 0.0);
+    state_out[2u * i] = fine_a[2u * i];
+    state_out[2u * i + 1u] = fine_a[2u * i + 1u];
 }
 
 // ---- Reset --------------------------------------------------------------------

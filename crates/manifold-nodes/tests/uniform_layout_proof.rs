@@ -635,6 +635,11 @@ const NON_STANDALONE: &[&str] = &[
     // over one hand shader, its GasUniforms reflected in
     // uniform_layout_extended.
     "node.gas_volume",
+    // Its domain and tick loop: CPU clock, solids and light readback, and a
+    // substep boundary; the domain's only GPU work is the shared body-row
+    // upload, proven with the liquids'.
+    "node.gas_domain",
+    "node.gas_ticks",
     // Terrain: noise, raindrop erosion and soil slides over one hand shader,
     // kept across frames; its TerrainUniforms reflected in
     // uniform_layout_extended.

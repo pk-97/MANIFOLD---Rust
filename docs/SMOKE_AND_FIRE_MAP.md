@@ -10,8 +10,10 @@ sand, are pushed by them and by scene forces, and push nothing back. A scene wit
 | part | file |
 |---|---|
 | items, rows, defaults | `manifold-core/src/scene_schema/gas.rs` |
-| compile (transform, cell size, gas node, object) | `manifold-nodes-scene/src/node_graph/scene_compile/gas.rs` |
-| solver node `node.gas_volume` | `manifold-gas/src/primitives/gas_volume.rs`, `shaders/gas_step.wgsl` |
+| compile (transform, cell size, domain, tick loop, step, object) | `manifold-nodes-scene/src/node_graph/scene_compile/gas.rs` |
+| domain `node.gas_domain` (box, clock, solids, forces, hits, light) | `manifold-gas/src/primitives/gas_domain.rs` |
+| tick loop `node.gas_ticks` (substep boundary, published fields) | `manifold-gas/src/primitives/gas_ticks.rs` |
+| step `node.gas_volume` (one tick) | `manifold-gas/src/primitives/gas_volume.rs`, `shaders/gas_step.wgsl` |
 | object inputs and look params | `manifold-nodes-scene/src/node_graph/primitives/scene_object.rs` (`gas_*`) |
 | renderer | `render_scene/gas_objects.rs` (collect), `gas_volume.rs` + `shaders/gas_volume.wgsl`, `gas_light.wgsl` (draw) |
 | fire light | `render_scene/frame_setup.rs` (`fire_light`) |
@@ -38,14 +40,24 @@ into sheets and flames into fronts thinner than an air cell; drawn from the
 air's cells alone they showed as blocks and soft blobs. Each tick the fine
 state is averaged back onto the air's cells (`cs_restrict`) for buoyancy,
 the flames' expansion and the fire light. Three velocity and three fine
-state buffers rotate roles each frame; the fine result is the published
-state, and the air's velocity is published on the fine grid beside it.
+state buffers rotate roles each tick; the frame's last tick writes the fine
+result and the air's velocity on the fine grid into the tick loop's
+published arrays, which the object draws.
 
 ## Step (once a tick of the World's clock, as water and sand step)
 
 The gas runs the World's fixed ticks (`SimulationClock`, at most 1/20 s a
 tick), so a force or a hit lands on the same step at any frame rate, and
-World Speed and Reset reach it as they reach water.
+World Speed and Reset reach it as they reach water. Three nodes, as water
+and Matter are built: `node.gas_domain` runs once a frame before the World's
+tick loop (it follows the lead's clock, lays the forces, hits and body rows
+of every tick, reads the light back) and is the clock owner of
+`node.gas_ticks`, a substep region whose body is `node.gas_volume`. With a
+water or Matter leading the World the gas's region steps in the World's
+group (`docs/ONE_WORLD_DESIGN.md`): tick k of the gas runs after tick k of
+the Matter and the water. Each tick reads its own scalars from the domain
+(`tick_dt`, `tick_forces`, `tick_impulses`, `tick_solid_base`,
+`tick_solid_count`, `tick_last`).
 
 0. Solids: the World's Colliders and Bodies, taken as a second water takes
    them (`SharedSolids`): from the water that owns the World, or straight
@@ -60,13 +72,16 @@ World Speed and Reset reach it as they reach water.
    the solve leaves it out (the count of open neighbours rides in the low
    bits of the divergence). The source sits on the static solids under its
    centre, so a box floor sunk in the ground emits from the ground's top.
-   The first Water's and the first Sand's particles a frame back
-   (`particles_b` of their frames, read as state captures: the gas runs
-   with the World's solids owner, before this frame's ticks) are solids too: each spreads its volume
-   and velocity over the eight cells round it once a frame (`cs_matter`),
-   and a cell at least half full is a solid moving with their mean
-   velocity, so smoke rolls over water and a splash or a sand slide shoves
-   it. The kernels are built twice, with and without solids: smoke with no
+   Water and sand as this tick left them are solids too. The first Water's
+   step is read through its own world tiles (`gas_water`: its faces and
+   distance at each gas cell, as the Matter's water push reads them): a
+   cell the water fills at least half moves with the water. The first
+   Sand's grains (`node.matter_stats`' `grain_view`) spread their bulk and
+   velocity over the eight cells round each (`cs_matter`), and a cell at
+   least half full moves with their mean velocity. So smoke rolls over
+   water and a splash or a sand slide shoves it within the tick. With no
+   World the water and sand run their own clocks and the gas reads neither.
+   The kernels are built twice, with and without solids: smoke with no
    solid, water or sand runs none of their code.
 1. Advect the air, then the fine state on its own grid by the same air
    (`cs_fine_*`): MacCormack with the min/max clamp. Air that
