@@ -32,6 +32,10 @@ use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
 use texture_jobs::{DecodedTexture, LoadReceiver};
 
+/// Picture bytes copied into GPU memory a frame: a 4K picture's 64 MB took
+/// about 16 ms in one frame, so it lands over eight at about 2 ms each.
+const UPLOAD_BYTES_PER_FRAME: usize = 8 << 20;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SourceTextureKey {
     rgba8_sha256: [u8; 32],
@@ -177,6 +181,9 @@ manifold_node_engine::primitive! {
         // drain step to the upload step (texture creation needs the
         // GPU device, which only `run()`'s `ctx` has).
         pending_upload: Option<Arc<DecodedTexture>> = None,
+        // The source texture `pending_upload` is going into, its content
+        // key and the rows in so far: a big picture uploads a band a frame.
+        upload_band: Option<(Arc<manifold_gpu::GpuTexture>, SourceTextureKey, u32)> = None,
         // Whether `source_texture` currently reflects the last decode.
         uploaded: bool = false,
         // Identity of the `out` texture the level-0 blit + mip chain were
@@ -289,6 +296,7 @@ impl Primitive for GltfTextureSource {
             self.src_h = 0;
             self.uploaded = false;
             self.pending_upload = None;
+            self.upload_band = None;
             self.published_content = false;
             self.converted_output = None;
             self.converted_key = None;
@@ -308,6 +316,7 @@ impl Primitive for GltfTextureSource {
                         log::error!("node.gltf_texture_source: {warning}");
                     }
                     self.pending_upload = Some(decoded);
+                    self.upload_band = None;
                     self.uploaded = false;
                 }
                 Ok(Err(e)) => {
@@ -330,7 +339,7 @@ impl Primitive for GltfTextureSource {
         // The decoded image waits for a GPU-bound frame; a CPU-only frame never
         // reaches the encoder, whatever the decode thread timing.
         if ctx.gpu.is_some()
-            && let Some(decoded) = self.pending_upload.take()
+            && let Some(decoded) = self.pending_upload.clone()
         {
             let (w, h) = (decoded.width, decoded.height);
             let color_space = match ctx.params.get("color_space") {
@@ -342,12 +351,12 @@ impl Primitive for GltfTextureSource {
             } else {
                 manifold_gpu::GpuTextureFormat::Rgba8Unorm
             };
-            self.upload_source_texture(ctx, w, h, format, decoded.rgba8_sha256, &decoded.rgba);
-            self.src_w = w;
-            self.src_h = h;
-            self.uploaded = true;
-            self.published_content = false;
-            fresh_upload = true;
+            if self.upload_source_band(ctx, w, h, format, &decoded) {
+                self.pending_upload = None;
+                self.uploaded = true;
+                self.published_content = false;
+                fresh_upload = true;
+            }
         }
 
         // Read fresh every frame (like color_space at upload) rather than
@@ -667,32 +676,40 @@ impl GltfTextureSource {
         }
     }
 
-    fn upload_source_texture(
+    /// Upload the next band of `decoded`'s rows into its source texture, at
+    /// most `UPLOAD_BYTES_PER_FRAME` a frame. True once the source is whole,
+    /// at once when a live source with the same content already holds it.
+    fn upload_source_band(
         &mut self,
         ctx: &mut EffectNodeContext<'_, '_>,
         w: u32,
         h: u32,
         format: manifold_gpu::GpuTextureFormat,
-        rgba8_sha256: [u8; 32],
-        rgba: &[u8],
-    ) {
+        decoded: &DecodedTexture,
+    ) -> bool {
         let device = ctx.gpu_encoder().device;
         let key = SourceTextureKey {
-            rgba8_sha256,
+            rgba8_sha256: decoded.rgba8_sha256,
             width: w,
             height: h,
             format,
             device_scope_id: device.resource_scope_id(),
         };
-        let cached = SOURCE_TEXTURE_CACHE.with(|cache| {
-            let mut cache = cache.borrow_mut();
-            cache.retain(|_, weak| weak.strong_count() != 0);
-            cache.get(&key).and_then(Weak::upgrade)
-        });
-
-        let tex = if let Some(tex) = cached {
-            tex
-        } else {
+        if self
+            .upload_band
+            .as_ref()
+            .is_none_or(|(_, band_key, _)| *band_key != key)
+        {
+            let cached = SOURCE_TEXTURE_CACHE.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                cache.retain(|_, weak| weak.strong_count() != 0);
+                cache.get(&key).and_then(Weak::upgrade)
+            });
+            if let Some(tex) = cached {
+                self.upload_band = None;
+                self.adopt_source(key, tex, w, h);
+                return true;
+            }
             let tex = Arc::new(device.create_texture(&manifold_gpu::GpuTextureDesc {
                 width: w,
                 height: h,
@@ -704,17 +721,41 @@ impl GltfTextureSource {
                 label: "node.gltf_texture_source source",
                 mip_levels: 1,
             }));
-            // CPU_UPLOAD uses synchronous Metal replaceRegion, so publishing
-            // the weak cache entry after this call makes every shared source
-            // fully initialized before another node can observe it.
-            ctx.gpu_encoder()
-                .native_enc
-                .upload_texture(tex.as_ref(), w, h, 1, rgba);
-            SOURCE_TEXTURE_CACHE.with(|cache| {
-                cache.borrow_mut().insert(key, Arc::downgrade(&tex));
-            });
-            tex
-        };
+            self.upload_band = Some((tex, key, 0));
+        }
+        let (tex, _, done) = self.upload_band.as_mut().expect("set above");
+        let row_bytes = w as usize * format.bytes_per_pixel() as usize;
+        let rows = (UPLOAD_BYTES_PER_FRAME / row_bytes).clamp(1, (h - *done) as usize) as u32;
+        let start = *done as usize * row_bytes;
+        ctx.gpu_encoder().native_enc.upload_texture_rows(
+            tex,
+            w,
+            *done,
+            rows,
+            &decoded.rgba[start..start + rows as usize * row_bytes],
+        );
+        *done += rows;
+        if *done < h {
+            return false;
+        }
+        let (tex, key, _) = self.upload_band.take().expect("set above");
+        // CPU_UPLOAD uses synchronous Metal replaceRegion, so publishing the
+        // weak cache entry once the last band is in makes every shared
+        // source fully initialized before another node can observe it.
+        SOURCE_TEXTURE_CACHE.with(|cache| {
+            cache.borrow_mut().insert(key, Arc::downgrade(&tex));
+        });
+        self.adopt_source(key, tex, w, h);
+        true
+    }
+
+    fn adopt_source(
+        &mut self,
+        key: SourceTextureKey,
+        tex: Arc<manifold_gpu::GpuTexture>,
+        w: u32,
+        h: u32,
+    ) {
         self.source_content_key = Some(key);
         self.source_texture = Some(tex);
         self.src_w = w;

@@ -1969,15 +1969,33 @@ impl GpuEncoder {
         _depth: u32,
         data: &[u8],
     ) {
+        self.upload_texture_rows(texture, width, 0, height, data);
+    }
+
+    /// Upload `rows` rows of CPU data, from row `first_row` down, to a
+    /// CPU_UPLOAD 2D texture via replaceRegion: `data` holds just those rows.
+    /// A big picture uploads a band a frame, so no one frame pays for all of it.
+    pub fn upload_texture_rows(
+        &mut self,
+        texture: &GpuTexture,
+        width: u32,
+        first_row: u32,
+        rows: u32,
+        data: &[u8],
+    ) {
         texture.assert_cpu_uploadable();
         self.end_current();
         let bpp = texture.format.bytes_per_pixel();
         let bytes_per_row = width as u64 * bpp as u64;
         let region = objc2_metal::MTLRegion {
-            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            origin: MTLOrigin {
+                x: 0,
+                y: first_row as usize,
+                z: 0,
+            },
             size: MTLSize {
                 width: width as usize,
-                height: height as usize,
+                height: rows as usize,
                 depth: 1,
             },
         };

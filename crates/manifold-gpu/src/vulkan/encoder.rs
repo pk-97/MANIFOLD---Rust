@@ -1077,11 +1077,26 @@ impl GpuEncoder {
         _depth: u32,
         data: &[u8],
     ) {
+        self.upload_texture_rows(texture, width, 0, height, data);
+    }
+
+    /// Upload `rows` rows of CPU data, from row `first_row` down, to a
+    /// CPU_UPLOAD 2D texture: `data` holds just those rows. A big picture
+    /// uploads a band a frame, so no one frame pays for all of it.
+    pub fn upload_texture_rows(
+        &mut self,
+        texture: &GpuTexture,
+        width: u32,
+        first_row: u32,
+        rows: u32,
+        data: &[u8],
+    ) {
         let view = &texture.view;
         assert!(
             view.image.usage.contains(GpuTextureUsage::CPU_UPLOAD),
             "texture CPU upload requires CPU_UPLOAD usage (CPU-visible storage)"
         );
+        let height = rows;
         let bytes =
             u64::from(width) * u64::from(height) * u64::from(texture.format.bytes_per_pixel());
         assert!(
@@ -1103,6 +1118,11 @@ impl GpuEncoder {
         let region = [vk::BufferImageCopy::default()
             .buffer_offset(offset)
             .image_subresource(subresource(texture))
+            .image_offset(vk::Offset3D {
+                x: 0,
+                y: first_row as i32,
+                z: 0,
+            })
             .image_extent(vk::Extent3D {
                 width,
                 height,
