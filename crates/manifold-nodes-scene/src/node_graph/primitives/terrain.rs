@@ -221,7 +221,8 @@ manifold_node_engine::primitive! {
 
 impl Primitive for Terrain {
     fn prepare_pipelines(&mut self, device: &GpuDevice) {
-        self.pipelines.get_or_insert_with(|| Pipelines::build(device));
+        self.pipelines
+            .get_or_insert_with(|| Pipelines::build(device));
     }
 
     /// The grid's triangles never change; only its points move, so a morph
@@ -269,7 +270,8 @@ impl Primitive for Terrain {
 
         let prepared = {
             let device = ctx.gpu_encoder().device;
-            self.pipelines.get_or_insert_with(|| Pipelines::build(device));
+            self.pipelines
+                .get_or_insert_with(|| Pipelines::build(device));
             if self.buffers.as_ref().is_none_or(|b| b.res != res) {
                 self.buffers = None;
                 self.shape = None;
@@ -356,12 +358,30 @@ impl Primitive for Terrain {
             let groups = [batch.droplets.div_ceil(THREADS), 1, 1];
             dispatch(enc, &pipelines.erode, &batch, groups, "node.terrain erode");
             for _ in 0..SLIDES_PER_BATCH {
-                dispatch(enc, &pipelines.snapshot, &uniforms, cells, "node.terrain snapshot");
-                dispatch(enc, &pipelines.slide, &uniforms, cells, "node.terrain slide");
+                dispatch(
+                    enc,
+                    &pipelines.snapshot,
+                    &uniforms,
+                    cells,
+                    "node.terrain snapshot",
+                );
+                dispatch(
+                    enc,
+                    &pipelines.slide,
+                    &uniforms,
+                    cells,
+                    "node.terrain slide",
+                );
             }
             first += batch.droplets;
         }
-        dispatch(enc, &pipelines.vertices, &uniforms, cells, "node.terrain vertices");
+        dispatch(
+            enc,
+            &pipelines.vertices,
+            &uniforms,
+            cells,
+            "node.terrain vertices",
+        );
         self.shape = Some(shape);
         self.done = done + f64::from(droplets);
         self.spawned = self.spawned.wrapping_add(droplets);
@@ -396,7 +416,10 @@ mod tests {
         };
         assert_eq!(carving_after(None, shape, 0.0), (0.0, 0.0));
         assert_eq!(carving_after(Some(shape), shape, 9000.0), (1.0, 9000.0));
-        let wider = Shape { size: 800.0, ..shape };
+        let wider = Shape {
+            size: 800.0,
+            ..shape
+        };
         assert_eq!(carving_after(Some(shape), wider, 9000.0), (0.5, 4500.0));
         let reseeded = Shape { seed: 4, ..shape };
         assert_eq!(carving_after(Some(shape), reseeded, 9000.0), (0.0, 0.0));

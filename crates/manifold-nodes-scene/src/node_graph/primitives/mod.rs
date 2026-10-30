@@ -98,6 +98,7 @@ mod camera_lens;
 pub(crate) mod camera_orbit;
 pub(crate) mod camera_switch;
 mod free_camera;
+mod grid_indices;
 mod look_at_camera;
 mod loop_camera;
 pub mod loop_cell;

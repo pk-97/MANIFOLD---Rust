@@ -45,7 +45,12 @@ pub(super) fn resolve<'ctx>(
     let look = TerrainLook {
         on_tiles: [1.0, layers.tile[0].max(0.01), layers.tile[1].max(0.01), 0.0],
         cliff: [layers.cliff_slope[0], layers.cliff_slope[1], 0.0, 0.0],
-        snow: [layers.snow_line, layers.snow_softness.max(0.01), layers.snow_slope, 0.0],
+        snow: [
+            layers.snow_line,
+            layers.snow_softness.max(0.01),
+            layers.snow_slope,
+            0.0,
+        ],
         cliff_maps: [present(0), present(1), present(2), 0.0],
         peak_maps: [present(3), present(4), present(5), 0.0],
     };

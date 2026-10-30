@@ -130,15 +130,15 @@ fn detail_level(b: &Builder<'_>, item: &Item, rest: Option<&Rest>) -> u32 {
     level
 }
 
-/// A Terrain's chain: `node.terrain` lays and lifts the grid, and
-/// `node.make_triangles` turns it into triangles with normals. Returns the
-/// triangles node, the Object's vertices.
-fn emit_terrain(b: &mut Builder<'_>, item: &Item) -> u32 {
+/// A Terrain's chain: `node.terrain` lays and lifts the grid with its
+/// normals, and `node.grid_indices` lists the grid's triangles once, so the
+/// Object draws indexed and shades each grid point once. Returns the grid
+/// node, the Object's vertices, and the indices node.
+fn emit_terrain(b: &mut Builder<'_>, item: &Item) -> (u32, u32) {
     let owner = item.id.as_str();
     let grid = b.add(owner, "terrain", "node.terrain");
-    let triangles = b.add(owner, "triangles", "node.make_triangles");
-    b.wire(grid, "vertices", triangles, "in");
-    triangles
+    let indices = b.add(owner, "indices", "node.grid_indices");
+    (grid, indices)
 }
 
 /// Wire a Terrain layer's colour, normal and metallic-roughness maps into
@@ -162,7 +162,12 @@ fn terrain_layer(b: &mut Builder<'_>, object: u32, material: Option<&ItemId>, la
         b.wire(source, "out", object, &format!("terrain_{layer}_{map}"));
     }
     if let Some(surface) = b.id(material.as_str(), MATERIAL_FAMILY.node) {
-        b.follow(surface, "tile_size", object, &format!("terrain_{layer}_tile"));
+        b.follow(
+            surface,
+            "tile_size",
+            object,
+            &format!("terrain_{layer}_tile"),
+        );
     }
 }
 
@@ -205,9 +210,9 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
         rest = None;
         (triangles, (triangles, "out"), None)
     } else if terrain {
-        let triangles = emit_terrain(b, item);
+        let (grid, indices) = emit_terrain(b, item);
         rest = None;
-        (triangles, (triangles, "out"), None)
+        (grid, (grid, "vertices"), Some((indices, "indices")))
     } else if let Some(curve) = super::curves::emit(b, item, &fields.shape) {
         rest = curve.rest;
         (curve.solid, curve.vertices, None)

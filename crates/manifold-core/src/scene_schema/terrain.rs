@@ -1,7 +1,7 @@
 //! Terrain: an Object whose Shape is Terrain. `node.terrain` lifts a square
 //! grid of points by noise and carves it with simulated rain on the GPU
-//! whenever the land changes; `node.make_triangles` turns the grid into the
-//! triangles the Object draws.
+//! whenever the land changes, with each point's normal; `node.grid_indices`
+//! lists the grid's triangles for the Object's indexed draw.
 //!
 //! Size, Height, Feature Size, Roughness, Weathering and Seed are performance
 //! rows, so the land can morph on the beat. The grid's density is fixed setup.
@@ -133,8 +133,8 @@ static ROWS: [PropertyRow; 15] = [
         .range(0.0, 999.0)
         .default(1.0),
     fixed("terrain_resolution", "terrain", "resolution").default(RESOLUTION),
-    fixed("terrain_triangle_columns", "triangles", "src_cols").default(RESOLUTION),
-    fixed("terrain_triangle_rows", "triangles", "src_rows").default(RESOLUTION),
+    fixed("terrain_index_columns", "indices", "cols").default(RESOLUTION),
+    fixed("terrain_index_rows", "indices", "rows").default(RESOLUTION),
     row(
         "terrain_layers",
         Reach::Own("object"),
