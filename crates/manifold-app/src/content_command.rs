@@ -87,6 +87,8 @@ pub enum ContentCommand {
     // ── Transport/sync ─────────────────────────────────────────────
     ToggleLink,
     ToggleMidiClock,
+    /// Switch live tempo from audio on or off.
+    ToggleAudioTempo,
     SetMidiClockDevice(i32),
     ResetBpm,
 

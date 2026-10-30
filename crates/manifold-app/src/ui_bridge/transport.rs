@@ -100,6 +100,7 @@ pub(super) fn dispatch_transport(
         TransportAction::CycleClockAuthority
         | TransportAction::ToggleLink
         | TransportAction::ToggleMidiClock
+        | TransportAction::ToggleAudioTempo
         | TransportAction::ToggleSyncOutput => {
             // Intercepted by Application before dispatch — should not reach here
             DispatchResult::handled()

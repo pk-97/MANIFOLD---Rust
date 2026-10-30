@@ -143,6 +143,8 @@ pub enum ClockAuthority {
     Link = 1,
     MidiClock = 2,
     Osc = 3,
+    /// Tempo and bar 1 heard from the first audio send.
+    Audio = 4,
 }
 
 impl ClockAuthority {
@@ -151,7 +153,8 @@ impl ClockAuthority {
             Self::Internal => Self::Link,
             Self::Link => Self::MidiClock,
             Self::MidiClock => Self::Osc,
-            Self::Osc => Self::Internal,
+            Self::Osc => Self::Audio,
+            Self::Audio => Self::Internal,
         }
     }
 
@@ -161,6 +164,7 @@ impl ClockAuthority {
             Self::Link => "LINK",
             Self::MidiClock => "MIDI",
             Self::Osc => "OSC",
+            Self::Audio => "AUDIO",
         }
     }
 
@@ -171,6 +175,7 @@ impl ClockAuthority {
             Self::Link => "SRC:LNK",
             Self::MidiClock => "SRC:CLK",
             Self::Osc => "SRC:OSC",
+            Self::Audio => "SRC:AUD",
         }
     }
 }
@@ -333,6 +338,7 @@ pub enum TempoPointSource {
     MidiClock = 3,
     Recorded = 4,
     AbletonOsc = 5,
+    Audio = 6,
 }
 
 // ─── Beat Division (for parameter drivers / LFO) ───

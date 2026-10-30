@@ -364,6 +364,7 @@ pub fn push_chrome(
             manifold_core::types::ClockAuthority::Link => color::LINK_ORANGE,
             manifold_core::types::ClockAuthority::MidiClock => color::MIDI_PURPLE,
             manifold_core::types::ClockAuthority::Osc => color::ABLETON_LINK_BLUE,
+            manifold_core::types::ClockAuthority::Audio => color::AUDIO_TEMPO_GREEN,
         };
         ui.transport
             .set_clock_authority(auth.transport_label(), auth_color);
@@ -393,6 +394,17 @@ pub fn push_chrome(
                 color::TEXT_DIMMED_C32,
             );
         }
+
+        // Live tempo from audio: green while locked, yellow while listening.
+        let audio_dot = if !content_state.audio_tempo_enabled {
+            color::STATUS_DOT_INACTIVE
+        } else if content_state.audio_tempo_locked {
+            color::STATUS_DOT_GREEN
+        } else {
+            color::STATUS_DOT_YELLOW
+        };
+        ui.transport
+            .set_audio_tempo_state(content_state.audio_tempo_enabled, audio_dot);
 
         // MIDI Clock
         if !content_state.midi_clock_enabled {

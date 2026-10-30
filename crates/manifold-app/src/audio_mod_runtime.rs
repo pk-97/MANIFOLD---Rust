@@ -32,6 +32,7 @@ use ahash::AHashMap;
 use manifold_audio::analysis::{
     AudioFeatureWorker, GainBank, LinearResampler, MonoReader, StreamingSendAnalyzer,
 };
+use manifold_audio::beats::{FollowWorker, Lock};
 use manifold_audio::capture::{self, CaptureBackend, CaptureSource};
 use manifold_audio::detectors::{DetectorEvent, DetectorWorker, send_detectors};
 use manifold_core::audio_features::{
@@ -298,6 +299,8 @@ pub struct AudioModRuntime {
     staged_sends: Vec<usize>,
     /// Detector events collected for one send.
     detector_events: Vec<DetectorEvent>,
+    /// Live tempo from the first send, while switched on.
+    tempo_follow: Option<TempoFollow>,
     /// Cached at construction from `MANIFOLD_AUDIO_TRACE` — the P1 gate
     /// instrument. Checked once,
     /// not per tick, so the trace stays zero-cost when unset.
@@ -347,6 +350,7 @@ impl Default for AudioModRuntime {
             resampled: Vec::new(),
             staged_sends: Vec::new(),
             detector_events: Vec::with_capacity(256),
+            tempo_follow: None,
             trace: std::env::var_os("MANIFOLD_AUDIO_TRACE").is_some(),
         }
     }
@@ -455,6 +459,11 @@ impl AudioModRuntime {
                 .map(|p| {
                     let mut consumed = p.analysis_consumed_sends();
                     consumed.extend(self.visual_consumed.iter().cloned());
+                    if self.tempo_follow.is_some()
+                        && let Some(send) = p.audio_setup.sends.first()
+                    {
+                        consumed.insert(send.id.clone());
+                    }
                     consumed
                 })
                 .unwrap_or_default();
@@ -500,7 +509,8 @@ impl AudioModRuntime {
             let needs = p.has_active_audio_mods()
                 || self.spec_send.is_some()
                 || p.has_active_clip_triggers()
-                || !self.visual_consumed.is_empty();
+                || !self.visual_consumed.is_empty()
+                || self.tempo_follow.is_some();
             (needs, p.audio_setup.sends.len())
         });
         if !active {
@@ -753,6 +763,18 @@ impl AudioModRuntime {
                 }
                 entry.stage(&mono_mix);
                 staged_sends.push(i);
+                if i == 0
+                    && let Some(follow) = self.tempo_follow.as_mut()
+                {
+                    // A capture-only send carries the clock its samples were heard at. A send with layers has
+                    // none, and its samples are taken as heard now.
+                    let heard_at = (entry.capture_generation.is_some() && layers.is_empty())
+                        .then(|| self.capture_batch.source_time_at(mono_mix.len()))
+                        .flatten()
+                        .unwrap_or_else(std::time::Instant::now);
+                    let beats_per_bar = project.settings.time_signature_numerator.max(1) as u32;
+                    follow.submit(&mono_mix, canonical, beats_per_bar, heard_at);
+                }
             }
 
             // The detector workers ran while the sends were mixed. Collect them under one
@@ -853,6 +875,18 @@ impl AudioModRuntime {
     /// immutable registry on the content/UI snapshot path.
     pub fn visuals(&self) -> &manifold_core::audio_visual::AudioVisualRegistry {
         &self.visuals
+    }
+
+    /// Switch live tempo from the first send on or off. Forces a reconcile so capture starts for it.
+    pub fn set_tempo_follow(&mut self, on: bool) {
+        if on != self.tempo_follow.is_some() {
+            self.tempo_follow = on.then(TempoFollow::default);
+            self.spec_dirty = true;
+        }
+    }
+
+    pub fn tempo_follow(&self) -> Option<&TempoFollow> {
+        self.tempo_follow.as_ref()
     }
 
     /// Set which send the Audio Setup scope is showing (`None` = panel closed /
@@ -997,7 +1031,8 @@ impl AudioModRuntime {
         let needs_analysis = project.has_active_audio_mods()
             || self.spec_send.is_some()
             || project.has_active_clip_triggers()
-            || !self.visual_consumed.is_empty();
+            || !self.visual_consumed.is_empty()
+            || self.tempo_follow.is_some();
         // Outside the live app (tests, headless binaries) the room microphone
         // must never drive a value, so capture stays dark.
         let gate = manifold_core::device_guard::real_devices_enabled()
@@ -1419,5 +1454,64 @@ mod hop_tests {
             .unwrap();
         assert_eq!(batch.hops().len(), 1);
         assert_eq!(batch.hops()[0].stamp.end_sample, hop as u64);
+    }
+}
+
+/// Live tempo from the first send: the beat follower's thread, its newest lock, and where its stream time sits on
+/// the clock.
+#[derive(Default)]
+pub struct TempoFollow {
+    worker: Option<FollowWorker>,
+    /// The rate and beats per bar the worker was started with.
+    started: Option<(u32, u32)>,
+    lock: Option<Lock>,
+    /// Stream seconds at the end of the last submit, and the instant that sample was heard.
+    anchor: Option<(f64, std::time::Instant)>,
+}
+
+impl TempoFollow {
+    fn submit(
+        &mut self,
+        mono: &[f32],
+        rate: u32,
+        beats_per_bar: u32,
+        heard_at: std::time::Instant,
+    ) {
+        if mono.is_empty() {
+            return;
+        }
+        if self.started != Some((rate, beats_per_bar)) {
+            // A new stream: the old lock's seconds and bars no longer apply.
+            self.started = Some((rate, beats_per_bar));
+            self.lock = None;
+            self.anchor = None;
+            self.worker = FollowWorker::spawn(rate, beats_per_bar)
+                .inspect_err(|e| log::error!("[AudioMod] beat follower did not start: {e}"))
+                .ok();
+        }
+        let Some(worker) = self.worker.as_mut() else {
+            return;
+        };
+        worker.submit(mono);
+        if let Some(Ok(lock)) = worker.latest() {
+            self.lock = Some(lock);
+        }
+        self.anchor = Some((worker.stream_s(), heard_at));
+    }
+
+    /// The newest lock. It holds through hearings that find no steady beat, so a breakdown keeps the grid.
+    pub fn lock(&self) -> Option<Lock> {
+        self.lock
+    }
+
+    /// The follower's beat count at `at`.
+    pub fn beat_at(&self, at: std::time::Instant) -> Option<f64> {
+        let lock = self.lock?;
+        let (stream_s, heard_at) = self.anchor?;
+        Some(
+            lock.beat_at(
+                stream_s + manifold_playback::sync_projection::seconds_between(heard_at, at),
+            ),
+        )
     }
 }

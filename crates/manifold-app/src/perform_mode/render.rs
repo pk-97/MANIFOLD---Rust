@@ -4,6 +4,7 @@
 //! and the HUD's draw helpers.
 
 use manifold_core::types::ClockAuthority;
+use manifold_ui::color;
 use manifold_ui::node::{Color32, FontWeight, Rect};
 use manifold_ui::text::TextMeasure;
 use manifold_ui_paint::ui_renderer::UIRenderer;
@@ -316,6 +317,7 @@ pub(super) fn draw_sync_indicators(ui: &mut UIRenderer, tm: &dyn TextMeasure, sy
     let midi_purple_bg = Color32::new(148, 77, 148, 255);
     let inactive_bg = Color32::new(59, 59, 61, 255);
     let osc_blue_bg = Color32::new(56, 133, 179, 255);
+    let audio_green_bg = color::AUDIO_TEMPO_GREEN;
     let white = [240u8, 240u8, 240u8, 255u8];
     let dimmed = [140u8, 140u8, 145u8, 255u8];
     let dot_green = [64u8, 179u8, 77u8, 255u8];
@@ -362,6 +364,7 @@ pub(super) fn draw_sync_indicators(ui: &mut UIRenderer, tm: &dyn TextMeasure, sy
         ClockAuthority::Link => link_orange_bg,
         ClockAuthority::MidiClock => midi_purple_bg,
         ClockAuthority::Osc => osc_blue_bg,
+        ClockAuthority::Audio => audio_green_bg,
     };
     let w = draw_badge(ui, x, auth_label, auth_bg);
     x += w + group_gap;

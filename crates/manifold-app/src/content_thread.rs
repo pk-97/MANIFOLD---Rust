@@ -37,12 +37,13 @@ use crate::content_state::{ContentState, StateTx};
 use crate::frame_timer::FrameTimer;
 
 /// The follower row for an authority (D6): Link and MIDI clock are fast and
-/// clean, AbletonOSC and timecode slow and coarse; Internal follows the map.
+/// clean; AbletonOSC, timecode and the beat follower's grid, which moves a
+/// little each second it hears, slow; Internal follows the map.
 fn follow_profile(authority: ClockAuthority) -> Option<FollowProfile> {
     match authority {
         ClockAuthority::Internal => None,
         ClockAuthority::Link | ClockAuthority::MidiClock => Some(FollowProfile::FAST),
-        ClockAuthority::Osc => Some(FollowProfile::SLOW),
+        ClockAuthority::Osc | ClockAuthority::Audio => Some(FollowProfile::SLOW),
     }
 }
 
@@ -148,6 +149,10 @@ pub struct ContentThread {
     pub tempo_recorder: TempoRecorder,
     /// MANIFOLD's beat under Link is Link's beat minus this (D15).
     pub link_offset: LinkOffset,
+    /// MANIFOLD's beat under live tempo from audio is the follower's beat
+    /// count minus this, always taken in whole bars so bar 1 lands on the
+    /// music's.
+    pub audio_offset: LinkOffset,
     /// Whether Link's tempo stands in for MIDI clock's or AbletonOSC's (D21).
     pub tempo_guard: LinkTempoGuard,
     /// The read instant's output latency and the source offsets (D19).
@@ -344,6 +349,7 @@ impl ContentThread {
             ableton_bridge: manifold_playback::ableton_bridge::AbletonBridge::new(),
             tempo_recorder: TempoRecorder::new(),
             link_offset: LinkOffset::new(),
+            audio_offset: LinkOffset::new(),
             tempo_guard: LinkTempoGuard::new(),
             calibration: SyncCalibration::new(),
             sync_log: manifold_playback::sync_log::SyncLog::new(),
@@ -1597,6 +1603,11 @@ impl ContentThread {
                 .link_sync
                 .as_ref()
                 .is_some_and(|s| s.is_link_enabled()),
+            audio_tempo_enabled: self.audio_mod_runtime.tempo_follow().is_some(),
+            audio_tempo_locked: self
+                .audio_mod_runtime
+                .tempo_follow()
+                .is_some_and(|f| f.lock().is_some()),
             link_peers: self
                 .transport_controller
                 .link_sync
@@ -1786,6 +1797,12 @@ impl ContentThread {
                 .is_some_and(|s| s.is_link_enabled() && s.has_active_peers())
             {
                 ClockAuthority::Link
+            } else if self
+                .audio_mod_runtime
+                .tempo_follow()
+                .is_some_and(|f| f.lock().is_some())
+            {
+                ClockAuthority::Audio
             } else {
                 ClockAuthority::Internal
             };
@@ -1805,6 +1822,9 @@ impl ContentThread {
             // Link becoming the authority while MANIFOLD plays (D15).
             if auto != previous && auto == ClockAuthority::Link && self.engine.is_playing() {
                 self.link_offset.link_became_authority();
+            }
+            if auto != previous && auto == ClockAuthority::Audio {
+                self.audio_offset.request(OffsetTake::Quantum);
             }
             auto
         };
@@ -1831,6 +1851,23 @@ impl ContentThread {
                 }
             }
         }
+        // Live tempo from audio: a due offset lines MANIFOLD's bar up with the
+        // music's, against the beat of the frame this tick shows.
+        if authority == ClockAuthority::Audio
+            && self.audio_offset.is_due()
+            && let Some(beat) = self
+                .audio_mod_runtime
+                .tempo_follow()
+                .and_then(|f| f.beat_at(self.link_sample_at))
+        {
+            let frame_beat = self.engine.upcoming_frame_beat(frames).0;
+            let bar = self
+                .engine
+                .project()
+                .map_or(4, |p| p.settings.time_signature_numerator.max(1));
+            self.audio_offset.take(beat, frame_beat, f64::from(bar));
+        }
+
         let link_bpm = self
             .transport_controller
             .link_sync
@@ -2057,6 +2094,11 @@ impl ContentThread {
                 )
             }),
             ClockAuthority::Osc => listener.map(|bpm| (bpm, TempoPointSource::AbletonOsc)),
+            ClockAuthority::Audio => self
+                .audio_mod_runtime
+                .tempo_follow()
+                .and_then(|f| f.lock())
+                .map(|l| (l.grid.bpm(), TempoPointSource::Audio)),
             _ => None,
         };
         if let Some((bpm, source)) =
@@ -2181,6 +2223,16 @@ impl ContentThread {
                     self.ableton_osc_sample(self.source_read_at(CalibratedSource::AbletonOsc))
                 }
             },
+            // The follower's beat count at the read instant, less the offset;
+            // none until an offset is taken.
+            ClockAuthority::Audio => self.audio_mod_runtime.tempo_follow().and_then(|f| {
+                Some(ExternalSample {
+                    beat: self.audio_offset.beat(f.beat_at(self.link_sample_at)?)?,
+                    bpm: f.lock()?.grid.bpm(),
+                    fresh: true,
+                    exact: false,
+                })
+            }),
             ClockAuthority::Internal => None,
         };
         if let Some(sample) = sample {
@@ -2281,6 +2333,7 @@ impl ContentThread {
             (ClockAuthority::Osc, OscSyncMode::M4L) => {
                 (Some("timecode"), Some(CalibratedSource::Timecode))
             }
+            (ClockAuthority::Audio, _) => (Some("audio"), None),
             (ClockAuthority::Internal, _) => (None, None),
         };
         let tick = manifold_playback::sync_log::SyncTick {

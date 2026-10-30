@@ -310,6 +310,7 @@ pub const SYNC_ACTIVE: Color32 = Color32::new(56, 158, 133, 255);
 pub const LINK_ORANGE: Color32 = Color32::new(191, 122, 20, 255);
 pub const MIDI_PURPLE: Color32 = Color32::new(148, 77, 148, 255);
 pub const ABLETON_LINK_BLUE: Color32 = Color32::new(56, 133, 179, 255);
+pub const AUDIO_TEMPO_GREEN: Color32 = GREEN_BASE;
 
 // ── Delete / Remove button ──────────────────────────────────────────
 

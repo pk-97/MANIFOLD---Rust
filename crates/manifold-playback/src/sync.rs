@@ -236,15 +236,16 @@ mod tests {
         }
     }
 
-    const ALL_AUTHORITIES: [ClockAuthority; 4] = [
+    const ALL_AUTHORITIES: [ClockAuthority; 5] = [
         ClockAuthority::Internal,
         ClockAuthority::Link,
         ClockAuthority::MidiClock,
         ClockAuthority::Osc,
+        ClockAuthority::Audio,
     ];
 
     // ── section 7 gate matrix: "every sync controller passes (source, authority)
-    // and the call is dropped unless they match." Exhaustive over the 4×4
+    // and the call is dropped unless they match." Exhaustive over the 5×5
     // grid for each of the three gated operations. ──────────────────────────
 
     #[test]

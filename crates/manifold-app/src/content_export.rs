@@ -566,6 +566,7 @@ fn export_disposition(cmd: &ContentCommand) -> ExportDisposition {
         | ContentCommand::StopLiveRecording
         | ContentCommand::ToggleLink
         | ContentCommand::ToggleMidiClock
+        | ContentCommand::ToggleAudioTempo
         | ContentCommand::SetMidiClockDevice(_)
         | ContentCommand::ResetBpm
         | ContentCommand::ToggleOscSyncMode

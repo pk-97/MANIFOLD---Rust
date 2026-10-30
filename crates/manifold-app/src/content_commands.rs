@@ -836,6 +836,7 @@ impl ContentThread {
         // Reset link beat offset and tempo recorder on project load.
         // Port of C# PlaybackController.OnProjectLoading lines 550-551.
         self.link_offset.clear();
+        self.audio_offset.clear();
         self.tempo_recorder.reset();
         self.engine.initialize(*project);
         self.reactions.load_seq += 1;
@@ -1110,6 +1111,7 @@ impl ContentThread {
                 );
                 self.engine.play();
                 self.link_offset.request(OffsetTake::Exact);
+                self.audio_offset.request(OffsetTake::Quantum);
             }
             ContentCommand::Pause => {
                 if self.osc_sender.is_sender_enabled() || self.ableton_bridge.is_transport_enabled()
@@ -1142,6 +1144,7 @@ impl ContentThread {
                 );
                 self.engine.stop();
                 self.link_offset.clear();
+                self.audio_offset.clear();
                 // BUG-104: release generator-side trigger-edge latches
                 // (sample_and_hold / clip_trigger_cycle / clip_trigger_index /
                 // frequency_ratio / cycle_table_row / trigger_gate /
@@ -1168,6 +1171,7 @@ impl ContentThread {
                     self.time_since_start.0,
                 );
                 self.link_offset.request(OffsetTake::Exact);
+                self.audio_offset.request(OffsetTake::Quantum);
             }
             ContentCommand::SeekToBeat(beat) => {
                 crate::sync_rig_log::user_transport(
@@ -1184,6 +1188,7 @@ impl ContentThread {
                     self.time_since_start.0,
                 );
                 self.link_offset.request(OffsetTake::Exact);
+                self.audio_offset.request(OffsetTake::Quantum);
             }
             ContentCommand::SetRecording(rec) => {
                 self.engine.set_recording(rec);
@@ -1495,6 +1500,11 @@ impl ContentThread {
             // ── Transport/sync ─────────────────────────────────────
             ContentCommand::ToggleLink => {
                 self.transport_controller.toggle_link(&mut self.engine);
+            }
+            ContentCommand::ToggleAudioTempo => {
+                let on = self.audio_mod_runtime.tempo_follow().is_none();
+                self.audio_mod_runtime.set_tempo_follow(on);
+                self.audio_offset.clear();
             }
             ContentCommand::ToggleMidiClock => {
                 self.transport_controller

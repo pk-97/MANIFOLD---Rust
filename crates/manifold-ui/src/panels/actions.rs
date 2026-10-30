@@ -56,6 +56,8 @@ pub enum TransportAction {
     ToggleMidiClock,
     SelectClkDevice,
     ToggleSyncOutput,
+    /// Follow the tempo and bar 1 heard from the first audio send instead of the project tempo.
+    ToggleAudioTempo,
     /// Toggle the global Automation Arm: while armed, touching an automated
     /// param (while playing) records into its lane instead of latching an
     /// override (section 5).

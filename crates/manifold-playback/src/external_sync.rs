@@ -220,7 +220,8 @@ impl LinkTempoGuard {
 /// The live tempo an authority reports (D21): its base tempo, never the
 /// trimmed rate. Link's session tempo under Link; under MIDI clock and
 /// AbletonOSC, Link's while the guard is latched, else the source's own
-/// (`own`); none under timecode, whose tempo is the map's, or Internal.
+/// (`own`); under Audio, the follower's own tempo (`own`); none under
+/// timecode, whose tempo is the map's, or Internal.
 pub fn live_tempo(
     authority: ClockAuthority,
     link_bpm: Option<f64>,
@@ -237,6 +238,7 @@ pub fn live_tempo(
                 own
             }
         }
+        ClockAuthority::Audio => own,
         ClockAuthority::Internal => None,
     }
 }

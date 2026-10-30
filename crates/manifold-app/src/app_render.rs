@@ -998,6 +998,10 @@ impl Application {
                     self.send_content_cmd(ContentCommand::ToggleMidiClock);
                     continue;
                 }
+                PanelAction::Transport(TransportAction::ToggleAudioTempo) => {
+                    self.send_content_cmd(ContentCommand::ToggleAudioTempo);
+                    continue;
+                }
                 PanelAction::Transport(TransportAction::ToggleSyncOutput) => {
                     self.send_content_cmd(ContentCommand::ToggleOscSyncMode);
                     continue;

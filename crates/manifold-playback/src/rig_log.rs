@@ -30,6 +30,7 @@ pub enum TransportSource {
     Link,
     MidiClock,
     Osc,
+    Audio,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,6 +201,7 @@ fn authority_name(a: ClockAuthority) -> &'static str {
         ClockAuthority::Link => "link",
         ClockAuthority::MidiClock => "clk",
         ClockAuthority::Osc => "osc",
+        ClockAuthority::Audio => "audio",
     }
 }
 
@@ -209,6 +211,7 @@ fn source_name(s: TransportSource) -> &'static str {
         TransportSource::Link => "link",
         TransportSource::MidiClock => "clk",
         TransportSource::Osc => "osc",
+        TransportSource::Audio => "audio",
     }
 }
 
@@ -230,6 +233,7 @@ impl TransportSource {
             ClockAuthority::Link => Self::Link,
             ClockAuthority::MidiClock => Self::MidiClock,
             ClockAuthority::Osc => Self::Osc,
+            ClockAuthority::Audio => Self::Audio,
         }
     }
 }

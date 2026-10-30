@@ -33,6 +33,7 @@ const LINK_BUTTON_W: f32 = 45.0;
 const CLK_BUTTON_W: f32 = 35.0;
 const CLK_DEVICE_W: f32 = 100.0;
 const SYNC_BUTTON_W: f32 = 45.0;
+const AUDIO_TEMPO_W: f32 = LINK_BUTTON_W + 8.0;
 
 const PLAY_BUTTON_W: f32 = 50.0;
 const STOP_BUTTON_W: f32 = 50.0;
@@ -108,6 +109,8 @@ pub struct TransportPanel {
     link_dot_color: Color32,
     link_status_text: String,
     link_status_color: Color32,
+    audio_tempo_enabled: bool,
+    audio_tempo_dot_color: Color32,
     clk_enabled: bool,
     clk_device_text: String,
     clk_dot_color: Color32,
@@ -185,6 +188,8 @@ impl TransportPanel {
             link_dot_color: color::DRIVER_INACTIVE_C32,
             link_status_text: "Off".into(),
             link_status_color: color::TEXT_DIMMED_C32,
+            audio_tempo_enabled: false,
+            audio_tempo_dot_color: color::STATUS_DOT_INACTIVE,
             clk_enabled: false,
             clk_device_text: "Select...".into(),
             clk_dot_color: color::DRIVER_INACTIVE_C32,
@@ -234,6 +239,11 @@ impl TransportPanel {
         self.link_dot_color = dot_color;
         self.link_status_text = status.into();
         self.link_status_color = status_color;
+    }
+
+    pub fn set_audio_tempo_state(&mut self, enabled: bool, dot_color: Color32) {
+        self.audio_tempo_enabled = enabled;
+        self.audio_tempo_dot_color = dot_color;
     }
 
     pub fn set_clk_state(
@@ -501,6 +511,20 @@ impl TransportPanel {
             )
             .child(
                 Self::btn(
+                    "AUDIO",
+                    AUDIO_TEMPO_W,
+                    button_style(if self.audio_tempo_enabled {
+                        color::AUDIO_TEMPO_GREEN
+                    } else {
+                        color::BUTTON_INACTIVE_C32
+                    }),
+                    PanelAction::Transport(TransportAction::ToggleAudioTempo),
+                )
+                .name("transport.audio_tempo"),
+            )
+            .child(Self::dot(self.audio_tempo_dot_color))
+            .child(
+                Self::btn(
                     "R",
                     BPM_RESET_W,
                     button_style(reset_c),
@@ -683,6 +707,7 @@ mod tests {
                 "STOP",
                 "REC",
                 "120.0",
+                "AUDIO",
                 "R",
                 "CLR",
                 "AUTOMATION",
