@@ -628,8 +628,10 @@ pub fn stiffness_room(wave_reach: f64, step_dt: f64, speed_estimate: f64, wave: 
     (carried / wave).powi(2)
 }
 
-/// Acoustic CFL (taichi_elements' default dt at L = 1 gives c·dt/dx = 0.33).
-pub const ACOUSTIC_CFL: f64 = 1.0 / 3.0;
+/// Acoustic CFL: a substep carries a wave half a cell. Packed snow, lava and
+/// sand against walls and bodies stay stable here; a third (taichi_elements'
+/// default) costs half again as many substeps for the same motion.
+pub const ACOUSTIC_CFL: f64 = 0.5;
 /// The substep cap (D4).
 pub const MAX_SUBSTEPS: u32 = 128;
 
@@ -884,7 +886,7 @@ mod tests {
         assert!((c - 17.25).abs() < 0.01, "{c}");
         let v = free_fall_speed(4.0) as f32;
         let n = |dx: f32| substeps_per_tick(dx, c as f32, v, None, None);
-        assert_eq!([n(0.0625), n(0.125), n(0.25)], [21, 11, 6]);
+        assert_eq!([n(0.0625), n(0.125), n(0.25)], [14, 7, 4]);
     }
 
     /// Jelly's damping held to the most a substep carries (matter_material.wgsl
