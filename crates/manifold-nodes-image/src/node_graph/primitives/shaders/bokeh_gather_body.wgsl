@@ -398,13 +398,16 @@ fn body(uv: vec2<f32>, dims: vec2<f32>, max_radius: f32, enabled: u32, aperture:
             continue;
         }
         // Match source-radius support to the coarse color footprint. Use a
-        // conservative four-texel max; interpolating against an empty texel
-        // would falsely shrink the radius of a thin foreground silhouette.
+        // conservative max over the bilinear 2x2 window; interpolating against
+        // an empty texel would falsely shrink the radius of a thin foreground
+        // silhouette. Coarse guide levels already hold each texel's 2x2 max
+        // (bokeh_guide_downsample.wgsl), so only level zero loads four.
         let gp = vec2<i32>(floor(tap_uv*vec2<f32>(guide_dims)-0.5));
-        var tap_guide = vec4<f32>(0.0);
-        for(var gy=0;gy<2;gy++) {
-            for(var gx=0;gx<2;gx++) {
-                tap_guide = max(tap_guide,textureLoad(tex_width,clamp(gp+vec2<i32>(gx,gy),vec2<i32>(0),guide_dims-1),guide_lod));
+        var tap_guide = textureLoad(tex_width,clamp(gp,vec2<i32>(0),guide_dims-1),guide_lod);
+        if guide_lod == 0 {
+            for(var g=1;g<4;g++) {
+                let o = vec2<i32>(g&1,g>>1u);
+                tap_guide = max(tap_guide,textureLoad(tex_width,clamp(gp+o,vec2<i32>(0),guide_dims-1),0));
             }
         }
         let tap_radius = select(tap_guide.r,tap_guide.g,near_field)*max_radius;

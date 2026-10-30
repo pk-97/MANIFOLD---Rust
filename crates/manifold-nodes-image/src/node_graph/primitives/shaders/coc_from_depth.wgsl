@@ -21,6 +21,8 @@ struct Uniforms {
 }
 
 const SENSOR_H_MM: f32 = 24.0;
+// BLUR_REFERENCE_HEIGHT in primitives/mod.rs.
+const REFERENCE_H: f32 = 1080.0;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var depth_tex: texture_2d<f32>;
@@ -51,7 +53,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let signed_delta = d_mm - s_mm;
     let coc_radius_mm = aperture_radius_mm * f_mm * signed_delta
         / (d_mm * max(s_mm - f_mm, 1.0));
-    let coc_radius_px = clamp(abs(coc_radius_mm) / SENSOR_H_MM * f32(dims.y), 0.0, u.max_radius);
+    let coc_radius_px = clamp(abs(coc_radius_mm) / SENSOR_H_MM * REFERENCE_H, 0.0, u.max_radius);
     // focus_distance <= 0 is the LensParams hyperfocal/neutral contract —
     // exactly 0 CoC radius (mirrors coc_from_depth_body.wgsl).
     let coc_q = select(coc_radius_px, 0.0, u.focus_distance <= 0.0);

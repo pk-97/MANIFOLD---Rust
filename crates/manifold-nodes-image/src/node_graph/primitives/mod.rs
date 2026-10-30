@@ -1,3 +1,8 @@
+/// The frame height post-effect blur sizes are set at. Motion blur's and
+/// depth of field's longest blur scale from it to the frame they render, so
+/// one setting looks the same at 1080p and 4K.
+pub(crate) const BLUR_REFERENCE_HEIGHT: f32 = 1080.0;
+
 mod abs_texture;
 mod affine_transform;
 mod anti_clump_particles;

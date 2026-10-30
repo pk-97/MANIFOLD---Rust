@@ -13,8 +13,8 @@
 //! signed  = D_mm - S_mm
 //! coc_radius_mm = aperture_radius_mm * f_mm * signed
 //!                 / (D_mm * max(S_mm - f_mm, 1.0))
-//! coc_radius_px = clamp(|coc_radius_mm| / SENSOR_H_MM * viewport_h,
-//!                       0.0, max_radius)
+//! coc_radius_px = clamp(|coc_radius_mm| / SENSOR_H_MM * 1080,
+//!                       0.0, max_radius)   // pixels of a 1080 px tall frame
 //! out.r   = coc_radius_px / max_radius   (RADIUS MAGNITUDE —
 //!           node.variable_blur's and node.bokeh_gather's `width.r` read this unchanged)
 //! out.g   = signed < 0 ? 1.0 : 0.0   (sign flag: 1.0 = nearer than focus,
@@ -48,12 +48,13 @@
 
 use std::borrow::Cow;
 
-
-use manifold_node_engine::scene::camera::{Camera, CameraMode};
 use manifold_node_engine::exec::effect_node::EffectNodeContext;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{dispatch_standalone_2d, standalone_pipeline};
+use manifold_node_engine::primitives::standalone_pipeline::{
+    dispatch_standalone_2d, standalone_pipeline,
+};
+use manifold_node_engine::scene::camera::{Camera, CameraMode};
 
 const DEPTH_COMMON: &str = include_str!("../../generators/shaders/depth_common.wgsl");
 
@@ -81,7 +82,7 @@ struct CocFromDepthUniforms {
 manifold_node_engine::primitive! {
     name: CocFromDepth,
     type_id: "node.coc_from_depth",
-    purpose: "Physically-based circle-of-confusion radius from scene depth + a Camera (thin-lens model, signed CoC): f_mm = 24mm / (2*tan(fov_y/2)); aperture_radius_mm = f_mm/(2*f_stop); D_mm = linearize_depth(raw_depth, near, far) * world_to_mm; S_mm = focus_distance * world_to_mm; signed = D_mm - S_mm; coc_radius_mm = aperture_radius_mm*f_mm*signed / (D_mm*max(S_mm-f_mm, 1.0)); coc_radius_px = clamp(|coc_radius_mm|/24mm * viewport_h, 0, max_radius). Output R/B = coc_radius_px / max_radius (the [0,1] radius magnitude, unchanged for existing readers), G = signed < 0 ? 1.0 : 0.0 (sign flag: nearer than focus = 1, far-or-in-focus = 0), A = 1.0. Wire into node.variable_blur's or node.bokeh_gather's `width` input with max_radius matched. f_stop = infinity (pinhole) makes the radius zero everywhere. `world_to_mm` (default 1000.0 = the old 1-unit-per-meter constant) calibrates the mm-per-world-unit reading for the scene at hand (BUG-bdwd): the glTF import stamps 1000/scene_radius so any scene scale renders with musical f-stops. Reads fov_y/near/far and the Camera's lens (focus_distance/f_stop, written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding.",
+    purpose: "Physically-based circle-of-confusion radius from scene depth + a Camera (thin-lens model, signed CoC): f_mm = 24mm / (2*tan(fov_y/2)); aperture_radius_mm = f_mm/(2*f_stop); D_mm = linearize_depth(raw_depth, near, far) * world_to_mm; S_mm = focus_distance * world_to_mm; signed = D_mm - S_mm; coc_radius_mm = aperture_radius_mm*f_mm*signed / (D_mm*max(S_mm-f_mm, 1.0)); coc_radius_px = clamp(|coc_radius_mm|/24mm * 1080, 0, max_radius): pixels of a 1080 px tall frame, whatever the output size, so R is a share of the frame and node.bokeh_gather scales its own max_radius to the frame it renders. Output R/B = coc_radius_px / max_radius (the [0,1] radius magnitude, unchanged for existing readers), G = signed < 0 ? 1.0 : 0.0 (sign flag: nearer than focus = 1, far-or-in-focus = 0), A = 1.0. Wire into node.variable_blur's or node.bokeh_gather's `width` input with max_radius matched. f_stop = infinity (pinhole) makes the radius zero everywhere. `world_to_mm` (default 1000.0 = the old 1-unit-per-meter constant) calibrates the mm-per-world-unit reading for the scene at hand (BUG-bdwd): the glTF import stamps 1000/scene_radius so any scene scale renders with musical f-stops. Reads fov_y/near/far and the Camera's lens (focus_distance/f_stop, written by node.camera_lens) entirely via derived uniforms — the Camera wire is never a GPU binding.",
     inputs: {
         depth: Texture2D required,
         camera: Camera required,
@@ -149,7 +150,13 @@ fn derive_lens_scalars(cam: &Camera) -> [f32; 5] {
         CameraMode::Perspective { fov_y } => fov_y,
         CameraMode::Orthographic { .. } => std::f32::consts::FRAC_PI_3,
     };
-    [fov_y, cam.near, cam.far, cam.lens.focus_distance, cam.lens.f_stop]
+    [
+        fov_y,
+        cam.near,
+        cam.far,
+        cam.lens.focus_distance,
+        cam.lens.f_stop,
+    ]
 }
 
 // Per-frame recompute for a FUSED
@@ -184,7 +191,10 @@ impl Primitive for CocFromDepth {
 
         let world_to_mm = ctx.param_f32("world_to_mm", 1000.0);
 
-        let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
+        let cam = ctx
+            .inputs
+            .camera("camera")
+            .unwrap_or_else(Camera::default_perspective);
         let [fov_y, near, far, focus_distance, f_stop] = derive_lens_scalars(&cam);
 
         let Some(depth_tex) = ctx.inputs.texture_2d("depth") else {
@@ -235,9 +245,17 @@ mod tests {
         let mut cam = Camera::default_perspective();
         cam.near = 0.1;
         cam.far = 500.0;
-        cam.lens = LensParams { focus_distance: 3.5, f_stop: 2.8, shutter_angle: 0.0, exposure_ev: 0.0 };
+        cam.lens = LensParams {
+            focus_distance: 3.5,
+            f_stop: 2.8,
+            shutter_angle: 0.0,
+            exposure_ev: 0.0,
+        };
         let [fov_y, near, far, focus_distance, f_stop] = derive_lens_scalars(&cam);
-        let CameraMode::Perspective { fov_y: expected_fov } = cam.mode else {
+        let CameraMode::Perspective {
+            fov_y: expected_fov,
+        } = cam.mode
+        else {
             panic!("default_perspective is Perspective");
         };
         assert_eq!(fov_y, expected_fov);
@@ -294,7 +312,15 @@ mod hand_computed_coc {
         max_radius: f32,
         world_to_mm: f32,
     ) -> [f32; 4] {
-        coc_output_physics(raw_depth, NEAR, FAR, focus_distance, f_stop, max_radius, world_to_mm)
+        coc_output_physics(
+            raw_depth,
+            NEAR,
+            FAR,
+            focus_distance,
+            f_stop,
+            max_radius,
+            world_to_mm,
+        )
     }
 
     /// The bare formula with explicit near/far (the import's camera near/far
@@ -314,15 +340,22 @@ mod hand_computed_coc {
         let d_mm = linearize_depth(raw_depth, near, far) * world_to_mm;
         let s_mm = focus_distance * world_to_mm;
         let signed_delta = d_mm - s_mm;
-        let coc_radius_mm = aperture_radius_mm * f_mm * signed_delta
-            / (d_mm * (s_mm - f_mm).max(1.0));
-        let coc_radius_px =
-            (coc_radius_mm.abs() / SENSOR_H_MM * VIEWPORT_H).clamp(0.0, max_radius);
+        let coc_radius_mm =
+            aperture_radius_mm * f_mm * signed_delta / (d_mm * (s_mm - f_mm).max(1.0));
+        let coc_radius_px = (coc_radius_mm.abs() / SENSOR_H_MM * VIEWPORT_H).clamp(0.0, max_radius);
         // The WGSL body's focus<=0 neutral contract — mirrored exactly.
-        let coc_q = if focus_distance <= 0.0 { 0.0 } else { coc_radius_px };
+        let coc_q = if focus_distance <= 0.0 {
+            0.0
+        } else {
+            coc_radius_px
+        };
         let normalized = coc_q / max_radius;
         // Sign flag: 1.0 = nearer than focus, 0.0 = far-or-in-focus.
-        let near_flag = if focus_distance > 0.0 && signed_delta < 0.0 { 1.0 } else { 0.0 };
+        let near_flag = if focus_distance > 0.0 && signed_delta < 0.0 {
+            1.0
+        } else {
+            0.0
+        };
         [normalized, near_flag, normalized, 1.0]
     }
 
@@ -340,7 +373,11 @@ mod hand_computed_coc {
         assert_eq!(got[0], 0.0, "negative focus is neutral too");
         assert_eq!(got[1], 0.0, "negative focus sign flag stays 0");
         let focused = coc_output(0.5, 0.3, 1.4, 24.0, WORLD_TO_MM);
-        assert!(focused[0] > 0.0, "a real focus distance keeps its radius, got {}", focused[0]);
+        assert!(
+            focused[0] > 0.0,
+            "a real focus distance keeps its radius, got {}",
+            focused[0]
+        );
     }
 
     /// Case 1: focus exactly AT the sample (D_mm == S_mm) — CoC must be
@@ -351,10 +388,21 @@ mod hand_computed_coc {
     fn case_1_focus_at_sample_gives_zero_coc() {
         let raw = NEAR * (FAR - 5.0) / (5.0 * (FAR - NEAR));
         let view_z = linearize_depth(raw, NEAR, FAR);
-        assert!((view_z - 5.0).abs() < 1e-4, "fixture raw must linearize to 5.0m, got {view_z}");
+        assert!(
+            (view_z - 5.0).abs() < 1e-4,
+            "fixture raw must linearize to 5.0m, got {view_z}"
+        );
         let got = coc_output(raw, 5.0, 2.8, 24.0, WORLD_TO_MM);
-        assert!(got[0].abs() < 1e-4, "focus-plane sample must give CoC radius == 0, got {}", got[0]);
-        assert!(got[1].abs() < 1e-4, "focus-plane sample is far-or-in-focus, sign flag == 0, got {}", got[1]);
+        assert!(
+            got[0].abs() < 1e-4,
+            "focus-plane sample must give CoC radius == 0, got {}",
+            got[0]
+        );
+        assert!(
+            got[1].abs() < 1e-4,
+            "focus-plane sample is far-or-in-focus, sign flag == 0, got {}",
+            got[1]
+        );
     }
 
     /// Case 2: f_stop = infinity (pinhole) — CoC radius must be exactly 0
@@ -364,8 +412,16 @@ mod hand_computed_coc {
     #[test]
     fn case_2_pinhole_gives_zero_coc_at_any_depth() {
         let got = coc_output(0.5, 1.0, f32::INFINITY, 24.0, WORLD_TO_MM);
-        assert_eq!(got[0], 0.0, "f_stop = infinity must give exactly 0 radius, got {}", got[0]);
-        assert_eq!(got[1], 1.0, "raw 0.5 is nearer than focus=1.0, sign flag == 1, got {}", got[1]);
+        assert_eq!(
+            got[0], 0.0,
+            "f_stop = infinity must give exactly 0 radius, got {}",
+            got[0]
+        );
+        assert_eq!(
+            got[1], 1.0,
+            "raw 0.5 is nearer than focus=1.0, sign flag == 1, got {}",
+            got[1]
+        );
     }
 
     /// Case 3: hand-worked non-trivial point. raw = 0.5, focus_distance =
@@ -382,8 +438,16 @@ mod hand_computed_coc {
     #[test]
     fn case_3_hand_worked_nontrivial_point() {
         let got = coc_output(0.5, 2.0, 2.0, 24.0, WORLD_TO_MM);
-        assert!((got[0] - 7.34215 / 24.0).abs() < 5e-4, "hand-worked case_3 radius: expected ~{}, got {}", 7.34215 / 24.0, got[0]);
-        assert_eq!(got[1], 1.0, "raw 0.5 is nearer than focus=2.0, sign flag == 1");
+        assert!(
+            (got[0] - 7.34215 / 24.0).abs() < 5e-4,
+            "hand-worked case_3 radius: expected ~{}, got {}",
+            7.34215 / 24.0,
+            got[0]
+        );
+        assert_eq!(
+            got[1], 1.0,
+            "raw 0.5 is nearer than focus=2.0, sign flag == 1"
+        );
     }
 
     /// Case 4: depth far beyond focus, wide aperture — clamp to max_radius
@@ -401,8 +465,16 @@ mod hand_computed_coc {
     #[test]
     fn case_4_close_focus_wide_aperture_far_depth() {
         let got = coc_output(0.05, 0.5, 0.5, 24.0, WORLD_TO_MM);
-        assert!((got[0] - 9.89595 / 24.0).abs() < 5e-4, "hand-worked case_4 radius: expected ~{}, got {}", 9.89595 / 24.0, got[0]);
-        assert_eq!(got[1], 0.0, "raw 0.05 is far from focus=0.5, sign flag == 0");
+        assert!(
+            (got[0] - 9.89595 / 24.0).abs() < 5e-4,
+            "hand-worked case_4 radius: expected ~{}, got {}",
+            9.89595 / 24.0,
+            got[0]
+        );
+        assert_eq!(
+            got[1], 0.0,
+            "raw 0.05 is far from focus=0.5, sign flag == 0"
+        );
     }
 
     /// Case 5: clamp-engaged. raw = 0.01 (very near the far plane in reversed-Z), focus_distance
@@ -418,8 +490,15 @@ mod hand_computed_coc {
     #[test]
     fn case_5_clamp_engages_at_max_radius() {
         let got = coc_output(0.01, 0.2, 0.5, 24.0, WORLD_TO_MM);
-        assert!((got[0] - 1.0).abs() < 1e-6, "clamp must give radius == max_radius/max_radius = 1.0, got {}", got[0]);
-        assert_eq!(got[1], 0.0, "raw 0.01 is far from focus=0.2, sign flag == 0");
+        assert!(
+            (got[0] - 1.0).abs() < 1e-6,
+            "clamp must give radius == max_radius/max_radius = 1.0, got {}",
+            got[0]
+        );
+        assert_eq!(
+            got[1], 0.0,
+            "raw 0.01 is far from focus=0.2, sign flag == 0"
+        );
     }
 
     /// **Scene-scale invariance (BUG-bdwd)**: the CoC formula is homogeneous
@@ -430,37 +509,42 @@ mod hand_computed_coc {
     /// hardcoded-1000 path did at unit scale, regardless of R. This is the
     /// property that makes musical f-stops work at any scene size.
     /// **Migration look-preservation (BUG-bdwd)**: at each scene bounding-radius
-/// R, the import stamps stored content at model scale (focus = 2.2R, camera
-/// near/far from Framing's per-R values — the same numbers the graph
-/// actually stores). The migration multiplies the stored `f_stop` by R and
-/// calibrates `world_to_mm = 1000/R` — the migrated rendering must preserve
-/// the OLD (W=1000, N) tuned CoC (2% tolerance; the `max(s_mm−f_mm, 1.0)`
-/// floor and the far-plane clamp make it approximate, not exact).
-#[test]
-fn migration_f_stop_times_radius_preserves_coc() {
-    let import_cam = |r: f32| -> (f32, f32) {
-        let dist = 2.2 * r;
-        let near = ((dist - r) * 0.5).max(1e-4);
-        let far = 200.0f32.max(dist + 1.5 * r);
-        (near, far)
-    };
-    let raw = 0.5;
-    for r in [0.01f32, 0.1, 1.0, 2.0, 10.0, 100.0] {
-        let (near, far) = import_cam(r);
-        let focus_model = 2.2 * r;
-        // Pre-fix import: W=1000 (hardcoded), stored near/far/focus, N=2.8.
-        let old = coc_output_physics(raw, near, far, focus_model, 2.8, 24.0, 1000.0);
-        // Migrated: same near/far/focus, world_to_mm=1000/R, f_stop×R.
-        let migrated = coc_output_physics(raw, near, far, focus_model, 2.8 * r, 24.0, 1000.0 / r);
-        let rel = if old[0].abs() < 1e-6 { 0.0 } else { ((migrated[0] - old[0]) / old[0]).abs() };
-        assert!(
-            rel < 0.06,
-            "R={r}: migrated (W=1000/R, f=R·N) must preserve old (W=1000, N) within 6%, old {} got {}",
-            old[0],
-            migrated[0]
-        );
+    /// R, the import stamps stored content at model scale (focus = 2.2R, camera
+    /// near/far from Framing's per-R values — the same numbers the graph
+    /// actually stores). The migration multiplies the stored `f_stop` by R and
+    /// calibrates `world_to_mm = 1000/R` — the migrated rendering must preserve
+    /// the OLD (W=1000, N) tuned CoC (2% tolerance; the `max(s_mm−f_mm, 1.0)`
+    /// floor and the far-plane clamp make it approximate, not exact).
+    #[test]
+    fn migration_f_stop_times_radius_preserves_coc() {
+        let import_cam = |r: f32| -> (f32, f32) {
+            let dist = 2.2 * r;
+            let near = ((dist - r) * 0.5).max(1e-4);
+            let far = 200.0f32.max(dist + 1.5 * r);
+            (near, far)
+        };
+        let raw = 0.5;
+        for r in [0.01f32, 0.1, 1.0, 2.0, 10.0, 100.0] {
+            let (near, far) = import_cam(r);
+            let focus_model = 2.2 * r;
+            // Pre-fix import: W=1000 (hardcoded), stored near/far/focus, N=2.8.
+            let old = coc_output_physics(raw, near, far, focus_model, 2.8, 24.0, 1000.0);
+            // Migrated: same near/far/focus, world_to_mm=1000/R, f_stop×R.
+            let migrated =
+                coc_output_physics(raw, near, far, focus_model, 2.8 * r, 24.0, 1000.0 / r);
+            let rel = if old[0].abs() < 1e-6 {
+                0.0
+            } else {
+                ((migrated[0] - old[0]) / old[0]).abs()
+            };
+            assert!(
+                rel < 0.06,
+                "R={r}: migrated (W=1000/R, f=R·N) must preserve old (W=1000, N) within 6%, old {} got {}",
+                old[0],
+                migrated[0]
+            );
+        }
     }
-}
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -588,9 +672,18 @@ mod gpu_tests {
         enc.dispatch_compute(
             pipeline,
             &[
-                GpuBinding::Bytes { binding: 0, data: uniform_bytes },
-                GpuBinding::Texture { binding: 1, texture: depth },
-                GpuBinding::Texture { binding: 2, texture: &out.texture },
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: uniform_bytes,
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: depth,
+                },
+                GpuBinding::Texture {
+                    binding: 2,
+                    texture: &out.texture,
+                },
             ],
             [w.div_ceil(16), h.div_ceil(16), 1],
             "coc-dispatch",
@@ -631,7 +724,6 @@ mod gpu_tests {
         }
     }
 
-
     /// Independent optical oracle: a 50 mm f/2 lens focused at 1 m gives a
     /// 0.32894737 mm blur radius at 2 m, or 14.802632 pixels on a 24 mm-high
     /// sensor rendered at 1080p. Exercise the actual generated GPU kernel;
@@ -643,22 +735,37 @@ mod gpu_tests {
         let (near, far, object_z) = (0.1f32, 100.0f32, 2.0f32);
         let raw = (near * far / object_z - near) / (far - near);
         let depth = device.create_texture(&GpuTextureDesc {
-            width: w, height: h, depth: 1,
+            width: w,
+            height: h,
+            depth: 1,
             format: GpuTextureFormat::R32Float,
             dimension: GpuTextureDimension::D2,
             usage: GpuTextureUsage::CPU_UPLOAD | GpuTextureUsage::SHADER_READ,
-            label: "coc-physical-two-metre-plane", mip_levels: 1,
+            label: "coc-physical-two-metre-plane",
+            mip_levels: 1,
         });
         device.upload_texture(&depth, bytemuck::cast_slice(&vec![raw; (w * h) as usize]));
         let uniforms = coc_uniforms(24.0, 2.0 * (24.0f32 / 100.0).atan(), near, far, 1.0, 2.0);
         let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<CocFromDepth>()
             .expect("CoC standalone codegen");
         let pipeline = device.create_compute_pipeline(
-            &wgsl, manifold_node_engine::freeze::codegen::ENTRY, "coc-physical-radius",
+            &wgsl,
+            manifold_node_engine::freeze::codegen::ENTRY,
+            "coc-physical-radius",
         );
-        let out = dispatch_coc(&device, &pipeline, &depth, w, h, bytemuck::bytes_of(&uniforms));
+        let out = dispatch_coc(
+            &device,
+            &pipeline,
+            &depth,
+            w,
+            h,
+            bytemuck::bytes_of(&uniforms),
+        );
         for p in out {
-            assert!((p[0] * 24.0 - 14.802632).abs() < 0.02, "wrong physical blur radius: {p:?}");
+            assert!(
+                (p[0] * 24.0 - 14.802632).abs() < 0.02,
+                "wrong physical blur radius: {p:?}"
+            );
             assert_eq!(p[1], 0.0, "two-metre plane must be behind one-metre focus");
         }
     }
@@ -672,7 +779,14 @@ mod gpu_tests {
         let device = manifold_gpu::testkit::test_device();
         let (w, h) = (16u32, 4u32);
         let depth = depth_ramp(&device, w, h);
-        let uniforms = coc_uniforms(24.0, std::f32::consts::FRAC_PI_2, 0.1, 100.0, 5.0, f32::INFINITY);
+        let uniforms = coc_uniforms(
+            24.0,
+            std::f32::consts::FRAC_PI_2,
+            0.1,
+            100.0,
+            5.0,
+            f32::INFINITY,
+        );
         let bytes = bytemuck::bytes_of(&uniforms);
 
         let gen_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<CocFromDepth>()
@@ -685,12 +799,24 @@ mod gpu_tests {
         let out = dispatch_coc(&device, &pipeline, &depth, w, h, bytes);
 
         for (i, px) in out.iter().enumerate() {
-            assert_eq!(px[0], 0.0, "texel {i} R radius must be exactly 0 at f_stop=inf, got {}", px[0]);
-            assert_eq!(px[2], 0.0, "texel {i} B radius must be exactly 0 at f_stop=inf, got {}", px[2]);
+            assert_eq!(
+                px[0], 0.0,
+                "texel {i} R radius must be exactly 0 at f_stop=inf, got {}",
+                px[0]
+            );
+            assert_eq!(
+                px[2], 0.0,
+                "texel {i} B radius must be exactly 0 at f_stop=inf, got {}",
+                px[2]
+            );
             assert_eq!(px[3], 1.0, "texel {i} alpha must stay 1.0, got {}", px[3]);
             // The depth ramp linearizes to values well below focus_distance=5.0,
             // so every texel is geometrically nearer than focus.
-            assert_eq!(px[1], 1.0, "texel {i} sign flag must be 1 (nearer), got {}", px[1]);
+            assert_eq!(
+                px[1], 1.0,
+                "texel {i} sign flag must be 1 (nearer), got {}",
+                px[1]
+            );
         }
     }
 
@@ -705,7 +831,14 @@ mod gpu_tests {
         let (w, h) = (16u32, 16u32);
         let depth = depth_ramp(&device, w, h);
         let color = color_gradient(&device, w, h);
-        let uniforms = coc_uniforms(24.0, std::f32::consts::FRAC_PI_2, 0.1, 100.0, 5.0, f32::INFINITY);
+        let uniforms = coc_uniforms(
+            24.0,
+            std::f32::consts::FRAC_PI_2,
+            0.1,
+            100.0,
+            5.0,
+            f32::INFINITY,
+        );
         let bytes = bytemuck::bytes_of(&uniforms);
 
         let coc_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<CocFromDepth>()
@@ -715,15 +848,30 @@ mod gpu_tests {
             manifold_node_engine::freeze::codegen::ENTRY,
             "coc-chain",
         );
-        let coc_out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "coc-chain-out");
+        let coc_out = RenderTarget::new(
+            &device,
+            w,
+            h,
+            GpuTextureFormat::Rgba16Float,
+            "coc-chain-out",
+        );
         {
             let mut enc = device.create_encoder("coc-chain-coc");
             enc.dispatch_compute(
                 &coc_pipeline,
                 &[
-                    GpuBinding::Bytes { binding: 0, data: bytes },
-                    GpuBinding::Texture { binding: 1, texture: &depth },
-                    GpuBinding::Texture { binding: 2, texture: &coc_out.texture },
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytes,
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: &depth,
+                    },
+                    GpuBinding::Texture {
+                        binding: 2,
+                        texture: &coc_out.texture,
+                    },
                 ],
                 [w.div_ceil(16), h.div_ceil(16), 1],
                 "coc-chain-coc",
@@ -740,9 +888,10 @@ mod gpu_tests {
             _pad1: u32,
         }
 
-        let vbw_wgsl =
-            manifold_node_engine::freeze::codegen::standalone_for_spec::<GaussianBlurVariableWidth>()
-                .expect("node.variable_blur standalone codegen");
+        let vbw_wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<
+            GaussianBlurVariableWidth,
+        >()
+        .expect("node.variable_blur standalone codegen");
         let sampler = device.create_sampler(&GpuSamplerDesc::default());
 
         let dispatch_blur = |direction: u32, input: &GpuTexture| -> RenderTarget {
@@ -752,17 +901,43 @@ mod gpu_tests {
                 &[("QUALITY_LEVEL", "1u"), ("WEIGHTING_MODE", "0u")],
                 "coc-chain-blur",
             );
-            let u = BlurUniforms { direction, max_radius: 24.0, _pad0: 0, _pad1: 0 };
-            let out = RenderTarget::new(&device, w, h, GpuTextureFormat::Rgba16Float, "coc-chain-blur-out");
+            let u = BlurUniforms {
+                direction,
+                max_radius: 24.0,
+                _pad0: 0,
+                _pad1: 0,
+            };
+            let out = RenderTarget::new(
+                &device,
+                w,
+                h,
+                GpuTextureFormat::Rgba16Float,
+                "coc-chain-blur-out",
+            );
             let mut enc = device.create_encoder("coc-chain-blur");
             enc.dispatch_compute(
                 &pipeline,
                 &[
-                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&u) },
-                    GpuBinding::Texture { binding: 1, texture: input },
-                    GpuBinding::Texture { binding: 2, texture: &coc_out.texture },
-                    GpuBinding::Sampler { binding: 3, sampler: &sampler },
-                    GpuBinding::Texture { binding: 4, texture: &out.texture },
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&u),
+                    },
+                    GpuBinding::Texture {
+                        binding: 1,
+                        texture: input,
+                    },
+                    GpuBinding::Texture {
+                        binding: 2,
+                        texture: &coc_out.texture,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 3,
+                        sampler: &sampler,
+                    },
+                    GpuBinding::Texture {
+                        binding: 4,
+                        texture: &out.texture,
+                    },
                 ],
                 [w.div_ceil(16), h.div_ceil(16), 1],
                 "coc-chain-blur",

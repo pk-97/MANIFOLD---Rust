@@ -10,8 +10,10 @@
 //   signed  = D_mm - S_mm
 //   coc_radius_mm = aperture_radius_mm * f_mm * signed
 //                   / (D_mm * max(S_mm - f_mm, 1.0))
-//   coc_radius_px = clamp(|coc_radius_mm| / SENSOR_H_MM * viewport_h,
+//   coc_radius_px = clamp(|coc_radius_mm| / SENSOR_H_MM * REFERENCE_H,
 //                         0.0, max_radius)
+//   (pixels of a 1080 px tall frame whatever the output size: R is a share
+//   of the frame, and node.bokeh_gather scales max_radius to its own frame)
 //   out.r   = coc_radius_px / max_radius   (RADIUS MAGNITUDE — unchanged for every existing
 //             reader: node.variable_blur and node.bokeh_gather read `width.r`)
 //   out.g   = signed < 0 ? 1.0 : 0.0   (sign flag: 1.0 = nearer than focus,
@@ -37,6 +39,8 @@
 // oracle). `world_to_mm` calibrates the mm-per-world-unit reading for the
 // scene at hand (BUG-bdwd); default 1000.0 reproduces the old behavior.
 const SENSOR_H_MM: f32 = 24.0;
+// BLUR_REFERENCE_HEIGHT in primitives/mod.rs.
+const REFERENCE_H: f32 = 1080.0;
 
 fn body(
     c_depth: vec4<f32>,
@@ -57,7 +61,7 @@ fn body(
     let signed_delta = d_mm - s_mm;
     let coc_radius_mm = aperture_radius_mm * f_mm * signed_delta
         / (d_mm * max(s_mm - f_mm, 1.0));
-    let coc_radius_px = clamp(abs(coc_radius_mm) / SENSOR_H_MM * dims.y, 0.0, max_radius);
+    let coc_radius_px = clamp(abs(coc_radius_mm) / SENSOR_H_MM * REFERENCE_H, 0.0, max_radius);
     // focus_distance <= 0 is the LensParams hyperfocal/neutral contract —
     // exactly 0 CoC radius. Without this, S_mm = 0 makes the denominator 1 and the
     // formula degenerates to f_mm^2/f_stop: MAX blur at every aperture

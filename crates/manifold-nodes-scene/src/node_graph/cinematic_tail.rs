@@ -25,8 +25,8 @@ pub(crate) struct CinematicTail {
 }
 
 /// Build the DoF group + motion_blur node with neutral lens-era params
-/// (CoC/bokeh `max_radius` = 24, `max_blur_px` = 32 — the CinematicScene
-/// values). The caller chooses the initial enabled state and wires the shared
+/// (CoC/bokeh `max_radius` = 24 — the CinematicScene value; motion blur
+/// keeps its node default cap). The caller chooses the initial enabled state and wires the shared
 /// lens in, so depth-of-field
 /// and shutter read the SAME lens the exposure and FOV card knob surface.
 ///
@@ -130,9 +130,6 @@ pub(crate) fn build_cinematic_tail(
         "node.motion_blur",
         "motion_blur",
     );
-    motion_blur_node
-        .params
-        .insert("max_blur_px".to_string(), float(32.0));
     motion_blur_node
         .params
         .insert("enabled".to_string(), bool_val(enabled));

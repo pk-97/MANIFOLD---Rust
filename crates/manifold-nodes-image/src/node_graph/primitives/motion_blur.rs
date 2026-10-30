@@ -1,20 +1,25 @@
 //! `node.motion_blur` — shutter motion blur from a scene's velocity and depth.
 //!
 //! Three passes (Jimenez 2014, the tile/neighbour reconstruction filter):
-//! 1. `motion_blur_tiles.wgsl`: the longest smear in each 16 px tile.
+//! 1. `motion_blur_tiles.wgsl`: each pixel's smear length and inverse depth
+//!    for the taps, and the longest and shortest smear in each 16 px tile.
 //! 2. `motion_blur_neighbors.wgsl`: the longest smear reaching each tile from
 //!    tiles within the longest possible smear, so pixels beside a moving
-//!    object blur past its edge.
-//! 3. `motion_blur.wgsl`: per-pixel taps along that smear, weighted by depth
-//!    so a moving foreground covers the background and turns see-through at
-//!    its own edges, and the background never bleeds over the foreground.
+//!    object blur past its edge, and the shortest smear it spans.
+//! 3. `motion_blur.wgsl`: per-pixel taps along that smear and the pixel's
+//!    own, weighted by depth so a moving foreground covers the background and
+//!    turns see-through at its own edges, and the background never bleeds
+//!    over the foreground. A neighbourhood moving as one averages plain taps.
 //!
-//! A pixel's smear is `velocity_ndc * 0.5 * viewport * (shutter_angle / 360)`,
-//! centred on the pixel, its length capped at `max_blur_px`. `velocity` is
-//! `render_scene`'s NDC move since last frame and `depth` its raw reversed-Z
-//! depth, both read at each pixel's spot in their own grid. `camera` supplies
-//! the shutter angle and near/far. Tiles where nothing moves copy the source
-//! and skip the taps; a closed shutter copies the whole frame.
+//! A pixel's smear is `velocity_ndc * 0.5 * viewport * shutter`, centred on
+//! the pixel, its length capped at `max_blur_px` scaled from a 1080 px tall
+//! frame. `shutter` is the camera's shutter angle as a share of one project
+//! frame: `velocity` is `render_scene`'s NDC move since the last rendered
+//! frame, and live, a late frame spans several project frames, so the share
+//! shrinks to keep the smear a project-frame shutter's length. `depth` is
+//! the same render's raw reversed-Z depth, both read at each pixel's spot in
+//! their own grid. `camera` supplies the shutter angle and near/far. Tiles
+//! where nothing moves copy the source; a closed shutter copies the frame.
 
 use std::borrow::Cow;
 
@@ -23,7 +28,8 @@ use manifold_gpu::{
     GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
-use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
+use manifold_core::Seconds;
+use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameLoad, ParamValues};
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
 use manifold_node_engine::primitive::Primitive;
@@ -50,7 +56,9 @@ struct MotionBlurUniforms {
 
 #[derive(Clone, Copy)]
 struct MotionBlurSettings {
-    shutter_angle: f32,
+    /// The share of the measured frame interval the shutter is open.
+    shutter_scale: f32,
+    /// Longest smear in output pixels.
     max_blur_px: f32,
     near: f32,
     far: f32,
@@ -86,28 +94,54 @@ impl MotionBlurPipelines {
 }
 
 pub struct MotionBlurTiles {
+    /// Output-sized: each pixel's smear length and inverse linear depth.
+    prep: GpuTexture,
     tiles: GpuTexture,
     neighbors: GpuTexture,
 }
 
 impl MotionBlurTiles {
     fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
-        let make = |label| {
+        let make = |width, height, format, label| {
             device.create_texture(&GpuTextureDesc {
                 width,
                 height,
                 depth: 1,
-                format: GpuTextureFormat::Rgba16Float,
+                format,
                 dimension: GpuTextureDimension::D2,
                 usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::SHADER_WRITE,
                 label,
                 mip_levels: 1,
             })
         };
+        let (tw, th) = (width.div_ceil(TILE), height.div_ceil(TILE));
         Self {
-            tiles: make("motion blur tiles"),
-            neighbors: make("motion blur neighbours"),
+            prep: make(
+                width,
+                height,
+                GpuTextureFormat::Rg16Float,
+                "motion blur prep",
+            ),
+            tiles: make(tw, th, GpuTextureFormat::Rgba16Float, "motion blur tiles"),
+            neighbors: make(
+                tw,
+                th,
+                GpuTextureFormat::Rgba16Float,
+                "motion blur neighbours",
+            ),
         }
+    }
+}
+
+/// The shutter's share of the interval `velocity` was measured over. Live,
+/// that interval is `delta`, a whole number of project frames (`budget`), so
+/// a late frame's smear shrinks back to one project frame's shutter. Export
+/// frames are exact and take the angle as is.
+fn shutter_scale(shutter_angle: f32, load: Option<FrameLoad>, delta: Seconds) -> f32 {
+    let open = shutter_angle / 360.0;
+    match load {
+        Some(load) if delta > load.budget => open * (load.budget.0 / delta.0) as f32,
+        _ => open,
     }
 }
 
@@ -121,7 +155,7 @@ fn reach_tiles(max_blur_px: f32, tile_dims: (u32, u32)) -> u32 {
 manifold_node_engine::primitive! {
     name: MotionBlur,
     type_id: "node.motion_blur",
-    purpose: "Shutter motion blur (tile/neighbour reconstruction filter). smear_px = velocity_ndc * 0.5 * viewport * (shutter_angle/360), centred on the pixel, length capped at max_blur_px. Each pixel samples along the longest smear among nearby 16 px tiles, weighting taps by depth: a nearer tap counts where its own smear reaches the pixel, a farther tap where the pixel's smear reaches it, so moving objects blur past their edges and the background never bleeds over them. `velocity` expects render_scene's Rg16Float NDC-delta output and `depth` its raw reversed-Z depth, both from the same render_scene. `camera` supplies lens.shutter_angle (written by node.camera_lens) and near/far. Tiles with no visible motion copy the source; shutter_angle = 0 copies the frame; `enabled = false` aliases `in` to `out` with no GPU work.",
+    purpose: "Shutter motion blur (tile/neighbour reconstruction filter). smear_px = velocity_ndc * 0.5 * viewport * shutter, centred on the pixel, length capped at max_blur_px * frame_height / 1080. shutter is shutter_angle/360 of one project frame: live, a late frame's velocity spans several project frames and the shutter shrinks to match, so the smear never grows when frames drop. Each pixel samples along the longest smear among nearby 16 px tiles and its own smear, weighting taps by depth: a nearer tap counts where its own smear reaches the pixel, a farther tap where the pixel's smear reaches it, so moving objects blur past their edges and the background never bleeds over them. `velocity` expects render_scene's Rg16Float NDC-delta output and `depth` its raw reversed-Z depth, both from the same render_scene. `camera` supplies lens.shutter_angle (written by node.camera_lens) and near/far. Tiles with no visible motion copy the source; a neighbourhood moving as one averages plain taps; shutter_angle = 0 copies the frame; `enabled = false` aliases `in` to `out` with no GPU work.",
     inputs: {
         in: Texture2D required,
         velocity: Texture2D required,
@@ -136,8 +170,8 @@ manifold_node_engine::primitive! {
             name: Cow::Borrowed("max_blur_px"),
             label: "Max Blur",
             ty: ParamType::Float,
-            default: ParamValue::Float(32.0),
-            range: Some((0.0, 128.0)),
+            default: ParamValue::Float(96.0),
+            range: Some((0.0, 256.0)),
             enum_values: &[],
         },
         ParamDef {
@@ -153,7 +187,7 @@ manifold_node_engine::primitive! {
         },
     ],
     depth_rule: Warp,
-    composition_notes: "Wire one render_scene's `velocity` and `depth` outputs into `velocity` and `depth` (both lazy, free unless wired), and the Camera used for `node.camera_lens` into `camera` so the shutter matches the lens exposure and DoF use. Drive the shutter from node.camera_lens's own `shutter_angle` port. `max_blur_px` caps the smear length in pixels. Sits at the end of the cinematic chain, after DoF and before tone mapping, so highlights streak in HDR.",
+    composition_notes: "Wire one render_scene's `velocity` and `depth` outputs into `velocity` and `depth` (both lazy, free unless wired), and the Camera used for `node.camera_lens` into `camera` so the shutter matches the lens exposure and DoF use. Drive the shutter from node.camera_lens's own `shutter_angle` port. `max_blur_px` caps the smear length in pixels of a 1080 px tall frame and scales with the output, so it guards against jumps and leaves real motion to the shutter. Sits at the end of the cinematic chain, after DoF and before tone mapping, so highlights streak in HDR.",
     examples: ["preset.generator.cinematic_scene"],
     picker: { label: "Motion Blur", category: Atom },
     summary: "Smears moving things along their screen motion for the camera's shutter angle, past their own edges and in front of what they pass, driven by real per-object movement.",
@@ -185,7 +219,7 @@ impl MotionBlur {
         if w == 0 || h == 0 {
             return;
         }
-        if s.shutter_angle <= 0.0 || s.max_blur_px <= 0.0 {
+        if s.shutter_scale <= 0.0 || s.max_blur_px <= 0.0 {
             gpu.copy_texture_to_texture(src, out, w, h);
             return;
         }
@@ -193,9 +227,9 @@ impl MotionBlur {
         if self
             .tiles
             .as_ref()
-            .is_none_or(|t| t.tiles.width != tw || t.tiles.height != th)
+            .is_none_or(|t| t.prep.width != w || t.prep.height != h)
         {
-            self.tiles = Some(MotionBlurTiles::new(gpu.device, tw, th));
+            self.tiles = Some(MotionBlurTiles::new(gpu.device, w, h));
         }
         let t = self.tiles.as_ref().expect("motion blur tiles allocated");
         let p = self
@@ -206,7 +240,7 @@ impl MotionBlur {
             .get_or_insert_with(|| gpu.device.create_sampler(&GpuSamplerDesc::default()));
         let uniforms = MotionBlurUniforms {
             dims: [w as f32, h as f32],
-            shutter_scale: s.shutter_angle / 360.0,
+            shutter_scale: s.shutter_scale,
             max_blur_px: s.max_blur_px,
             near: s.near,
             far: s.far,
@@ -214,7 +248,7 @@ impl MotionBlur {
             _pad: 0,
         };
         let u = bytemuck::bytes_of(&uniforms);
-        let tile_grid = [tw.div_ceil(8), th.div_ceil(8), 1];
+        // One 16x16 workgroup per tile.
         gpu.native_enc.dispatch_compute(
             &p.tiles,
             &[
@@ -228,10 +262,18 @@ impl MotionBlur {
                 },
                 GpuBinding::Texture {
                     binding: 2,
+                    texture: depth,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: &t.prep,
+                },
+                GpuBinding::Texture {
+                    binding: 4,
                     texture: &t.tiles,
                 },
             ],
-            tile_grid,
+            [tw, th, 1],
             "motion blur tiles",
         );
         gpu.native_enc.dispatch_compute(
@@ -250,7 +292,7 @@ impl MotionBlur {
                     texture: &t.neighbors,
                 },
             ],
-            tile_grid,
+            [tw.div_ceil(8), th.div_ceil(8), 1],
             "motion blur neighbours",
         );
         gpu.native_enc.dispatch_compute(
@@ -270,7 +312,7 @@ impl MotionBlur {
                 },
                 GpuBinding::Texture {
                     binding: 3,
-                    texture: depth,
+                    texture: &t.prep,
                 },
                 GpuBinding::Texture {
                     binding: 4,
@@ -316,7 +358,7 @@ impl Primitive for MotionBlur {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let max_blur_px = ctx.param_f32("max_blur_px", 32.0);
+        let max_blur_px = ctx.param_f32("max_blur_px", 96.0);
         let cam = ctx
             .inputs
             .camera("camera")
@@ -334,13 +376,41 @@ impl Primitive for MotionBlur {
             return;
         };
         let settings = MotionBlurSettings {
-            shutter_angle: cam.lens.shutter_angle,
-            max_blur_px,
+            shutter_scale: shutter_scale(
+                cam.lens.shutter_angle,
+                ctx.sim_step.load(),
+                ctx.time.delta,
+            ),
+            max_blur_px: max_blur_px * out.height as f32
+                / crate::node_graph::primitives::BLUR_REFERENCE_HEIGHT,
             near: cam.near,
             far: cam.far,
         };
         let gpu = ctx.gpu_encoder();
         self.encode(gpu, src, velocity, depth, out, settings);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use manifold_core::Seconds;
+    use manifold_node_engine::exec::effect_node::FrameLoad;
+
+    use super::shutter_scale;
+
+    /// A 30 fps project with a 144° shutter: an on-time frame and export keep
+    /// the angle's share; a frame that spans 2.5 project frames shrinks it so
+    /// the smear stays one project frame's shutter long.
+    #[test]
+    fn late_frames_keep_one_project_frame_of_shutter() {
+        let load = Some(FrameLoad {
+            previous: Seconds(0.08),
+            budget: Seconds(1.0 / 30.0),
+        });
+        let open = 144.0 / 360.0;
+        assert!((shutter_scale(144.0, load, Seconds(1.0 / 30.0)) - open).abs() < 1e-6);
+        assert!((shutter_scale(144.0, load, Seconds(2.5 / 30.0)) - open / 2.5).abs() < 1e-6);
+        assert!((shutter_scale(144.0, None, Seconds(2.5 / 30.0)) - open).abs() < 1e-6);
     }
 }
 
@@ -449,7 +519,7 @@ mod gpu_tests {
         let mut native = device.create_encoder("motion-blur-test");
         let mut gpu = manifold_node_engine::gpu::gpu_encoder::GpuEncoder::new(&mut native, &device);
         let settings = MotionBlurSettings {
-            shutter_angle: 360.0,
+            shutter_scale: 1.0,
             max_blur_px: 32.0,
             near: 0.1,
             far: 100.0,

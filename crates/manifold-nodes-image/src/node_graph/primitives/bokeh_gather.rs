@@ -543,7 +543,7 @@ impl Primitive for BokehGather {
             .map(|(_, dims)| *dims)
     }
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let radius = ctx.param_f32("max_radius", 24.0);
+        let max_radius = ctx.param_f32("max_radius", 24.0);
         let aperture = match ctx.params.get("aperture") {
             Some(ParamValue::Enum(v)) => *v,
             _ => 0,
@@ -562,6 +562,9 @@ impl Primitive for BokehGather {
         let Some(out) = ctx.outputs.texture_2d("out") else {
             return;
         };
+        // max_radius is set for a 1080 px tall frame, like the CoC producer's.
+        let radius =
+            max_radius * out.height as f32 / crate::node_graph::primitives::BLUR_REFERENCE_HEIGHT;
         self.encode(
             ctx.gpu_encoder(),
             source,

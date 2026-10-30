@@ -9,7 +9,7 @@ use manifold_foundation::scene_surface::{CardBand, ControlGroup, Feature, Gate, 
 use super::fields::{
     Choice, FieldControl, FieldRow, FieldValue, always, enabled, is_object_or_group, wrong_value,
 };
-use super::{AT_LEAST_ZERO, Exposure, PropertyRow, Reach, perform, row, setup};
+use super::{Exposure, PropertyRow, Reach, perform, row, setup};
 use crate::scene_doc::{CameraRig, ItemFields};
 
 const RIG: Reach = Reach::Own("rig");
@@ -191,11 +191,13 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
         Camera,
         Exposure::Automatic("the Environment's Exposure"),
     ),
-    row("max_blur", BOKEH, DepthOfField, perform(CardBand::Look, 3))
-        .param("max_radius")
-        .gate(Gate::Fold(Feature::DepthOfField))
-        .unit(Unit::Pixels)
-        .limit(AT_LEAST_ZERO),
+    row(
+        "max_blur",
+        BOKEH,
+        DepthOfField,
+        Exposure::Automatic("scales with the frame; Focus and F-Stop set the blur"),
+    )
+    .param("max_radius"),
     row("aperture", BOKEH, DepthOfField, setup()),
     row("quality", BOKEH, DepthOfField, setup()),
     row(
@@ -217,10 +219,12 @@ pub static CAMERA_ROWS: [PropertyRow; 66] = [
         DepthOfField,
         Exposure::Automatic("one scene unit is one metre"),
     ),
-    row("max_blur_px", BLUR, MotionBlur, perform(CardBand::Look, 12))
-        .gate(Gate::Fold(Feature::MotionBlur))
-        .unit(Unit::Pixels)
-        .limit(AT_LEAST_ZERO),
+    row(
+        "max_blur_px",
+        BLUR,
+        MotionBlur,
+        Exposure::Automatic("scales with the frame; Shutter Angle sets the blur"),
+    ),
     // Shake: nothing moves on its own, Amount 0 leaves the camera still.
     row("shake_amount", SHAKE, Shake, perform(CardBand::Camera, 20))
         .param("amount")
