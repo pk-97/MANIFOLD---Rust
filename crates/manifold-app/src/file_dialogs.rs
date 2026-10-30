@@ -478,9 +478,9 @@ pub(crate) fn starter_hdris() -> &'static [(String, PathBuf)] {
         let mut library: Vec<_> = entries
             .filter_map(|entry| {
                 let file = entry.ok()?.path();
-                let hdri = file
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("hdr") || ext.eq_ignore_ascii_case("exr"));
+                let hdri = file.extension().is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("hdr") || ext.eq_ignore_ascii_case("exr")
+                });
                 let name = file.file_stem()?.to_string_lossy().into_owned();
                 hdri.then_some((name, file))
             })
