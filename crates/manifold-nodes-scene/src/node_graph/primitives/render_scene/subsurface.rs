@@ -206,11 +206,11 @@ impl SubsurfacePass {
             .iter()
             .zip(binding_sets)
             .filter(|(draw, _)| draw.subsurface_look.scatters())
-            .filter_map(|(draw, bindings)| {
+            .flat_map(|(draw, bindings)| {
                 let slot = draw.subsurface_look.weight_slot[1] as usize;
                 profiles[slot - 1] = draw.subsurface_look.distance;
                 let pipeline = &pipelines[usize::from(solid_surface(&draw.uniforms))];
-                bindings.as_ref().map(|bindings| {
+                bindings.as_ref().into_iter().flat_map(move |bindings| {
                     draw.camera_live(manifold_gpu::Draw::new(
                         pipeline,
                         bindings,

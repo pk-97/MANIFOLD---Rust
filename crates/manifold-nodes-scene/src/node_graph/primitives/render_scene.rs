@@ -2008,6 +2008,9 @@ struct ObjectDraw<'ctx> {
     live_extent: Option<manifold_node_engine::scene::live_extent::LiveExtent>,
     indices: Option<&'ctx manifold_gpu::GpuBuffer>,
     indices_content: Option<ContentVersion>,
+    /// The indexed mesh's detail levels (`mesh_lods.rs`), which a draw that
+    /// culls its copies picks from per copy and view.
+    lods: Option<&'ctx manifold_gpu::GpuBuffer>,
     /// This frame's GPU-written draw arguments (buffer, byte offset) for an
     /// object with a live extent or trimmed instances: raster passes draw
     /// indirectly with them.
@@ -2184,26 +2187,60 @@ impl ObjectDraw<'_> {
         self.with_args(draw, self.indices, args)
     }
 
-    /// [`Self::live`] for a camera pass: the view block counts only the
-    /// copies that survived the cull.
-    fn camera_live<'a>(&'a self, draw: manifold_gpu::Draw<'a>) -> manifold_gpu::Draw<'a> {
-        if let Some(PatchDraw {
-            args,
-            first_block,
-            camera: Some(kept),
-        }) = &self.patches
-        {
-            let offset = first_block * live_draw_args::ARGS_BYTES;
-            return self.with_args(draw, Some(kept), Some((args, offset)));
-        }
-        let args = self.live_args.as_ref().map(|(args, offset)| {
-            let offset = self
-                .camera_cull
-                .as_ref()
-                .map_or(*offset, |cull| cull.offset);
-            (args, offset)
-        });
-        self.with_args(draw, self.indices, args)
+    /// [`Self::live`] for a camera pass: the view blocks count only the
+    /// copies that survived the cull, one draw per detail level.
+    fn camera_live<'a>(
+        &'a self,
+        draw: manifold_gpu::Draw<'a>,
+    ) -> impl Iterator<Item = manifold_gpu::Draw<'a>> + 'a {
+        let levels = match (&self.patches, &self.camera_cull) {
+            (
+                Some(PatchDraw {
+                    camera: Some(_), ..
+                }),
+                _,
+            )
+            | (_, None) => 1,
+            (_, Some(_)) => live_draw_args::view_blocks(self.lods.is_some()),
+        };
+        (0..levels).map(move |level| {
+            if let Some(PatchDraw {
+                args,
+                first_block,
+                camera: Some(kept),
+            }) = &self.patches
+            {
+                let offset = first_block * live_draw_args::ARGS_BYTES;
+                return self.with_args(draw, Some(kept), Some((args, offset)));
+            }
+            let args = self.live_args.as_ref().map(|(args, offset)| {
+                let offset = self.camera_cull.as_ref().map_or(*offset, |cull| {
+                    cull.offset + level * live_draw_args::ARGS_BYTES
+                });
+                (args, offset)
+            });
+            self.with_args(draw, self.level_indices(level), args)
+        })
+    }
+
+    /// The draws of a culled view whose first block sits at byte `offset`
+    /// of `args`: the full mesh, then each detail level.
+    fn view_draws<'a>(
+        &'a self,
+        draw: manifold_gpu::Draw<'a>,
+        args: &'a manifold_gpu::GpuBuffer,
+        offset: u64,
+    ) -> impl Iterator<Item = manifold_gpu::Draw<'a>> + 'a {
+        (0..live_draw_args::view_blocks(self.lods.is_some())).map(move |level| {
+            let at = offset + level * live_draw_args::ARGS_BYTES;
+            self.with_args(draw, self.level_indices(level), Some((args, at)))
+        })
+    }
+
+    /// Level 0 draws the mesh's own indices; a coarser level reads its
+    /// indices from the `lods` array, whose block names where they start.
+    fn level_indices(&self, level: u64) -> Option<&manifold_gpu::GpuBuffer> {
+        if level == 0 { self.indices } else { self.lods }
     }
 
     /// `draw` with this object's back-face rule, drawn from `indices` when
@@ -2973,6 +3010,7 @@ impl RenderScene {
             material: inputs.material("material"),
             mesh: inputs.slot_of("vertices"),
             indices: None,
+            lods: None,
             prev_positions: None,
             weights: None,
             topology: None,
@@ -3206,7 +3244,7 @@ impl RenderScene {
         let (rt_just_resumed, will_rt_accumulate_this_frame) =
             self.author_rt_flags(ctx, &pre, &rt_ready, &mut draws, has_transmission);
         self.plan_prev_positions(ctx, &mut draws, pre.velocity_wired, has_transmission);
-        self.encode_copy_cull(ctx, &mut draws);
+        self.encode_copy_cull(ctx, &mut draws, [pre.width, pre.height]);
         self.encode_patch_cull(ctx, &mut draws);
 
         // ---- Ensure cached GPU resources (mutable phase) — BUG-trh7 stage 2,

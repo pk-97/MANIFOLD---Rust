@@ -4,7 +4,8 @@
 //! live triangles, and from the instance array, so an instanced draw stops at
 //! its last instance that is not an all-zero hole (`live_instances.wgsl`).
 //! A camera pass reads a second block per culled draw: the live block with
-//! only the copies that can reach the view counted (`cull_instances.wgsl`).
+//! only the copies that can reach the view counted (`cull_instances.wgsl`),
+//! or one such block per detail level for a mesh that has them.
 
 use manifold_gpu::BufferUse;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
@@ -63,6 +64,9 @@ struct CullArgs {
     live_block: u32,
     view_block: u32,
     has_prev: u32,
+    viewport: [f32; 2],
+    levels: u32,
+    _pad: u32,
 }
 
 /// One draw's cull: the matrices its uniforms carry, the mesh box, the copies
@@ -81,6 +85,20 @@ pub(super) struct CullDraw<'a> {
     /// Last frame's records and the buffer their survivors go to, when the
     /// velocity pass reads them.
     pub prev: Option<(&'a GpuBuffer, &'a GpuBuffer)>,
+    /// The mesh's detail levels, which take the [`view_blocks`] after
+    /// `view_block`, and the view's size in pixels that picks among them.
+    pub lods: Option<&'a GpuBuffer>,
+    pub viewport: [u32; 2],
+}
+
+/// Arguments blocks one view of a culled draw takes: the full mesh's, and
+/// one per detail level when the mesh has them.
+pub(super) fn view_blocks(lods: bool) -> u64 {
+    if lods {
+        1 + u64::from(super::super::mesh_lods::LOD_LEVELS)
+    } else {
+        1
+    }
 }
 
 #[derive(Default)]
@@ -90,6 +108,9 @@ pub(super) struct LiveDrawArgs {
     trim: Option<GpuComputePipeline>,
     view_args: Option<GpuComputePipeline>,
     cull: Option<GpuComputePipeline>,
+    count_levels: Option<GpuComputePipeline>,
+    level_bases: Option<GpuComputePipeline>,
+    place_levels: Option<GpuComputePipeline>,
     buffer: Option<GpuBuffer>,
 }
 
@@ -122,6 +143,21 @@ impl LiveDrawArgs {
                 CULL_SHADER,
                 "cull",
                 "node.render_scene cull instances",
+            ));
+            self.count_levels = Some(device.create_compute_pipeline(
+                CULL_SHADER,
+                "count_levels",
+                "node.render_scene count copy levels",
+            ));
+            self.level_bases = Some(device.create_compute_pipeline(
+                CULL_SHADER,
+                "level_bases",
+                "node.render_scene copy level bases",
+            ));
+            self.place_levels = Some(device.create_compute_pipeline(
+                CULL_SHADER,
+                "place_levels",
+                "node.render_scene place copy levels",
             ));
         }
         let bytes = blocks.max(1) as u64 * ARGS_BYTES;
@@ -247,7 +283,8 @@ impl LiveDrawArgs {
     /// the first `draw.count` whose box can reach the clip volume into
     /// `draw.out_instances`, counting them into the view block's instance
     /// word. Survivors keep their previous records alongside when `draw.prev`
-    /// is set.
+    /// is set. With detail levels, each copy is counted into its level's
+    /// block, and the survivors are laid out level by level.
     pub(super) fn cull(&self, encoder: &mut GpuEncoder, draw: &CullDraw<'_>) {
         let buffer = self.buffer.as_ref().expect("prepare before cull");
         let params = CullArgs {
@@ -270,7 +307,13 @@ impl LiveDrawArgs {
             live_block: draw.live_block,
             view_block: draw.view_block,
             has_prev: u32::from(draw.prev.is_some()),
+            viewport: [draw.viewport[0] as f32, draw.viewport[1] as f32],
+            levels: (view_blocks(draw.lods.is_some()) - 1) as u32,
+            _pad: 0,
         };
+        // Without detail levels the binding takes a stand-in the kernels
+        // never index past word 0 of, read as no levels.
+        let lods = draw.lods.unwrap_or(draw.instances);
         encoder.dispatch_compute(
             self.view_args.as_ref().expect("prepare before cull"),
             &[
@@ -283,6 +326,11 @@ impl LiveDrawArgs {
                     buffer,
                     offset: 0,
                 },
+                GpuBinding::Buffer {
+                    binding: 6,
+                    buffer: lods,
+                    offset: 0,
+                },
             ],
             [1, 1, 1],
             "node.render_scene view draw args",
@@ -291,41 +339,71 @@ impl LiveDrawArgs {
         // Without previous records the two bindings take stand-ins the
         // kernel never touches.
         let (prev, out_prev) = draw.prev.unwrap_or((draw.instances, draw.out_instances));
+        let bindings = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&params),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: draw.instances,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: draw.out_instances,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: prev,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 5,
+                buffer: out_prev,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 6,
+                buffer: lods,
+                offset: 0,
+            },
+        ];
+        let groups = [draw.count.div_ceil(256).clamp(1, TRIM_GROUPS), 1, 1];
+        if draw.lods.is_none() {
+            encoder.dispatch_compute(
+                self.cull.as_ref().expect("prepare before cull"),
+                &bindings,
+                groups,
+                "node.render_scene cull instances",
+            );
+            return;
+        }
         encoder.dispatch_compute(
-            self.cull.as_ref().expect("prepare before cull"),
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&params),
-                },
-                GpuBinding::Buffer {
-                    binding: 1,
-                    buffer: draw.instances,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 2,
-                    buffer,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 3,
-                    buffer: draw.out_instances,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 4,
-                    buffer: prev,
-                    offset: 0,
-                },
-                GpuBinding::Buffer {
-                    binding: 5,
-                    buffer: out_prev,
-                    offset: 0,
-                },
-            ],
-            [draw.count.div_ceil(256).clamp(1, TRIM_GROUPS), 1, 1],
-            "node.render_scene cull instances",
+            self.count_levels.as_ref().expect("prepare before cull"),
+            &bindings,
+            groups,
+            "node.render_scene count copy levels",
+        );
+        encoder.compute_memory_barrier_buffers();
+        encoder.dispatch_compute(
+            self.level_bases.as_ref().expect("prepare before cull"),
+            &bindings,
+            [1, 1, 1],
+            "node.render_scene copy level bases",
+        );
+        encoder.compute_memory_barrier_buffers();
+        encoder.dispatch_compute(
+            self.place_levels.as_ref().expect("prepare before cull"),
+            &bindings,
+            groups,
+            "node.render_scene place copy levels",
         );
     }
 }

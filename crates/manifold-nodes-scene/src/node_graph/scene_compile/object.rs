@@ -158,7 +158,11 @@ fn leaves_tree(b: &mut Builder<'_>, item: &Item) -> Option<u32> {
     let mut beside: Option<&[Item]> = None;
     doc.walk(|candidate, ancestors| {
         if candidate.id == item.id {
-            beside = Some(ancestors.last().map_or(&doc.items[..], |parent| &parent.children[..]));
+            beside = Some(
+                ancestors
+                    .last()
+                    .map_or(&doc.items[..], |parent| &parent.children[..]),
+            );
         }
     });
     let tree = beside?
@@ -288,6 +292,10 @@ pub(crate) fn emit(b: &mut Builder<'_>, item: &Item, frame: Option<&Frame>) {
     }
     if let Some(indices) = indices {
         b.wire(indices.0, indices.1, object, "indices");
+        // Copies of an imported mesh draw far ones at its detail levels.
+        if matches!(fields.shape, Shape::Mesh { .. }) && (own_copies || group_copies.is_some()) {
+            b.wire(indices.0, "lods", object, "lods");
+        }
     }
     for (source, port) in maps {
         b.wire(source, "out", object, port);

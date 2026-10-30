@@ -665,7 +665,7 @@ impl RenderScene {
             // draw's fill mode (Lines under wireframe) and topology (Point
             // under Points). The depth/shadow batches never see either —
             // they force Fill + Triangle in the encoder.
-            let call = if draw.points {
+            let calls = if draw.points {
                 // D8: points draw EVERY vertex in the buffer (one dot per
                 // vertex), not the triangle-multiple-of-3 count — the
                 // trailing-vertex truncation must not drop dots.
@@ -690,9 +690,9 @@ impl RenderScene {
                 )
             };
             if draw.routes_to_transparent() {
-                blend_entries.push((draw.sort_depth, draw_index, call));
+                blend_entries.extend(calls.map(|call| (draw.sort_depth, draw_index, call)));
             } else {
-                draw_calls.push(call);
+                draw_calls.extend(calls);
             }
         }
         // Back-to-front: farthest object (largest view-space depth along
@@ -1353,6 +1353,7 @@ impl RenderScene {
                     // there and the scene behind shows through as specks. A
                     // few units farther (reversed depth) keeps the nearest
                     // surface, far short of any face behind it.
+                    // A transparent draw keeps every copy, so it is one draw.
                     let depth_draw = draw
                         .camera_live(manifold_gpu::Draw::new(
                             if shadow_uniforms.discard_free() {
@@ -1364,6 +1365,8 @@ impl RenderScene {
                             draw.vertex_count,
                             draw.instance_count,
                         ))
+                        .next()
+                        .expect("a transparent draw is one draw")
                         .depth_bias(-16.0, -1.0, 0.0);
 
                     #[cfg(feature = "fluid-perf-proofs")]

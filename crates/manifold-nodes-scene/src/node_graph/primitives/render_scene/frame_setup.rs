@@ -602,6 +602,12 @@ impl RenderScene {
                 live_extent,
                 indices,
                 indices_content,
+                lods: indices.and(
+                    object
+                        .lods
+                        .filter(|&slot| ctx.inputs.slot_content_ready(slot))
+                        .and_then(|slot| ctx.inputs.array_slot(slot)),
+                ),
                 live_args: None,
                 vertices_content,
                 mesh_revision: mesh_slot.and_then(|s| ctx.inputs.mesh_revision_of(s)),
@@ -693,10 +699,15 @@ impl RenderScene {
             .count();
         let patched = draws.iter().filter(|d| d.culls_patches()).count();
         if live + live_meshes + patched > 0 {
-            let culled = draws.iter().filter(|d| d.culls_copies()).count();
-            // Each culled draw also gets one block per shadow caster, after
-            // the water meshes' blocks; then each patch-culled draw one for
-            // the camera and one per caster.
+            // Each culled draw's view takes one block, or one per detail
+            // level; each culled draw also gets a view's blocks per shadow
+            // caster, after the water meshes' blocks; then each patch-culled
+            // draw one for the camera and one per caster.
+            let culled: usize = draws
+                .iter()
+                .filter(|d| d.culls_copies())
+                .map(|d| live_draw_args::view_blocks(d.lods.is_some()) as usize)
+                .sum();
             let casters = pre.casters.len();
             let gpu = ctx.gpu_encoder();
             let args = self.live_draw_args.prepare(
@@ -764,7 +775,7 @@ impl RenderScene {
                     instances: grown_buffer(buffer, gpu.device, bytes),
                     prev: None,
                 });
-                view_block += 1;
+                view_block += live_draw_args::view_blocks(draw.lods.is_some());
             }
             // The water meshes' blocks follow the view blocks.
             let mut block = (live + culled) as u64;
@@ -782,11 +793,11 @@ impl RenderScene {
                 mesh.live_args = Some((args.clone(), block * live_draw_args::ARGS_BYTES));
                 block += 1;
             }
-            // Then each culled draw's shadow blocks, one per caster.
+            // Then each culled draw's shadow blocks, a view's per caster.
             let mut shadow_block = (live + culled + live_meshes) as u64;
             for draw in draws.iter_mut().filter(|d| d.culls_copies()) {
                 draw.shadow_block = Some(shadow_block);
-                shadow_block += casters as u64;
+                shadow_block += casters as u64 * live_draw_args::view_blocks(draw.lods.is_some());
             }
             let mut patch_block = shadow_block;
             for draw in draws.iter_mut().filter(|d| d.culls_patches()) {
@@ -813,6 +824,7 @@ impl RenderScene {
         &mut self,
         ctx: &mut EffectNodeContext<'_, '_>,
         draws: &mut [ObjectDraw<'_>],
+        viewport: [u32; 2],
     ) {
         if draws.iter().all(|d| d.camera_cull.is_none()) {
             return;
@@ -853,6 +865,8 @@ impl RenderScene {
                     instances: source,
                     out_instances: &cull.instances,
                     prev: prev_source.zip(cull.prev.as_ref()),
+                    lods: draw.lods,
+                    viewport,
                 },
             );
         }

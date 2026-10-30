@@ -613,6 +613,10 @@ pub(crate) fn emit_combined(b: &mut Builder<'_>, group: &Item, frame: &Frame) ->
         }
         if let Some(indices) = drawn.indices {
             b.wire(indices.0, indices.1, object, "indices");
+            // Copies draw far ones at the mesh's detail levels.
+            if frame.copies.is_some() {
+                b.wire(indices.0, "lods", object, "lods");
+            }
         }
         for (source, port) in maps {
             b.wire(source, "out", object, port);

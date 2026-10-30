@@ -537,7 +537,13 @@ fn cull_instances_wgsl_validates_with_the_instance_transform_prelude() {
             e.emit_to_string(src)
         );
     }
-    for entry in ["view_args", "cull"] {
+    for entry in [
+        "view_args",
+        "cull",
+        "count_levels",
+        "level_bases",
+        "place_levels",
+    ] {
         assert!(
             module.entry_points.iter().any(|ep| ep.name == entry),
             "cull_instances.wgsl must expose {entry}"

@@ -68,6 +68,14 @@ As built, without new graph ports: a patch is a run of 128 consecutive triangles
 
 Each view gets its own cull: the camera (frustum and back-face cone, for meshes that skip back faces) and each shadow light (its own frustum). The CPU per-object frustum test stays as the first reject. Not yet covered: per-patch culling inside instanced draws (copies, swarms, Scene Loop cells), and meshes a modifier deforms (see Findings).
 
+### P5a Detail levels for copies (built)
+
+A mesh producer may publish `lods: Array(u32)` (layout in `primitives/mesh_lods.rs`: a 16-word header of up to four levels, each its first word, index count and simplification error in mesh units, then each level's indices into the same vertices). `node.gltf_mesh_source` builds them on its loader thread with meshoptimizer when the output is wired; the scene compiler wires them only for imported meshes drawn as copies. The copy cull (`cull_instances.wgsl`) picks each surviving copy's coarsest level whose error projects to at most one pixel at the copy's nearest point, counts copies per level, and lays the survivors out level by level so each level is one indexed indirect draw (its block's base instance points at its run). Each view picks its own levels: the camera by render size, each shadow caster by its map size. RT, picking and every unculled pass keep the full mesh.
+
+### Tile budget (landed)
+
+The scene pass draws into memoryless MSAA targets, which cannot spill when the tiler's parameter buffer fills; the GPU fault ends the session. A frame that can submit more than 16M triangles (falling back below 8M) uses real targets instead (`resources.rs` `TILE_TRIANGLE_BUDGET`). Measured: 8000 copies of a 35k-triangle tree render at 150 ms instead of aborting; the 80k-copy terrain keeps 19.8 ms and pays about 140 MB.
+
 ### P4 Occlusion culling
 
 Depth pyramid and the two-phase draw of D3, camera views only.

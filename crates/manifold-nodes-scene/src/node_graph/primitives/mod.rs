@@ -56,6 +56,7 @@ pub mod gltf_texture_source;
 pub mod hdri_source;
 mod hypercube_vertices;
 mod instance_position_jitter;
+pub(crate) mod mesh_lods;
 manifold_core::testkit_visible! { mod instance_rotation_jitter; }
 mod camera_sky;
 mod cut_out_box;

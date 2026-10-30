@@ -61,6 +61,9 @@ pub struct SceneObject {
     pub mesh: Option<Slot>,
     /// Optional u32 triangle indices into the vertex array.
     pub indices: Option<Slot>,
+    /// Optional detail levels of the indexed mesh (`mesh_lods.rs` lays them
+    /// out), which an instanced draw picks from per copy.
+    pub lods: Option<Slot>,
     /// Optional per-vertex appearance weights consumed by `render_scene`.
     pub weights: Option<Slot>,
     /// `Array<Vec4Vertex>` slot: each vertex's position a frame ago, from a

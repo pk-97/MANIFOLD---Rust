@@ -104,6 +104,9 @@ impl RenderScene {
                 };
                 let vp = l.shadow_view_proj();
                 let resolution = shadow_map_resolution(l.shadow_resolution);
+                // Shadow maps share one layer size; a light asking for less
+                // detail renders its own resolution in the layer's corner.
+                let side = resolution.min(shadow_map.width).min(shadow_map.height);
 
                 // This caster's
                 // dirty-check key — everything the depth-only batch below
@@ -212,7 +215,8 @@ impl RenderScene {
                                     gpu.native_enc.compute_memory_barrier_buffers();
                                     culled_any = true;
                                 }
-                                let block = first + slot as u64;
+                                let block = first
+                                    + slot as u64 * live_draw_args::view_blocks(d.lods.is_some());
                                 self.live_draw_args.cull(
                                     gpu.native_enc,
                                     &live_draw_args::CullDraw {
@@ -227,6 +231,8 @@ impl RenderScene {
                                         instances: source,
                                         out_instances: &survivors,
                                         prev: None,
+                                        lods: d.lods,
+                                        viewport: [side, side],
                                     },
                                 );
                                 Some((survivors, block * live_draw_args::ARGS_BYTES))
@@ -326,7 +332,7 @@ impl RenderScene {
                     .zip(&shadow_bindings)
                     .zip(&shadow_culls)
                     .zip(&shadow_patches)
-                    .map(|((((d, su), b), cull), kept)| {
+                    .flat_map(|((((d, su), b), cull), kept)| {
                         let draw = manifold_gpu::Draw::new(
                             if su.discard_free() {
                                 solid_pipeline
@@ -337,20 +343,20 @@ impl RenderScene {
                             d.vertex_count,
                             d.instance_count,
                         );
-                        match (cull, kept, &d.live_args, &d.patches) {
+                        let (culled, single) = match (cull, kept, &d.live_args, &d.patches) {
                             (Some((_, offset)), _, Some((args, _)), _) => {
-                                d.with_args(draw, d.indices, Some((args, *offset)))
+                                (Some(d.view_draws(draw, args, *offset)), None)
                             }
-                            (_, Some((kept, offset)), _, Some(patches)) => {
-                                d.with_args(draw, Some(kept), Some((&patches.args, *offset)))
-                            }
-                            _ => d.live(draw),
-                        }
+                            (_, Some((kept, offset)), _, Some(patches)) => (
+                                None,
+                                Some(d.with_args(draw, Some(kept), Some((&patches.args, *offset)))),
+                            ),
+                            _ => (None, Some(d.live(draw))),
+                        };
+                        culled.into_iter().flatten().chain(single)
                     })
                     .collect();
-                // Shadow maps share one layer size; a light asking for less
-                // detail renders its own resolution in the layer's corner.
-                let side = resolution.min(shadow_map.width).min(shadow_map.height) as f32;
+                let side = side as f32;
                 ctx.gpu_encoder().native_enc.draw(
                     &manifold_gpu::DrawPass::depth_only(
                         shadow_map,
@@ -442,7 +448,7 @@ impl RenderScene {
                 .filter(|d| d.in_view)
                 .zip(&cam_uniforms)
                 .zip(&cam_bindings)
-                .map(|((d, su), b)| {
+                .flat_map(|((d, su), b)| {
                     d.camera_live(manifold_gpu::Draw::new(
                         if su.discard_free() {
                             solid_depth_pipeline
