@@ -10,7 +10,7 @@
 //! ([`TickSamples`]), never observed per display frame, so a source moves
 //! the same at any frame rate.
 
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 
 use manifold_physics::coupled_motion::{MAX_SUPPORT_POINTS, SupportPoint};
 
@@ -380,96 +380,6 @@ struct BodyRole {
     scale: [f32; 3],
 }
 
-type TreeBuild = Result<Arc<MeshBvh>, String>;
-
-/// One geometry's mesh tree in one liquid, built once on a worker.
-struct RoleTree {
-    geometry: Arc<PreparedFluidGeometry>,
-    ready: Option<Arc<MeshBvh>>,
-    building: Option<mpsc::Receiver<TreeBuild>>,
-    failed: Option<String>,
-}
-
-/// `geometry`'s tree for this frame: `None` while live and not built yet;
-/// `wait` blocks for it.
-fn resolve_tree(
-    trees: &mut Vec<RoleTree>,
-    geometry: &Arc<PreparedFluidGeometry>,
-    wait: bool,
-) -> Result<Option<Arc<MeshBvh>>, String> {
-    let index = match trees
-        .iter()
-        .position(|entry| Arc::ptr_eq(&entry.geometry, geometry))
-    {
-        Some(index) => index,
-        None => {
-            trees.push(RoleTree {
-                geometry: Arc::clone(geometry),
-                ready: None,
-                building: None,
-                failed: None,
-            });
-            trees.len() - 1
-        }
-    };
-    let entry = &mut trees[index];
-    loop {
-        if let Some(receiver) = &entry.building {
-            let settled = if wait {
-                Some(
-                    receiver
-                        .recv()
-                        .unwrap_or_else(|_| Err("Fluid role tree build stopped".into())),
-                )
-            } else {
-                match receiver.try_recv() {
-                    Ok(result) => Some(result),
-                    Err(mpsc::TryRecvError::Empty) => None,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        Some(Err("Fluid role tree build stopped".into()))
-                    }
-                }
-            };
-            if let Some(result) = settled {
-                entry.building = None;
-                match result {
-                    Ok(tree) => entry.ready = Some(tree),
-                    Err(error) => entry.failed = Some(error),
-                }
-            }
-        }
-        if let Some(tree) = &entry.ready {
-            return Ok(Some(Arc::clone(tree)));
-        }
-        if let Some(error) = &entry.failed {
-            return Err(error.clone());
-        }
-        if entry.building.is_none() {
-            let (sender, receiver) = mpsc::channel();
-            let source = Arc::clone(&entry.geometry);
-            let spawned = std::thread::Builder::new()
-                .name("fluid-role-tree".into())
-                .spawn(move || {
-                    // Always settle, so a waiter never waits on a build that panicked.
-                    let built = std::panic::catch_unwind(|| source.build_tree())
-                        .unwrap_or_else(|_| Err("Fluid role tree build panicked".into()));
-                    let _ = sender.send(built);
-                });
-            match spawned {
-                Ok(_) => entry.building = Some(receiver),
-                Err(error) => {
-                    entry.failed = Some(format!("Fluid role tree could not start: {error}"));
-                    continue;
-                }
-            }
-        }
-        if wait {
-            continue;
-        }
-        return Ok(None);
-    }
-}
-
 /// One moving shape's distance lattice, built on the GPU from its tree into
 /// the atlas at `word_base` (two nodes per word, x fastest).
 #[derive(Clone, Debug, PartialEq)]
@@ -710,10 +620,11 @@ pub struct LiquidBodies {
     lattice_builds: Vec<LatticeBuild>,
     /// The cell size the lattices were planned for.
     cell_size: f32,
-    /// Every shape's tree end to end ([`MeshBvh::gpu_nodes`] and
-    /// [`MeshBvh::gpu_triangles`]), one copy per distinct tree.
-    collider_nodes: Vec<[f32; 4]>,
-    collider_triangles: Vec<[f32; 4]>,
+    /// Each distinct tree once, in the order their nodes and triangles lie
+    /// end to end in the GPU's collider buffers ([`Self::pack_colliders`]).
+    collider_trees: Vec<Arc<MeshBvh>>,
+    /// The vec4s those nodes and triangles take.
+    collider_vec4s: [usize; 2],
     /// Bumped whenever `shapes`, the atlas or the trees are rebuilt.
     pub version: u64,
     rows: Vec<LiquidBody>,
@@ -723,8 +634,6 @@ pub struct LiquidBodies {
     /// Inflow and Outflow rows, tick major, built beside `rows`.
     region_rows: Vec<LiquidBody>,
     warned_thin: bool,
-    /// Each geometry's mesh tree in this liquid.
-    trees: Vec<RoleTree>,
     /// This frame's tree per shape, roles then coupled bodies.
     resolved: Vec<Arc<MeshBvh>>,
     /// What the shapes and atlas were last built from.
@@ -899,14 +808,25 @@ impl LiquidBodies {
         &self.lattice_builds
     }
 
-    /// Every shape's tree nodes, [`MeshBvh::gpu_nodes`] layout.
-    pub fn collider_nodes(&self) -> &[[f32; 4]] {
-        &self.collider_nodes
+    /// Every shape's tree nodes ([`MeshBvh::gpu_nodes`] layout) and
+    /// triangles ([`MeshBvh::gpu_triangles`] layout) end to end into
+    /// `nodes` and `triangles`, for an upload. The trees are shared with
+    /// every other solver reading the same solids; only the GPU keeps the
+    /// packed copy.
+    pub fn pack_colliders(&self, nodes: &mut Vec<[f32; 4]>, triangles: &mut Vec<[f32; 4]>) {
+        nodes.clear();
+        triangles.clear();
+        nodes.reserve(self.collider_vec4s[0]);
+        triangles.reserve(self.collider_vec4s[1]);
+        for tree in &self.collider_trees {
+            tree.gpu_nodes(nodes);
+            tree.gpu_triangles(triangles);
+        }
     }
 
-    /// Every shape's tree triangles, [`MeshBvh::gpu_triangles`] layout.
-    pub fn collider_triangles(&self) -> &[[f32; 4]] {
-        &self.collider_triangles
+    /// The vec4s [`Self::pack_colliders`] writes: nodes, then triangles.
+    pub fn collider_vec4s(&self) -> [usize; 2] {
+        self.collider_vec4s
     }
 
     /// The rows the last [`Self::rows`] call produced.
@@ -967,7 +887,7 @@ impl LiquidBodies {
                     "Liquid: role {slot} scale must be finite and positive"
                 ));
             }
-            match resolve_tree(&mut self.trees, &role.geometry, wait) {
+            match role.geometry.tree(wait) {
                 Ok(Some(tree)) => self.resolved.push(tree),
                 Ok(None) => return Ok(BodiesStatus::Pending),
                 Err(error) => return Err(format!("Liquid: role {slot}: {error}")),
@@ -989,7 +909,7 @@ impl LiquidBodies {
                         .position(|known| known.body() == Some(body))
                 })
                 .and_then(|known| self.coupled_resolved.get(known));
-            match resolve_tree(&mut self.trees, geometry, wait) {
+            match geometry.tree(wait) {
                 Ok(Some(found)) => self.resolved.push(found),
                 Ok(None) => match stand_in {
                     Some(stand_in) => self.resolved.push(stand_in.clone()),
@@ -1036,8 +956,8 @@ impl LiquidBodies {
         self.atlas_words = 0;
         self.cell_size = cell_size;
         self.lattice_builds.clear();
-        self.collider_nodes.clear();
-        self.collider_triangles.clear();
+        self.collider_trees.clear();
+        self.collider_vec4s = [0; 2];
         self.used.clear();
         // Each distinct tree once, and each moving geometry's lattice once
         // per scale step pair.
@@ -1068,12 +988,11 @@ impl LiquidBodies {
             {
                 Some(&(_, node, triangle)) => (node, triangle),
                 None => {
-                    let at = (
-                        (self.collider_nodes.len() / 4) as u32,
-                        (self.collider_triangles.len() / 3) as u32,
-                    );
-                    tree.gpu_nodes(&mut self.collider_nodes);
-                    tree.gpu_triangles(&mut self.collider_triangles);
+                    let [nodes, triangles] = &mut self.collider_vec4s;
+                    let at = ((*nodes / 4) as u32, (*triangles / 3) as u32);
+                    *nodes += 4 * tree.nodes.len();
+                    *triangles += 3 * tree.triangles.len();
+                    self.collider_trees.push(Arc::clone(tree));
                     placed_trees.push((Arc::clone(tree), at.0, at.1));
                     at
                 }
@@ -1167,15 +1086,6 @@ impl LiquidBodies {
                 .iter()
                 .cloned(),
         );
-        self.trees.retain(|entry| {
-            roles
-                .iter()
-                .flatten()
-                .any(|role| Arc::ptr_eq(&role.geometry, &entry.geometry))
-                || coupled
-                    .iter()
-                    .any(|geometry| Arc::ptr_eq(geometry, &entry.geometry))
-        });
         self.version += 1;
         Ok(())
     }
@@ -2065,7 +1975,8 @@ mod tests {
     /// through the tree (dims 0, no atlas), the domain holds the tree's
     /// nodes and triangles once however many bodies share it, and a moving
     /// hull beside it keeps its lattice and has its own tree. Unchanged
-    /// geometry rebuilds nothing.
+    /// geometry rebuilds nothing, and a second solver reading the same
+    /// solids shares the trees instead of building its own.
     #[test]
     fn liquid_bodies_give_a_fixed_collider_a_tree() {
         let slab = [box_mesh([50.0, 0.5, 50.0])];
@@ -2077,10 +1988,12 @@ mod tests {
             bodies.prepare(&[], &hulls, 0.0625, true),
             Ok(BodiesStatus::Ready)
         );
-        let tree = fixed.build_tree().unwrap();
+        let tree = fixed.tree(false).unwrap().expect("built while preparing");
         let (mut nodes, mut triangles) = (Vec::new(), Vec::new());
         tree.gpu_nodes(&mut nodes);
         tree.gpu_triangles(&mut triangles);
+        let (mut packed_nodes, mut packed_triangles) = (Vec::new(), Vec::new());
+        bodies.pack_colliders(&mut packed_nodes, &mut packed_triangles);
         let shapes = bodies.shapes();
         assert_eq!(shapes.len(), 3);
         for index in [0, 2] {
@@ -2094,13 +2007,22 @@ mod tests {
         }
         assert_eq!((shapes[1].tree, shapes[1].atlas_offset), (0, 0));
         assert!(shapes[1].dims_x > 0, "a moving hull keeps its lattice");
-        assert_eq!(&bodies.collider_nodes()[..nodes.len()], nodes.as_slice());
-        assert_eq!(bodies.collider_nodes().len(), 2 * nodes.len());
+        assert_eq!(&packed_nodes[..nodes.len()], nodes.as_slice());
+        assert_eq!(packed_nodes.len(), 2 * nodes.len());
+        assert_eq!(&packed_triangles[..triangles.len()], triangles.as_slice());
         assert_eq!(
-            &bodies.collider_triangles()[..triangles.len()],
-            triangles.as_slice()
+            bodies.collider_vec4s(),
+            [packed_nodes.len(), packed_triangles.len()]
         );
         assert_eq!(shapes[1].tree_node as usize, nodes.len() / 4);
+        let mut other = LiquidBodies::with_regions();
+        assert_eq!(
+            other.prepare(&[], &hulls, 0.03, false),
+            Ok(BodiesStatus::Ready),
+            "the trees are built, so a second solver waits for nothing"
+        );
+        assert!(Arc::ptr_eq(&other.collider_trees[0], &tree));
+        assert!(Arc::ptr_eq(&other.collider_trees[1], &bodies.collider_trees[1]));
         let version = bodies.version;
         assert_eq!(
             bodies.prepare(&[], &hulls, 0.0625, false),

@@ -5,6 +5,7 @@
 //! `Arc` so graph execution can pass it through the CPU wire without cloning
 //! mesh data.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use manifold_physics::mesh_bvh::MeshBvh;
@@ -153,6 +154,12 @@ pub struct PreparedFluidGeometry {
     /// The meshes' local box, min then max. Derived, never serialized.
     #[serde(skip)]
     bounds: OnceLock<[[f32; 3]; 2]>,
+    /// The meshes' tree, built once on a worker and shared by every solver
+    /// that reads this solid. Derived, never serialized.
+    #[serde(skip)]
+    tree: OnceLock<TreeBuild>,
+    #[serde(skip)]
+    tree_started: AtomicBool,
     /// A static collider's exact mesh: it never moves in the simulation, so
     /// each water reads it through a tree instead of a lattice. Set where the
     /// coupling builds it, never serialized.
@@ -171,6 +178,8 @@ impl PreparedFluidGeometry {
             meshes,
             open_parts: OnceLock::new(),
             bounds: OnceLock::new(),
+            tree: OnceLock::new(),
+            tree_started: AtomicBool::new(false),
             fixed: false,
             body: None,
         }
@@ -232,7 +241,39 @@ impl PreparedFluidGeometry {
             .map(Arc::new)
             .map_err(|error| format!("Fluid role tree: {error}"))
     }
+
+    /// The meshes' tree, built once on a worker whichever solver asks first;
+    /// every Water, Sand and gas reading this solid then shares it. `None`
+    /// while it builds; `wait` (offline) blocks for it, so no simulated time
+    /// goes by while it builds.
+    pub fn tree(self: &Arc<Self>, wait: bool) -> Result<Option<Arc<MeshBvh>>, String> {
+        if let Some(built) = self.tree.get() {
+            return built.clone().map(Some);
+        }
+        if !self.tree_started.swap(true, Ordering::AcqRel) {
+            let source = Arc::clone(self);
+            let spawned = std::thread::Builder::new()
+                .name("fluid-role-tree".into())
+                .spawn(move || {
+                    // Always settle, so a waiter never waits on a build that panicked.
+                    let built = std::panic::catch_unwind(|| source.build_tree())
+                        .unwrap_or_else(|_| Err("Fluid role tree build panicked".into()));
+                    let _ = source.tree.set(built);
+                });
+            if let Err(error) = spawned {
+                let _ = self
+                    .tree
+                    .set(Err(format!("Fluid role tree could not start: {error}")));
+            }
+        }
+        if wait {
+            return self.tree.wait().clone().map(Some);
+        }
+        self.tree.get().cloned().transpose()
+    }
 }
+
+type TreeBuild = Result<Arc<MeshBvh>, String>;
 
 /// CPU payload carried by a [`super::ports::PortType::FluidRole`] wire.
 #[derive(Clone, Debug)]

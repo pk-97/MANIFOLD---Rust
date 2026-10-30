@@ -1071,8 +1071,7 @@ fn static_hash(bodies: Option<&LiquidBodies>, geometry: &GasGeometry, moving: [u
     };
     let shapes = bodies.shapes();
     bytemuck::cast_slice::<LiquidShape, u8>(shapes).hash(&mut hasher);
-    bodies.collider_nodes().len().hash(&mut hasher);
-    bodies.collider_triangles().len().hash(&mut hasher);
+    bodies.collider_vec4s().hash(&mut hasher);
     // A moving Collider is laid each tick, so only which ones move counts.
     moving.hash(&mut hasher);
     for (index, row) in tree_rows(bodies, &bodies.last_rows()[..first_tick_rows(bodies)]) {

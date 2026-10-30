@@ -1384,8 +1384,7 @@ fn static_change(
     let mut hasher = std::hash::DefaultHasher::new();
     let shapes = bodies.shapes();
     bytemuck::cast_slice::<LiquidShape, u8>(shapes).hash(&mut hasher);
-    bodies.collider_nodes().len().hash(&mut hasher);
-    bodies.collider_triangles().len().hash(&mut hasher);
+    bodies.collider_vec4s().hash(&mut hasher);
     let rows = bodies.last_rows();
     let last_tick = &rows[rows.len() - bodies.count().min(rows.len())..];
     let now: Vec<(usize, LiquidBody)> = last_tick

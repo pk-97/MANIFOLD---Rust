@@ -191,6 +191,10 @@ impl LiquidBodyBuffers {
                 buffer
             };
             let row = std::mem::size_of::<LiquidBody>();
+            // Packed only for this upload: the trees are shared, the GPU keeps
+            // the one packed copy.
+            let (mut nodes, mut triangles) = (Vec::new(), Vec::new());
+            bodies.pack_colliders(&mut nodes, &mut triangles);
             let (old_bodies, old_contacts, old_regions) = match self.stored.take() {
                 Some(stored) => (
                     Some(stored.bodies),
@@ -221,8 +225,8 @@ impl LiquidBodyBuffers {
                     std::mem::size_of::<LiquidShape>(),
                 ),
                 atlas,
-                collider_nodes: fresh(bytemuck::cast_slice(bodies.collider_nodes()), 16),
-                collider_triangles: fresh(bytemuck::cast_slice(bodies.collider_triangles()), 16),
+                collider_nodes: fresh(bytemuck::cast_slice(&nodes), 16),
+                collider_triangles: fresh(bytemuck::cast_slice(&triangles), 16),
                 // The coupled exchange writes the clock vertices from the CPU too.
                 clock_obstacles: gpu
                     .device
