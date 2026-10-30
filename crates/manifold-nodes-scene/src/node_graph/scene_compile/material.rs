@@ -183,7 +183,9 @@ fn emit(b: &mut Builder<'_>, item: &Item) {
         }
         // A Cover's rows hide while it has no Material, and stay declared
         // so its values survive the Material leaving and coming back.
-        if manifold_core::scene_schema::cover_slot(name).is_some_and(|slot| fields.covers[slot].is_none()) {
+        if manifold_core::scene_schema::cover_slot(name)
+            .is_some_and(|slot| fields.covers[slot].is_none())
+        {
             facts.role = SurfaceRole::Hidden;
         }
         if matches!(

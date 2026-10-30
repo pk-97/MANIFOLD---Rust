@@ -284,7 +284,12 @@ impl RenderScene {
             let tracer = self.rt_tracer.as_ref().expect("ensured before maintenance");
             if structural_changed {
                 let plan = tracer
-                    .plan_accel(gpu.device, self.rt_accel.as_ref(), objects, gi_materials_data)
+                    .plan_accel(
+                        gpu.device,
+                        self.rt_accel.as_ref(),
+                        objects,
+                        gi_materials_data,
+                    )
                     .map_err(rt_frame_failure)?;
                 let mut additional_bytes = plan.additional_peak_bytes();
                 for (capacity, needed, stride) in [

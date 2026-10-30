@@ -49,7 +49,14 @@ type TreeParam = (&'static str, &'static str, ParamType, f32, f32, f32);
 const TREE_PARAMS: [TreeParam; 16] = [
     ("levels", "Levels", ParamType::Int, 3.0, 0.0, 3.0),
     ("height", "Height", ParamType::Float, 10.0, 0.5, 60.0),
-    ("trunk_width", "Trunk Width", ParamType::Float, 0.5, 0.02, 3.0),
+    (
+        "trunk_width",
+        "Trunk Width",
+        ParamType::Float,
+        0.5,
+        0.02,
+        3.0,
+    ),
     ("branches", "Branches", ParamType::Int, 9.0, 0.0, 16.0),
     ("twigs", "Twigs", ParamType::Int, 6.0, 0.0, 10.0),
     ("spread", "Spread", ParamType::Float, 55.0, 0.0, 120.0),
@@ -60,7 +67,14 @@ const TREE_PARAMS: [TreeParam; 16] = [
     ("twist", "Twist", ParamType::Float, 0.0, -45.0, 45.0),
     ("leaves", "Leaves", ParamType::Int, 18.0, 0.0, 40.0),
     ("leaf_size", "Leaf Size", ParamType::Float, 0.4, 0.02, 2.0),
-    ("leaf_angle", "Leaf Angle", ParamType::Float, 35.0, 0.0, 90.0),
+    (
+        "leaf_angle",
+        "Leaf Angle",
+        ParamType::Float,
+        35.0,
+        0.0,
+        90.0,
+    ),
     ("seed", "Seed", ParamType::Int, 1.0, 0.0, 999.0),
     ("cards", "Cards", ParamType::Int, CARDS as f32, 1.0, 2.0),
 ];
@@ -216,7 +230,12 @@ impl TreeUniforms {
                 value(params, "leaf_angle").to_radians(),
                 LEAF_START,
             ],
-            counts: [s.last, count(params, "leaves"), s.cards, count(params, "seed")],
+            counts: [
+                s.last,
+                count(params, "leaves"),
+                s.cards,
+                count(params, "seed"),
+            ],
             level: [0, s.vertices, s.indices, s.leaf_vertices()],
         }
     }
@@ -318,7 +337,8 @@ manifold_node_engine::primitive! {
 
 impl Primitive for Tree {
     fn prepare_pipelines(&mut self, device: &GpuDevice) {
-        self.pipelines.get_or_insert_with(|| Pipelines::build(device));
+        self.pipelines
+            .get_or_insert_with(|| Pipelines::build(device));
     }
 
     fn mesh_output_rule(&self, _port: &str) -> MeshOutputRule<'_> {
@@ -367,8 +387,13 @@ impl Primitive for Tree {
         }
         let prepared = {
             let device = ctx.gpu_encoder().device;
-            self.pipelines.get_or_insert_with(|| Pipelines::build(device));
-            if self.buffers.as_ref().is_none_or(|b| b.structure != structure) {
+            self.pipelines
+                .get_or_insert_with(|| Pipelines::build(device));
+            if self
+                .buffers
+                .as_ref()
+                .is_none_or(|b| b.structure != structure)
+            {
                 self.buffers = None;
                 TreeBuffers::new(device, structure).map(|buffers| self.buffers = Some(buffers))
             } else {
@@ -400,7 +425,12 @@ impl Primitive for Tree {
                 buffer(3, &buffers.indices),
                 buffer(4, &buffers.leaves),
             ];
-            enc.dispatch_compute(pipeline, &bindings, [items.div_ceil(THREADS), 1, 1], "node.tree");
+            enc.dispatch_compute(
+                pipeline,
+                &bindings,
+                [items.div_ceil(THREADS), 1, 1],
+                "node.tree",
+            );
         };
         // Each level grows from the rings of the one above.
         for l in 0..=structure.last {
@@ -423,7 +453,12 @@ mod tests {
     #[test]
     fn levels_lie_end_to_end_with_each_count_from_the_rows() {
         let mut params = ParamValues::default();
-        for (name, v) in [("levels", 2.0), ("branches", 3.0), ("twigs", 2.0), ("leaves", 4.0)] {
+        for (name, v) in [
+            ("levels", 2.0),
+            ("branches", 3.0),
+            ("twigs", 2.0),
+            ("leaves", 4.0),
+        ] {
             params.insert(Cow::Borrowed(name), ParamValue::Float(v));
         }
         let s = Structure::of(&params);
@@ -450,6 +485,10 @@ mod tests {
         let s = Structure::of(&params);
         assert_eq!(s.branches, [1, 0, 0, 0]);
         assert_eq!(s.vertices, 13 * 13);
-        assert_eq!(s.leaf_vertices(), 3, "one degenerate triangle with no leaves");
+        assert_eq!(
+            s.leaf_vertices(),
+            3,
+            "one degenerate triangle with no leaves"
+        );
     }
 }
